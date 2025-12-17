@@ -108,3 +108,15 @@ export type InsertInvoice = z.infer<typeof insertInvoiceSchema>;
 
 export type Payout = typeof payouts.$inferSelect;
 export type InsertPayout = z.infer<typeof insertPayoutSchema>;
+
+// Integration status tracking (tokens stored as secrets/env vars, not in DB)
+export const integrationStatus = pgTable("integration_status", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  service: text("service").notNull().unique(), // 'yodeck' or 'moneybird'
+  isConnected: text("is_connected").notNull().default("false"),
+  lastSyncAt: timestamp("last_sync_at"),
+  lastError: text("last_error"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export type IntegrationStatusRecord = typeof integrationStatus.$inferSelect;

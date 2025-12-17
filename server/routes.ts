@@ -9,6 +9,12 @@ import {
   insertPlacementSchema,
   insertPayoutSchema,
 } from "@shared/schema";
+import {
+  getIntegrationStatus,
+  testYodeckConnection,
+  testMoneybirdConnection,
+  syncYodeckScreens,
+} from "./integrations";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -183,6 +189,40 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
+  });
+
+  // Integration routes
+  app.get("/api/integrations/status", async (_req, res) => {
+    const status = getIntegrationStatus();
+    res.json(status);
+  });
+
+  app.post("/api/integrations/yodeck/test", async (_req, res) => {
+    const result = await testYodeckConnection();
+    res.json(result);
+  });
+
+  app.post("/api/integrations/moneybird/test", async (_req, res) => {
+    const result = await testMoneybirdConnection();
+    res.json(result);
+  });
+
+  app.post("/api/integrations/yodeck/sync", async (_req, res) => {
+    const result = await syncYodeckScreens();
+    if (result.success && result.screens) {
+      // Update local screens with Yodeck data
+      for (const yodeckScreen of result.screens) {
+        const existingScreens = await storage.getScreens();
+        const match = existingScreens.find(s => s.yodeckPlayerId === yodeckScreen.id);
+        if (match) {
+          await storage.updateScreen(match.id, {
+            status: yodeckScreen.online ? "online" : "offline",
+            lastSeenAt: new Date(),
+          });
+        }
+      }
+    }
+    res.json(result);
   });
 
   return httpServer;
