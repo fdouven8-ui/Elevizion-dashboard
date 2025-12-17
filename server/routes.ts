@@ -22,6 +22,11 @@ import {
   testMoneybirdConnection,
   syncYodeckScreens,
 } from "./integrations";
+import {
+  isEmailConfigured,
+  sendContractEmail,
+  sendSepaEmail,
+} from "./email";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -601,6 +606,86 @@ export async function registerRoutes(
   app.get("/api/jobs/:id/runs", async (req, res) => {
     const runs = await storage.getRecentJobRuns(req.params.id);
     res.json(runs);
+  });
+
+  // ============================================================================
+  // EMAIL
+  // ============================================================================
+
+  app.get("/api/email/status", async (_req, res) => {
+    res.json({
+      configured: isEmailConfigured(),
+      message: isEmailConfigured() 
+        ? "E-mail service is geconfigureerd" 
+        : "Voeg SENDGRID_API_KEY toe aan uw environment variables om e-mails te versturen",
+    });
+  });
+
+  app.post("/api/email/contract/:contractId", async (req, res) => {
+    try {
+      const contract = await storage.getContract(req.params.contractId);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract niet gevonden" });
+      }
+
+      const advertiser = await storage.getAdvertiser(contract.advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+
+      const placements = await storage.getPlacementsByContract(contract.id);
+      const screens = await storage.getScreens();
+      const screenNames = placements
+        .map(p => screens.find(s => s.id === p.screenId)?.name)
+        .filter(Boolean) as string[];
+
+      const result = await sendContractEmail(advertiser.email, {
+        advertiserName: advertiser.companyName,
+        contactName: advertiser.contactName,
+        contractName: contract.name,
+        monthlyPrice: contract.monthlyPriceExVat,
+        vatPercent: contract.vatPercent,
+        startDate: contract.startDate,
+        endDate: contract.endDate,
+        billingCycle: contract.billingCycle,
+        screens: screenNames,
+      });
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  app.post("/api/email/sepa/:advertiserId", async (req, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+
+      const contracts = await storage.getContracts();
+      const activeContract = contracts.find(
+        c => c.advertiserId === advertiser.id && c.status === "active"
+      );
+
+      const monthlyAmount = activeContract 
+        ? (parseFloat(activeContract.monthlyPriceExVat) * 1.21).toFixed(2)
+        : "0.00";
+      const vatPercent = activeContract?.vatPercent || "21.00";
+
+      const result = await sendSepaEmail(advertiser.email, {
+        advertiserName: advertiser.companyName,
+        contactName: advertiser.contactName,
+        email: advertiser.email,
+        monthlyAmount,
+        vatPercent,
+      });
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
   });
 
   return httpServer;

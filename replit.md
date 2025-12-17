@@ -75,3 +75,13 @@ Core entities with relationships:
 - `date-fns`: Date manipulation utilities
 - `zod`: Runtime type validation
 - Full shadcn/ui component set via Radix UI primitives
+
+### Email Integration (SendGrid)
+- **Status**: Code is ready, API key must be configured manually
+- **Configuration**: Add `SENDGRID_API_KEY` environment variable with your SendGrid API key
+- **Optional**: Set `SENDGRID_FROM_EMAIL` for custom sender address (default: noreply@elevizion.nl)
+- **Features**:
+  - Contract confirmation emails (`POST /api/email/contract/:contractId`)
+  - SEPA mandate request emails (`POST /api/email/sepa/:advertiserId`)
+  - Status check endpoint (`GET /api/email/status`)
+- **Get API Key**: https://sendgrid.com/docs/ui/account-and-settings/api-keys/
