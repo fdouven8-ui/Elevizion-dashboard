@@ -13,9 +13,10 @@ import Contracts from "@/pages/Contracts";
 import Billing from "@/pages/Billing";
 import Payouts from "@/pages/Payouts";
 import Integrations from "@/pages/Integrations";
+import SignContract from "@/pages/SignContract";
 import NotFound from "@/pages/not-found";
 
-function Router() {
+function DashboardRouter() {
   return (
     <DashboardLayout>
       <Switch>
@@ -30,6 +31,15 @@ function Router() {
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>
+  );
+}
+
+function Router() {
+  return (
+    <Switch>
+      <Route path="/sign/:token" component={SignContract} />
+      <Route component={DashboardRouter} />
+    </Switch>
   );
 }
 

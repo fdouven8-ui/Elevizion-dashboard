@@ -26,7 +26,16 @@ import {
   isEmailConfigured,
   sendContractEmail,
   sendSepaEmail,
+  sendEmail,
 } from "./email";
+import {
+  generateSigningToken,
+  hashToken,
+  verifyToken,
+  generateContractHtml,
+  calculateExpirationDate,
+  formatClientInfo,
+} from "./contract-signing";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -685,6 +694,487 @@ export async function registerRoutes(
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // CONTRACT SIGNING
+  // ============================================================================
+
+  // Send contract for signing
+  app.post("/api/contracts/:id/send", async (req, res) => {
+    try {
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract niet gevonden" });
+      }
+
+      if (contract.status !== "draft") {
+        return res.status(400).json({ message: "Contract kan alleen verzonden worden vanuit conceptstatus" });
+      }
+
+      const advertiser = await storage.getAdvertiser(contract.advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+
+      // Generate signing token
+      const { token, hash } = generateSigningToken();
+      const expiresAt = calculateExpirationDate(14);
+
+      // Get screens for contract
+      const placements = await storage.getPlacementsByContract(contract.id);
+      const screens = await storage.getScreens();
+      const screenNames = placements
+        .map(p => screens.find(s => s.id === p.screenId)?.name)
+        .filter(Boolean) as string[];
+
+      // Generate contract HTML
+      const htmlContent = generateContractHtml({
+        advertiserName: advertiser.companyName,
+        contactName: advertiser.contactName,
+        contractName: contract.name,
+        monthlyPrice: contract.monthlyPriceExVat,
+        vatPercent: contract.vatPercent,
+        startDate: contract.startDate,
+        endDate: contract.endDate,
+        billingCycle: contract.billingCycle,
+        screens: screenNames,
+      });
+
+      // Update contract with token and status
+      await storage.updateContract(contract.id, {
+        status: "sent",
+        signatureTokenHash: hash,
+        expiresAt,
+        sentAt: new Date(),
+        htmlContent,
+      });
+
+      // Log event
+      await storage.createContractEvent({
+        contractId: contract.id,
+        eventType: "sent",
+        actorType: "system",
+        metadata: { recipientEmail: advertiser.email },
+      });
+
+      // Send email with signing link
+      const signingUrl = `${req.protocol}://${req.get("host")}/sign/${token}`;
+      const emailResult = await sendEmail({
+        to: advertiser.email,
+        subject: `Contract ter ondertekening: ${contract.name}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+              <h1 style="color: white; margin: 0;">Elevizion</h1>
+              <p style="color: #f8a12f; margin: 5px 0 0 0;">See Your Business Grow</p>
+            </div>
+            <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd;">
+              <h2 style="color: #1e3a5f;">Contract ter ondertekening</h2>
+              <p>Beste ${advertiser.contactName},</p>
+              <p>Er staat een contract klaar voor ondertekening. Klik op onderstaande knop om het contract te bekijken en digitaal te ondertekenen.</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${signingUrl}" style="background: #f8a12f; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold;">
+                  Contract Bekijken & Ondertekenen
+                </a>
+              </div>
+              <p style="color: #666; font-size: 14px;">Dit contract verloopt op ${expiresAt.toLocaleDateString("nl-NL")}.</p>
+              <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+            </div>
+          </div>
+        `,
+      });
+
+      res.json({ 
+        success: true, 
+        message: "Contract verzonden", 
+        signingUrl,
+        emailSent: emailResult.success 
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Get contract for signing (public endpoint)
+  app.get("/api/sign/:token", async (req, res) => {
+    try {
+      const tokenHash = hashToken(req.params.token);
+      const contract = await storage.getContractBySignatureToken(tokenHash);
+
+      if (!contract) {
+        return res.status(404).json({ message: "Contract niet gevonden of link is verlopen" });
+      }
+
+      if (contract.status === "signed") {
+        return res.status(400).json({ message: "Dit contract is al ondertekend", signed: true });
+      }
+
+      if (contract.status === "expired" || contract.status === "cancelled") {
+        return res.status(400).json({ message: "Dit contract is niet meer geldig" });
+      }
+
+      if (contract.expiresAt && new Date() > new Date(contract.expiresAt)) {
+        await storage.updateContract(contract.id, { status: "expired" });
+        await storage.createContractEvent({
+          contractId: contract.id,
+          eventType: "expired",
+          actorType: "system",
+        });
+        return res.status(400).json({ message: "Dit contract is verlopen" });
+      }
+
+      // Mark as viewed if first time
+      if (!contract.viewedAt) {
+        const { ip, userAgent } = formatClientInfo(req);
+        await storage.updateContract(contract.id, { viewedAt: new Date() });
+        await storage.createContractEvent({
+          contractId: contract.id,
+          eventType: "viewed",
+          actorType: "signer",
+          ipAddress: ip,
+          userAgent: userAgent,
+        });
+      }
+
+      const advertiser = await storage.getAdvertiser(contract.advertiserId);
+
+      res.json({
+        id: contract.id,
+        name: contract.name,
+        title: contract.title,
+        htmlContent: contract.htmlContent,
+        monthlyPriceExVat: contract.monthlyPriceExVat,
+        vatPercent: contract.vatPercent,
+        startDate: contract.startDate,
+        endDate: contract.endDate,
+        billingCycle: contract.billingCycle,
+        advertiserName: advertiser?.companyName,
+        contactName: advertiser?.contactName,
+        contactEmail: advertiser?.email,
+        expiresAt: contract.expiresAt,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Sign contract (public endpoint)
+  app.post("/api/sign/:token", async (req, res) => {
+    try {
+      const tokenHash = hashToken(req.params.token);
+      const contract = await storage.getContractBySignatureToken(tokenHash);
+
+      if (!contract) {
+        return res.status(404).json({ message: "Contract niet gevonden of link is verlopen" });
+      }
+
+      if (contract.status === "signed") {
+        return res.status(400).json({ message: "Dit contract is al ondertekend" });
+      }
+
+      if (contract.expiresAt && new Date() > new Date(contract.expiresAt)) {
+        return res.status(400).json({ message: "Dit contract is verlopen" });
+      }
+
+      const { name, email, signatureData, agreedToTerms } = req.body;
+
+      if (!name || !email || !agreedToTerms) {
+        return res.status(400).json({ message: "Naam, e-mail en akkoord zijn verplicht" });
+      }
+
+      const { ip, userAgent } = formatClientInfo(req);
+
+      // Update contract with signature
+      await storage.updateContract(contract.id, {
+        status: "signed",
+        signedAt: new Date(),
+        signedByName: name,
+        signedByEmail: email,
+        signedIp: ip,
+        signedUserAgent: userAgent,
+        signatureData: signatureData || null,
+      });
+
+      // Log signing event with full audit trail
+      await storage.createContractEvent({
+        contractId: contract.id,
+        eventType: "signed",
+        actorType: "signer",
+        actorId: email,
+        actorName: name,
+        ipAddress: ip,
+        userAgent: userAgent,
+        metadata: { 
+          agreedToTerms: true,
+          hasSignature: !!signatureData,
+          signedAt: new Date().toISOString(),
+        },
+      });
+
+      // Activate advertiser if needed
+      const advertiser = await storage.getAdvertiser(contract.advertiserId);
+      if (advertiser && advertiser.status !== "active") {
+        await storage.updateAdvertiser(advertiser.id, { status: "active" });
+      }
+
+      // Create onboarding checklist
+      const existingChecklist = await storage.getOnboardingChecklist(contract.advertiserId);
+      if (!existingChecklist) {
+        const checklist = await storage.createOnboardingChecklist({
+          advertiserId: contract.advertiserId,
+          status: "in_progress",
+        });
+
+        // Create onboarding tasks
+        const taskTypes = [
+          "creative_received",
+          "creative_approved",
+          "campaign_created",
+          "scheduled_on_screens",
+          "billing_configured",
+          "first_invoice_sent",
+          "go_live_confirmed",
+          "first_report_sent",
+        ];
+
+        for (const taskType of taskTypes) {
+          await storage.createOnboardingTask({
+            checklistId: checklist.id,
+            taskType,
+            status: "todo",
+          });
+        }
+      }
+
+      // Send confirmation email
+      await sendEmail({
+        to: email,
+        subject: `Contract ondertekend: ${contract.name}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+              <h1 style="color: white; margin: 0;">Elevizion</h1>
+              <p style="color: #f8a12f; margin: 5px 0 0 0;">See Your Business Grow</p>
+            </div>
+            <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd;">
+              <h2 style="color: #1e3a5f;">Contract Ondertekend</h2>
+              <p>Beste ${name},</p>
+              <p>Bedankt voor het ondertekenen van uw contract. Hieronder vindt u de bevestiging:</p>
+              <div style="background: white; padding: 20px; border-radius: 8px; border-left: 4px solid #f8a12f; margin: 20px 0;">
+                <table style="width: 100%; border-collapse: collapse;">
+                  <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Contract:</strong></td><td style="padding: 8px 0; border-bottom: 1px solid #eee;">${contract.name}</td></tr>
+                  <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Ondertekend door:</strong></td><td style="padding: 8px 0; border-bottom: 1px solid #eee;">${name}</td></tr>
+                  <tr><td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Datum:</strong></td><td style="padding: 8px 0; border-bottom: 1px solid #eee;">${new Date().toLocaleDateString("nl-NL")}</td></tr>
+                  <tr><td style="padding: 8px 0;"><strong>IP-adres:</strong></td><td style="padding: 8px 0;">${ip}</td></tr>
+                </table>
+              </div>
+              <p>Wij nemen binnenkort contact met u op om de volgende stappen te bespreken.</p>
+              <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+            </div>
+          </div>
+        `,
+      });
+
+      res.json({ 
+        success: true, 
+        message: "Contract succesvol ondertekend",
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Get contract events (timeline)
+  app.get("/api/contracts/:id/events", async (req, res) => {
+    try {
+      const events = await storage.getContractEvents(req.params.id);
+      res.json(events);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Cancel contract
+  app.post("/api/contracts/:id/cancel", async (req, res) => {
+    try {
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract niet gevonden" });
+      }
+
+      if (contract.status === "signed" || contract.status === "active") {
+        return res.status(400).json({ message: "Ondertekende of actieve contracten kunnen niet geannuleerd worden" });
+      }
+
+      await storage.updateContract(contract.id, { status: "cancelled" });
+      await storage.createContractEvent({
+        contractId: contract.id,
+        eventType: "cancelled",
+        actorType: "user",
+        metadata: { reason: req.body.reason },
+      });
+
+      res.json({ success: true, message: "Contract geannuleerd" });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // Resend contract
+  app.post("/api/contracts/:id/resend", async (req, res) => {
+    try {
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract niet gevonden" });
+      }
+
+      if (contract.status !== "sent") {
+        return res.status(400).json({ message: "Alleen verzonden contracten kunnen opnieuw verstuurd worden" });
+      }
+
+      const advertiser = await storage.getAdvertiser(contract.advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+
+      // Generate new token
+      const { token, hash } = generateSigningToken();
+      const expiresAt = calculateExpirationDate(14);
+
+      await storage.updateContract(contract.id, {
+        signatureTokenHash: hash,
+        expiresAt,
+        sentAt: new Date(),
+      });
+
+      await storage.createContractEvent({
+        contractId: contract.id,
+        eventType: "sent",
+        actorType: "system",
+        metadata: { recipientEmail: advertiser.email, isResend: true },
+      });
+
+      // Send email
+      const signingUrl = `${req.protocol}://${req.get("host")}/sign/${token}`;
+      await sendEmail({
+        to: advertiser.email,
+        subject: `Herinnering: Contract ter ondertekening - ${contract.name}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+              <h1 style="color: white; margin: 0;">Elevizion</h1>
+            </div>
+            <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd;">
+              <h2 style="color: #1e3a5f;">Herinnering: Contract ter ondertekening</h2>
+              <p>Beste ${advertiser.contactName},</p>
+              <p>Dit is een herinnering dat er een contract klaar staat voor ondertekening.</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${signingUrl}" style="background: #f8a12f; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold;">
+                  Contract Bekijken & Ondertekenen
+                </a>
+              </div>
+              <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+            </div>
+          </div>
+        `,
+      });
+
+      res.json({ success: true, message: "Contract opnieuw verzonden", signingUrl });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // ONBOARDING
+  // ============================================================================
+
+  app.get("/api/advertisers/:advertiserId/onboarding", async (req, res) => {
+    try {
+      const checklist = await storage.getOnboardingChecklist(req.params.advertiserId);
+      if (!checklist) {
+        return res.json(null);
+      }
+      const tasks = await storage.getOnboardingTasks(checklist.id);
+      res.json({ ...checklist, tasks });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/onboarding-tasks/:id", async (req, res) => {
+    try {
+      const task = await storage.updateOnboardingTask(req.params.id, {
+        ...req.body,
+        completedAt: req.body.status === "done" ? new Date() : null,
+      });
+      res.json(task);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // INCIDENTS & MONITORING
+  // ============================================================================
+
+  app.get("/api/incidents", async (_req, res) => {
+    try {
+      const incidents = await storage.getIncidents();
+      res.json(incidents);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/incidents", async (req, res) => {
+    try {
+      const incident = await storage.createIncident(req.body);
+      res.status(201).json(incident);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/incidents/:id", async (req, res) => {
+    try {
+      const incident = await storage.updateIncident(req.params.id, req.body);
+      res.json(incident);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/alert-rules", async (_req, res) => {
+    try {
+      const rules = await storage.getAlertRules();
+      res.json(rules);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // REPORTS
+  // ============================================================================
+
+  app.get("/api/reports", async (_req, res) => {
+    try {
+      const reports = await storage.getReports();
+      res.json(reports);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/advertisers/:advertiserId/reports", async (req, res) => {
+    try {
+      const reports = await storage.getReportsByAdvertiser(req.params.advertiserId);
+      res.json(reports);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
     }
   });
 

@@ -101,21 +101,68 @@ export const packagePlans = pgTable("package_plans", {
 /**
  * Contracts - The commercial agreement between Elevizion and an Advertiser
  * This is the source of truth for "who pays what, for how long"
+ * Extended with e-sign capabilities for digital contract signing
  */
 export const contracts = pgTable("contracts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id),
   packagePlanId: varchar("package_plan_id").references(() => packagePlans.id),
   name: text("name").notNull(), // Contract reference name
+  version: integer("version").notNull().default(1),
+  title: text("title"), // Display title for contract
   startDate: date("start_date").notNull(),
   endDate: date("end_date"), // NULL = ongoing/indefinite
   monthlyPriceExVat: decimal("monthly_price_ex_vat", { precision: 10, scale: 2 }).notNull(),
   vatPercent: decimal("vat_percent", { precision: 5, scale: 2 }).notNull().default("21.00"),
   billingCycle: text("billing_cycle").notNull().default("monthly"), // monthly, quarterly, yearly
-  status: text("status").notNull().default("active"), // draft, active, paused, ended, cancelled
+  status: text("status").notNull().default("draft"), // draft, sent, viewed, signed, expired, cancelled, active, paused, ended
+  // E-sign fields
+  pdfUrl: text("pdf_url"),
+  htmlContent: text("html_content"), // Contract HTML template content
+  signatureTokenHash: text("signature_token_hash"), // Hashed token for signing
+  sentAt: timestamp("sent_at"),
+  viewedAt: timestamp("viewed_at"),
+  signedAt: timestamp("signed_at"),
+  expiresAt: timestamp("expires_at"),
+  signedByName: text("signed_by_name"),
+  signedByEmail: text("signed_by_email"),
+  signedIp: text("signed_ip"),
+  signedUserAgent: text("signed_user_agent"),
+  signatureData: text("signature_data"), // Base64 signature image
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * ContractEvents - Audit trail of contract lifecycle events
+ */
+export const contractEvents = pgTable("contract_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").notNull().references(() => contracts.id),
+  eventType: text("event_type").notNull(), // created, sent, viewed, signed, reminder_sent, expired, cancelled
+  actorType: text("actor_type").notNull().default("system"), // user, system, signer
+  actorId: varchar("actor_id"), // User ID or email of the actor
+  actorName: text("actor_name"), // Display name of the actor
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * ContractFiles - Document storage for contracts (PDFs, attachments)
+ */
+export const contractFiles = pgTable("contract_files", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  contractId: varchar("contract_id").notNull().references(() => contracts.id),
+  fileType: text("file_type").notNull(), // pdf, html, attachment, signature
+  fileName: text("file_name").notNull(),
+  storageKey: text("storage_key").notNull(),
+  mimeType: text("mime_type"),
+  fileSize: integer("file_size"),
+  sha256Hash: text("sha256_hash"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
 /**
@@ -333,6 +380,210 @@ export const auditLogs = pgTable("audit_logs", {
 });
 
 // ============================================================================
+// ONBOARDING (Advertiser workflow tracking)
+// ============================================================================
+
+/**
+ * OnboardingChecklists - Track advertiser onboarding progress
+ */
+export const onboardingChecklists = pgTable("onboarding_checklists", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id),
+  status: text("status").notNull().default("not_started"), // not_started, in_progress, completed
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * OnboardingTasks - Individual tasks within a checklist
+ */
+export const onboardingTasks = pgTable("onboarding_tasks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  checklistId: varchar("checklist_id").notNull().references(() => onboardingChecklists.id),
+  taskType: text("task_type").notNull(), // creative_received, creative_approved, campaign_created, scheduled_on_screens, billing_configured, first_invoice_sent, go_live_confirmed, first_report_sent
+  status: text("status").notNull().default("todo"), // todo, doing, done, blocked
+  ownerUserId: varchar("owner_user_id"),
+  notes: text("notes"),
+  dueDate: date("due_date"),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// ============================================================================
+// REPORTING & MONITORING (Phase 2)
+// ============================================================================
+
+/**
+ * Reports - Generated proof-of-play and performance reports
+ */
+export const reports = pgTable("reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id),
+  reportType: text("report_type").notNull().default("monthly"), // monthly, quarterly, custom
+  periodStart: date("period_start").notNull(),
+  periodEnd: date("period_end").notNull(),
+  pdfUrl: text("pdf_url"),
+  generatedAt: timestamp("generated_at").notNull().defaultNow(),
+  sentAt: timestamp("sent_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * ReportMetrics - Detailed metrics per screen for a report
+ */
+export const reportMetrics = pgTable("report_metrics", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  reportId: varchar("report_id").notNull().references(() => reports.id),
+  screenId: varchar("screen_id").notNull().references(() => screens.id),
+  locationId: varchar("location_id").notNull().references(() => locations.id),
+  scheduledPlaysEstimate: integer("scheduled_plays_estimate").notNull(),
+  scheduledSecondsEstimate: integer("scheduled_seconds_estimate").notNull(),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * Incidents - Track system issues (screen offline, sync failures)
+ */
+export const incidents = pgTable("incidents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  incidentType: text("incident_type").notNull(), // screen_offline, sync_failed, playlist_mismatch, storage_issue
+  severity: text("severity").notNull().default("medium"), // low, medium, high
+  screenId: varchar("screen_id").references(() => screens.id),
+  locationId: varchar("location_id").references(() => locations.id),
+  status: text("status").notNull().default("open"), // open, acknowledged, resolved
+  title: text("title").notNull(),
+  description: text("description"),
+  metadata: jsonb("metadata"),
+  openedAt: timestamp("opened_at").notNull().defaultNow(),
+  acknowledgedAt: timestamp("acknowledged_at"),
+  resolvedAt: timestamp("resolved_at"),
+  lastSeenAt: timestamp("last_seen_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * AlertRules - Configuration for automated alerts
+ */
+export const alertRules = pgTable("alert_rules", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  alertType: text("alert_type").notNull(), // screen_offline, sync_failed, invoice_overdue
+  thresholdMinutes: integer("threshold_minutes").notNull().default(30),
+  notifyEmails: text("notify_emails").notNull(), // comma-separated emails
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// ============================================================================
+// USERS & PERMISSIONS (Phase 3)
+// ============================================================================
+
+/**
+ * Users - System users with role-based access
+ */
+export const users = pgTable("users", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash"),
+  name: text("name").notNull(),
+  role: text("role").notNull().default("viewer"), // admin, finance, ops, viewer, partner
+  locationId: varchar("location_id").references(() => locations.id), // For partner role
+  isActive: boolean("is_active").notNull().default(true),
+  lastLoginAt: timestamp("last_login_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// ============================================================================
+// CREATIVES & ASSETS (Phase 4)
+// ============================================================================
+
+/**
+ * Creatives - Advertising content files
+ */
+export const creatives = pgTable("creatives", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id),
+  creativeType: text("creative_type").notNull(), // video, image
+  title: text("title").notNull(),
+  status: text("status").notNull().default("draft"), // draft, pending_approval, approved, rejected, archived
+  durationSeconds: integer("duration_seconds"), // For videos
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * CreativeVersions - Version history for creatives
+ */
+export const creativeVersions = pgTable("creative_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  creativeId: varchar("creative_id").notNull().references(() => creatives.id),
+  versionNo: integer("version_no").notNull(),
+  fileUrl: text("file_url").notNull(),
+  fileName: text("file_name").notNull(),
+  mimeType: text("mime_type"),
+  fileSize: integer("file_size"),
+  sha256Hash: text("sha256_hash"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * CreativeApprovals - Approval workflow for creatives
+ */
+export const creativeApprovals = pgTable("creative_approvals", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  creativeId: varchar("creative_id").notNull().references(() => creatives.id),
+  requestedAt: timestamp("requested_at").notNull().defaultNow(),
+  approvedAt: timestamp("approved_at"),
+  rejectedAt: timestamp("rejected_at"),
+  approvedByUserId: varchar("approved_by_user_id"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// ============================================================================
+// WEBHOOKS & API (Phase 4)
+// ============================================================================
+
+/**
+ * Webhooks - External webhook endpoints for event notifications
+ */
+export const webhooks = pgTable("webhooks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  url: text("url").notNull(),
+  eventTypes: text("event_types").notNull(), // comma-separated: invoice.paid, screen.offline, contract.signed
+  secret: text("secret"), // For signature verification
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  lastTriggeredAt: timestamp("last_triggered_at"),
+  failureCount: integer("failure_count").notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * WebhookDeliveries - Log of webhook delivery attempts
+ */
+export const webhookDeliveries = pgTable("webhook_deliveries", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  webhookId: varchar("webhook_id").notNull().references(() => webhooks.id),
+  eventType: text("event_type").notNull(),
+  payload: jsonb("payload").notNull(),
+  responseStatus: integer("response_status"),
+  responseBody: text("response_body"),
+  deliveredAt: timestamp("delivered_at"),
+  status: text("status").notNull().default("pending"), // pending, success, failed
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// ============================================================================
 // INSERT SCHEMAS (for validation)
 // ============================================================================
 
@@ -341,6 +592,8 @@ export const insertLocationSchema = createInsertSchema(locations).omit({ id: tru
 export const insertScreenSchema = createInsertSchema(screens).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPackagePlanSchema = createInsertSchema(packagePlans).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertContractSchema = createInsertSchema(contracts).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertContractEventSchema = createInsertSchema(contractEvents).omit({ id: true, createdAt: true });
+export const insertContractFileSchema = createInsertSchema(contractFiles).omit({ id: true, createdAt: true });
 export const insertPlacementSchema = createInsertSchema(placements).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertScheduleSnapshotSchema = createInsertSchema(scheduleSnapshots).omit({ id: true, createdAt: true });
 export const insertSnapshotPlacementSchema = createInsertSchema(snapshotPlacements).omit({ id: true, createdAt: true });
@@ -352,6 +605,18 @@ export const insertIntegrationLogSchema = createInsertSchema(integrationLogs).om
 export const insertJobSchema = createInsertSchema(jobs).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertJobRunSchema = createInsertSchema(jobRuns).omit({ id: true, createdAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
+export const insertOnboardingChecklistSchema = createInsertSchema(onboardingChecklists).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertOnboardingTaskSchema = createInsertSchema(onboardingTasks).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertReportSchema = createInsertSchema(reports).omit({ id: true, createdAt: true });
+export const insertReportMetricSchema = createInsertSchema(reportMetrics).omit({ id: true, createdAt: true });
+export const insertIncidentSchema = createInsertSchema(incidents).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertAlertRuleSchema = createInsertSchema(alertRules).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertCreativeSchema = createInsertSchema(creatives).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertCreativeVersionSchema = createInsertSchema(creativeVersions).omit({ id: true, createdAt: true });
+export const insertCreativeApprovalSchema = createInsertSchema(creativeApprovals).omit({ id: true, createdAt: true });
+export const insertWebhookSchema = createInsertSchema(webhooks).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertWebhookDeliverySchema = createInsertSchema(webhookDeliveries).omit({ id: true, createdAt: true });
 
 // ============================================================================
 // TYPE EXPORTS
@@ -404,3 +669,45 @@ export type InsertJobRun = z.infer<typeof insertJobRunSchema>;
 
 export type AuditLog = typeof auditLogs.$inferSelect;
 export type InsertAuditLog = z.infer<typeof insertAuditLogSchema>;
+
+export type ContractEvent = typeof contractEvents.$inferSelect;
+export type InsertContractEvent = z.infer<typeof insertContractEventSchema>;
+
+export type ContractFile = typeof contractFiles.$inferSelect;
+export type InsertContractFile = z.infer<typeof insertContractFileSchema>;
+
+export type OnboardingChecklist = typeof onboardingChecklists.$inferSelect;
+export type InsertOnboardingChecklist = z.infer<typeof insertOnboardingChecklistSchema>;
+
+export type OnboardingTask = typeof onboardingTasks.$inferSelect;
+export type InsertOnboardingTask = z.infer<typeof insertOnboardingTaskSchema>;
+
+export type Report = typeof reports.$inferSelect;
+export type InsertReport = z.infer<typeof insertReportSchema>;
+
+export type ReportMetric = typeof reportMetrics.$inferSelect;
+export type InsertReportMetric = z.infer<typeof insertReportMetricSchema>;
+
+export type Incident = typeof incidents.$inferSelect;
+export type InsertIncident = z.infer<typeof insertIncidentSchema>;
+
+export type AlertRule = typeof alertRules.$inferSelect;
+export type InsertAlertRule = z.infer<typeof insertAlertRuleSchema>;
+
+export type User = typeof users.$inferSelect;
+export type InsertUser = z.infer<typeof insertUserSchema>;
+
+export type Creative = typeof creatives.$inferSelect;
+export type InsertCreative = z.infer<typeof insertCreativeSchema>;
+
+export type CreativeVersion = typeof creativeVersions.$inferSelect;
+export type InsertCreativeVersion = z.infer<typeof insertCreativeVersionSchema>;
+
+export type CreativeApproval = typeof creativeApprovals.$inferSelect;
+export type InsertCreativeApproval = z.infer<typeof insertCreativeApprovalSchema>;
+
+export type Webhook = typeof webhooks.$inferSelect;
+export type InsertWebhook = z.infer<typeof insertWebhookSchema>;
+
+export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
+export type InsertWebhookDelivery = z.infer<typeof insertWebhookDeliverySchema>;

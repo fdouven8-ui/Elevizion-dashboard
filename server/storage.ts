@@ -12,6 +12,8 @@ import type {
   Screen, InsertScreen,
   PackagePlan, InsertPackagePlan,
   Contract, InsertContract,
+  ContractEvent, InsertContractEvent,
+  ContractFile, InsertContractFile,
   Placement, InsertPlacement,
   ScheduleSnapshot, InsertScheduleSnapshot,
   SnapshotPlacement, InsertSnapshotPlacement,
@@ -23,6 +25,13 @@ import type {
   Job, InsertJob,
   JobRun, InsertJobRun,
   AuditLog, InsertAuditLog,
+  OnboardingChecklist, InsertOnboardingChecklist,
+  OnboardingTask, InsertOnboardingTask,
+  Report, InsertReport,
+  ReportMetric, InsertReportMetric,
+  Incident, InsertIncident,
+  AlertRule, InsertAlertRule,
+  User, InsertUser,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -57,9 +66,52 @@ export interface IStorage {
   // Contracts
   getContracts(): Promise<Contract[]>;
   getContract(id: string): Promise<Contract | undefined>;
+  getContractBySignatureToken(tokenHash: string): Promise<Contract | undefined>;
   getActiveContracts(): Promise<Contract[]>;
+  getPendingSignatureContracts(): Promise<Contract[]>;
+  getExpiredContracts(): Promise<Contract[]>;
   createContract(data: InsertContract): Promise<Contract>;
-  updateContract(id: string, data: Partial<InsertContract>): Promise<Contract | undefined>;
+  updateContract(id: string, data: Partial<Contract>): Promise<Contract | undefined>;
+  
+  // Contract Events
+  getContractEvents(contractId: string): Promise<ContractEvent[]>;
+  createContractEvent(data: InsertContractEvent): Promise<ContractEvent>;
+  
+  // Contract Files
+  getContractFiles(contractId: string): Promise<ContractFile[]>;
+  createContractFile(data: InsertContractFile): Promise<ContractFile>;
+  
+  // Onboarding
+  getOnboardingChecklist(advertiserId: string): Promise<OnboardingChecklist | undefined>;
+  createOnboardingChecklist(data: InsertOnboardingChecklist): Promise<OnboardingChecklist>;
+  updateOnboardingChecklist(id: string, data: Partial<OnboardingChecklist>): Promise<OnboardingChecklist | undefined>;
+  getOnboardingTasks(checklistId: string): Promise<OnboardingTask[]>;
+  createOnboardingTask(data: InsertOnboardingTask): Promise<OnboardingTask>;
+  updateOnboardingTask(id: string, data: Partial<OnboardingTask>): Promise<OnboardingTask | undefined>;
+  
+  // Reports
+  getReports(): Promise<Report[]>;
+  getReportsByAdvertiser(advertiserId: string): Promise<Report[]>;
+  createReport(data: InsertReport): Promise<Report>;
+  updateReport(id: string, data: Partial<Report>): Promise<Report | undefined>;
+  
+  // Incidents
+  getIncidents(): Promise<Incident[]>;
+  getOpenIncidents(): Promise<Incident[]>;
+  createIncident(data: InsertIncident): Promise<Incident>;
+  updateIncident(id: string, data: Partial<Incident>): Promise<Incident | undefined>;
+  
+  // Alert Rules
+  getAlertRules(): Promise<AlertRule[]>;
+  createAlertRule(data: InsertAlertRule): Promise<AlertRule>;
+  updateAlertRule(id: string, data: Partial<AlertRule>): Promise<AlertRule | undefined>;
+  
+  // Users
+  getUsers(): Promise<User[]>;
+  getUser(id: string): Promise<User | undefined>;
+  getUserByEmail(email: string): Promise<User | undefined>;
+  createUser(data: InsertUser): Promise<User>;
+  updateUser(id: string, data: Partial<User>): Promise<User | undefined>;
 
   // Placements
   getPlacements(): Promise<Placement[]>;
@@ -263,17 +315,211 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(schema.contracts).where(eq(schema.contracts.status, "active"));
   }
 
+  async getContractBySignatureToken(tokenHash: string): Promise<Contract | undefined> {
+    const [contract] = await db.select().from(schema.contracts)
+      .where(eq(schema.contracts.signatureTokenHash, tokenHash));
+    return contract;
+  }
+
+  async getPendingSignatureContracts(): Promise<Contract[]> {
+    return await db.select().from(schema.contracts)
+      .where(eq(schema.contracts.status, "sent"));
+  }
+
+  async getExpiredContracts(): Promise<Contract[]> {
+    const now = new Date();
+    return await db.select().from(schema.contracts)
+      .where(and(
+        eq(schema.contracts.status, "sent"),
+        lte(schema.contracts.expiresAt, now)
+      ));
+  }
+
   async createContract(data: InsertContract): Promise<Contract> {
     const [contract] = await db.insert(schema.contracts).values(data).returning();
     return contract;
   }
 
-  async updateContract(id: string, data: Partial<InsertContract>): Promise<Contract | undefined> {
+  async updateContract(id: string, data: Partial<Contract>): Promise<Contract | undefined> {
     const [contract] = await db.update(schema.contracts)
       .set({ ...data, updatedAt: new Date() })
       .where(eq(schema.contracts.id, id))
       .returning();
     return contract;
+  }
+
+  // ============================================================================
+  // CONTRACT EVENTS
+  // ============================================================================
+
+  async getContractEvents(contractId: string): Promise<ContractEvent[]> {
+    return await db.select().from(schema.contractEvents)
+      .where(eq(schema.contractEvents.contractId, contractId))
+      .orderBy(desc(schema.contractEvents.createdAt));
+  }
+
+  async createContractEvent(data: InsertContractEvent): Promise<ContractEvent> {
+    const [event] = await db.insert(schema.contractEvents).values(data).returning();
+    return event;
+  }
+
+  // ============================================================================
+  // CONTRACT FILES
+  // ============================================================================
+
+  async getContractFiles(contractId: string): Promise<ContractFile[]> {
+    return await db.select().from(schema.contractFiles)
+      .where(eq(schema.contractFiles.contractId, contractId));
+  }
+
+  async createContractFile(data: InsertContractFile): Promise<ContractFile> {
+    const [file] = await db.insert(schema.contractFiles).values(data).returning();
+    return file;
+  }
+
+  // ============================================================================
+  // ONBOARDING
+  // ============================================================================
+
+  async getOnboardingChecklist(advertiserId: string): Promise<OnboardingChecklist | undefined> {
+    const [checklist] = await db.select().from(schema.onboardingChecklists)
+      .where(eq(schema.onboardingChecklists.advertiserId, advertiserId));
+    return checklist;
+  }
+
+  async createOnboardingChecklist(data: InsertOnboardingChecklist): Promise<OnboardingChecklist> {
+    const [checklist] = await db.insert(schema.onboardingChecklists).values(data).returning();
+    return checklist;
+  }
+
+  async updateOnboardingChecklist(id: string, data: Partial<OnboardingChecklist>): Promise<OnboardingChecklist | undefined> {
+    const [checklist] = await db.update(schema.onboardingChecklists)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.onboardingChecklists.id, id))
+      .returning();
+    return checklist;
+  }
+
+  async getOnboardingTasks(checklistId: string): Promise<OnboardingTask[]> {
+    return await db.select().from(schema.onboardingTasks)
+      .where(eq(schema.onboardingTasks.checklistId, checklistId));
+  }
+
+  async createOnboardingTask(data: InsertOnboardingTask): Promise<OnboardingTask> {
+    const [task] = await db.insert(schema.onboardingTasks).values(data).returning();
+    return task;
+  }
+
+  async updateOnboardingTask(id: string, data: Partial<OnboardingTask>): Promise<OnboardingTask | undefined> {
+    const [task] = await db.update(schema.onboardingTasks)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.onboardingTasks.id, id))
+      .returning();
+    return task;
+  }
+
+  // ============================================================================
+  // REPORTS
+  // ============================================================================
+
+  async getReports(): Promise<Report[]> {
+    return await db.select().from(schema.reports).orderBy(desc(schema.reports.createdAt));
+  }
+
+  async getReportsByAdvertiser(advertiserId: string): Promise<Report[]> {
+    return await db.select().from(schema.reports)
+      .where(eq(schema.reports.advertiserId, advertiserId));
+  }
+
+  async createReport(data: InsertReport): Promise<Report> {
+    const [report] = await db.insert(schema.reports).values(data).returning();
+    return report;
+  }
+
+  async updateReport(id: string, data: Partial<Report>): Promise<Report | undefined> {
+    const [report] = await db.update(schema.reports)
+      .set(data)
+      .where(eq(schema.reports.id, id))
+      .returning();
+    return report;
+  }
+
+  // ============================================================================
+  // INCIDENTS
+  // ============================================================================
+
+  async getIncidents(): Promise<Incident[]> {
+    return await db.select().from(schema.incidents).orderBy(desc(schema.incidents.createdAt));
+  }
+
+  async getOpenIncidents(): Promise<Incident[]> {
+    return await db.select().from(schema.incidents)
+      .where(eq(schema.incidents.status, "open"));
+  }
+
+  async createIncident(data: InsertIncident): Promise<Incident> {
+    const [incident] = await db.insert(schema.incidents).values(data).returning();
+    return incident;
+  }
+
+  async updateIncident(id: string, data: Partial<Incident>): Promise<Incident | undefined> {
+    const [incident] = await db.update(schema.incidents)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.incidents.id, id))
+      .returning();
+    return incident;
+  }
+
+  // ============================================================================
+  // ALERT RULES
+  // ============================================================================
+
+  async getAlertRules(): Promise<AlertRule[]> {
+    return await db.select().from(schema.alertRules);
+  }
+
+  async createAlertRule(data: InsertAlertRule): Promise<AlertRule> {
+    const [rule] = await db.insert(schema.alertRules).values(data).returning();
+    return rule;
+  }
+
+  async updateAlertRule(id: string, data: Partial<AlertRule>): Promise<AlertRule | undefined> {
+    const [rule] = await db.update(schema.alertRules)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.alertRules.id, id))
+      .returning();
+    return rule;
+  }
+
+  // ============================================================================
+  // USERS
+  // ============================================================================
+
+  async getUsers(): Promise<User[]> {
+    return await db.select().from(schema.users).orderBy(schema.users.name);
+  }
+
+  async getUser(id: string): Promise<User | undefined> {
+    const [user] = await db.select().from(schema.users).where(eq(schema.users.id, id));
+    return user;
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const [user] = await db.select().from(schema.users).where(eq(schema.users.email, email));
+    return user;
+  }
+
+  async createUser(data: InsertUser): Promise<User> {
+    const [user] = await db.insert(schema.users).values(data).returning();
+    return user;
+  }
+
+  async updateUser(id: string, data: Partial<User>): Promise<User | undefined> {
+    const [user] = await db.update(schema.users)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.users.id, id))
+      .returning();
+    return user;
   }
 
   // ============================================================================
