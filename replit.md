@@ -117,6 +117,17 @@ All permission changes are logged to `audit_logs` table:
 
 ## Recent Changes
 
+### December 2025 - Public Landing Page
+- Added public landing page at `/` for elevizion.nl
+  - Hero section with main value proposition and CTAs
+  - Services section explaining digital signage network
+  - Benefits section with pricing packages (Starter, Professional, Enterprise)
+  - Location partners section for potential hosting locations
+  - Contact section with email links for adverteerders and locaties
+  - Full Dutch language implementation
+- Dashboard moved to `/dashboard` (was `/`)
+- Updated meta tags for SEO (title, description, Open Graph, Twitter Cards)
+
 ### December 2025 - Backup & Handleiding
 - Added Backup & Export page (`/backup`) for data backup and disaster recovery
   - Full JSON backup of all tables in one file

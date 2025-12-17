@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 
 // Pages
+import Landing from "@/pages/Landing";
 import Overview from "@/pages/Overview";
 import Advertisers from "@/pages/Advertisers";
 import Locations from "@/pages/Locations";
@@ -27,7 +28,7 @@ function DashboardRouter() {
   return (
     <DashboardLayout>
       <Switch>
-        <Route path="/" component={Overview} />
+        <Route path="/dashboard" component={Overview} />
         <Route path="/advertisers" component={Advertisers} />
         <Route path="/locations" component={Locations} />
         <Route path="/screens" component={Screens} />
@@ -51,6 +52,7 @@ function DashboardRouter() {
 function Router() {
   return (
     <Switch>
+      <Route path="/" component={Landing} />
       <Route path="/sign/:token" component={SignContract} />
       <Route component={DashboardRouter} />
     </Switch>
