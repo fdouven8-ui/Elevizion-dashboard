@@ -884,6 +884,10 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Naam, e-mail en akkoord zijn verplicht" });
       }
 
+      if (!signatureData) {
+        return res.status(400).json({ message: "Een digitale handtekening is verplicht" });
+      }
+
       const { ip, userAgent } = formatClientInfo(req);
 
       // Update contract with signature

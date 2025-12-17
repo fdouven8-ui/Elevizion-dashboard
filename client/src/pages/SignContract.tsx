@@ -124,7 +124,7 @@ export default function SignContract() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !email || !agreedToTerms) return;
+    if (!name || !email || !agreedToTerms || !signatureData) return;
     signMutation.mutate({ name, email, signatureData, agreedToTerms });
   };
 
@@ -318,7 +318,7 @@ export default function SignContract() {
               <Button
                 type="submit"
                 className="w-full bg-[#1e3a5f] hover:bg-[#2d5a87]"
-                disabled={!name || !email || !agreedToTerms || signMutation.isPending}
+                disabled={!name || !email || !agreedToTerms || !signatureData || signMutation.isPending}
                 data-testid="button-sign-contract"
               >
                 {signMutation.isPending ? (
@@ -330,6 +330,11 @@ export default function SignContract() {
                   "Contract Ondertekenen"
                 )}
               </Button>
+              {!signatureData && (
+                <p className="text-xs text-amber-600 text-center">
+                  Plaats eerst uw handtekening in het veld hierboven
+                </p>
+              )}
 
               <p className="text-xs text-muted-foreground text-center">
                 Door te ondertekenen bevestigt u uw identiteit en gaat u akkoord met elektronische ondertekening.
