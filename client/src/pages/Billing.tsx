@@ -54,7 +54,7 @@ export default function Billing() {
                 <TableCell className="text-muted-foreground text-sm">
                   {inv.periodStart} - {inv.periodEnd}
                 </TableCell>
-                <TableCell className="text-right font-mono">${inv.amountIncVat.toFixed(2)}</TableCell>
+                <TableCell className="text-right font-mono">€{parseFloat(inv.amountIncVat).toLocaleString()}</TableCell>
                 <TableCell>
                   <Badge variant={getStatusVariant(inv.status) as any}>
                     {inv.status}

@@ -1,0 +1,254 @@
+We have a first working version / prototype of an Elevizion Dashboard built with Next.js 14, TypeScript, Prisma and PostgreSQL.
+It is not live yet and data loss is acceptable if it results in a cleaner, stronger architecture.
+
+Your task:
+Refactor, upgrade and extend this project into the best possible, future-proof Elevizion OS, ready to scale from 25 screens to 500+ screens and hundreds of advertisers, with full automation and integrations.
+
+1) Overall goals (very important)
+
+This becomes the single source of truth for:
+
+What advert runs
+
+Where it runs
+
+For how long
+
+Who pays what
+
+Who earns what
+
+Prioritize clarity, correctness, and automation over speed
+
+No “demo shortcuts”: design as if this will handle millions €/year
+
+Code must be clean, documented, and production-ready
+
+2) Architecture & foundations
+Tech stack (keep unless clearly better)
+
+Next.js 14 (App Router)
+
+TypeScript
+
+Prisma + PostgreSQL
+
+TailwindCSS + shadcn/ui
+
+Auth (role-based)
+
+Background jobs (worker + cron)
+
+Required improvements
+
+Strong folder structure (domain-based)
+
+Clear service layer (no business logic in pages)
+
+Background job system (syncs, invoicing, payouts)
+
+Environment-based config (.env)
+
+Docker-ready
+
+3) Data model — rebuild cleanly if needed
+
+Design a clear, normalized model around contracts and reality, not “just campaigns”.
+
+Core truth entities
+
+Advertiser
+
+Location (partner business)
+
+Screen
+
+PackagePlan (what is sold)
+
+Contract (who bought what, from when to when)
+
+Placement (where the contract is shown)
+
+ScheduleSnapshot (monthly immutable truth)
+
+Financial entities
+
+Invoice
+
+Payment
+
+Payout
+
+CarryOver (unpaid small balances)
+
+Integration entities
+
+IntegrationSettings (Moneybird, Yodeck)
+
+IntegrationLog
+
+Job
+
+AuditLog
+
+Explain in comments why each table exists.
+
+4) Scheduling & proof (extremely important)
+
+Support two sources:
+
+Manual scheduling
+
+Yodeck sync
+
+Every placement must have:
+
+source
+
+effective dates
+
+weight (seconds × plays × days)
+
+Monthly Schedule Snapshot
+
+One click: “Generate snapshot for {month}”
+
+Snapshot becomes read-only
+
+All billing & payouts reference this snapshot
+
+This is the legal/proof layer of the system
+
+5) Billing & Moneybird integration (full automation)
+Contracts → invoices
+
+Invoices are generated from contracts, not manually
+
+Support:
+
+Monthly recurring billing
+
+Custom prices
+
+VAT handling
+
+Invoice lifecycle:
+
+draft → sent → paid / failed / overdue
+
+Moneybird
+
+Secure token storage
+
+Sync:
+
+Contacts
+
+Invoices
+
+Payments
+
+Webhooks for payment updates
+
+Never double-create invoices (idempotent)
+
+6) Revenue share (10% for locations, professional level)
+
+Revenue distributed based on weighted screen time
+
+Payout calculation per month:
+
+gross revenue
+
+location share %
+
+minimum payout threshold
+
+Carry over unpaid balances
+
+Payout status + export for bookkeeping
+
+7) Yodeck integration (operational reality)
+
+Sync screens/players
+
+Sync playlists/schedules
+
+Match Yodeck players to Screens
+
+Show:
+
+Online/offline
+
+Last seen
+
+Currently running ads
+
+Conflict view:
+
+“Dashboard vs Yodeck mismatch”
+
+8) Automation & jobs
+
+Implement background jobs for:
+
+Nightly Yodeck sync
+
+Nightly Moneybird sync
+
+Monthly snapshot generation
+
+Monthly invoice generation
+
+Payment retry handling
+
+Overdue invoice checks
+
+Jobs must:
+
+Be idempotent
+
+Retry safely
+
+Log failures clearly
+
+9) UX — built for operators, not developers
+
+Left sidebar with clear domains
+
+KPI overview (MRR, screens, advertisers, unpaid)
+
+Powerful tables with:
+
+search
+
+filters
+
+saved views
+
+Clear “Next action” buttons (generate snapshot, send invoices, etc.)
+
+10) Final delivery expectations
+
+Refactored codebase
+
+Clear Prisma schema
+
+Seed data for testing
+
+README explaining:
+
+architecture
+
+workflows
+
+how monthly closing works
+
+Comments explaining key business logic
+
+VERY IMPORTANT
+
+If something in the existing code is weak, unclear or hacky:
+replace it with a better design and explain why in comments.
+
+Build this as if Elevizion could be sold as a SaaS in the future.

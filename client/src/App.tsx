@@ -9,7 +9,7 @@ import Overview from "@/pages/Overview";
 import Advertisers from "@/pages/Advertisers";
 import Locations from "@/pages/Locations";
 import Screens from "@/pages/Screens";
-import Campaigns from "@/pages/Campaigns";
+import Contracts from "@/pages/Contracts";
 import Billing from "@/pages/Billing";
 import Payouts from "@/pages/Payouts";
 import Integrations from "@/pages/Integrations";
@@ -23,7 +23,7 @@ function Router() {
         <Route path="/advertisers" component={Advertisers} />
         <Route path="/locations" component={Locations} />
         <Route path="/screens" component={Screens} />
-        <Route path="/campaigns" component={Campaigns} />
+        <Route path="/contracts" component={Contracts} />
         <Route path="/billing" component={Billing} />
         <Route path="/payouts" component={Payouts} />
         <Route path="/integrations" component={Integrations} />

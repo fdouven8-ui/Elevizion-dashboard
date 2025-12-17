@@ -54,7 +54,7 @@ export default function Payouts() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              ${payouts.filter(p => p.status === 'pending').reduce((sum, p) => sum + p.payoutAmountExVat, 0).toFixed(2)}
+              €{payouts.filter(p => p.status === 'pending').reduce((sum, p) => sum + parseFloat(p.payoutAmountExVat), 0).toFixed(2)}
             </div>
           </CardContent>
         </Card>
@@ -79,9 +79,9 @@ export default function Payouts() {
                 <TableCell className="text-muted-foreground text-sm">
                   {pay.periodStart}
                 </TableCell>
-                <TableCell className="text-right font-mono">${pay.grossRevenueExVat.toFixed(2)}</TableCell>
+                <TableCell className="text-right font-mono">€{parseFloat(pay.grossRevenueExVat).toFixed(2)}</TableCell>
                 <TableCell className="text-right font-mono">{pay.sharePercent}%</TableCell>
-                <TableCell className="text-right font-mono font-bold">${pay.payoutAmountExVat.toFixed(2)}</TableCell>
+                <TableCell className="text-right font-mono font-bold">€{parseFloat(pay.payoutAmountExVat).toFixed(2)}</TableCell>
                 <TableCell>
                   <Badge variant={pay.status === 'paid' ? 'default' : 'secondary'}>
                     {pay.status}

@@ -47,8 +47,8 @@ const items = [
     icon: MapPin,
   },
   {
-    title: "Campaigns",
-    url: "/campaigns",
+    title: "Contracts",
+    url: "/contracts",
     icon: Calendar,
   },
   {

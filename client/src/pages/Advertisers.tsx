@@ -22,7 +22,7 @@ import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
-import { Advertiser } from "@/lib/types";
+import type { Advertiser } from "@shared/schema";
 
 export default function Advertisers() {
   const { advertisers, addAdvertiser, updateAdvertiser } = useAppData();
@@ -75,7 +75,6 @@ export default function Advertisers() {
               <TableHead>Company</TableHead>
               <TableHead>Contact</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="text-right">Monthly (Ex VAT)</TableHead>
               <TableHead className="w-[50px]"></TableHead>
             </TableRow>
           </TableHeader>
@@ -94,7 +93,6 @@ export default function Advertisers() {
                     {adv.status}
                   </Badge>
                 </TableCell>
-                <TableCell className="text-right font-mono">${adv.monthlyPriceExVat.toFixed(2)}</TableCell>
                 <TableCell>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
@@ -115,7 +113,7 @@ export default function Advertisers() {
             ))}
             {filteredAdvertisers.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center">
+                <TableCell colSpan={4} className="h-24 text-center">
                   No advertisers found.
                 </TableCell>
               </TableRow>
@@ -134,7 +132,6 @@ function AdvertiserForm({ onSuccess }: { onSuccess: () => void }) {
   const onSubmit = (data: any) => {
     addAdvertiser({
       ...data,
-      monthlyPriceExVat: Number(data.monthlyPriceExVat),
       status: "active"
     });
     onSuccess();
@@ -146,15 +143,9 @@ function AdvertiserForm({ onSuccess }: { onSuccess: () => void }) {
         <Label htmlFor="companyName">Company Name</Label>
         <Input id="companyName" {...register("companyName", { required: true })} />
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="grid gap-2">
-          <Label htmlFor="contactName">Contact Name</Label>
-          <Input id="contactName" {...register("contactName", { required: true })} />
-        </div>
-        <div className="grid gap-2">
-          <Label htmlFor="monthlyPrice">Monthly Price (Ex VAT)</Label>
-          <Input id="monthlyPrice" type="number" {...register("monthlyPriceExVat", { required: true })} />
-        </div>
+      <div className="grid gap-2">
+        <Label htmlFor="contactName">Contact Name</Label>
+        <Input id="contactName" {...register("contactName", { required: true })} />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-2">
