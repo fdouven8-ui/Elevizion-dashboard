@@ -117,9 +117,28 @@ All permission changes are logged to `audit_logs` table:
 
 ## Recent Changes
 
+### December 2025 - Phase 4 (Schema Alignment)
+- Refactored snapshot routes to use normalized schema fields (periodYear/periodMonth instead of legacy year/month)
+- Implemented immutable snapshot data by freezing contracts, locations, and carry-overs at snapshot creation time
+- Invoice generation now uses frozen contract data from snapshot notes JSON
+- Payout generation uses weight-based revenue distribution with frozen location data
+- Fixed webhook deliveries to use correct fields (eventType, responseStatus, responseBody)
+- Fixed creative approvals to use approvedAt/rejectedAt timestamps instead of action field
+- Added Phase 4 schemas: webhooks, webhookDeliveries, creatives, creativeVersions, creativeApprovals, apiKeys
+
 ### December 2025 - Phase 3
 - Added Partner Portal with Replit Auth integration
 - Implemented role-based access control system
 - Created Users management page for admins
 - Added audit logging for permission changes
 - Extended auth storage with role management functions
+
+## Snapshot Immutability Design
+
+Monthly snapshots freeze all relevant business data at creation time to ensure billing accuracy:
+- `frozenContracts`: Contract pricing (monthlyPriceExVat, vatPercent) captured at snapshot time
+- `frozenLocations`: Location revenue share settings (revenueSharePercent, minimumPayoutAmount)
+- `frozenCarryOvers`: Pending carry-over amounts from previous periods
+- `frozenTotalRevenue`: Calculated total revenue from active contracts
+
+This data is stored in the snapshot's `notes` field as JSON and used by invoice/payout generation to guarantee consistent billing regardless of subsequent changes to live data.

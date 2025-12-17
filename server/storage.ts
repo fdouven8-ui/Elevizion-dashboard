@@ -32,6 +32,11 @@ import type {
   Incident, InsertIncident,
   AlertRule, InsertAlertRule,
   User, InsertUser,
+  Webhook, InsertWebhook,
+  WebhookDelivery, InsertWebhookDelivery,
+  Creative, InsertCreative,
+  CreativeVersion, InsertCreativeVersion,
+  CreativeApproval, InsertCreativeApproval,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -173,6 +178,26 @@ export interface IStorage {
   // Audit Logs
   createAuditLog(data: InsertAuditLog): Promise<AuditLog>;
   getAuditLogs(entityType?: string, entityId?: string): Promise<AuditLog[]>;
+
+  // Webhooks
+  getWebhooks(): Promise<Webhook[]>;
+  getWebhook(id: string): Promise<Webhook | undefined>;
+  createWebhook(data: InsertWebhook): Promise<Webhook>;
+  updateWebhook(id: string, data: Partial<InsertWebhook>): Promise<Webhook | undefined>;
+  deleteWebhook(id: string): Promise<boolean>;
+  getWebhookDeliveries(webhookId: string): Promise<WebhookDelivery[]>;
+  createWebhookDelivery(data: InsertWebhookDelivery): Promise<WebhookDelivery>;
+
+  // Creatives
+  getCreatives(): Promise<Creative[]>;
+  getCreative(id: string): Promise<Creative | undefined>;
+  createCreative(data: InsertCreative): Promise<Creative>;
+  updateCreative(id: string, data: Partial<InsertCreative>): Promise<Creative | undefined>;
+  deleteCreative(id: string): Promise<boolean>;
+  getCreativeVersions(creativeId: string): Promise<CreativeVersion[]>;
+  createCreativeVersion(data: InsertCreativeVersion): Promise<CreativeVersion>;
+  getCreativeApprovals(creativeId: string): Promise<CreativeApproval[]>;
+  createCreativeApproval(data: InsertCreativeApproval): Promise<CreativeApproval>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -497,7 +522,7 @@ export class DatabaseStorage implements IStorage {
   // ============================================================================
 
   async getUsers(): Promise<User[]> {
-    return await db.select().from(schema.users).orderBy(schema.users.name);
+    return await db.select().from(schema.users).orderBy(desc(schema.users.createdAt));
   }
 
   async getUser(id: string): Promise<User | undefined> {
@@ -801,6 +826,102 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(schema.auditLogs)
       .orderBy(desc(schema.auditLogs.createdAt))
       .limit(100);
+  }
+
+  // ============================================================================
+  // WEBHOOKS
+  // ============================================================================
+
+  async getWebhooks(): Promise<Webhook[]> {
+    return await db.select().from(schema.webhooks).orderBy(desc(schema.webhooks.createdAt));
+  }
+
+  async getWebhook(id: string): Promise<Webhook | undefined> {
+    const [webhook] = await db.select().from(schema.webhooks).where(eq(schema.webhooks.id, id));
+    return webhook;
+  }
+
+  async createWebhook(data: InsertWebhook): Promise<Webhook> {
+    const [webhook] = await db.insert(schema.webhooks).values(data).returning();
+    return webhook;
+  }
+
+  async updateWebhook(id: string, data: Partial<InsertWebhook>): Promise<Webhook | undefined> {
+    const [webhook] = await db.update(schema.webhooks)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.webhooks.id, id))
+      .returning();
+    return webhook;
+  }
+
+  async deleteWebhook(id: string): Promise<boolean> {
+    await db.delete(schema.webhooks).where(eq(schema.webhooks.id, id));
+    return true;
+  }
+
+  async getWebhookDeliveries(webhookId: string): Promise<WebhookDelivery[]> {
+    return await db.select().from(schema.webhookDeliveries)
+      .where(eq(schema.webhookDeliveries.webhookId, webhookId))
+      .orderBy(desc(schema.webhookDeliveries.createdAt))
+      .limit(50);
+  }
+
+  async createWebhookDelivery(data: InsertWebhookDelivery): Promise<WebhookDelivery> {
+    const [delivery] = await db.insert(schema.webhookDeliveries).values(data).returning();
+    return delivery;
+  }
+
+  // ============================================================================
+  // CREATIVES
+  // ============================================================================
+
+  async getCreatives(): Promise<Creative[]> {
+    return await db.select().from(schema.creatives).orderBy(desc(schema.creatives.createdAt));
+  }
+
+  async getCreative(id: string): Promise<Creative | undefined> {
+    const [creative] = await db.select().from(schema.creatives).where(eq(schema.creatives.id, id));
+    return creative;
+  }
+
+  async createCreative(data: InsertCreative): Promise<Creative> {
+    const [creative] = await db.insert(schema.creatives).values(data).returning();
+    return creative;
+  }
+
+  async updateCreative(id: string, data: Partial<InsertCreative>): Promise<Creative | undefined> {
+    const [creative] = await db.update(schema.creatives)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.creatives.id, id))
+      .returning();
+    return creative;
+  }
+
+  async deleteCreative(id: string): Promise<boolean> {
+    await db.delete(schema.creatives).where(eq(schema.creatives.id, id));
+    return true;
+  }
+
+  async getCreativeVersions(creativeId: string): Promise<CreativeVersion[]> {
+    return await db.select().from(schema.creativeVersions)
+      .where(eq(schema.creativeVersions.creativeId, creativeId))
+      .orderBy(desc(schema.creativeVersions.versionNo));
+  }
+
+  async createCreativeVersion(data: InsertCreativeVersion): Promise<CreativeVersion> {
+    const [version] = await db.insert(schema.creativeVersions).values(data).returning();
+    return version;
+  }
+
+  async getCreativeApprovals(creativeId: string): Promise<CreativeApproval[]> {
+    return await db.select().from(schema.creativeApprovals)
+      .where(eq(schema.creativeApprovals.creativeId, creativeId))
+      .orderBy(desc(schema.creativeApprovals.createdAt));
+  }
+
+  async createCreativeApproval(data: InsertCreativeApproval): Promise<CreativeApproval> {
+    const [approval] = await db.insert(schema.creativeApprovals).values(data).returning();
+    return approval;
   }
 }
 

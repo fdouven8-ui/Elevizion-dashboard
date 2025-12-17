@@ -287,14 +287,14 @@ export async function registerRoutes(
 
       // Get active contracts for this period
       const contracts = await storage.getActiveContracts();
-      const placements = await storage.getPlacements();
+      const allPlacements = await storage.getPlacements();
       const screens = await storage.getScreens();
       const locations = await storage.getLocations();
-      const advertisers = await storage.getAdvertisers();
       const pendingCarryOvers = await storage.getAllPendingCarryOvers();
 
       const periodStart = new Date(year, month - 1, 1);
       const periodEnd = new Date(year, month, 0);
+      const daysInMonth = periodEnd.getDate();
 
       // Filter contracts active in this period
       const activeContracts = contracts.filter(c => {
@@ -307,9 +307,13 @@ export async function registerRoutes(
         return true;
       });
 
-      // Build snapshot data with frozen carry-overs
-      const snapshotData = {
-        contracts: activeContracts.map(c => ({
+      // Calculate total revenue from active contracts
+      const totalRevenue = activeContracts.reduce((sum, c) => sum + parseFloat(c.monthlyPriceExVat), 0);
+
+      // Freeze all data at snapshot time for immutability
+      const advertisers = await storage.getAdvertisers();
+      const frozenData = {
+        frozenContracts: activeContracts.map(c => ({
           id: c.id,
           name: c.name,
           advertiserId: c.advertiserId,
@@ -318,68 +322,78 @@ export async function registerRoutes(
           vatPercent: c.vatPercent,
           billingCycle: c.billingCycle,
         })),
-        placements: placements
-          .filter(p => activeContracts.some(c => c.id === p.contractId))
-          .map(p => ({
-            id: p.id,
-            contractId: p.contractId,
-            screenId: p.screenId,
-            screenName: screens.find(s => s.id === p.screenId)?.name,
-            locationName: locations.find(l => l.id === screens.find(s => s.id === p.screenId)?.locationId)?.name,
-          })),
-        locations: locations.map(l => ({
+        frozenLocations: locations.map(l => ({
           id: l.id,
           name: l.name,
           revenueSharePercent: l.revenueSharePercent,
           minimumPayoutAmount: l.minimumPayoutAmount,
-          bankAccountIban: l.bankAccountIban,
         })),
-        // Freeze pending carry-overs at snapshot time
         frozenCarryOvers: pendingCarryOvers.map(co => ({
           id: co.id,
           locationId: co.locationId,
-          fromYear: co.fromYear,
-          fromMonth: co.fromMonth,
+          periodYear: co.periodYear,
+          periodMonth: co.periodMonth,
           amount: co.amount,
         })),
-        totalRevenue: activeContracts.reduce((sum, c) => sum + parseFloat(c.monthlyPriceExVat), 0),
+        frozenTotalRevenue: totalRevenue.toFixed(2),
+        createdAt: new Date().toISOString(),
       };
 
+      // Create the snapshot with normalized schema fields and frozen data
       const snapshot = await storage.createScheduleSnapshot({
-        year,
-        month,
+        periodYear: year,
+        periodMonth: month,
         status: "draft",
-        snapshotData,
+        totalRevenue: totalRevenue.toFixed(2),
+        notes: JSON.stringify(frozenData),
       });
 
-      // Create snapshot placements (skip placements without valid location)
-      for (const p of snapshotData.placements) {
+      // Create snapshot placements with weight-based calculations
+      const activePlacements = allPlacements.filter(p => 
+        activeContracts.some(c => c.id === p.contractId)
+      );
+
+      let totalWeight = 0;
+      for (const p of activePlacements) {
         const contract = activeContracts.find(c => c.id === p.contractId);
         const screen = screens.find(s => s.id === p.screenId);
         const location = locations.find(l => l.id === screen?.locationId);
         
-        // Skip placements without a valid location to ensure data integrity
+        // Skip placements without a valid location
         if (!location?.id) continue;
+        
+        // Calculate weight: seconds × plays × days
+        const secondsPerLoop = p.secondsPerLoop || 10;
+        const playsPerHour = p.playsPerHour || 6;
+        const weight = secondsPerLoop * playsPerHour * daysInMonth;
+        totalWeight += weight;
         
         await storage.createSnapshotPlacement({
           snapshotId: snapshot.id,
+          placementId: p.id,
           contractId: p.contractId,
           screenId: p.screenId,
           advertiserId: contract?.advertiserId || "",
           locationId: location.id,
-          monthlyPriceExVat: contract?.monthlyPriceExVat || "0",
-          vatPercent: contract?.vatPercent || "21.00",
-          revenueSharePercent: location.revenueSharePercent || "0",
+          secondsPerLoop,
+          playsPerHour,
+          daysActive: daysInMonth,
+          weight: weight.toFixed(2),
         });
       }
 
-      res.status(201).json(snapshot);
+      // Update snapshot with total weight
+      await storage.updateScheduleSnapshot(snapshot.id, {
+        totalWeight: totalWeight.toFixed(2),
+      });
+
+      res.status(201).json({ ...snapshot, totalWeight: totalWeight.toFixed(2) });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
   });
 
-  // Generate invoices from snapshot
+  // Generate invoices from snapshot (uses frozen contract data for immutability)
   app.post("/api/snapshots/:id/generate-invoices", async (req, res) => {
     try {
       const snapshot = await storage.getScheduleSnapshot(req.params.id);
@@ -391,15 +405,27 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Snapshot is al afgesloten" });
       }
 
-      const snapshotData = snapshot.snapshotData as any;
+      // Parse frozen data from snapshot notes (immutable at creation time)
+      let frozenData: any = {};
+      try {
+        frozenData = snapshot.notes ? JSON.parse(snapshot.notes) : {};
+      } catch {
+        return res.status(400).json({ message: "Snapshot data is beschadigd. Maak een nieuwe snapshot." });
+      }
+
+      const frozenContracts = frozenData.frozenContracts || [];
+      if (frozenContracts.length === 0) {
+        return res.status(400).json({ message: "Geen contracten gevonden in snapshot. Maak een nieuwe snapshot." });
+      }
+
       const existingInvoices = await storage.getInvoices();
       
-      const periodStart = new Date(snapshot.year, snapshot.month - 1, 1).toISOString().split("T")[0];
-      const periodEnd = new Date(snapshot.year, snapshot.month, 0).toISOString().split("T")[0];
+      const periodStart = new Date(snapshot.periodYear, snapshot.periodMonth - 1, 1).toISOString().split("T")[0];
+      const periodEnd = new Date(snapshot.periodYear, snapshot.periodMonth, 0).toISOString().split("T")[0];
 
       let count = 0;
-      for (const contract of snapshotData.contracts || []) {
-        // Check if invoice already exists
+      for (const contract of frozenContracts) {
+        // Check if invoice already exists for this contract and period
         const exists = existingInvoices.some(inv => 
           inv.contractId === contract.id && 
           inv.periodStart === periodStart
@@ -413,7 +439,7 @@ export async function registerRoutes(
         const amountIncVat = amountExVat + vatAmount;
 
         // Generate invoice number
-        const invoiceNumber = `INV-${snapshot.year}-${String(snapshot.month).padStart(2, "0")}-${String(count + 1).padStart(4, "0")}`;
+        const invoiceNumber = `INV-${snapshot.periodYear}-${String(snapshot.periodMonth).padStart(2, "0")}-${String(count + 1).padStart(4, "0")}`;
 
         await storage.createInvoice({
           advertiserId: contract.advertiserId,
@@ -426,7 +452,7 @@ export async function registerRoutes(
           vatAmount: vatAmount.toFixed(2),
           amountIncVat: amountIncVat.toFixed(2),
           status: "draft",
-          dueDate: new Date(snapshot.year, snapshot.month, 15).toISOString().split("T")[0],
+          dueDate: new Date(snapshot.periodYear, snapshot.periodMonth, 15).toISOString().split("T")[0],
         });
 
         count++;
@@ -440,7 +466,7 @@ export async function registerRoutes(
     }
   });
 
-  // Generate payouts from snapshot (stores results in snapshot, no database mutations)
+  // Generate payouts from snapshot using weight-based revenue distribution (uses frozen data)
   app.post("/api/snapshots/:id/generate-payouts", async (req, res) => {
     try {
       const snapshot = await storage.getScheduleSnapshot(req.params.id);
@@ -452,22 +478,19 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Snapshot is afgesloten, uitbetalingen kunnen niet meer worden gewijzigd" });
       }
 
-      const snapshotPlacements = await storage.getSnapshotPlacements(snapshot.id);
-      const snapshotData = snapshot.snapshotData as any;
-      const frozenCarryOvers = snapshotData.frozenCarryOvers || [];
-
-      // Fail-fast validation: check all frozen carry-overs have valid locationIds
-      const invalidCarryOvers = frozenCarryOvers.filter((co: any) => !co.locationId);
-      if (invalidCarryOvers.length > 0) {
-        return res.status(422).json({
-          message: `Data integriteit fout: ${invalidCarryOvers.length} bevroren carry-overs hebben geen geldige locatie. Maak een nieuwe snapshot.`,
-          invalidIds: invalidCarryOvers.map((co: any) => co.id),
-        });
+      // Parse frozen data from snapshot notes (immutable at creation time)
+      let frozenData: any = {};
+      try {
+        frozenData = snapshot.notes ? JSON.parse(snapshot.notes) : {};
+      } catch {
+        return res.status(400).json({ message: "Snapshot data is beschadigd. Maak een nieuwe snapshot." });
       }
 
-      // Group by location and calculate revenue share using frozen snapshot data
-      const locationPayouts = new Map<string, { amount: number; revenueSharePercent: string; minPayout: number; carryOverIds: string[] }>();
-      
+      const frozenLocations = frozenData.frozenLocations || [];
+      const frozenCarryOvers = frozenData.frozenCarryOvers || [];
+
+      const snapshotPlacements = await storage.getSnapshotPlacements(snapshot.id);
+
       // Validate all placements have valid locationIds
       const invalidPlacements = snapshotPlacements.filter(p => !p.locationId);
       if (invalidPlacements.length > 0) {
@@ -476,15 +499,30 @@ export async function registerRoutes(
         });
       }
 
-      // First add all locations with placements
+      const totalRevenue = parseFloat(snapshot.totalRevenue || "0");
+      const totalWeight = parseFloat(snapshot.totalWeight || "0");
+
+      // Group by location and calculate revenue share based on weight (using frozen location data)
+      const locationPayouts = new Map<string, { 
+        amount: number; 
+        revenueSharePercent: string; 
+        minPayout: number; 
+        carryOverIds: string[];
+        locationName: string;
+      }>();
+
+      // Calculate revenue share per location based on weight proportion
       for (const placement of snapshotPlacements) {
-        const revenue = parseFloat(placement.monthlyPriceExVat || "0");
-        const sharePercent = parseFloat(placement.revenueSharePercent || "0");
-        const share = (revenue * sharePercent) / 100;
+        const frozenLocation = frozenLocations.find((l: any) => l.id === placement.locationId);
+        if (!frozenLocation) continue;
+
+        const weight = parseFloat(placement.weight);
+        const sharePercent = parseFloat(frozenLocation.revenueSharePercent || "0");
+        const minPayout = parseFloat(frozenLocation.minimumPayoutAmount || "0");
         
-        // Get minimum payout from frozen snapshot data
-        const frozenLocation = snapshotData.locations?.find((l: any) => l.id === placement.locationId);
-        const minPayout = parseFloat(frozenLocation?.minimumPayoutAmount || "0");
+        // Revenue proportional to weight, then apply share percentage
+        const proportionalRevenue = totalWeight > 0 ? (weight / totalWeight) * totalRevenue : 0;
+        const share = (proportionalRevenue * sharePercent) / 100;
         
         const current = locationPayouts.get(placement.locationId);
         if (current) {
@@ -492,49 +530,48 @@ export async function registerRoutes(
         } else {
           locationPayouts.set(placement.locationId, {
             amount: share,
-            revenueSharePercent: placement.revenueSharePercent || "0",
+            revenueSharePercent: frozenLocation.revenueSharePercent || "0",
             minPayout,
             carryOverIds: [],
+            locationName: frozenLocation.name,
           });
         }
       }
 
-      // Add frozen carry-overs (including locations with only carry-overs, no placements)
-      // Note: all carry-overs are guaranteed to have valid locationId by the fail-fast check above
+      // Add frozen carry-overs (from snapshot creation time, not live data)
       for (const carryOver of frozenCarryOvers) {
-        const frozenLocation = snapshotData.locations?.find((l: any) => l.id === carryOver.locationId);
-        const minPayout = parseFloat(frozenLocation?.minimumPayoutAmount || "0");
-        
+        const frozenLocation = frozenLocations.find((l: any) => l.id === carryOver.locationId);
+        if (!frozenLocation) continue;
+
         const current = locationPayouts.get(carryOver.locationId);
         if (current) {
           current.amount += parseFloat(carryOver.amount);
           current.carryOverIds.push(carryOver.id);
         } else {
-          // Location has only carry-over, no current placements
           locationPayouts.set(carryOver.locationId, {
             amount: parseFloat(carryOver.amount),
-            revenueSharePercent: frozenLocation?.revenueSharePercent || "0",
-            minPayout,
+            revenueSharePercent: frozenLocation.revenueSharePercent || "0",
+            minPayout: parseFloat(frozenLocation.minimumPayoutAmount || "0"),
             carryOverIds: [carryOver.id],
+            locationName: frozenLocation.name,
           });
         }
       }
 
-      // Build payout results to store in snapshot (no database mutations)
+      // Build payout results
       const payoutResults: any[] = [];
       const carryOverResults: any[] = [];
 
-      for (const [locationId, data] of locationPayouts) {
-        if (data.amount === 0) continue;
+      const periodStart = new Date(snapshot.periodYear, snapshot.periodMonth - 1, 1).toISOString().split("T")[0];
+      const periodEnd = new Date(snapshot.periodYear, snapshot.periodMonth, 0).toISOString().split("T")[0];
 
-        const periodStart = new Date(snapshot.year, snapshot.month - 1, 1).toISOString().split("T")[0];
-        const periodEnd = new Date(snapshot.year, snapshot.month, 0).toISOString().split("T")[0];
-        const frozenLocation = snapshotData.locations?.find((l: any) => l.id === locationId);
+      for (const [locationId, data] of Array.from(locationPayouts.entries())) {
+        if (data.amount === 0) continue;
 
         if (data.amount >= data.minPayout) {
           payoutResults.push({
             locationId,
-            locationName: frozenLocation?.name,
+            locationName: data.locationName,
             periodStart,
             periodEnd,
             revenueAmount: data.amount.toFixed(2),
@@ -545,30 +582,32 @@ export async function registerRoutes(
         } else {
           carryOverResults.push({
             locationId,
-            locationName: frozenLocation?.name,
+            locationName: data.locationName,
             amount: data.amount.toFixed(2),
             appliedCarryOverIds: data.carryOverIds,
           });
         }
       }
 
-      // Store results in snapshot (immutable once locked)
-      const updatedSnapshotData = {
-        ...snapshotData,
+      // Store payout results in notes, preserving frozen data
+      const updatedNotes = {
+        ...frozenData,
         payoutResults,
         carryOverResults,
         payoutsGeneratedAt: new Date().toISOString(),
       };
 
       await storage.updateScheduleSnapshot(snapshot.id, {
-        snapshotData: updatedSnapshotData,
         status: "payouts_calculated",
+        notes: JSON.stringify(updatedNotes),
       });
 
       res.json({ 
         success: true, 
         count: payoutResults.length, 
         carryOverCount: carryOverResults.length,
+        payoutResults,
+        carryOverResults,
         message: `${payoutResults.length} uitbetalingen berekend${carryOverResults.length > 0 ? `, ${carryOverResults.length} bedragen worden doorgeschoven` : ""}` 
       });
     } catch (error: any) {
@@ -588,45 +627,41 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Snapshot is al afgesloten" });
       }
 
-      const snapshotData = snapshot.snapshotData as any;
-      const payoutResults = snapshotData.payoutResults || [];
-      const carryOverResults = snapshotData.carryOverResults || [];
-      const frozenCarryOvers = snapshotData.frozenCarryOvers || [];
-
-      // Integrity check: verify all frozen carry-overs are accounted for
-      const processedCarryOverIds = new Set<string>();
-      for (const payout of payoutResults) {
-        for (const id of payout.appliedCarryOverIds || []) {
-          processedCarryOverIds.add(id);
-        }
-      }
-      for (const carryOver of carryOverResults) {
-        for (const id of carryOver.appliedCarryOverIds || []) {
-          processedCarryOverIds.add(id);
-        }
-      }
-
-      // Check if any frozen carry-overs with valid locationId were not processed
-      const unprocessedCarryOvers = frozenCarryOvers.filter((co: any) => 
-        co.locationId && !processedCarryOverIds.has(co.id)
-      );
-      if (unprocessedCarryOvers.length > 0) {
-        return res.status(422).json({ 
-          message: `Data integriteit fout: ${unprocessedCarryOvers.length} bevroren carry-overs zijn niet verwerkt. Herbereken uitbetalingen.`,
-          unprocessedIds: unprocessedCarryOvers.map((co: any) => co.id),
+      // Parse payout results from notes field (stored by generate-payouts)
+      let payoutResults: any[] = [];
+      let carryOverResults: any[] = [];
+      try {
+        const notesData = snapshot.notes ? JSON.parse(snapshot.notes) : {};
+        payoutResults = notesData.payoutResults || [];
+        carryOverResults = notesData.carryOverResults || [];
+      } catch {
+        // Notes field not in expected format - regenerate payouts first
+        return res.status(400).json({ 
+          message: "Uitbetalingen zijn nog niet berekend. Bereken eerst de uitbetalingen." 
         });
       }
 
-      // Apply all payout and carry-over mutations at lock time
+      if (payoutResults.length === 0 && carryOverResults.length === 0) {
+        return res.status(400).json({ 
+          message: "Geen uitbetalingen om te verwerken. Bereken eerst de uitbetalingen." 
+        });
+      }
+
+      const locations = await storage.getLocations();
+
+      // Apply all payout mutations at lock time
       for (const payout of payoutResults) {
+        const location = locations.find(l => l.id === payout.locationId);
+        
         await storage.createPayout({
           locationId: payout.locationId,
           snapshotId: snapshot.id,
           periodStart: payout.periodStart,
           periodEnd: payout.periodEnd,
-          revenueAmount: payout.revenueAmount,
-          revenueSharePercent: payout.revenueSharePercent,
-          payoutAmount: payout.payoutAmount,
+          grossRevenueExVat: payout.revenueAmount,
+          sharePercent: payout.revenueSharePercent,
+          payoutAmountExVat: payout.payoutAmount,
+          totalDue: payout.payoutAmount,
           status: "pending",
         });
 
@@ -636,16 +671,17 @@ export async function registerRoutes(
         }
       }
 
+      // Create new carry-overs for amounts below minimum payout
       for (const carryOver of carryOverResults) {
         await storage.createCarryOver({
           locationId: carryOver.locationId,
-          fromYear: snapshot.year,
-          fromMonth: snapshot.month,
+          periodYear: snapshot.periodYear,
+          periodMonth: snapshot.periodMonth,
           amount: carryOver.amount,
           status: "pending",
         });
 
-        // Mark all applied carry-overs as used
+        // Mark all applied carry-overs as used (rolled into the new one)
         for (const carryOverId of carryOver.appliedCarryOverIds || []) {
           await storage.updateCarryOver(carryOverId, { status: "applied" });
         }
@@ -1687,6 +1723,273 @@ export async function registerRoutes(
       } else {
         res.status(500).json({ message: emailResult.message });
       }
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // EXPORT/IMPORT - Bulk Data Operations
+  // ============================================================================
+
+  const entityExporters: Record<string, () => Promise<any[]>> = {
+    advertisers: () => storage.getAdvertisers(),
+    locations: () => storage.getLocations(),
+    screens: () => storage.getScreens(),
+    contracts: () => storage.getContracts(),
+    placements: () => storage.getPlacements(),
+    invoices: () => storage.getInvoices(),
+  };
+
+  function convertToCSV(data: any[]): string {
+    if (data.length === 0) return "";
+    const headers = Object.keys(data[0]);
+    const rows = data.map(item => 
+      headers.map(h => {
+        const val = item[h];
+        if (val === null || val === undefined) return "";
+        if (typeof val === "object") return JSON.stringify(val).replace(/"/g, '""');
+        return String(val).replace(/"/g, '""');
+      }).map(v => `"${v}"`).join(",")
+    );
+    return [headers.join(","), ...rows].join("\n");
+  }
+
+  app.get("/api/export/:entity", async (req, res) => {
+    try {
+      const { entity } = req.params;
+      const format = (req.query.format as string) || "json";
+      
+      const exporter = entityExporters[entity];
+      if (!exporter) {
+        return res.status(400).json({ message: `Onbekende entiteit: ${entity}` });
+      }
+      
+      const data = await exporter();
+      
+      if (format === "csv") {
+        const csv = convertToCSV(data);
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", `attachment; filename="${entity}_export.csv"`);
+        res.send(csv);
+      } else {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader("Content-Disposition", `attachment; filename="${entity}_export.json"`);
+        res.json(data);
+      }
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // WEBHOOKS
+  // ============================================================================
+
+  app.get("/api/webhooks", async (_req, res) => {
+    try {
+      const webhooks = await storage.getWebhooks();
+      res.json(webhooks);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/webhooks", async (req, res) => {
+    try {
+      const webhook = await storage.createWebhook(req.body);
+      res.status(201).json(webhook);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/webhooks/:id", async (req, res) => {
+    try {
+      const webhook = await storage.updateWebhook(req.params.id, req.body);
+      if (!webhook) return res.status(404).json({ message: "Webhook niet gevonden" });
+      res.json(webhook);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/webhooks/:id", async (req, res) => {
+    try {
+      await storage.deleteWebhook(req.params.id);
+      res.status(204).send();
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/webhooks/:id/deliveries", async (req, res) => {
+    try {
+      const deliveries = await storage.getWebhookDeliveries(req.params.id);
+      res.json(deliveries);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/webhooks/:id/test", async (req, res) => {
+    try {
+      const webhook = await storage.getWebhook(req.params.id);
+      if (!webhook) return res.status(404).json({ message: "Webhook niet gevonden" });
+      
+      const testPayload = {
+        event: "test.ping",
+        timestamp: new Date().toISOString(),
+        data: { message: "Test webhook delivery from Elevizion OS" }
+      };
+      
+      const response = await fetch(webhook.url, {
+        method: "POST",
+        headers: { 
+          "Content-Type": "application/json",
+          "X-Webhook-Secret": webhook.secret || "",
+        },
+        body: JSON.stringify(testPayload),
+      });
+      
+      const delivery = await storage.createWebhookDelivery({
+        webhookId: webhook.id,
+        eventType: "test.ping",
+        payload: testPayload,
+        responseStatus: response.status,
+        responseBody: await response.text().catch(() => ""),
+        deliveredAt: new Date(),
+        status: response.ok ? "success" : "failed",
+      });
+      
+      res.json({ success: response.ok, delivery });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // CREATIVES
+  // ============================================================================
+
+  app.get("/api/creatives", async (_req, res) => {
+    try {
+      const creatives = await storage.getCreatives();
+      res.json(creatives);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/creatives/:id", async (req, res) => {
+    try {
+      const creative = await storage.getCreative(req.params.id);
+      if (!creative) return res.status(404).json({ message: "Creative niet gevonden" });
+      res.json(creative);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/creatives", async (req, res) => {
+    try {
+      const creative = await storage.createCreative(req.body);
+      res.status(201).json(creative);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/creatives/:id", async (req, res) => {
+    try {
+      const creative = await storage.updateCreative(req.params.id, req.body);
+      if (!creative) return res.status(404).json({ message: "Creative niet gevonden" });
+      res.json(creative);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/creatives/:id", async (req, res) => {
+    try {
+      await storage.deleteCreative(req.params.id);
+      res.status(204).send();
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/creatives/:id/versions", async (req, res) => {
+    try {
+      const versions = await storage.getCreativeVersions(req.params.id);
+      res.json(versions);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/creatives/:id/versions", async (req, res) => {
+    try {
+      const version = await storage.createCreativeVersion({
+        ...req.body,
+        creativeId: req.params.id,
+      });
+      res.status(201).json(version);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/creatives/:id/submit", async (req, res) => {
+    try {
+      const creative = await storage.updateCreative(req.params.id, { status: "submitted" });
+      if (!creative) return res.status(404).json({ message: "Creative niet gevonden" });
+      res.json(creative);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/creatives/:id/approve", async (req, res) => {
+    try {
+      const creative = await storage.updateCreative(req.params.id, { status: "approved" });
+      if (!creative) return res.status(404).json({ message: "Creative niet gevonden" });
+      
+      await storage.createCreativeApproval({
+        creativeId: req.params.id,
+        approvedAt: new Date(),
+        approvedByUserId: req.body.reviewedBy || null,
+        notes: req.body.notes,
+      });
+      
+      res.json(creative);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/creatives/:id/reject", async (req, res) => {
+    try {
+      const creative = await storage.updateCreative(req.params.id, { status: "rejected" });
+      if (!creative) return res.status(404).json({ message: "Creative niet gevonden" });
+      
+      await storage.createCreativeApproval({
+        creativeId: req.params.id,
+        rejectedAt: new Date(),
+        approvedByUserId: req.body.reviewedBy || null,
+        notes: req.body.notes,
+      });
+      
+      res.json(creative);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/creatives/:id/approvals", async (req, res) => {
+    try {
+      const approvals = await storage.getCreativeApprovals(req.params.id);
+      res.json(approvals);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
