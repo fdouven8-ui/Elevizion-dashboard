@@ -16,6 +16,7 @@ import MonthClose from "@/pages/MonthClose";
 import Reports from "@/pages/Reports";
 import Monitoring from "@/pages/Monitoring";
 import Onboarding from "@/pages/Onboarding";
+import Users from "@/pages/Users";
 import Integrations from "@/pages/Integrations";
 import SignContract from "@/pages/SignContract";
 import NotFound from "@/pages/not-found";
@@ -35,6 +36,7 @@ function DashboardRouter() {
         <Route path="/reports" component={Reports} />
         <Route path="/monitoring" component={Monitoring} />
         <Route path="/onboarding" component={Onboarding} />
+        <Route path="/users" component={Users} />
         <Route path="/integrations" component={Integrations} />
         <Route component={NotFound} />
       </Switch>

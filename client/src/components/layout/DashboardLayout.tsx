@@ -23,6 +23,7 @@ const pageNames: Record<string, string> = {
   "reports": "Rapportages",
   "monitoring": "Monitoring",
   "onboarding": "Onboarding",
+  "users": "Gebruikers",
   "integrations": "Integraties",
 };
 

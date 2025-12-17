@@ -36,11 +36,16 @@ import {
   calculateExpirationDate,
   formatClientInfo,
 } from "./contract-signing";
+import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  
+  // Setup authentication first (before other routes)
+  await setupAuth(app);
+  registerAuthRoutes(app);
   
   // ============================================================================
   // ADVERTISERS

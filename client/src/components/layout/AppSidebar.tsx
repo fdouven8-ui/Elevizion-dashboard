@@ -11,6 +11,7 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   LayoutDashboard,
   Monitor,
@@ -21,12 +22,14 @@ import {
   Banknote,
   Settings,
   LogOut,
+  LogIn,
   CalendarCheck,
   FileText,
   AlertTriangle,
   Rocket,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
+import { useAuth } from "@/hooks/use-auth";
 
 const items = [
   {
@@ -85,6 +88,11 @@ const items = [
     icon: Rocket,
   },
   {
+    title: "Gebruikers",
+    url: "/users",
+    icon: Users,
+  },
+  {
     title: "Integraties",
     url: "/integrations",
     icon: Settings,
@@ -93,6 +101,30 @@ const items = [
 
 export function AppSidebar() {
   const [location] = useLocation();
+  const { user, isAuthenticated, isLoading } = useAuth();
+
+  const handleLogin = () => {
+    window.location.href = "/api/login";
+  };
+
+  const handleLogout = () => {
+    window.location.href = "/api/logout";
+  };
+
+  const getUserInitials = () => {
+    if (!user) return "?";
+    const first = user.firstName?.[0] || "";
+    const last = user.lastName?.[0] || "";
+    return (first + last).toUpperCase() || user.email?.[0]?.toUpperCase() || "?";
+  };
+
+  const getUserDisplayName = () => {
+    if (!user) return "";
+    if (user.firstName && user.lastName) {
+      return `${user.firstName} ${user.lastName}`;
+    }
+    return user.email || "";
+  };
 
   return (
     <Sidebar collapsible="icon">
@@ -130,12 +162,32 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton>
-              <LogOut />
-              <span>Uitloggen</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+          {isAuthenticated && user ? (
+            <>
+              <SidebarMenuItem>
+                <SidebarMenuButton className="cursor-default">
+                  <Avatar className="h-6 w-6">
+                    <AvatarImage src={user.profileImageUrl || undefined} alt={getUserDisplayName()} />
+                    <AvatarFallback className="text-xs">{getUserInitials()}</AvatarFallback>
+                  </Avatar>
+                  <span className="truncate">{getUserDisplayName()}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton onClick={handleLogout} data-testid="button-logout">
+                  <LogOut />
+                  <span>Uitloggen</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </>
+          ) : (
+            <SidebarMenuItem>
+              <SidebarMenuButton onClick={handleLogin} data-testid="button-login" disabled={isLoading}>
+                <LogIn />
+                <span>{isLoading ? "Laden..." : "Inloggen"}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
       </SidebarFooter>
       <SidebarRail />

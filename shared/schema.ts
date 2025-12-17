@@ -15,6 +15,12 @@ import { pgTable, text, varchar, decimal, timestamp, integer, boolean, jsonb, da
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// Import and re-export auth schema (users and sessions tables)
+import { users as authUsers, sessions as authSessions, type User, type UpsertUser } from "./models/auth";
+export const users = authUsers;
+export const sessions = authSessions;
+export type { User, UpsertUser };
+
 // ============================================================================
 // CORE ENTITIES
 // ============================================================================
@@ -479,25 +485,8 @@ export const alertRules = pgTable("alert_rules", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// ============================================================================
-// USERS & PERMISSIONS (Phase 3)
-// ============================================================================
-
-/**
- * Users - System users with role-based access
- */
-export const users = pgTable("users", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  email: text("email").notNull().unique(),
-  passwordHash: text("password_hash"),
-  name: text("name").notNull(),
-  role: text("role").notNull().default("viewer"), // admin, finance, ops, viewer, partner
-  locationId: varchar("location_id").references(() => locations.id), // For partner role
-  isActive: boolean("is_active").notNull().default(true),
-  lastLoginAt: timestamp("last_login_at"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+// Note: Users and Sessions tables are defined in ./models/auth.ts
+// and re-exported at the top of this file
 
 // ============================================================================
 // CREATIVES & ASSETS (Phase 4)

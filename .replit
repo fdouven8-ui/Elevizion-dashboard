@@ -41,3 +41,4 @@ waitForPort = 5000
 
 [agent]
 mockupState = "FULLSTACK"
+integrations = ["javascript_replit_auth:2.0.0"]

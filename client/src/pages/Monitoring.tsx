@@ -82,9 +82,14 @@ export default function Monitoring() {
     queryKey: ["/api/locations"],
   });
 
-  const { data: availableJobs = [] } = useQuery<{ name: string; description: string }[]>({
+  const { data: jobsData } = useQuery<{ jobs: string[]; descriptions: Record<string, string> }>({
     queryKey: ["/api/jobs/available"],
   });
+  
+  const availableJobs = (jobsData?.jobs || []).map(name => ({
+    name,
+    description: jobsData?.descriptions?.[name] || "",
+  }));
 
   const updateIncidentMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: Partial<Incident> }) => {
