@@ -996,6 +996,43 @@ export async function registerRoutes(
     res.json(runs);
   });
 
+  // Execute a job manually
+  app.post("/api/jobs/:name/run", async (req, res) => {
+    try {
+      const { executeJob, jobRegistry } = await import("./jobs");
+      const jobName = req.params.name;
+      
+      if (!jobRegistry[jobName]) {
+        return res.status(404).json({ 
+          message: `Onbekende job: ${jobName}`,
+          availableJobs: Object.keys(jobRegistry),
+        });
+      }
+      
+      const result = await executeJob(jobName);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // List available jobs
+  app.get("/api/jobs/available", async (_req, res) => {
+    try {
+      const { jobRegistry } = await import("./jobs");
+      res.json({
+        jobs: Object.keys(jobRegistry),
+        descriptions: {
+          "contract-signing-reminders": "Verstuurt herinneringen voor contracten die wachten op ondertekening",
+          "contract-expiration-check": "Controleert contracten die binnenkort verlopen en stuurt waarschuwingen",
+          "signing-token-cleanup": "Verwijdert verlopen ondertekenings-tokens (ouder dan 30 dagen)",
+        },
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ============================================================================
   // EMAIL
   // ============================================================================
