@@ -1,0 +1,107 @@
+Build a production-ready web app called “Elevizion Dashboard” (MVP).
+Goal: one central dashboard to manage advertisers, locations, screens, campaigns/schedules, billing status, and revenue-share (10%).
+
+Tech requirements
+
+Use Next.js 14 (App Router) + TypeScript
+
+UI: TailwindCSS + shadcn/ui
+
+Database: PostgreSQL with Prisma ORM
+
+Auth: NextAuth (email/password or magic link is fine)
+
+Hosting-ready for Replit, but code must be portable to any VPS later.
+
+Provide a clear README with local dev + deployment steps.
+
+Data model (Prisma)
+
+Implement these entities (minimum fields):
+
+User: id, email, name, role (“admin”, “viewer”), createdAt
+
+Advertiser: id, companyName, contactName, email, phone, status (“active”, “paused”), monthlyPriceExVat, createdAt
+
+Location (partner business): id, name, address, contactName, email, phone, revenueSharePercent (default 10), createdAt
+
+Screen: id, locationId, name, yodeckPlayerId (nullable), status (“online”, “offline”, “unknown”), lastSeenAt (nullable), createdAt
+
+Campaign: id, advertiserId, name, startDate, endDate, status (“active”, “ended”, “scheduled”), createdAt
+
+Placement (campaign ↔ screens): id, campaignId, screenId, secondsPerLoop, playsPerHour, createdAt
+
+Invoice: id, advertiserId, periodStart, periodEnd, amountExVat, amountIncVat, status (“draft”, “sent”, “paid”, “overdue”, “failed”), moneybirdInvoiceId (nullable), createdAt
+
+Payout (revenue share): id, locationId, periodStart, periodEnd, grossRevenueExVat, sharePercent, payoutAmountExVat, status (“pending”, “paid”), createdAt
+
+Add proper relations + indexes.
+
+Core pages (MVP)
+
+Create these pages with a left sidebar navigation:
+
+Overview: KPIs (MRR, active advertisers, active screens, unpaid invoices, total payouts due).
+
+Screens: table of screens with filters by location + status. Screen detail shows placements that run on it.
+
+Advertisers: table + create/edit form. Advertiser detail shows campaigns + invoices.
+
+Locations: table + create/edit form. Location detail shows screens + payouts.
+
+Campaigns: create campaign + assign to screens (create placements).
+
+Billing: invoices list + status badges + “mark as paid” button (MVP local only).
+
+Payouts: generate payouts per month from invoices and placements (simple logic below).
+
+MVP business logic
+
+MRR = sum(monthlyPriceExVat) of active advertisers
+
+A campaign is “active” if today is between startDate and endDate (inclusive).
+
+A screen “status” is manual for now (online/offline/unknown), editable.
+
+Revenue share logic (simple MVP):
+
+For a given month, compute total invoice revenue (Ex VAT) from advertisers.
+
+Distribute revenue to locations proportionally by how many active placements they had that month:
+
+placementCountPerLocation / totalPlacementCount
+
+payoutAmountExVat = grossRevenueExVat * (sharePercent/100)
+
+Store payouts in Payout table. Provide “Generate payouts for {month}” button.
+
+Integrations (stub for now)
+
+Create an “Integrations” settings page (even if minimal) with:
+
+Moneybird API token fields (store encrypted or at least env vars)
+
+Yodeck API token fields
+But for MVP, do not call external APIs yet—only show “Connected: not configured / configured”.
+
+UX requirements
+
+Use clean cards + tables, good spacing.
+
+Add search inputs on main tables.
+
+Use toast notifications for create/update actions.
+
+Include seed data script (Prisma) so the dashboard is populated on first run.
+
+Deliverables
+
+Working app with all pages + CRUD.
+
+Prisma schema + migrations.
+
+Seed script.
+
+README with setup steps.
+
+Start by scaffolding the project, then implement database + auth, then pages in this order: Overview → Advertisers → Locations → Screens → Campaigns → Billing → Payouts → Integrations.
