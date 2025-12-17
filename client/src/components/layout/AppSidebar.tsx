@@ -27,6 +27,8 @@ import {
   FileText,
   AlertTriangle,
   Rocket,
+  Download,
+  BookOpen,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -96,6 +98,16 @@ const items = [
     title: "Integraties",
     url: "/integrations",
     icon: Settings,
+  },
+  {
+    title: "Backup",
+    url: "/backup",
+    icon: Download,
+  },
+  {
+    title: "Handleiding",
+    url: "/handleiding",
+    icon: BookOpen,
   },
 ];
 

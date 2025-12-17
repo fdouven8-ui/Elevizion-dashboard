@@ -18,6 +18,8 @@ import Monitoring from "@/pages/Monitoring";
 import Onboarding from "@/pages/Onboarding";
 import Users from "@/pages/Users";
 import Integrations from "@/pages/Integrations";
+import Backup from "@/pages/Backup";
+import Handleiding from "@/pages/Handleiding";
 import SignContract from "@/pages/SignContract";
 import NotFound from "@/pages/not-found";
 
@@ -38,6 +40,8 @@ function DashboardRouter() {
         <Route path="/onboarding" component={Onboarding} />
         <Route path="/users" component={Users} />
         <Route path="/integrations" component={Integrations} />
+        <Route path="/backup" component={Backup} />
+        <Route path="/handleiding" component={Handleiding} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>

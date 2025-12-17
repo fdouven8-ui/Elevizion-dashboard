@@ -1995,5 +1995,116 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================================
+  // BACKUP & EXPORT
+  // ============================================================================
+
+  app.get("/api/backup/full", async (_req, res) => {
+    try {
+      const backup = {
+        exportedAt: new Date().toISOString(),
+        version: "1.0",
+        data: {
+          advertisers: await storage.getAdvertisers(),
+          locations: await storage.getLocations(),
+          screens: await storage.getScreens(),
+          packagePlans: await storage.getPackagePlans(),
+          contracts: await storage.getContracts(),
+          placements: await storage.getPlacements(),
+          invoices: await storage.getInvoices(),
+          payouts: await storage.getPayouts(),
+          snapshots: await storage.getScheduleSnapshots(),
+          users: await storage.getUsers(),
+        },
+      };
+      
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="elevizion-backup-${new Date().toISOString().split("T")[0]}.json"`);
+      res.json(backup);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/backup/:table", async (req, res) => {
+    try {
+      const { table } = req.params;
+      let data: any[] = [];
+      
+      switch (table) {
+        case "advertisers": data = await storage.getAdvertisers(); break;
+        case "locations": data = await storage.getLocations(); break;
+        case "screens": data = await storage.getScreens(); break;
+        case "contracts": data = await storage.getContracts(); break;
+        case "placements": data = await storage.getPlacements(); break;
+        case "invoices": data = await storage.getInvoices(); break;
+        case "payouts": data = await storage.getPayouts(); break;
+        case "snapshots": data = await storage.getScheduleSnapshots(); break;
+        case "users": data = await storage.getUsers(); break;
+        default:
+          return res.status(400).json({ message: "Onbekende tabel" });
+      }
+      
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="elevizion-${table}-${new Date().toISOString().split("T")[0]}.json"`);
+      res.json({ table, exportedAt: new Date().toISOString(), count: data.length, data });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/backup/:table/csv", async (req, res) => {
+    try {
+      const { table } = req.params;
+      let data: any[] = [];
+      
+      const defaultHeaders: Record<string, string[]> = {
+        advertisers: ["id", "name", "email", "phone", "contactPerson", "status", "vatNumber", "address"],
+        locations: ["id", "name", "address", "ownerName", "ownerEmail", "ownerPhone", "ownerIban", "revenueShare", "minimumPayout", "status"],
+        screens: ["id", "locationId", "name", "status", "yodeckPlayerId", "notes"],
+        contracts: ["id", "advertiserId", "packagePlanId", "startDate", "endDate", "monthlyPrice", "status"],
+        placements: ["id", "contractId", "screenId", "secondsPerLoop", "playsPerHour", "isActive"],
+        invoices: ["id", "advertiserId", "invoiceNumber", "amount", "dueDate", "status", "sentAt", "paidAt"],
+        payouts: ["id", "locationId", "amount", "status", "periodMonth", "periodYear", "paidAt"],
+        snapshots: ["id", "periodYear", "periodMonth", "lockedAt", "status", "totalRevenue"],
+        users: ["id", "email", "firstName", "lastName", "role", "isActive"],
+      };
+      
+      switch (table) {
+        case "advertisers": data = await storage.getAdvertisers(); break;
+        case "locations": data = await storage.getLocations(); break;
+        case "screens": data = await storage.getScreens(); break;
+        case "contracts": data = await storage.getContracts(); break;
+        case "placements": data = await storage.getPlacements(); break;
+        case "invoices": data = await storage.getInvoices(); break;
+        case "payouts": data = await storage.getPayouts(); break;
+        case "snapshots": data = await storage.getScheduleSnapshots(); break;
+        case "users": data = await storage.getUsers(); break;
+        default:
+          return res.status(400).json({ message: "CSV export niet beschikbaar voor deze tabel" });
+      }
+      
+      const headers = data.length > 0 ? Object.keys(data[0]) : (defaultHeaders[table] || []);
+      const csvRows = [
+        headers.join(";"),
+        ...data.map(row => headers.map(h => {
+          const val = row[h];
+          if (val === null || val === undefined) return "";
+          if (typeof val === "object") return JSON.stringify(val).replace(/"/g, '""');
+          if (typeof val === "string" && (val.includes(";") || val.includes("\n") || val.includes('"'))) {
+            return `"${val.replace(/"/g, '""')}"`;
+          }
+          return String(val);
+        }).join(";"))
+      ];
+      
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="elevizion-${table}-${new Date().toISOString().split("T")[0]}.csv"`);
+      res.send("\uFEFF" + csvRows.join("\n"));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   return httpServer;
 }

@@ -117,6 +117,17 @@ All permission changes are logged to `audit_logs` table:
 
 ## Recent Changes
 
+### December 2025 - Backup & Handleiding
+- Added Backup & Export page (`/backup`) for data backup and disaster recovery
+  - Full JSON backup of all tables in one file
+  - Per-table JSON and CSV exports for all major entities
+  - Supports empty table exports with header-only CSV files
+- Added Handleiding page (`/handleiding`) with Dutch user manual
+  - Accordion-based explanation of all features
+  - Common mistakes section with preventive guidance
+  - All text in Dutch for Dutch-speaking users
+- API endpoints: `/api/backup/full`, `/api/backup/:table`, `/api/backup/:table/csv`
+
 ### December 2025 - Phase 4 (Schema Alignment)
 - Refactored snapshot routes to use normalized schema fields (periodYear/periodMonth instead of legacy year/month)
 - Implemented immutable snapshot data by freezing contracts, locations, and carry-overs at snapshot creation time
