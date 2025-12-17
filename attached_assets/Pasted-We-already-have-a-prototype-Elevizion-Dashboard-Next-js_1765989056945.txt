@@ -1,0 +1,567 @@
+We already have a prototype Elevizion Dashboard (Next.js 14 App Router + TypeScript + Prisma + PostgreSQL + basic email integrations).
+It is not live yet. Your task is to upgrade it into a highly functional Elevizion OS suitable for scaling to 500+ screens and hundreds of advertisers.
+
+IMPORTANT
+
+You may refactor aggressively to improve quality.
+
+Prefer clean architecture (services, repositories, jobs).
+
+Add seed data + a README.
+
+Everything must be auditable and automation-first.
+
+A) Core upgrades to add (modules)
+1) Contract system + e-sign flow (in-app signing)
+Goal
+
+Generate, send, sign and store contracts with full proof & automation.
+
+Data model
+
+Add tables (or extend existing):
+
+Contract
+
+id, advertiserId
+
+status: draft | sent | viewed | signed | expired | cancelled
+
+version, title
+
+startDate, endDate (nullable)
+
+monthlyPriceExVat, vatRate
+
+pdfUrl (nullable), htmlTemplateId (nullable)
+
+sentAt, viewedAt, signedAt, expiresAt
+
+signatureTokenHash (store hash, not raw token)
+
+signedByName, signedByEmail
+
+signedIp, signedUserAgent
+
+createdAt, updatedAt
+
+ContractSigner (optional if multiple)
+
+contractId, name, email, role
+
+ContractEvent
+
+contractId, eventType: created|sent|viewed|signed|reminder_sent|expired|cancelled
+
+metadata JSON, createdAt
+
+ContractFile
+
+contractId, fileType: pdf|html|attachment
+
+storageKey/url, sha256Hash, createdAt
+
+UI/pages
+
+Contract list page: filters by status, search by advertiser
+
+Contract detail page:
+
+preview contract
+
+timeline of events
+
+buttons: Send / Resend / Cancel / Generate PDF / Copy signing link
+
+Signing page: /sign/[token]
+
+shows contract text
+
+signer enters name + email (prefill if known)
+
+checkbox “I agree”
+
+optional signature draw field (canvas)
+
+submit → status signed + audit proof
+
+Email templates (SendGrid)
+
+Use existing email integration. Add templates:
+
+Contract Sent (CTA “Review & Sign”)
+
+Contract Reminder
+
+Contract Signed Confirmation (to advertiser + internal)
+
+Automations
+
+Background jobs:
+
+If contract is sent and not signed:
+
+reminder after 3 days and 7 days
+
+expire after 14 days (configurable)
+
+When signed:
+
+advertiser status becomes active
+
+start billing onboarding checklist automatically
+
+Acceptance criteria
+
+Contract can be created, sent, signed via token link
+
+Proof stored: timestamp, IP, UA, version, PDF hash
+
+Reminders + expiry work automatically
+
+2) Onboarding Wizard per Advertiser (operator checklist)
+Goal
+
+Turn onboarding into a repeatable process so nothing is forgotten.
+
+Data model
+
+OnboardingChecklist
+
+advertiserId, status: not_started|in_progress|completed
+
+createdAt, completedAt
+
+OnboardingTask
+
+checklistId
+
+type enum:
+
+creative_received
+
+creative_approved
+
+campaign_created
+
+scheduled_on_screens
+
+billing_configured
+
+first_invoice_sent
+
+go_live_confirmed
+
+first_report_sent
+
+status: todo|doing|done|blocked
+
+ownerUserId (nullable)
+
+notes, dueDate (nullable)
+
+createdAt, updatedAt
+
+UI
+
+Advertiser detail gets “Onboarding” tab with:
+
+progress bar
+
+tasks list + inline actions
+
+“Mark all prerequisites done” helpers
+
+Automation
+
+When contract signed → auto-create checklist
+
+If “go_live_confirmed” done → advertiser becomes “live” and appears in KPI
+
+3) Creatives / Asset management (reclame bestanden beheren)
+Goal
+
+Central place for all ad files (mp4/png) with versions + approvals.
+
+Data model
+
+Creative
+
+advertiserId
+
+type: video|image
+
+title, status: draft|pending_approval|approved|rejected|archived
+
+durationSeconds (for video)
+
+createdAt, updatedAt
+
+CreativeVersion
+
+creativeId
+
+versionNo
+
+fileUrl/storageKey
+
+fileName, mimeType, fileSize
+
+sha256Hash
+
+createdAt
+
+CreativeApproval
+
+creativeId
+
+requestedAt, approvedAt
+
+approvedByUserId
+
+notes
+
+Storage
+
+Implement file upload to a storage provider (start with local disk in dev + abstraction for S3 later).
+
+Validate formats and max size.
+
+Generate thumbnails for videos/images if feasible.
+
+UI
+
+Advertiser → Creatives tab:
+
+upload
+
+versions
+
+request approval
+
+approve/reject with notes
+
+Creative can be selected when creating a campaign/placement.
+
+Automation
+
+If a campaign endDate is near: send reminder to refresh creative (“Your campaign ends soon”).
+
+4) Proof-of-Play / Reporting (bewijs & rapportages)
+Goal
+
+Reduce disputes and make upsells easy by showing proof.
+
+Strategy (tiered)
+
+Implement at least Tier 1 now:
+
+Tier 1: “Scheduled proof” based on placements + snapshot (what should have played).
+Optionally prepare for Tier 2:
+
+Tier 2: ingest actual play logs if Yodeck supports it or via future logging.
+
+Data model
+
+Report
+
+advertiserId, periodStart, periodEnd
+
+type: monthly
+
+generatedAt, sentAt
+
+pdfUrl
+
+ReportMetric
+
+reportId
+
+screenId, locationId
+
+scheduledPlaysEstimate
+
+scheduledSecondsEstimate
+
+notes JSON
+
+UI
+
+Reports page:
+
+generate report for advertiser + month
+
+view/download
+
+resend by email
+
+Advertiser detail shows history.
+
+Automation
+
+Monthly: auto-generate and email reports to active advertisers.
+
+5) Alerts & Monitoring (schermen offline / sync failures)
+Goal
+
+No surprises. Catch issues early.
+
+Data model
+
+Incident
+
+type: screen_offline|sync_failed|playlist_mismatch|storage_issue
+
+severity: low|medium|high
+
+screenId/locationId (nullable)
+
+status: open|acknowledged|resolved
+
+openedAt, resolvedAt
+
+lastSeenAt, metadata
+
+AlertRule
+
+type
+
+thresholdMinutes
+
+notifyEmailList
+
+enabled
+
+UI
+
+Monitoring page:
+
+list of incidents
+
+filters by severity/status
+
+acknowledge/resolve actions
+
+Automation
+
+If screen offline > X minutes → create incident + email alert
+
+If Moneybird/Yodeck sync fails → incident + email alert
+
+Daily summary email to admin/ops.
+
+6) Finance automation: Monthly Close (snapshot → invoices → payouts → exports)
+Goal
+
+One button per month that produces everything.
+
+Workflow UI
+
+Create a “Month Close” page:
+
+Select month
+
+Step 1: Generate Schedule Snapshot (locks month)
+
+Step 2: Generate Invoices (from contracts)
+
+Step 3: Send Invoices (email + optionally Moneybird)
+
+Step 4: Generate Payouts (revenue share)
+
+Step 5: Export Pack (CSV/PDF bundle)
+Each step shows logs, success/failure, and is idempotent.
+
+Exports
+
+Invoices CSV
+
+Aging report CSV
+
+Payouts CSV
+
+Contract signed list CSV
+
+Screens offline incidents CSV
+
+7) Partner Portal (locations login)
+Goal
+
+Partners (kappers/sportscholen) can log in and see:
+
+what runs on their screens
+
+how much they earn (10% share)
+
+payout status and history
+
+“Report issue” button
+
+Auth/RBAC
+
+Add role: partner
+
+Partner user can only access their location(s)
+
+UI
+
+Partner portal pages:
+
+My Screens (status + what’s playing)
+
+My Earnings (monthly payouts + carry overs)
+
+Support (create ticket / incident)
+
+8) Permissions + Audit Log (enterprise safety)
+Roles
+
+admin, finance, ops, viewer, partner
+
+Audit log
+
+Log every create/update/delete on:
+
+contracts
+
+invoices
+
+payouts
+
+placements/schedules
+
+screens/locations
+Store before/after JSON and actor user.
+
+UI:
+
+Admin “Audit Log” page with filters/search.
+
+9) Import/Export + Bulk actions (massive time saver)
+Bulk actions needed
+
+Import advertisers via CSV
+
+Import screens via CSV
+
+Bulk assign screens to location
+
+Bulk create contracts from template plan
+
+Bulk send contracts
+
+Bulk pause advertisers/campaigns
+
+UI
+
+“Bulk Ops” page with upload + dry-run preview:
+
+show validation errors before applying
+
+confirm apply writes to DB
+
+10) API + Webhooks framework (future-proof)
+Internal API design
+
+Create a consistent API layer:
+
+/api/v1/... with RBAC checks
+
+typed validators (zod)
+
+service layer for business logic
+
+Webhooks
+
+Provide a generic webhook dispatcher:
+
+event types: invoice.paid, screen.offline, contract.signed, payout.generated
+
+Allow registering webhook endpoints (for future n8n/CRM)
+
+B) Integrations: use what exists and make it real
+Moneybird
+
+Validate token + administration
+
+Sync contacts/invoices/payments
+
+Store external IDs
+
+Don’t duplicate invoices (idempotency keys)
+
+If webhook available: update invoice status automatically
+
+Yodeck
+
+Sync players → link to screens
+
+Sync schedules/playlists → placements
+
+Detect mismatches between manual vs Yodeck schedule and create incidents
+
+C) Background jobs / worker (mandatory)
+
+Implement:
+
+Job table, worker runner, retry with exponential backoff
+
+Cron endpoint secured by CRON_SECRET
+
+Jobs:
+
+nightly sync Moneybird
+
+nightly sync Yodeck
+
+hourly monitor screens
+
+daily reminders for contracts
+
+monthly close automation (optional but prepare it)
+
+D) Quality requirements
+
+Seed script populating realistic sample data (25 screens, 40 advertisers)
+
+Unit tests for: snapshot generation, payout calculation, invoice generation
+
+README explaining:
+
+month close
+
+contract signing proof
+
+integration setup
+
+job runner & cron config
+
+E) Build order (strict)
+
+Schema & migrations + seed
+
+Job system + cron
+
+Contract + e-sign + email templates
+
+Onboarding wizard
+
+Creatives
+
+Monitoring incidents + alerts
+
+Month close page
+
+Payout weighting + carryover
+
+Partner portal
+
+Bulk ops + webhooks + exports
+
+Deliver the upgraded project fully working.
+
+Extra (optioneel maar heel sterk)
+
+Add “Activity feed” on the overview page (latest events: signed contracts, offline screens, paid invoices).
+
+Add “Smart suggestions”: e.g. “Screen offline 12h → contact location”.
