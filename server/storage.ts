@@ -152,6 +152,7 @@ export interface IStorage {
   // CarryOvers
   getCarryOversByLocation(locationId: string): Promise<CarryOver[]>;
   getPendingCarryOver(locationId: string): Promise<CarryOver | undefined>;
+  getAllPendingCarryOvers(): Promise<CarryOver[]>;
   createCarryOver(data: InsertCarryOver): Promise<CarryOver>;
   updateCarryOver(id: string, data: Partial<CarryOver>): Promise<CarryOver | undefined>;
 
@@ -693,6 +694,11 @@ export class DatabaseStorage implements IStorage {
         eq(schema.carryOvers.status, "pending")
       ));
     return carryOver;
+  }
+
+  async getAllPendingCarryOvers(): Promise<CarryOver[]> {
+    return await db.select().from(schema.carryOvers)
+      .where(eq(schema.carryOvers.status, "pending"));
   }
 
   async createCarryOver(data: InsertCarryOver): Promise<CarryOver> {

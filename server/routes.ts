@@ -266,6 +266,397 @@ export async function registerRoutes(
     res.json({ ...snapshot, placements });
   });
 
+  // Create snapshot for monthly close
+  app.post("/api/snapshots", async (req, res) => {
+    try {
+      const { year, month } = req.body;
+      if (!year || !month) {
+        return res.status(400).json({ message: "Jaar en maand zijn verplicht" });
+      }
+
+      // Check if snapshot already exists
+      const existing = await storage.getSnapshotByPeriod(year, month);
+      if (existing) {
+        return res.status(400).json({ message: "Snapshot voor deze maand bestaat al" });
+      }
+
+      // Get active contracts for this period
+      const contracts = await storage.getActiveContracts();
+      const placements = await storage.getPlacements();
+      const screens = await storage.getScreens();
+      const locations = await storage.getLocations();
+      const advertisers = await storage.getAdvertisers();
+      const pendingCarryOvers = await storage.getAllPendingCarryOvers();
+
+      const periodStart = new Date(year, month - 1, 1);
+      const periodEnd = new Date(year, month, 0);
+
+      // Filter contracts active in this period
+      const activeContracts = contracts.filter(c => {
+        const start = new Date(c.startDate);
+        if (start > periodEnd) return false;
+        if (c.endDate) {
+          const end = new Date(c.endDate);
+          if (end < periodStart) return false;
+        }
+        return true;
+      });
+
+      // Build snapshot data with frozen carry-overs
+      const snapshotData = {
+        contracts: activeContracts.map(c => ({
+          id: c.id,
+          name: c.name,
+          advertiserId: c.advertiserId,
+          advertiserName: advertisers.find(a => a.id === c.advertiserId)?.companyName,
+          monthlyPriceExVat: c.monthlyPriceExVat,
+          vatPercent: c.vatPercent,
+          billingCycle: c.billingCycle,
+        })),
+        placements: placements
+          .filter(p => activeContracts.some(c => c.id === p.contractId))
+          .map(p => ({
+            id: p.id,
+            contractId: p.contractId,
+            screenId: p.screenId,
+            screenName: screens.find(s => s.id === p.screenId)?.name,
+            locationName: locations.find(l => l.id === screens.find(s => s.id === p.screenId)?.locationId)?.name,
+          })),
+        locations: locations.map(l => ({
+          id: l.id,
+          name: l.name,
+          revenueSharePercent: l.revenueSharePercent,
+          minimumPayoutAmount: l.minimumPayoutAmount,
+          bankAccountIban: l.bankAccountIban,
+        })),
+        // Freeze pending carry-overs at snapshot time
+        frozenCarryOvers: pendingCarryOvers.map(co => ({
+          id: co.id,
+          locationId: co.locationId,
+          fromYear: co.fromYear,
+          fromMonth: co.fromMonth,
+          amount: co.amount,
+        })),
+        totalRevenue: activeContracts.reduce((sum, c) => sum + parseFloat(c.monthlyPriceExVat), 0),
+      };
+
+      const snapshot = await storage.createScheduleSnapshot({
+        year,
+        month,
+        status: "draft",
+        snapshotData,
+      });
+
+      // Create snapshot placements (skip placements without valid location)
+      for (const p of snapshotData.placements) {
+        const contract = activeContracts.find(c => c.id === p.contractId);
+        const screen = screens.find(s => s.id === p.screenId);
+        const location = locations.find(l => l.id === screen?.locationId);
+        
+        // Skip placements without a valid location to ensure data integrity
+        if (!location?.id) continue;
+        
+        await storage.createSnapshotPlacement({
+          snapshotId: snapshot.id,
+          contractId: p.contractId,
+          screenId: p.screenId,
+          advertiserId: contract?.advertiserId || "",
+          locationId: location.id,
+          monthlyPriceExVat: contract?.monthlyPriceExVat || "0",
+          vatPercent: contract?.vatPercent || "21.00",
+          revenueSharePercent: location.revenueSharePercent || "0",
+        });
+      }
+
+      res.status(201).json(snapshot);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Generate invoices from snapshot
+  app.post("/api/snapshots/:id/generate-invoices", async (req, res) => {
+    try {
+      const snapshot = await storage.getScheduleSnapshot(req.params.id);
+      if (!snapshot) {
+        return res.status(404).json({ message: "Snapshot niet gevonden" });
+      }
+
+      if (snapshot.status === "locked") {
+        return res.status(400).json({ message: "Snapshot is al afgesloten" });
+      }
+
+      const snapshotData = snapshot.snapshotData as any;
+      const existingInvoices = await storage.getInvoices();
+      
+      const periodStart = new Date(snapshot.year, snapshot.month - 1, 1).toISOString().split("T")[0];
+      const periodEnd = new Date(snapshot.year, snapshot.month, 0).toISOString().split("T")[0];
+
+      let count = 0;
+      for (const contract of snapshotData.contracts || []) {
+        // Check if invoice already exists
+        const exists = existingInvoices.some(inv => 
+          inv.contractId === contract.id && 
+          inv.periodStart === periodStart
+        );
+
+        if (exists) continue;
+
+        const amountExVat = parseFloat(contract.monthlyPriceExVat);
+        const vatRate = parseFloat(contract.vatPercent) / 100;
+        const vatAmount = amountExVat * vatRate;
+        const amountIncVat = amountExVat + vatAmount;
+
+        // Generate invoice number
+        const invoiceNumber = `INV-${snapshot.year}-${String(snapshot.month).padStart(2, "0")}-${String(count + 1).padStart(4, "0")}`;
+
+        await storage.createInvoice({
+          advertiserId: contract.advertiserId,
+          contractId: contract.id,
+          snapshotId: snapshot.id,
+          invoiceNumber,
+          periodStart,
+          periodEnd,
+          amountExVat: amountExVat.toFixed(2),
+          vatAmount: vatAmount.toFixed(2),
+          amountIncVat: amountIncVat.toFixed(2),
+          status: "draft",
+          dueDate: new Date(snapshot.year, snapshot.month, 15).toISOString().split("T")[0],
+        });
+
+        count++;
+      }
+
+      await storage.updateScheduleSnapshot(snapshot.id, { status: "invoiced" });
+
+      res.json({ success: true, count, message: `${count} facturen aangemaakt` });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Generate payouts from snapshot (stores results in snapshot, no database mutations)
+  app.post("/api/snapshots/:id/generate-payouts", async (req, res) => {
+    try {
+      const snapshot = await storage.getScheduleSnapshot(req.params.id);
+      if (!snapshot) {
+        return res.status(404).json({ message: "Snapshot niet gevonden" });
+      }
+
+      if (snapshot.status === "locked") {
+        return res.status(400).json({ message: "Snapshot is afgesloten, uitbetalingen kunnen niet meer worden gewijzigd" });
+      }
+
+      const snapshotPlacements = await storage.getSnapshotPlacements(snapshot.id);
+      const snapshotData = snapshot.snapshotData as any;
+      const frozenCarryOvers = snapshotData.frozenCarryOvers || [];
+
+      // Fail-fast validation: check all frozen carry-overs have valid locationIds
+      const invalidCarryOvers = frozenCarryOvers.filter((co: any) => !co.locationId);
+      if (invalidCarryOvers.length > 0) {
+        return res.status(422).json({
+          message: `Data integriteit fout: ${invalidCarryOvers.length} bevroren carry-overs hebben geen geldige locatie. Maak een nieuwe snapshot.`,
+          invalidIds: invalidCarryOvers.map((co: any) => co.id),
+        });
+      }
+
+      // Group by location and calculate revenue share using frozen snapshot data
+      const locationPayouts = new Map<string, { amount: number; revenueSharePercent: string; minPayout: number; carryOverIds: string[] }>();
+      
+      // Validate all placements have valid locationIds
+      const invalidPlacements = snapshotPlacements.filter(p => !p.locationId);
+      if (invalidPlacements.length > 0) {
+        return res.status(422).json({
+          message: `Data integriteit fout: ${invalidPlacements.length} placements hebben geen geldige locatie. Maak een nieuwe snapshot.`,
+        });
+      }
+
+      // First add all locations with placements
+      for (const placement of snapshotPlacements) {
+        const revenue = parseFloat(placement.monthlyPriceExVat || "0");
+        const sharePercent = parseFloat(placement.revenueSharePercent || "0");
+        const share = (revenue * sharePercent) / 100;
+        
+        // Get minimum payout from frozen snapshot data
+        const frozenLocation = snapshotData.locations?.find((l: any) => l.id === placement.locationId);
+        const minPayout = parseFloat(frozenLocation?.minimumPayoutAmount || "0");
+        
+        const current = locationPayouts.get(placement.locationId);
+        if (current) {
+          current.amount += share;
+        } else {
+          locationPayouts.set(placement.locationId, {
+            amount: share,
+            revenueSharePercent: placement.revenueSharePercent || "0",
+            minPayout,
+            carryOverIds: [],
+          });
+        }
+      }
+
+      // Add frozen carry-overs (including locations with only carry-overs, no placements)
+      // Note: all carry-overs are guaranteed to have valid locationId by the fail-fast check above
+      for (const carryOver of frozenCarryOvers) {
+        const frozenLocation = snapshotData.locations?.find((l: any) => l.id === carryOver.locationId);
+        const minPayout = parseFloat(frozenLocation?.minimumPayoutAmount || "0");
+        
+        const current = locationPayouts.get(carryOver.locationId);
+        if (current) {
+          current.amount += parseFloat(carryOver.amount);
+          current.carryOverIds.push(carryOver.id);
+        } else {
+          // Location has only carry-over, no current placements
+          locationPayouts.set(carryOver.locationId, {
+            amount: parseFloat(carryOver.amount),
+            revenueSharePercent: frozenLocation?.revenueSharePercent || "0",
+            minPayout,
+            carryOverIds: [carryOver.id],
+          });
+        }
+      }
+
+      // Build payout results to store in snapshot (no database mutations)
+      const payoutResults: any[] = [];
+      const carryOverResults: any[] = [];
+
+      for (const [locationId, data] of locationPayouts) {
+        if (data.amount === 0) continue;
+
+        const periodStart = new Date(snapshot.year, snapshot.month - 1, 1).toISOString().split("T")[0];
+        const periodEnd = new Date(snapshot.year, snapshot.month, 0).toISOString().split("T")[0];
+        const frozenLocation = snapshotData.locations?.find((l: any) => l.id === locationId);
+
+        if (data.amount >= data.minPayout) {
+          payoutResults.push({
+            locationId,
+            locationName: frozenLocation?.name,
+            periodStart,
+            periodEnd,
+            revenueAmount: data.amount.toFixed(2),
+            revenueSharePercent: data.revenueSharePercent,
+            payoutAmount: data.amount.toFixed(2),
+            appliedCarryOverIds: data.carryOverIds,
+          });
+        } else {
+          carryOverResults.push({
+            locationId,
+            locationName: frozenLocation?.name,
+            amount: data.amount.toFixed(2),
+            appliedCarryOverIds: data.carryOverIds,
+          });
+        }
+      }
+
+      // Store results in snapshot (immutable once locked)
+      const updatedSnapshotData = {
+        ...snapshotData,
+        payoutResults,
+        carryOverResults,
+        payoutsGeneratedAt: new Date().toISOString(),
+      };
+
+      await storage.updateScheduleSnapshot(snapshot.id, {
+        snapshotData: updatedSnapshotData,
+        status: "payouts_calculated",
+      });
+
+      res.json({ 
+        success: true, 
+        count: payoutResults.length, 
+        carryOverCount: carryOverResults.length,
+        message: `${payoutResults.length} uitbetalingen berekend${carryOverResults.length > 0 ? `, ${carryOverResults.length} bedragen worden doorgeschoven` : ""}` 
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Lock snapshot (finalize month and apply database mutations)
+  app.post("/api/snapshots/:id/lock", async (req, res) => {
+    try {
+      const snapshot = await storage.getScheduleSnapshot(req.params.id);
+      if (!snapshot) {
+        return res.status(404).json({ message: "Snapshot niet gevonden" });
+      }
+
+      if (snapshot.status === "locked") {
+        return res.status(400).json({ message: "Snapshot is al afgesloten" });
+      }
+
+      const snapshotData = snapshot.snapshotData as any;
+      const payoutResults = snapshotData.payoutResults || [];
+      const carryOverResults = snapshotData.carryOverResults || [];
+      const frozenCarryOvers = snapshotData.frozenCarryOvers || [];
+
+      // Integrity check: verify all frozen carry-overs are accounted for
+      const processedCarryOverIds = new Set<string>();
+      for (const payout of payoutResults) {
+        for (const id of payout.appliedCarryOverIds || []) {
+          processedCarryOverIds.add(id);
+        }
+      }
+      for (const carryOver of carryOverResults) {
+        for (const id of carryOver.appliedCarryOverIds || []) {
+          processedCarryOverIds.add(id);
+        }
+      }
+
+      // Check if any frozen carry-overs with valid locationId were not processed
+      const unprocessedCarryOvers = frozenCarryOvers.filter((co: any) => 
+        co.locationId && !processedCarryOverIds.has(co.id)
+      );
+      if (unprocessedCarryOvers.length > 0) {
+        return res.status(422).json({ 
+          message: `Data integriteit fout: ${unprocessedCarryOvers.length} bevroren carry-overs zijn niet verwerkt. Herbereken uitbetalingen.`,
+          unprocessedIds: unprocessedCarryOvers.map((co: any) => co.id),
+        });
+      }
+
+      // Apply all payout and carry-over mutations at lock time
+      for (const payout of payoutResults) {
+        await storage.createPayout({
+          locationId: payout.locationId,
+          snapshotId: snapshot.id,
+          periodStart: payout.periodStart,
+          periodEnd: payout.periodEnd,
+          revenueAmount: payout.revenueAmount,
+          revenueSharePercent: payout.revenueSharePercent,
+          payoutAmount: payout.payoutAmount,
+          status: "pending",
+        });
+
+        // Mark all applied carry-overs as used
+        for (const carryOverId of payout.appliedCarryOverIds || []) {
+          await storage.updateCarryOver(carryOverId, { status: "applied" });
+        }
+      }
+
+      for (const carryOver of carryOverResults) {
+        await storage.createCarryOver({
+          locationId: carryOver.locationId,
+          fromYear: snapshot.year,
+          fromMonth: snapshot.month,
+          amount: carryOver.amount,
+          status: "pending",
+        });
+
+        // Mark all applied carry-overs as used
+        for (const carryOverId of carryOver.appliedCarryOverIds || []) {
+          await storage.updateCarryOver(carryOverId, { status: "applied" });
+        }
+      }
+
+      await storage.updateScheduleSnapshot(snapshot.id, {
+        status: "locked",
+        lockedAt: new Date(),
+      });
+
+      res.json({ success: true, message: "Maand succesvol afgesloten" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/snapshots/generate", async (req, res) => {
     try {
       const { year, month } = req.body;
@@ -341,18 +732,6 @@ export async function registerRoutes(
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
-  });
-
-  app.post("/api/snapshots/:id/lock", async (req, res) => {
-    const snapshot = await storage.getScheduleSnapshot(req.params.id);
-    if (!snapshot) return res.status(404).json({ message: "Snapshot not found" });
-    if (snapshot.status === "locked") return res.status(400).json({ message: "Snapshot already locked" });
-
-    const updated = await storage.updateScheduleSnapshot(req.params.id, {
-      status: "locked",
-      lockedAt: new Date(),
-    });
-    res.json(updated);
   });
 
   // ============================================================================

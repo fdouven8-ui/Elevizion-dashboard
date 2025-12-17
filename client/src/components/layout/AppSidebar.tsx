@@ -21,6 +21,7 @@ import {
   Banknote,
   Settings,
   LogOut,
+  CalendarCheck,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 
@@ -59,6 +60,11 @@ const items = [
     title: "Uitbetalingen",
     url: "/payouts",
     icon: Banknote,
+  },
+  {
+    title: "Maandafsluiting",
+    url: "/month-close",
+    icon: CalendarCheck,
   },
   {
     title: "Integraties",

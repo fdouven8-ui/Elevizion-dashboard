@@ -19,6 +19,7 @@ const pageNames: Record<string, string> = {
   "contracts": "Contracten",
   "billing": "Facturatie",
   "payouts": "Uitbetalingen",
+  "month-close": "Maandafsluiting",
   "integrations": "Integraties",
 };
 

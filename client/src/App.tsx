@@ -12,6 +12,7 @@ import Screens from "@/pages/Screens";
 import Contracts from "@/pages/Contracts";
 import Billing from "@/pages/Billing";
 import Payouts from "@/pages/Payouts";
+import MonthClose from "@/pages/MonthClose";
 import Integrations from "@/pages/Integrations";
 import SignContract from "@/pages/SignContract";
 import NotFound from "@/pages/not-found";
@@ -27,6 +28,7 @@ function DashboardRouter() {
         <Route path="/contracts" component={Contracts} />
         <Route path="/billing" component={Billing} />
         <Route path="/payouts" component={Payouts} />
+        <Route path="/month-close" component={MonthClose} />
         <Route path="/integrations" component={Integrations} />
         <Route component={NotFound} />
       </Switch>
