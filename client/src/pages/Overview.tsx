@@ -18,37 +18,37 @@ export default function Overview() {
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight font-heading" data-testid="text-page-title">Overview</h1>
-          <p className="text-muted-foreground">Your digital signage network at a glance</p>
+          <h1 className="text-3xl font-bold tracking-tight font-heading" data-testid="text-page-title">Overzicht</h1>
+          <p className="text-muted-foreground">Uw digital signage netwerk in één oogopslag</p>
         </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         <Card className="card-hover" data-testid="card-mrr">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Monthly Recurring Revenue</CardTitle>
+            <CardTitle className="text-sm font-medium">Maandelijkse Terugkerende Omzet</CardTitle>
             <CreditCard className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold" data-testid="text-mrr">€{mrr.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">{activeContracts} active contracts</p>
+            <p className="text-xs text-muted-foreground">{activeContracts} actieve contracten</p>
           </CardContent>
         </Card>
         
         <Card className="card-hover" data-testid="card-advertisers">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Advertisers</CardTitle>
+            <CardTitle className="text-sm font-medium">Actieve Adverteerders</CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold" data-testid="text-advertisers">{activeAdvertisers}</div>
-            <p className="text-xs text-muted-foreground">With active contracts</p>
+            <p className="text-xs text-muted-foreground">Met actieve contracten</p>
           </CardContent>
         </Card>
 
         <Card className="card-hover" data-testid="card-screens">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Screens</CardTitle>
+            <CardTitle className="text-sm font-medium">Actieve Schermen</CardTitle>
             <Monitor className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -63,12 +63,12 @@ export default function Overview() {
 
         <Card className="card-hover" data-testid="card-unpaid">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Unpaid Invoices</CardTitle>
+            <CardTitle className="text-sm font-medium">Onbetaalde Facturen</CardTitle>
             <FileText className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold" data-testid="text-unpaid">€{unpaidAmount.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">{unpaidInvoiceCount} invoices outstanding</p>
+            <p className="text-xs text-muted-foreground">{unpaidInvoiceCount} facturen openstaand</p>
           </CardContent>
         </Card>
       </div>
@@ -76,35 +76,35 @@ export default function Overview() {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
         <Card className="col-span-4">
           <CardHeader>
-            <CardTitle>Quick Actions</CardTitle>
+            <CardTitle>Snelle Acties</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3">
               <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
                 <div>
-                  <p className="font-medium">Generate Monthly Snapshot</p>
-                  <p className="text-sm text-muted-foreground">Create immutable billing snapshot for current period</p>
+                  <p className="font-medium">Maandelijkse Snapshot Genereren</p>
+                  <p className="text-sm text-muted-foreground">Creëer onveranderlijke facturatie-snapshot voor huidige periode</p>
                 </div>
                 <a href="/billing" className="text-primary hover:underline text-sm font-medium">
-                  Go to Billing →
+                  Ga naar Facturatie →
                 </a>
               </div>
               <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
                 <div>
-                  <p className="font-medium">Send Invoices</p>
-                  <p className="text-sm text-muted-foreground">Generate and send invoices from locked snapshot</p>
+                  <p className="font-medium">Facturen Versturen</p>
+                  <p className="text-sm text-muted-foreground">Genereer en verstuur facturen vanuit vergrendelde snapshot</p>
                 </div>
                 <a href="/billing" className="text-primary hover:underline text-sm font-medium">
-                  Go to Billing →
+                  Ga naar Facturatie →
                 </a>
               </div>
               <div className="flex items-center justify-between p-4 bg-muted/50 rounded-lg">
                 <div>
-                  <p className="font-medium">Process Payouts</p>
-                  <p className="text-sm text-muted-foreground">Calculate and approve partner payouts</p>
+                  <p className="font-medium">Uitbetalingen Verwerken</p>
+                  <p className="text-sm text-muted-foreground">Bereken en keur partner-uitbetalingen goed</p>
                 </div>
                 <a href="/payouts" className="text-primary hover:underline text-sm font-medium">
-                  Go to Payouts →
+                  Ga naar Uitbetalingen →
                 </a>
               </div>
             </div>
@@ -113,15 +113,15 @@ export default function Overview() {
         
         <Card className="col-span-3">
           <CardHeader>
-            <CardTitle>System Status</CardTitle>
+            <CardTitle>Systeemstatus</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
               <div className="flex items-center gap-3">
                 <div className="h-2 w-2 bg-green-500 rounded-full" />
                 <div className="flex-1">
-                  <p className="text-sm font-medium">Screen Network</p>
-                  <p className="text-xs text-muted-foreground">{onlineScreens} of {totalScreens} screens online</p>
+                  <p className="text-sm font-medium">Schermnetwerk</p>
+                  <p className="text-xs text-muted-foreground">{onlineScreens} van {totalScreens} schermen online</p>
                 </div>
               </div>
               
@@ -129,7 +129,7 @@ export default function Overview() {
                 <div className="flex items-start gap-3 p-3 bg-destructive/10 rounded-lg">
                   <AlertCircle className="h-4 w-4 text-destructive mt-0.5" />
                   <div>
-                    <p className="text-sm font-medium">Offline Screens</p>
+                    <p className="text-sm font-medium">Offline Schermen</p>
                     <p className="text-xs text-muted-foreground">
                       {screens.filter(s => s.status === 'offline').map(s => s.name).join(', ')}
                     </p>
@@ -140,8 +140,8 @@ export default function Overview() {
               <div className="flex items-center gap-3">
                 <div className="h-2 w-2 bg-green-500 rounded-full" />
                 <div className="flex-1">
-                  <p className="text-sm font-medium">Active Contracts</p>
-                  <p className="text-xs text-muted-foreground">{activeContracts} contracts generating revenue</p>
+                  <p className="text-sm font-medium">Actieve Contracten</p>
+                  <p className="text-xs text-muted-foreground">{activeContracts} contracten genereren omzet</p>
                 </div>
               </div>
 
@@ -149,8 +149,8 @@ export default function Overview() {
                 <div className="flex items-center gap-3">
                   <div className="h-2 w-2 bg-yellow-500 rounded-full" />
                   <div className="flex-1">
-                    <p className="text-sm font-medium">Pending Payouts</p>
-                    <p className="text-xs text-muted-foreground">€{pendingPayoutAmount.toLocaleString()} awaiting processing</p>
+                    <p className="text-sm font-medium">Openstaande Uitbetalingen</p>
+                    <p className="text-xs text-muted-foreground">€{pendingPayoutAmount.toLocaleString()} wacht op verwerking</p>
                   </div>
                 </div>
               )}

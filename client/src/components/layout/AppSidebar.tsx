@@ -27,42 +27,42 @@ import { Link, useLocation } from "wouter";
 
 const items = [
   {
-    title: "Overview",
+    title: "Overzicht",
     url: "/",
     icon: LayoutDashboard,
   },
   {
-    title: "Screens",
+    title: "Schermen",
     url: "/screens",
     icon: Monitor,
   },
   {
-    title: "Advertisers",
+    title: "Adverteerders",
     url: "/advertisers",
     icon: Users,
   },
   {
-    title: "Locations",
+    title: "Locaties",
     url: "/locations",
     icon: MapPin,
   },
   {
-    title: "Contracts",
+    title: "Contracten",
     url: "/contracts",
     icon: Calendar,
   },
   {
-    title: "Billing",
+    title: "Facturatie",
     url: "/billing",
     icon: CreditCard,
   },
   {
-    title: "Payouts",
+    title: "Uitbetalingen",
     url: "/payouts",
     icon: Banknote,
   },
   {
-    title: "Integrations",
+    title: "Integraties",
     url: "/integrations",
     icon: Settings,
   },
@@ -82,7 +82,7 @@ export function AppSidebar() {
               </div>
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-bold font-heading">Elevizion</span>
-                <span className="truncate text-xs">Admin Dashboard</span>
+                <span className="truncate text-xs">Beheerdashboard</span>
               </div>
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -90,7 +90,7 @@ export function AppSidebar() {
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Management</SidebarGroupLabel>
+          <SidebarGroupLabel>Beheer</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {items.map((item) => (
@@ -112,7 +112,7 @@ export function AppSidebar() {
           <SidebarMenuItem>
             <SidebarMenuButton>
               <LogOut />
-              <span>Sign Out</span>
+              <span>Uitloggen</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

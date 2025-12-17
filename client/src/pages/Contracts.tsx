@@ -33,7 +33,7 @@ export default function Contracts() {
     c.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const getAdvertiserName = (id: string) => advertisers.find(a => a.id === id)?.companyName || "Unknown";
+  const getAdvertiserName = (id: string) => advertisers.find(a => a.id === id)?.companyName || "Onbekend";
 
   const getStatusVariant = (status: string) => {
     switch (status) {
@@ -45,22 +45,32 @@ export default function Contracts() {
     }
   };
 
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'active': return 'Actief';
+      case 'ended': return 'Beëindigd';
+      case 'paused': return 'Gepauzeerd';
+      case 'cancelled': return 'Geannuleerd';
+      default: return status;
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight font-heading" data-testid="text-page-title">Contracts</h1>
-          <p className="text-muted-foreground">Manage advertising contracts and screen placements.</p>
+          <h1 className="text-3xl font-bold tracking-tight font-heading" data-testid="text-page-title">Contracten</h1>
+          <p className="text-muted-foreground">Beheer reclamecontracten en schermplaatsingen.</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button className="shadow-sm" data-testid="button-create-contract">
-              <Plus className="mr-2 h-4 w-4" /> New Contract
+              <Plus className="mr-2 h-4 w-4" /> Nieuw Contract
             </Button>
           </DialogTrigger>
           <DialogContent className="max-w-2xl">
             <DialogHeader>
-              <DialogTitle>Create New Contract</DialogTitle>
+              <DialogTitle>Nieuw Contract Aanmaken</DialogTitle>
             </DialogHeader>
             <ContractForm onSuccess={() => setIsDialogOpen(false)} />
           </DialogContent>
@@ -71,7 +81,7 @@ export default function Contracts() {
         <div className="relative w-full max-w-sm">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input 
-            placeholder="Search contracts..." 
+            placeholder="Zoek contracten..." 
             className="pl-8" 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -84,10 +94,10 @@ export default function Contracts() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Contract Name</TableHead>
-              <TableHead>Advertiser</TableHead>
-              <TableHead>Monthly Price</TableHead>
-              <TableHead>Date Range</TableHead>
+              <TableHead>Contractnaam</TableHead>
+              <TableHead>Adverteerder</TableHead>
+              <TableHead>Maandprijs</TableHead>
+              <TableHead>Periode</TableHead>
               <TableHead>Status</TableHead>
             </TableRow>
           </TableHeader>
@@ -103,11 +113,11 @@ export default function Contracts() {
                 <TableCell>{getAdvertiserName(contract.advertiserId)}</TableCell>
                 <TableCell className="font-medium">€{parseFloat(contract.monthlyPriceExVat).toLocaleString()}</TableCell>
                 <TableCell className="text-muted-foreground text-sm">
-                  {contract.startDate} <span className="mx-1">→</span> {contract.endDate || 'Ongoing'}
+                  {contract.startDate} <span className="mx-1">→</span> {contract.endDate || 'Doorlopend'}
                 </TableCell>
                 <TableCell>
                   <Badge variant={getStatusVariant(contract.status)}>
-                    {contract.status}
+                    {getStatusLabel(contract.status)}
                   </Badge>
                 </TableCell>
               </TableRow>
@@ -115,7 +125,7 @@ export default function Contracts() {
             {filteredContracts.length === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="h-24 text-center">
-                  No contracts found.
+                  Geen contracten gevonden.
                 </TableCell>
               </TableRow>
             )}
@@ -154,14 +164,14 @@ function ContractForm({ onSuccess }: { onSuccess: () => void }) {
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-6 py-4">
       <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-2">
-          <Label htmlFor="name">Contract Name</Label>
-          <Input id="name" placeholder="e.g., Company Q1 2025" {...register("name", { required: true })} data-testid="input-name" />
+          <Label htmlFor="name">Contractnaam</Label>
+          <Input id="name" placeholder="bijv. Bedrijf Q1 2025" {...register("name", { required: true })} data-testid="input-name" />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="advertiser">Advertiser</Label>
+          <Label htmlFor="advertiser">Adverteerder</Label>
           <Select onValueChange={(val) => setValue("advertiserId", val)}>
             <SelectTrigger data-testid="select-advertiser">
-              <SelectValue placeholder="Select advertiser" />
+              <SelectValue placeholder="Selecteer adverteerder" />
             </SelectTrigger>
             <SelectContent>
               {advertisers.map((adv) => (
@@ -176,23 +186,23 @@ function ContractForm({ onSuccess }: { onSuccess: () => void }) {
       
       <div className="grid grid-cols-3 gap-4">
         <div className="grid gap-2">
-          <Label htmlFor="monthlyPriceExVat">Monthly Price (ex VAT)</Label>
+          <Label htmlFor="monthlyPriceExVat">Maandprijs (ex BTW)</Label>
           <Input id="monthlyPriceExVat" type="number" step="0.01" placeholder="500.00" {...register("monthlyPriceExVat", { required: true })} data-testid="input-price" />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="vatPercent">VAT %</Label>
+          <Label htmlFor="vatPercent">BTW %</Label>
           <Input id="vatPercent" type="number" step="0.01" defaultValue="21.00" {...register("vatPercent")} />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="billingCycle">Billing Cycle</Label>
+          <Label htmlFor="billingCycle">Facturatiecyclus</Label>
           <Select defaultValue="monthly" onValueChange={(val) => setValue("billingCycle", val)}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="monthly">Monthly</SelectItem>
-              <SelectItem value="quarterly">Quarterly</SelectItem>
-              <SelectItem value="yearly">Yearly</SelectItem>
+              <SelectItem value="monthly">Maandelijks</SelectItem>
+              <SelectItem value="quarterly">Per Kwartaal</SelectItem>
+              <SelectItem value="yearly">Jaarlijks</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -200,17 +210,17 @@ function ContractForm({ onSuccess }: { onSuccess: () => void }) {
 
       <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-2">
-          <Label htmlFor="startDate">Start Date</Label>
+          <Label htmlFor="startDate">Startdatum</Label>
           <Input id="startDate" type="date" {...register("startDate", { required: true })} data-testid="input-start-date" />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="endDate">End Date (optional)</Label>
+          <Label htmlFor="endDate">Einddatum (optioneel)</Label>
           <Input id="endDate" type="date" {...register("endDate")} data-testid="input-end-date" />
         </div>
       </div>
 
       <div className="space-y-3">
-        <Label>Assign to Screens</Label>
+        <Label>Toewijzen aan Schermen</Label>
         <div className="grid grid-cols-2 gap-2 border rounded-md p-4 max-h-48 overflow-y-auto">
           {screens.map(screen => (
             <div key={screen.id} className="flex items-center space-x-2">
@@ -223,11 +233,11 @@ function ContractForm({ onSuccess }: { onSuccess: () => void }) {
             </div>
           ))}
         </div>
-        <p className="text-xs text-muted-foreground">{selectedScreens.length} screen(s) selected</p>
+        <p className="text-xs text-muted-foreground">{selectedScreens.length} scherm(en) geselecteerd</p>
       </div>
 
       <div className="flex justify-end pt-2">
-        <Button type="submit" data-testid="button-submit">Create Contract</Button>
+        <Button type="submit" data-testid="button-submit">Contract Aanmaken</Button>
       </div>
     </form>
   );

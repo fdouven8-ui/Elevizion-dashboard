@@ -19,38 +19,46 @@ export default function Payouts() {
 
   const handleGenerate = () => {
     setIsGenerating(true);
-    // Simulate current month generation
     generatePayouts(format(new Date(), "yyyy-MM"));
     setTimeout(() => setIsGenerating(false), 500);
   };
 
-  const getLocationName = (id: string) => locations.find(l => l.id === id)?.name || "Unknown";
+  const getLocationName = (id: string) => locations.find(l => l.id === id)?.name || "Onbekend";
+
+  const getStatusLabel = (status: string) => {
+    switch(status) {
+      case 'paid': return 'Betaald';
+      case 'pending': return 'In Afwachting';
+      case 'approved': return 'Goedgekeurd';
+      default: return status;
+    }
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight font-heading">Payouts</h1>
-          <p className="text-muted-foreground">Revenue share distribution for location partners.</p>
+          <h1 className="text-3xl font-bold tracking-tight font-heading">Uitbetalingen</h1>
+          <p className="text-muted-foreground">Omzetdeling voor locatiepartners.</p>
         </div>
         <Button onClick={handleGenerate} disabled={isGenerating}>
-          {isGenerating ? "Processing..." : "Generate Payouts for This Month"}
+          {isGenerating ? "Verwerken..." : "Uitbetalingen Genereren voor Deze Maand"}
         </Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Total Distributed (YTD)</CardTitle>
+            <CardTitle className="text-sm font-medium">Totaal Uitgekeerd (YTD)</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">$0.00</div>
-            <p className="text-xs text-muted-foreground">Calculated from paid payouts</p>
+            <div className="text-2xl font-bold">€0,00</div>
+            <p className="text-xs text-muted-foreground">Berekend uit betaalde uitbetalingen</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium">Pending Payouts</CardTitle>
+            <CardTitle className="text-sm font-medium">Openstaande Uitbetalingen</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
@@ -64,11 +72,11 @@ export default function Payouts() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Location</TableHead>
-              <TableHead>Period</TableHead>
-              <TableHead className="text-right">Gross Revenue Share</TableHead>
-              <TableHead className="text-right">Share %</TableHead>
-              <TableHead className="text-right">Payout Amount</TableHead>
+              <TableHead>Locatie</TableHead>
+              <TableHead>Periode</TableHead>
+              <TableHead className="text-right">Bruto Omzet</TableHead>
+              <TableHead className="text-right">Deel %</TableHead>
+              <TableHead className="text-right">Uitbetalingsbedrag</TableHead>
               <TableHead>Status</TableHead>
             </TableRow>
           </TableHeader>
@@ -84,7 +92,7 @@ export default function Payouts() {
                 <TableCell className="text-right font-mono font-bold">€{parseFloat(pay.payoutAmountExVat).toFixed(2)}</TableCell>
                 <TableCell>
                   <Badge variant={pay.status === 'paid' ? 'default' : 'secondary'}>
-                    {pay.status}
+                    {getStatusLabel(pay.status)}
                   </Badge>
                 </TableCell>
               </TableRow>
@@ -92,7 +100,7 @@ export default function Payouts() {
             {payouts.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="h-24 text-center">
-                  No payouts generated yet. Click the button above to calculate shares.
+                  Nog geen uitbetalingen gegenereerd. Klik op de knop hierboven om de delingen te berekenen.
                 </TableCell>
               </TableRow>
             )}

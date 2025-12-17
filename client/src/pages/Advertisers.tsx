@@ -38,18 +38,18 @@ export default function Advertisers() {
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight font-heading">Advertisers</h1>
-          <p className="text-muted-foreground">Manage your advertising partners and their subscriptions.</p>
+          <h1 className="text-3xl font-bold tracking-tight font-heading">Adverteerders</h1>
+          <p className="text-muted-foreground">Beheer uw reclamepartners en hun abonnementen.</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button className="shadow-sm">
-              <Plus className="mr-2 h-4 w-4" /> Add Advertiser
+              <Plus className="mr-2 h-4 w-4" /> Adverteerder Toevoegen
             </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Add New Advertiser</DialogTitle>
+              <DialogTitle>Nieuwe Adverteerder Toevoegen</DialogTitle>
             </DialogHeader>
             <AdvertiserForm onSuccess={() => setIsDialogOpen(false)} />
           </DialogContent>
@@ -60,7 +60,7 @@ export default function Advertisers() {
         <div className="relative w-full max-w-sm">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input 
-            placeholder="Search advertisers..." 
+            placeholder="Zoek adverteerders..." 
             className="pl-8" 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -72,8 +72,8 @@ export default function Advertisers() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Company</TableHead>
-              <TableHead>Contact</TableHead>
+              <TableHead>Bedrijf</TableHead>
+              <TableHead>Contactpersoon</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-[50px]"></TableHead>
             </TableRow>
@@ -90,7 +90,7 @@ export default function Advertisers() {
                 </TableCell>
                 <TableCell>
                   <Badge variant={adv.status === 'active' ? 'default' : 'secondary'}>
-                    {adv.status}
+                    {adv.status === 'active' ? 'Actief' : adv.status === 'paused' ? 'Gepauzeerd' : adv.status}
                   </Badge>
                 </TableCell>
                 <TableCell>
@@ -101,11 +101,11 @@ export default function Advertisers() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuLabel>Acties</DropdownMenuLabel>
                       <DropdownMenuItem onClick={() => updateAdvertiser(adv.id, { status: adv.status === 'active' ? 'paused' : 'active' })}>
-                        Toggle Status
+                        Status Wijzigen
                       </DropdownMenuItem>
-                      <DropdownMenuItem>View Details</DropdownMenuItem>
+                      <DropdownMenuItem>Details Bekijken</DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
@@ -114,7 +114,7 @@ export default function Advertisers() {
             {filteredAdvertisers.length === 0 && (
               <TableRow>
                 <TableCell colSpan={4} className="h-24 text-center">
-                  No advertisers found.
+                  Geen adverteerders gevonden.
                 </TableCell>
               </TableRow>
             )}
@@ -140,25 +140,25 @@ function AdvertiserForm({ onSuccess }: { onSuccess: () => void }) {
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
       <div className="grid gap-2">
-        <Label htmlFor="companyName">Company Name</Label>
+        <Label htmlFor="companyName">Bedrijfsnaam</Label>
         <Input id="companyName" {...register("companyName", { required: true })} />
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="contactName">Contact Name</Label>
+        <Label htmlFor="contactName">Contactpersoon</Label>
         <Input id="contactName" {...register("contactName", { required: true })} />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="grid gap-2">
-          <Label htmlFor="email">Email</Label>
+          <Label htmlFor="email">E-mail</Label>
           <Input id="email" type="email" {...register("email", { required: true })} />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="phone">Phone</Label>
+          <Label htmlFor="phone">Telefoon</Label>
           <Input id="phone" {...register("phone", { required: true })} />
         </div>
       </div>
       <div className="flex justify-end pt-4">
-        <Button type="submit">Create Advertiser</Button>
+        <Button type="submit">Adverteerder Aanmaken</Button>
       </div>
     </form>
   );

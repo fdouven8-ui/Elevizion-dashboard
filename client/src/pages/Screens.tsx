@@ -22,7 +22,7 @@ import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
-import { Screen } from "@/lib/types";
+import type { Screen } from "@shared/schema";
 import {
   Select,
   SelectContent,
@@ -40,13 +40,21 @@ export default function Screens() {
     scr.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const getLocationName = (id: string) => locations.find(l => l.id === id)?.name || "Unknown";
+  const getLocationName = (id: string) => locations.find(l => l.id === id)?.name || "Onbekend";
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'online': return 'default'; // dark/primary
+      case 'online': return 'default';
       case 'offline': return 'destructive';
       default: return 'secondary';
+    }
+  };
+
+  const getStatusLabel = (status: string) => {
+    switch (status) {
+      case 'online': return 'Online';
+      case 'offline': return 'Offline';
+      default: return status;
     }
   };
 
@@ -54,18 +62,18 @@ export default function Screens() {
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight font-heading">Screens</h1>
-          <p className="text-muted-foreground">Monitor and manage your digital signage displays.</p>
+          <h1 className="text-3xl font-bold tracking-tight font-heading">Schermen</h1>
+          <p className="text-muted-foreground">Monitor en beheer uw digital signage displays.</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
             <Button className="shadow-sm">
-              <Plus className="mr-2 h-4 w-4" /> Add Screen
+              <Plus className="mr-2 h-4 w-4" /> Scherm Toevoegen
             </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Add New Screen</DialogTitle>
+              <DialogTitle>Nieuw Scherm Toevoegen</DialogTitle>
             </DialogHeader>
             <ScreenForm onSuccess={() => setIsDialogOpen(false)} locations={locations} />
           </DialogContent>
@@ -76,7 +84,7 @@ export default function Screens() {
         <div className="relative w-full max-w-sm">
           <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input 
-            placeholder="Search screens..." 
+            placeholder="Zoek schermen..." 
             className="pl-8" 
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -88,8 +96,8 @@ export default function Screens() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Screen Name</TableHead>
-              <TableHead>Location</TableHead>
+              <TableHead>Schermnaam</TableHead>
+              <TableHead>Locatie</TableHead>
               <TableHead>Yodeck ID</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-[50px]"></TableHead>
@@ -103,10 +111,10 @@ export default function Screens() {
                   {scr.name}
                 </TableCell>
                 <TableCell>{getLocationName(scr.locationId)}</TableCell>
-                <TableCell className="font-mono text-xs">{scr.yodeckPlayerId || 'Not Linked'}</TableCell>
+                <TableCell className="font-mono text-xs">{scr.yodeckPlayerId || 'Niet Gekoppeld'}</TableCell>
                 <TableCell>
                   <Badge variant={getStatusColor(scr.status) as any}>
-                    {scr.status}
+                    {getStatusLabel(scr.status)}
                   </Badge>
                 </TableCell>
                 <TableCell>
@@ -117,10 +125,10 @@ export default function Screens() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                      <DropdownMenuItem onClick={() => updateScreen(scr.id, { status: 'online' })}>Mark Online</DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => updateScreen(scr.id, { status: 'offline' })}>Mark Offline</DropdownMenuItem>
-                      <DropdownMenuItem>Edit Details</DropdownMenuItem>
+                      <DropdownMenuLabel>Acties</DropdownMenuLabel>
+                      <DropdownMenuItem onClick={() => updateScreen(scr.id, { status: 'online' })}>Markeer als Online</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => updateScreen(scr.id, { status: 'offline' })}>Markeer als Offline</DropdownMenuItem>
+                      <DropdownMenuItem>Details Bewerken</DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
@@ -129,7 +137,7 @@ export default function Screens() {
             {filteredScreens.length === 0 && (
               <TableRow>
                 <TableCell colSpan={5} className="h-24 text-center">
-                  No screens found.
+                  Geen schermen gevonden.
                 </TableCell>
               </TableRow>
             )}
@@ -152,14 +160,14 @@ function ScreenForm({ onSuccess, locations }: { onSuccess: () => void, locations
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
       <div className="grid gap-2">
-        <Label htmlFor="name">Screen Name</Label>
+        <Label htmlFor="name">Schermnaam</Label>
         <Input id="name" {...register("name", { required: true })} />
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="location">Location</Label>
+        <Label htmlFor="location">Locatie</Label>
         <Select onValueChange={(val) => setValue("locationId", val)}>
           <SelectTrigger>
-            <SelectValue placeholder="Select location" />
+            <SelectValue placeholder="Selecteer locatie" />
           </SelectTrigger>
           <SelectContent>
             {locations.map((loc) => (
@@ -171,11 +179,11 @@ function ScreenForm({ onSuccess, locations }: { onSuccess: () => void, locations
         </Select>
       </div>
       <div className="grid gap-2">
-        <Label htmlFor="yodeckId">Yodeck Player ID (Optional)</Label>
+        <Label htmlFor="yodeckId">Yodeck Player ID (Optioneel)</Label>
         <Input id="yodeckId" {...register("yodeckPlayerId")} />
       </div>
       <div className="flex justify-end pt-4">
-        <Button type="submit">Create Screen</Button>
+        <Button type="submit">Scherm Aanmaken</Button>
       </div>
     </form>
   );

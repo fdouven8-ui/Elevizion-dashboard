@@ -11,14 +11,23 @@ import {
 } from "@/components/ui/breadcrumb";
 import { useLocation } from "wouter";
 
+const pageNames: Record<string, string> = {
+  "": "Overzicht",
+  "screens": "Schermen",
+  "advertisers": "Adverteerders",
+  "locations": "Locaties",
+  "contracts": "Contracten",
+  "billing": "Facturatie",
+  "payouts": "Uitbetalingen",
+  "integrations": "Integraties",
+};
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   
-  // Simple breadcrumb logic
   const path = location.split("/").filter(Boolean);
-  const pageName = path.length > 0 
-    ? path[0].charAt(0).toUpperCase() + path[0].slice(1) 
-    : "Overview";
+  const pageKey = path.length > 0 ? path[0] : "";
+  const pageName = pageNames[pageKey] || pageKey.charAt(0).toUpperCase() + pageKey.slice(1);
 
   return (
     <SidebarProvider>

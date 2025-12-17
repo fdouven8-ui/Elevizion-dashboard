@@ -48,12 +48,12 @@ export default function Integrations() {
     try {
       const result = await testYodeck();
       toast({
-        title: result.success ? "Yodeck Connected" : "Connection Failed",
+        title: result.success ? "Yodeck Verbonden" : "Verbinding Mislukt",
         description: result.message,
         variant: result.success ? "default" : "destructive",
       });
     } catch (error) {
-      toast({ title: "Error", description: "Failed to test connection", variant: "destructive" });
+      toast({ title: "Fout", description: "Kan verbinding niet testen", variant: "destructive" });
     }
     setTestingYodeck(false);
   };
@@ -63,12 +63,12 @@ export default function Integrations() {
     try {
       const result = await testMoneybird();
       toast({
-        title: result.success ? "Moneybird Connected" : "Connection Failed",
+        title: result.success ? "Moneybird Verbonden" : "Verbinding Mislukt",
         description: result.message,
         variant: result.success ? "default" : "destructive",
       });
     } catch (error) {
-      toast({ title: "Error", description: "Failed to test connection", variant: "destructive" });
+      toast({ title: "Fout", description: "Kan verbinding niet testen", variant: "destructive" });
     }
     setTestingMoneybird(false);
   };
@@ -78,27 +78,27 @@ export default function Integrations() {
     try {
       const result = await syncYodeck();
       if (result.success) {
-        toast({ title: "Sync Complete", description: `Synced ${result.screens?.length || 0} screens from Yodeck` });
+        toast({ title: "Synchronisatie Voltooid", description: `${result.screens?.length || 0} schermen gesynchroniseerd vanuit Yodeck` });
         queryClient.invalidateQueries({ queryKey: ["screens"] });
       } else {
-        toast({ title: "Sync Failed", description: result.message, variant: "destructive" });
+        toast({ title: "Synchronisatie Mislukt", description: result.message, variant: "destructive" });
       }
     } catch (error) {
-      toast({ title: "Error", description: "Failed to sync screens", variant: "destructive" });
+      toast({ title: "Fout", description: "Kan schermen niet synchroniseren", variant: "destructive" });
     }
     setSyncingYodeck(false);
   };
 
   if (isLoading) {
-    return <div className="p-6">Loading...</div>;
+    return <div className="p-6">Laden...</div>;
   }
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight font-heading">Integrations</h1>
-          <p className="text-muted-foreground">Connect external services for billing and display management.</p>
+          <h1 className="text-3xl font-bold tracking-tight font-heading">Integraties</h1>
+          <p className="text-muted-foreground">Verbind externe diensten voor facturatie en schermbeheer.</p>
         </div>
       </div>
 
@@ -109,27 +109,27 @@ export default function Integrations() {
               Yodeck
               <Badge variant={status?.yodeck.isConfigured ? "default" : "secondary"}>
                 {status?.yodeck.isConfigured ? (
-                  <><Check className="h-3 w-3 mr-1" /> Configured</>
+                  <><Check className="h-3 w-3 mr-1" /> Geconfigureerd</>
                 ) : (
-                  <><X className="h-3 w-3 mr-1" /> Not Configured</>
+                  <><X className="h-3 w-3 mr-1" /> Niet Geconfigureerd</>
                 )}
               </Badge>
             </CardTitle>
             <CardDescription>
-              Connect your Yodeck account to sync screen status and monitor player health.
+              Verbind uw Yodeck-account om schermstatus te synchroniseren en spelergezondheid te monitoren.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="text-sm text-muted-foreground">
               {status?.yodeck.isConfigured ? (
-                <p>Your Yodeck API token is configured. You can test the connection or sync screen data.</p>
+                <p>Uw Yodeck API-token is geconfigureerd. U kunt de verbinding testen of schermgegevens synchroniseren.</p>
               ) : (
                 <div className="space-y-2">
-                  <p>To connect Yodeck, add these environment variables:</p>
+                  <p>Om Yodeck te verbinden, voeg deze omgevingsvariabelen toe:</p>
                   <code className="block bg-muted p-3 rounded-md text-xs">
-                    YODECK_API_TOKEN=your_api_token_here
+                    YODECK_API_TOKEN=uw_api_token_hier
                   </code>
-                  <p className="text-xs">Get your API token from Yodeck: Settings → Advanced → API Tokens</p>
+                  <p className="text-xs">Haal uw API-token op van Yodeck: Instellingen → Geavanceerd → API Tokens</p>
                 </div>
               )}
             </div>
@@ -140,7 +140,7 @@ export default function Integrations() {
                 disabled={!status?.yodeck.isConfigured || testingYodeck}
               >
                 {testingYodeck && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Test Connection
+                Verbinding Testen
               </Button>
               <Button 
                 onClick={handleSyncYodeck}
@@ -151,7 +151,7 @@ export default function Integrations() {
                 ) : (
                   <RefreshCw className="h-4 w-4 mr-2" />
                 )}
-                Sync Screens
+                Schermen Synchroniseren
               </Button>
             </div>
           </CardContent>
@@ -163,28 +163,28 @@ export default function Integrations() {
               Moneybird
               <Badge variant={status?.moneybird.isConfigured ? "default" : "secondary"}>
                 {status?.moneybird.isConfigured ? (
-                  <><Check className="h-3 w-3 mr-1" /> Configured</>
+                  <><Check className="h-3 w-3 mr-1" /> Geconfigureerd</>
                 ) : (
-                  <><X className="h-3 w-3 mr-1" /> Not Configured</>
+                  <><X className="h-3 w-3 mr-1" /> Niet Geconfigureerd</>
                 )}
               </Badge>
             </CardTitle>
             <CardDescription>
-              Connect Moneybird to automatically sync invoices and payments.
+              Verbind Moneybird om automatisch facturen en betalingen te synchroniseren.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="text-sm text-muted-foreground">
               {status?.moneybird.isConfigured ? (
-                <p>Your Moneybird API is configured. You can test the connection or create invoices.</p>
+                <p>Uw Moneybird API is geconfigureerd. U kunt de verbinding testen of facturen aanmaken.</p>
               ) : (
                 <div className="space-y-2">
-                  <p>To connect Moneybird, add these environment variables:</p>
+                  <p>Om Moneybird te verbinden, voeg deze omgevingsvariabelen toe:</p>
                   <code className="block bg-muted p-3 rounded-md text-xs">
-                    MONEYBIRD_API_TOKEN=your_api_token_here<br />
-                    MONEYBIRD_ADMINISTRATION_ID=your_admin_id
+                    MONEYBIRD_API_TOKEN=uw_api_token_hier<br />
+                    MONEYBIRD_ADMINISTRATION_ID=uw_admin_id
                   </code>
-                  <p className="text-xs">Get your API token from: moneybird.com/user/applications/new</p>
+                  <p className="text-xs">Haal uw API-token op van: moneybird.com/user/applications/new</p>
                 </div>
               )}
             </div>
@@ -195,7 +195,7 @@ export default function Integrations() {
                 disabled={!status?.moneybird.isConfigured || testingMoneybird}
               >
                 {testingMoneybird && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Test Connection
+                Verbinding Testen
               </Button>
             </div>
           </CardContent>
