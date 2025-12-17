@@ -22,6 +22,9 @@ import {
   Settings,
   LogOut,
   CalendarCheck,
+  FileText,
+  AlertTriangle,
+  Rocket,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 
@@ -65,6 +68,21 @@ const items = [
     title: "Maandafsluiting",
     url: "/month-close",
     icon: CalendarCheck,
+  },
+  {
+    title: "Rapportages",
+    url: "/reports",
+    icon: FileText,
+  },
+  {
+    title: "Monitoring",
+    url: "/monitoring",
+    icon: AlertTriangle,
+  },
+  {
+    title: "Onboarding",
+    url: "/onboarding",
+    icon: Rocket,
   },
   {
     title: "Integraties",

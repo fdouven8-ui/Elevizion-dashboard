@@ -1524,6 +1524,46 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/advertisers/:advertiserId/onboarding", async (req, res) => {
+    try {
+      const advertiserId = req.params.advertiserId;
+      
+      const existingChecklist = await storage.getOnboardingChecklist(advertiserId);
+      if (existingChecklist) {
+        return res.status(400).json({ message: "Onboarding checklist bestaat al" });
+      }
+
+      const checklist = await storage.createOnboardingChecklist({
+        advertiserId,
+        status: "in_progress",
+      });
+
+      const defaultTasks = [
+        { taskType: "creative_received", status: "todo" as const },
+        { taskType: "creative_approved", status: "todo" as const },
+        { taskType: "campaign_created", status: "todo" as const },
+        { taskType: "scheduled_on_screens", status: "todo" as const },
+        { taskType: "billing_configured", status: "todo" as const },
+        { taskType: "first_invoice_sent", status: "todo" as const },
+        { taskType: "go_live_confirmed", status: "todo" as const },
+        { taskType: "first_report_sent", status: "todo" as const },
+      ];
+
+      const createdTasks = [];
+      for (const task of defaultTasks) {
+        const createdTask = await storage.createOnboardingTask({
+          checklistId: checklist.id,
+          ...task,
+        });
+        createdTasks.push(createdTask);
+      }
+
+      res.status(201).json({ ...checklist, tasks: createdTasks });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.patch("/api/onboarding-tasks/:id", async (req, res) => {
     try {
       const task = await storage.updateOnboardingTask(req.params.id, {
@@ -1593,6 +1633,55 @@ export async function registerRoutes(
     try {
       const reports = await storage.getReportsByAdvertiser(req.params.advertiserId);
       res.json(reports);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/reports", async (req, res) => {
+    try {
+      const report = await storage.createReport(req.body);
+      res.status(201).json(report);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/reports/:id/send", async (req, res) => {
+    try {
+      const reports = await storage.getReports();
+      const report = reports.find(r => r.id === req.params.id);
+      if (!report) {
+        return res.status(404).json({ message: "Rapport niet gevonden" });
+      }
+      
+      const advertisers = await storage.getAdvertisers();
+      const advertiser = advertisers.find(a => a.id === report.advertiserId);
+      if (!advertiser?.email) {
+        return res.status(400).json({ message: "Adverteerder heeft geen e-mailadres" });
+      }
+
+      const { sendEmail } = await import("./email");
+      const emailResult = await sendEmail({
+        to: advertiser.email,
+        subject: `Proof-of-Play Rapport - ${report.periodStart} t/m ${report.periodEnd}`,
+        html: `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2>Proof-of-Play Rapport</h2>
+            <p>Beste ${advertiser.contactName || advertiser.companyName},</p>
+            <p>Hierbij ontvangt u uw proof-of-play rapport voor de periode ${report.periodStart} t/m ${report.periodEnd}.</p>
+            <p>Dit rapport toont een overzicht van alle vertoningen van uw advertenties op ons netwerk.</p>
+            <p>Met vriendelijke groet,<br>Elevizion</p>
+          </div>
+        `,
+      });
+
+      if (emailResult.success) {
+        await storage.updateReport(report.id, { sentAt: new Date() });
+        res.json({ message: "Rapport verzonden" });
+      } else {
+        res.status(500).json({ message: emailResult.message });
+      }
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

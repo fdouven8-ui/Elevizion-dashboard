@@ -20,6 +20,9 @@ const pageNames: Record<string, string> = {
   "billing": "Facturatie",
   "payouts": "Uitbetalingen",
   "month-close": "Maandafsluiting",
+  "reports": "Rapportages",
+  "monitoring": "Monitoring",
+  "onboarding": "Onboarding",
   "integrations": "Integraties",
 };
 
