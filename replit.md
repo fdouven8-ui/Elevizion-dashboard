@@ -85,3 +85,41 @@ Core entities with relationships:
   - SEPA mandate request emails (`POST /api/email/sepa/:advertiserId`)
   - Status check endpoint (`GET /api/email/status`)
 - **Get API Key**: https://sendgrid.com/docs/ui/account-and-settings/api-keys/
+
+## Authentication & Authorization
+
+### Replit Auth Integration
+- **Provider**: Replit OIDC authentication
+- **Session Storage**: PostgreSQL-backed sessions via `connect-pg-simple`
+- **User Storage**: `users` table with extended profile fields
+- **Token Refresh**: Automatic refresh token handling
+
+### User Roles
+Five predefined roles with descending access levels:
+- **admin**: Full system access, user management
+- **finance**: Billing, invoices, payments access
+- **ops**: Screens, locations, monitoring access
+- **viewer**: Read-only dashboard access
+- **partner**: Location-specific access (linked via `locationId`)
+
+### Permission Middleware
+Use `requireRole()` middleware for protected routes:
+```typescript
+import { isAuthenticated, requireRole } from "./replit_integrations/auth";
+app.get("/api/users", isAuthenticated, requireRole("admin"), handler);
+```
+
+### Audit Logging
+All permission changes are logged to `audit_logs` table:
+- Role changes (`role_changed`)
+- User activation (`activated`)
+- User deactivation (`deactivated`)
+
+## Recent Changes
+
+### December 2025 - Phase 3
+- Added Partner Portal with Replit Auth integration
+- Implemented role-based access control system
+- Created Users management page for admins
+- Added audit logging for permission changes
+- Extended auth storage with role management functions
