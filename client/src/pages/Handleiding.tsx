@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { 
   Building2, MapPin, Monitor, FileText, Receipt, Wallet, 
   Camera, BarChart3, Users, Settings, Download, Shield,
-  CheckCircle, AlertCircle, HelpCircle
+  CheckCircle, AlertCircle, HelpCircle, Smartphone
 } from "lucide-react";
 
 const sections = [
@@ -16,12 +16,19 @@ const sections = [
     content: `
       Het dashboard laat in één oogopslag zien hoe je bedrijf draait:
       
-      • **Actieve Adverteerders** - Hoeveel bedrijven momenteel adverteren
-      • **MRR (Maandelijkse Omzet)** - Hoeveel je deze maand verwacht te verdienen
-      • **Online Schermen** - Hoeveel schermen actief zijn en content afspelen
-      • **Openstaande Facturen** - Facturen die nog betaald moeten worden
+      **Aandachtspunten:**
+      • Bovenaan zie je direct wat er aandacht nodig heeft
+      • Offline schermen, openstaande facturen, schermen zonder ads
+      • Klik op "Aandachtspunten" om in/uit te klappen
+      • Elke melding heeft een directe actieknop
       
-      Gebruik het dashboard om snel te zien of er problemen zijn (rode cijfers) of dat alles goed loopt (groene cijfers).
+      **Statistieken:**
+      • Schermen online - Klik om naar schermbeheer te gaan
+      • Actieve campagnes - Klik voor advertentie-overzicht
+      • Openstaande facturen - Klik naar facturatie
+      • Actieve adverteerders - Klik naar adverteerdersbeheer
+      
+      Alle kaarten zijn klikbaar en brengen je direct naar de juiste plek!
     `,
   },
   {
@@ -36,12 +43,19 @@ const sections = [
       • Nieuwe adverteerder toevoegen met de "Nieuwe Adverteerder" knop
       • Gegevens bekijken en aanpassen (naam, email, BTW-nummer)
       • Status wijzigen (actief, gepauzeerd)
+      • Automatisch incasso instellen (SEPA)
       
       **Belangrijke velden:**
       • **Bedrijfsnaam** - De officiële naam van het bedrijf
       • **Contactpersoon** - Met wie je contact hebt
       • **Email** - Waar facturen naartoe gaan
       • **BTW-nummer** - Nodig voor de factuur
+      
+      **Automatisch Incasso (SEPA):**
+      • Klik op ⋮ → "Incasso instellen" bij een adverteerder
+      • Vul het IBAN rekeningnummer in
+      • Vink aan dat de machtiging is getekend
+      • Facturen worden dan automatisch geïncasseerd via Moneybird
     `,
   },
   {
@@ -131,11 +145,18 @@ const sections = [
       • **Betaald** - Klant heeft betaald
       • **Te laat** - Vervaldatum is gepasseerd
       
+      **Betaalmethode:**
+      • **Incasso** - Wordt automatisch geïncasseerd (groen icoontje)
+      • **Overboeking** - Klant moet zelf overmaken
+      
       **Workflow:**
       1. Maandafsluiting genereert automatisch facturen
       2. Controleer de facturen
-      3. Verstuur naar klanten
-      4. Markeer als betaald wanneer geld binnen is
+      3. Verstuur naar klanten (via Moneybird)
+      4. Bij incasso: wordt automatisch afgeschreven
+      5. Bij overboeking: markeer als betaald wanneer geld binnen is
+      
+      **Tip:** Stel automatisch incasso in bij adverteerders voor minder administratie!
     `,
   },
   {
@@ -212,6 +233,31 @@ const sections = [
       
       **Nieuwe gebruiker:**
       Gebruikers krijgen automatisch toegang via Replit login. Als admin kun je hun rol aanpassen.
+    `,
+  },
+  {
+    id: "mobiel",
+    icon: <Smartphone className="h-5 w-5" />,
+    title: "Mobiel Gebruik",
+    description: "Elevizion op je telefoon of tablet",
+    content: `
+      Elevizion werkt volledig op je telefoon of tablet.
+      
+      **Als app op je iPhone/iPad:**
+      1. Open de site in Safari
+      2. Tik op het Deel-icoon (vierkantje met pijl)
+      3. Kies "Zet op beginscherm"
+      4. Geef het een naam en tik "Voeg toe"
+      
+      **Navigatie op mobiel:**
+      • Tik op het menu-icoon linksboven (☰)
+      • Het menu schuift uit als een lade
+      • Tik ergens anders om het menu te sluiten
+      
+      **Tips:**
+      • Alle functies werken hetzelfde als op desktop
+      • Aandachtspunten zijn inklapbaar voor meer ruimte
+      • Tabellen scrollen horizontaal op kleine schermen
     `,
   },
 ];
