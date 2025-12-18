@@ -121,7 +121,7 @@ All permission changes are logged to `audit_logs` table:
 
 ## Recent Changes
 
-### December 2025 - Sales & Acquisitie Module
+### December 2025 - Sales & Acquisitie Module + Task Management
 - Added complete sales pipeline for lead management
   - Kanban-style board with pipeline stages: nieuw → contact → schouw_gepland → voorstel → onderhandeling → gewonnen/verloren
   - Lead types: "adverteerder" (potential advertiser) and "locatie" (potential location partner)
@@ -132,12 +132,23 @@ All permission changes are logged to `audit_logs` table:
   - Foot traffic estimates and target audience analysis
   - Proposed screen count and locations
   - Estimated installation costs
+  - **Photo upload** with categories: locatie, technisch, montage, overig (using Object Storage)
+  - **Supplies/materials list** for specifying required items (TV, kabels, kabelgoten, etc.) with quantities
+- Automatic task generation on survey finalization
+  - **Installatie taak** created and assigned to ops role (field technicians)
+  - **Inkoop taak** created and assigned to admin role (purchasing)
+  - Tasks include material lists and survey reference
+- Tasks Dashboard (`/tasks`)
+  - Role-based filtering (all, ops, admin, finance)
+  - Open/Completed tabs with status management
+  - Task statistics per type (installatie, inkoop, onderhoud, administratief)
+  - Task status workflow: open → in_progress → completed
 - Digital signature component (canvas-based)
   - Touch-friendly signature pad for tablets/phones
   - Stores signature as base64 PNG with signer name
   - Used for location owner agreement during schouw
-- New tables: leads, locationSurveys, digitalSignatures, salesActivities
-- API endpoints: /api/leads, /api/surveys, /api/signatures
+- New tables: leads, locationSurveys, digitalSignatures, salesActivities, surveyPhotos, supplyItems, surveySupplies, tasks, taskAttachments
+- API endpoints: /api/leads, /api/surveys, /api/signatures, /api/tasks, /api/surveys/:id/supplies, /api/surveys/:id/finalize
 
 ### December 2025 - Dashboard Redesign (Screen-First)
 - Redesigned dashboard to focus on screens as primary element
