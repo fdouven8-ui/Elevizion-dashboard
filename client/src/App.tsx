@@ -5,7 +5,7 @@ import { Toaster } from "@/components/ui/toaster";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 
 // Pages
-import Landing from "@/pages/Landing";
+import Login from "@/pages/Login";
 import Overview from "@/pages/Overview";
 import Advertisers from "@/pages/Advertisers";
 import Locations from "@/pages/Locations";
@@ -62,7 +62,7 @@ function DashboardRouter() {
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Landing} />
+      <Route path="/" component={Login} />
       <Route path="/sign/:token" component={SignContract} />
       <Route component={DashboardRouter} />
     </Switch>
