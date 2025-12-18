@@ -2,15 +2,18 @@ import { useAppData } from "@/hooks/use-app-data";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { 
   Monitor, AlertCircle, Wifi, WifiOff, Building2, 
   Receipt, ArrowRight, Play, CalendarCheck, Eye,
-  TrendingUp, Clock, CheckCircle2
+  TrendingUp, Clock, CheckCircle2, ChevronDown, ChevronUp
 } from "lucide-react";
 import { Link } from "wouter";
+import { useState } from "react";
 
 export default function Overview() {
   const { screens, locations, placements, contracts, advertisers, invoices } = useAppData();
+  const [alertsOpen, setAlertsOpen] = useState(true);
 
   const onlineScreens = screens.filter(s => s.status === 'online').length;
   const offlineScreens = screens.filter(s => s.status === 'offline').length;
@@ -54,8 +57,29 @@ export default function Overview() {
       </div>
 
       {(offlineScreens > 0 || unpaidAmount > 0 || screensWithoutAds.length > 0) && (
-        <div className="space-y-3">
-          <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wide">Aandachtspunten</h2>
+        <Collapsible open={alertsOpen} onOpenChange={setAlertsOpen}>
+          <div className="flex items-center justify-between">
+            <CollapsibleTrigger asChild>
+              <button className="flex items-center gap-2 text-sm font-medium text-muted-foreground uppercase tracking-wide hover:text-foreground transition-colors">
+                Aandachtspunten
+                {alertsOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </button>
+            </CollapsibleTrigger>
+            {!alertsOpen && (
+              <div className="flex items-center gap-2">
+                {offlineScreens > 0 && (
+                  <Badge variant="destructive" className="text-xs">{offlineScreens} offline</Badge>
+                )}
+                {overdueInvoices.length > 0 && (
+                  <Badge variant="destructive" className="text-xs">{overdueInvoices.length} te laat</Badge>
+                )}
+                {unpaidInvoices.length > 0 && overdueInvoices.length === 0 && (
+                  <Badge variant="secondary" className="text-xs">€{unpaidAmount.toLocaleString()}</Badge>
+                )}
+              </div>
+            )}
+          </div>
+          <CollapsibleContent className="space-y-3 mt-3">
           
           {offlineScreens > 0 && (
             <Card className="border-red-200 bg-red-50" data-testid="alert-offline">
@@ -160,7 +184,8 @@ export default function Overview() {
               </CardContent>
             </Card>
           )}
-        </div>
+          </CollapsibleContent>
+        </Collapsible>
       )}
 
       {offlineScreens === 0 && unpaidAmount === 0 && screensWithoutAds.length === 0 && (
