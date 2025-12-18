@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { 
   Building2, MapPin, Monitor, FileText, Receipt, Wallet, 
   Camera, BarChart3, Users, Settings, Download, Shield,
-  CheckCircle, AlertCircle, HelpCircle, Smartphone
+  CheckCircle, AlertCircle, HelpCircle, Smartphone, UserPlus, ClipboardList, ClipboardCheck
 } from "lucide-react";
 
 const sections = [
@@ -29,6 +29,92 @@ const sections = [
       • Actieve adverteerders - Klik naar adverteerdersbeheer
       
       Alle kaarten zijn klikbaar en brengen je direct naar de juiste plek!
+    `,
+  },
+  {
+    id: "acquisitie",
+    icon: <UserPlus className="h-5 w-5" />,
+    title: "Acquisitie (Sales)",
+    description: "Leads beheren en nieuwe klanten werven",
+    content: `
+      Hier beheer je alle potentiële klanten (leads) in een visueel overzicht.
+      
+      **Kanban bord:**
+      • Leads worden weergegeven als kaarten in kolommen
+      • Sleep kaarten naar andere kolommen om de status te wijzigen
+      • Kolommen: Nieuw → Contact → Schouw Gepland → Voorstel → Onderhandeling → Gewonnen/Verloren
+      
+      **Lead types:**
+      • **Adverteerder** - Bedrijf dat wil adverteren
+      • **Locatie** - Plek die een scherm wil hosten
+      
+      **Workflow:**
+      1. Voeg een nieuwe lead toe met de knop rechtsboven
+      2. Plan een afspraak en zet de status op "Contact"
+      3. Voor locaties: plan een schouw en zet op "Schouw Gepland"
+      4. Na de schouw: voeg foto's en materialen toe
+      5. Rond de schouw af om automatisch taken aan te maken
+      6. Bij succes: converteer de lead naar adverteerder of locatie
+    `,
+  },
+  {
+    id: "schouwen",
+    icon: <ClipboardCheck className="h-5 w-5" />,
+    title: "Schouwen (Locatie-inspectie)",
+    description: "Technische inspecties van potentiële locaties",
+    content: `
+      Een schouw is een technische inspectie van een locatie voordat je er schermen plaatst.
+      
+      **Schouw formulier:**
+      • Technische checklist: WiFi, stroom, montagemogelijkheden
+      • Drukte-inschatting en doelgroep
+      • Voorgesteld aantal schermen
+      • Geschatte installatiekosten
+      
+      **Foto's toevoegen:**
+      • Upload foto's met categorieën: locatie, technisch, montage, overig
+      • Maak foto's van de plek waar schermen komen
+      • Documenteer eventuele obstakels of bijzonderheden
+      
+      **Benodigdheden specificeren:**
+      • Voeg materialen toe die nodig zijn voor installatie
+      • Bijv: TV's, HDMI kabels, kabelgoten, montagebeugels
+      • Specificeer hoeveelheden per item
+      
+      **Schouw afronden:**
+      • Klik op "Schouw Afronden & Taken Aanmaken"
+      • Systeem maakt automatisch taken aan:
+        - Installatietaak → voor bouwvakker (ops)
+        - Inkooptaak → voor inkoop (admin)
+      • Lead status wordt automatisch bijgewerkt
+    `,
+  },
+  {
+    id: "taken",
+    icon: <ClipboardList className="h-5 w-5" />,
+    title: "Taken",
+    description: "Werkzaamheden beheren en toewijzen",
+    content: `
+      Alle taken voor het team op één plek beheren.
+      
+      **Taaktypes:**
+      • **Installatie** - Schermen ophangen en aansluiten (→ ops team)
+      • **Inkoop** - Materialen bestellen (→ admin)
+      • **Onderhoud** - Reparaties en onderhoud
+      • **Administratief** - Overige taken
+      
+      **Taakstatussen:**
+      • **Open** - Nog niet gestart
+      • **In uitvoering** - Mee bezig
+      • **Afgerond** - Klaar
+      
+      **Filteren:**
+      • Filter op rol: Alle, Ops, Admin, Finance
+      • Bekijk open taken of afgeronde taken via de tabs
+      
+      **Vanuit schouw:**
+      Taken worden automatisch aangemaakt wanneer je een schouw afrondt. 
+      De materiaallijst wordt automatisch toegevoegd aan de taken.
     `,
   },
   {

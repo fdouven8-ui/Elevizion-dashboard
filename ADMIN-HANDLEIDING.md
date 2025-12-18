@@ -10,13 +10,14 @@ Deze handleiding is specifiek voor jou als hoofdbeheerder van Elevizion OS. Hier
 2. [Domein Koppelen](#domein-koppelen)
 3. [Eerste Setup](#eerste-setup)
 4. [Dagelijks Beheer](#dagelijks-beheer)
-5. [Maandelijkse Taken](#maandelijkse-taken)
-6. [Integraties Instellen](#integraties-instellen)
-7. [Aanpassingen Maken](#aanpassingen-maken)
-8. [Backup & Herstel](#backup--herstel)
-9. [Problemen Oplossen](#problemen-oplossen)
-10. [Belangrijke Bestanden](#belangrijke-bestanden)
-11. [Mobiel Gebruik](#mobiel-gebruik)
+5. [Sales & Acquisitie Workflow](#sales--acquisitie-workflow)
+6. [Maandelijkse Taken](#maandelijkse-taken)
+7. [Integraties Instellen](#integraties-instellen)
+8. [Aanpassingen Maken](#aanpassingen-maken)
+9. [Backup & Herstel](#backup--herstel)
+10. [Problemen Oplossen](#problemen-oplossen)
+11. [Belangrijke Bestanden](#belangrijke-bestanden)
+12. [Mobiel Gebruik](#mobiel-gebruik)
 
 ---
 
@@ -115,7 +116,17 @@ Deze handleiding is specifiek voor jou als hoofdbeheerder van Elevizion OS. Hier
 
 ### Als Admin doe je:
 
-1. **Dashboard checken** (`/dashboard`)
+1. **Taken controleren** (`/tasks`)
+   - Check of er nieuwe taken zijn aangemaakt
+   - Wijs taken toe aan teamleden
+   - Update taakstatussen (open → in uitvoering → afgerond)
+
+2. **Acquisitie beheren** (`/sales`)
+   - Bekijk nieuwe leads en hun status
+   - Plan schouwen voor potentiële locaties
+   - Volg onderhandelingen met adverteerders
+
+3. **Dashboard checken** (`/dashboard`)
    - Bekijk de "Aandachtspunten" bovenaan (inklapbaar)
    - Alle kaarten zijn klikbaar → directe acties
    - Rood = urgent, oranje = aandacht nodig
@@ -137,6 +148,82 @@ Deze handleiding is specifiek voor jou als hoofdbeheerder van Elevizion OS. Hier
    - Bekijk te betalen bedragen aan locaties
    - Maak overboekingen naar locatie-IBANs
    - Markeer als "Betaald"
+
+---
+
+## Sales & Acquisitie Workflow
+
+### Lead Management (`/sales`)
+
+Het acquisitie-systeem werkt met een Kanban bord waar je leads doorheen sleept:
+
+**Lead Stadia:**
+1. **Nieuw** - Lead net binnengekomen
+2. **Contact** - In gesprek met lead
+3. **Schouw Gepland** - Voor locaties: inspectie gepland
+4. **Voorstel** - Offerte/voorstel verstuurd
+5. **Onderhandeling** - Prijsonderhandeling bezig
+6. **Gewonnen/Verloren** - Afgerond
+
+**Lead Types:**
+- **Adverteerder** - Bedrijf dat wil adverteren
+- **Locatie** - Plek die schermen wil hosten
+
+### Schouw Uitvoeren (voor locaties)
+
+1. **Schouw starten:**
+   - Ga naar de lead in `/sales`
+   - Klik op "Start Schouw"
+   - Je komt op het schouwformulier
+
+2. **Formulier invullen:**
+   - Technische checklist (WiFi, stroom, montage)
+   - Drukte-inschatting
+   - Aantal voorgestelde schermen
+   - Installatiekosten
+
+3. **Opslaan:**
+   - Klik "Schouw Opslaan"
+   - Foto- en materialensecties worden nu zichtbaar
+
+4. **Foto's toevoegen:**
+   - Upload foto's per categorie:
+     - **Locatie** - Overzichtsfoto's
+     - **Technisch** - WiFi router, stopcontacten
+     - **Montage** - Waar schermen komen
+     - **Overig** - Bijzonderheden
+
+5. **Materialen specificeren:**
+   - Voeg benodigde items toe (TV, kabels, beugels, etc.)
+   - Specificeer hoeveelheden
+   - Deze lijst wordt meegestuurd naar inkoop
+
+6. **Schouw Afronden:**
+   - Klik "Schouw Afronden & Taken Aanmaken"
+   - Systeem maakt automatisch aan:
+     - **Installatietaak** → toegewezen aan ops team
+     - **Inkooptaak** → toegewezen aan admin/inkoop
+   - Lead status gaat automatisch naar "Voorstel"
+
+### Taken Beheren (`/tasks`)
+
+**Overzicht:**
+- Alle taken op één plek
+- Filter op rol: Alle, Ops, Admin, Finance
+- Tabs voor open/afgeronde taken
+
+**Taaktypes:**
+| Type | Toegewezen aan | Beschrijving |
+|------|---------------|--------------|
+| Installatie | Ops | Schermen ophangen en aansluiten |
+| Inkoop | Admin | Materialen bestellen |
+| Onderhoud | Ops | Reparaties uitvoeren |
+| Administratief | Admin | Overige taken |
+
+**Workflow:**
+1. Taak staat op **Open**
+2. Start werk → zet op **In uitvoering**
+3. Klaar → zet op **Afgerond**
 
 ---
 
@@ -313,6 +400,9 @@ Bij crash of dataverlies:
 |---------|--------------|
 | `client/src/pages/Landing.tsx` | Publieke website |
 | `client/src/pages/Overview.tsx` | Dashboard homepage |
+| `client/src/pages/Sales.tsx` | Acquisitie/lead beheer |
+| `client/src/pages/LocationSurvey.tsx` | Schouwformulier |
+| `client/src/pages/Tasks.tsx` | Takenbeheer |
 | `client/src/App.tsx` | Alle routes/pagina's |
 | `client/src/components/layout/AppSidebar.tsx` | Navigatiemenu |
 | `client/index.html` | SEO meta tags |
