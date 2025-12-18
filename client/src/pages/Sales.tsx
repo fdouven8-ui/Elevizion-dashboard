@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Phone, Mail, MapPin, Calendar, ArrowRight, Building2, Store, Check, X, Edit, Trash2, ClipboardList, Camera, Wrench, ShoppingCart } from "lucide-react";
+import { Plus, Phone, Mail, MapPin, Calendar, ArrowRight, Building2, Store, Check, X, Edit, Trash2, ClipboardList, Camera, Wrench, ShoppingCart, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -469,7 +469,25 @@ export default function Sales() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card 
+          className="border-green-200 bg-green-50 cursor-pointer hover:shadow-md transition-shadow" 
+          onClick={() => navigate("/acquisitie/new")}
+          data-testid="card-cold-walkin"
+        >
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-green-600 rounded-lg">
+                <UserPlus className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <p className="font-semibold text-lg">Cold Walk-in</p>
+                <p className="text-sm text-muted-foreground">Complete onboarding wizard</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
         <Card className="border-purple-200 bg-purple-50 cursor-pointer hover:shadow-md transition-shadow" onClick={() => setQuickSchouwOpen(true)}>
           <CardContent className="pt-6">
             <div className="flex items-center gap-4">
@@ -477,7 +495,7 @@ export default function Sales() {
                 <Camera className="h-6 w-6 text-white" />
               </div>
               <div>
-                <p className="font-semibold text-lg">Nieuwe Schouw</p>
+                <p className="font-semibold text-lg">Snelle Schouw</p>
                 <p className="text-sm text-muted-foreground">Start direct een locatie-inspectie</p>
               </div>
             </div>

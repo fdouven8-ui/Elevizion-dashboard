@@ -2120,6 +2120,42 @@ export async function registerRoutes(
   // SALES & ACQUISITIE (Leads, Surveys, Signatures)
   // ============================================================================
 
+  // Cold Walk-in Onboarding Wizard
+  app.post("/api/acquisitie/create", isAuthenticated, async (req, res) => {
+    try {
+      const { createColdWalkIn, acquisitieWizardSchema } = await import("./services/acquisitie");
+      const validated = acquisitieWizardSchema.parse(req.body);
+      const userId = (req.user as any)?.id;
+      const result = await createColdWalkIn(validated, userId);
+      
+      if (result.success) {
+        res.status(201).json(result);
+      } else {
+        res.status(400).json(result);
+      }
+    } catch (error: any) {
+      console.error("Acquisitie create error:", error);
+      res.status(400).json({ success: false, errors: [error.message] });
+    }
+  });
+
+  // Check for duplicates before creating
+  app.get("/api/acquisitie/check-duplicates", isAuthenticated, async (req, res) => {
+    try {
+      const { checkDuplicates } = await import("./services/acquisitie");
+      const { companyName, email, postcode } = req.query as { companyName?: string; email?: string; postcode?: string };
+      
+      if (!companyName) {
+        return res.status(400).json({ message: "companyName is verplicht" });
+      }
+      
+      const duplicates = await checkDuplicates(companyName, email, postcode);
+      res.json(duplicates);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
   app.get("/api/leads", async (_req, res) => {
     const leads = await storage.getLeads();
     res.json(leads);

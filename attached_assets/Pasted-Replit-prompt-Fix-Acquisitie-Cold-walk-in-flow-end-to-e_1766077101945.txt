@@ -1,0 +1,281 @@
+Replit prompt — Fix “Acquisitie / Cold-walk-in” flow (end-to-end)
+
+We already have an Elevizion Dashboard prototype. There is an “Acquisitie” page meant for field onboarding when we walk into a business and sign them up (as advertiser and/or as location partner).
+Right now the flow is buggy/incomplete: it does not reliably create all records and link them together.
+Your task: refactor and implement a clean, transactional end-to-end onboarding flow that always results in a consistent database state.
+
+Key requirement
+
+Implement this as a single guided wizard with atomic create behavior:
+
+Either everything is created and linked correctly
+
+Or nothing is saved (no half-created records)
+
+Use a server-side “transaction” (Prisma transaction) and strong validation (zod).
+
+1) The wizard: “Cold Walk-in Onboarding”
+
+Create a multi-step wizard page: /acquisitie/new
+
+Step 0 — Choose onboarding type
+
+User selects one of:
+A) “Add Location partner (screen host)”
+B) “Add Advertiser”
+C) “Add BOTH (location partner + advertiser deal now)”
+
+Wizard shows only relevant steps based on selection.
+
+2) Data captured in the wizard
+Step 1 — Company basics (always)
+
+Collect:
+
+companyName
+
+kvk (optional)
+
+contactName
+
+email
+
+phone
+
+address + city + postcode
+
+notes
+
+If type includes Location:
+
+locationDisplayName (e.g. “Barbershop X – Sittard”)
+
+revenueSharePercent default 10 (editable)
+
+If type includes Advertiser:
+
+advertiserStatus default “draft” until contract signed
+
+preferredPackagePlan (choose plan)
+
+customPriceExVat optional override
+
+startDate (default today) + endDate optional
+
+Step 2 — Schouw (Site survey) (only if Location)
+
+Create a Schouw Document form with structured fields + photo upload.
+
+Schouw fields (minimum)
+
+siteContactName + siteContactPhone
+
+wifiAvailable: yes/no
+
+wifiName + wifiPassword (optional fields, but store securely)
+
+powerAvailable: yes/no
+
+screenPlacementDescription (text)
+
+mountingType: wall/ceiling/stand/other
+
+heightApproxCm
+
+viewingDistanceApproxM
+
+openingHours (text)
+
+footTrafficEstimateLow/Med/High + notes
+
+anyRisks (text)
+
+installDateWanted (date optional)
+
+photos upload: multiple images
+
+Storage
+
+Store schouw photos in your existing file storage (or implement a storage abstraction if missing).
+
+Save file urls + hashes in DB.
+
+Do NOT store wifi password in plain text; encrypt it using existing encryption helper (create one if missing).
+
+Step 3 — Screens creation (only if Location)
+
+Allow quick creation of 1+ screens:
+
+screenName (default “Main screen”)
+
+optional yodeckPlayerId (nullable)
+
+status default “unknown”
+
+optionally assign “install status”: planned|installed|live
+
+Step 4 — User accounts (optional but supported)
+
+In the wizard, allow creating user accounts immediately:
+
+Partner portal user (if Location)
+
+create a “partner” role user
+
+link user to the location
+
+send an invite email (magic link or set password flow)
+
+Advertiser portal user (if Advertiser) (optional)
+
+create a “advertiser” role user
+
+link user to advertiser
+
+send invite email
+
+If email already exists, show “existing user found” and allow linking instead of creating duplicate.
+
+Step 5 — Contract + quick signature (if Advertiser OR Location deal)
+
+Generate a contract record (draft)
+
+Allow:
+
+“Send contract by email” OR
+
+“Sign now on iPad/phone” (open signing link)
+
+If “sign now” is used, create signing token and open /sign/{token} in new tab.
+
+After signing, automatically set:
+
+advertiser status = active
+
+contract status = signed
+
+create onboarding checklist
+
+3) Database requirements (must implement)
+Ensure these entities exist and are linked
+
+Depending on selected type, the transaction must create:
+
+If Location selected:
+
+Location
+
+Schouw (new model)
+
+SchouwPhotos
+
+Screens (1+)
+
+optional PartnerUser (linked)
+
+If Advertiser selected:
+
+Advertiser
+
+Contract (or Subscription/Contract)
+
+optional AdvertiserUser (linked)
+
+Onboarding checklist
+
+If BOTH selected:
+
+Create both sides and additionally:
+
+Create initial placements linking advertiser campaign/contract to the newly created screens (optional toggle “start ads on this location’s screens” default ON)
+
+If placements created, store schedule source = manual and set startDate = contract startDate.
+
+Add missing models if needed
+
+Create:
+
+Schouw model + SchouwPhoto model
+
+UserLocation join table if needed
+
+UserAdvertiser join table if needed
+
+All models must have createdAt/updatedAt and proper indexes.
+
+4) Implementation: make it reliable
+4.1 One server endpoint
+
+Create a single endpoint:
+POST /api/acquisitie/create
+Payload = zod-validated wizard data.
+In the handler:
+
+Normalize/clean data
+
+Use prisma.$transaction(async (tx) => { ... })
+
+Create records in the correct order
+
+Return a response object with created IDs and a “next actions” list:
+
+partnerInviteSent
+
+advertiserInviteSent
+
+contractLink
+
+createdScreenCount
+
+If ANY step fails, rollback everything and return a human-friendly error.
+
+4.2 Prevent duplicates
+
+If a location with same name+postcode exists, show warning and ask to merge (in UI).
+
+If advertiser email exists, link rather than duplicate.
+
+If user email exists, link roles rather than creating another user.
+
+4.3 UI feedback
+
+At end show a success screen with:
+
+“Open Location”
+
+“Open Advertiser”
+
+“Send contract”
+
+“Open signing link”
+
+“Send invites”
+
+If failure, show exact step where it failed.
+
+5) Email integration (use existing)
+
+Send partner invite email template
+
+Send advertiser invite email template
+
+Send contract email template
+All emails must use APP_URL for links.
+
+6) Seed & tests
+
+Add seed example for 1 location + schouw + 2 screens
+
+Add a basic test for /api/acquisitie/create ensuring that if screen creation fails, no location is created (transaction rollback test).
+
+7) Deliver
+
+When finished:
+
+The acquisitie wizard must work end-to-end consistently.
+
+No orphan records.
+
+All created entities correctly linked.
+
+Provide a short README section “Field onboarding (Acquisitie flow)”.

@@ -588,12 +588,15 @@ export const webhookDeliveries = pgTable("webhook_deliveries", {
  */
 export const leads = pgTable("leads", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  type: text("type").notNull(), // 'advertiser' of 'location'
+  type: text("type").notNull(), // 'advertiser', 'location', or 'both'
   companyName: text("company_name").notNull(),
   contactName: text("contact_name").notNull(),
   email: text("email"),
   phone: text("phone"),
   address: text("address"),
+  city: text("city"),
+  postcode: text("postcode"),
+  kvkNumber: text("kvk_number"), // Kamer van Koophandel nummer
   notes: text("notes"),
   status: text("status").notNull().default("nieuw"), // nieuw, contact, schouw_gepland, voorstel, onderhandeling, gewonnen, verloren
   source: text("source"), // website, beurs, cold_call, referral, etc.
@@ -620,6 +623,7 @@ export const locationSurveys = pgTable("location_surveys", {
   // Schouw checklist
   hasWifiAvailable: boolean("has_wifi_available"),
   wifiNetworkName: text("wifi_network_name"),
+  wifiPasswordEncrypted: text("wifi_password_encrypted"), // AES-256 encrypted
   hasPowerOutlet: boolean("has_power_outlet"),
   powerOutletLocation: text("power_outlet_location"),
   proposedScreenCount: integer("proposed_screen_count").default(1),
