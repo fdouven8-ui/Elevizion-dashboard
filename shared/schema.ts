@@ -71,12 +71,26 @@ export const locations = pgTable("locations", {
 });
 
 /**
+ * ScreenGroups - Groups of screens for bulk operations
+ */
+export const screenGroups = pgTable("screen_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  description: text("description"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
  * Screens - Digital signage displays at locations
  * Each screen can show multiple ads and syncs with Yodeck
+ * screenId is the unique identifier (EVZ-001 format) used everywhere
  */
 export const screens = pgTable("screens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  screenId: text("screen_id").notNull().unique(), // EVZ-001 format - MANDATORY
   locationId: varchar("location_id").notNull().references(() => locations.id),
+  groupId: varchar("group_id").references(() => screenGroups.id),
   name: text("name").notNull(),
   yodeckPlayerId: text("yodeck_player_id"), // Linked Yodeck player ID
   yodeckPlayerName: text("yodeck_player_name"),
@@ -458,14 +472,16 @@ export const reportMetrics = pgTable("report_metrics", {
 });
 
 /**
- * Incidents - Track system issues (screen offline, sync failures)
+ * Issues - Track screen and system problems (OPS-first)
+ * Renamed from incidents for clearer terminology
  */
 export const incidents = pgTable("incidents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  incidentType: text("incident_type").notNull(), // screen_offline, sync_failed, playlist_mismatch, storage_issue
+  incidentType: text("incident_type").notNull(), // screen_offline, sync_failed, playlist_mismatch, storage_issue, empty_inventory
   severity: text("severity").notNull().default("medium"), // low, medium, high
   screenId: varchar("screen_id").references(() => screens.id),
   locationId: varchar("location_id").references(() => locations.id),
+  assigneeUserId: varchar("assignee_user_id"), // Who is working on this
   status: text("status").notNull().default("open"), // open, acknowledged, resolved
   title: text("title").notNull(),
   description: text("description"),
@@ -476,6 +492,22 @@ export const incidents = pgTable("incidents", {
   lastSeenAt: timestamp("last_seen_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * SyncLogs - Track Yodeck/Moneybird sync runs
+ */
+export const syncLogs = pgTable("sync_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  syncType: text("sync_type").notNull(), // yodeck_devices, moneybird_invoices, moneybird_contacts
+  status: text("status").notNull().default("running"), // running, success, failed
+  itemsProcessed: integer("items_processed").default(0),
+  itemsCreated: integer("items_created").default(0),
+  itemsUpdated: integer("items_updated").default(0),
+  errorMessage: text("error_message"),
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
 /**
@@ -780,7 +812,9 @@ export const insertTaskAttachmentSchema = createInsertSchema(taskAttachments).om
 
 export const insertAdvertiserSchema = createInsertSchema(advertisers).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertLocationSchema = createInsertSchema(locations).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertScreenGroupSchema = createInsertSchema(screenGroups).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertScreenSchema = createInsertSchema(screens).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertSyncLogSchema = createInsertSchema(syncLogs).omit({ id: true, createdAt: true });
 export const insertPackagePlanSchema = createInsertSchema(packagePlans).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertContractSchema = createInsertSchema(contracts).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertContractEventSchema = createInsertSchema(contractEvents).omit({ id: true, createdAt: true });
@@ -819,8 +853,14 @@ export type InsertAdvertiser = z.infer<typeof insertAdvertiserSchema>;
 export type Location = typeof locations.$inferSelect;
 export type InsertLocation = z.infer<typeof insertLocationSchema>;
 
+export type ScreenGroup = typeof screenGroups.$inferSelect;
+export type InsertScreenGroup = z.infer<typeof insertScreenGroupSchema>;
+
 export type Screen = typeof screens.$inferSelect;
 export type InsertScreen = z.infer<typeof insertScreenSchema>;
+
+export type SyncLog = typeof syncLogs.$inferSelect;
+export type InsertSyncLog = z.infer<typeof insertSyncLogSchema>;
 
 export type PackagePlan = typeof packagePlans.$inferSelect;
 export type InsertPackagePlan = z.infer<typeof insertPackagePlanSchema>;

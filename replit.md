@@ -2,22 +2,24 @@
 
 ## Overview
 
-Elevizion Dashboard is an internal operations dashboard for digital signage network management. Focus on automation and quick actions for the Elevizion team. The system provides a cockpit view with KPIs, automated action lists, and toggle-based automation rules.
+Elevizion Dashboard is an OPS-first internal operations control room for digital signage network management. Top priority: screen uptime, ad delivery, fast onboarding, and simple automation. Finance is secondary in V1.
+
+**Core Principle**: SCREEN_ID (EVZ-001 format) is the MANDATORY central identifier everywhere.
 
 Core functionality:
-- Monitor screens (status, revenue per screen)
-- Manage advertisers (payment status, quick actions)
+- Monitor screens (status, alerts, uptime tracking)
+- Manage advertisers and ad creatives
 - Configure ad placements (which ad runs on which screen)
-- View financial data (read-only from Moneybird)
-- Set automation rules (invoice reminders, screen monitoring)
+- Quick onboarding wizards for screens, advertisers, and ads
+- Set automation rules (screen offline alerts, inventory warnings)
 
 **Simplified Navigation (6 items)**:
-- Home: Cockpit with KPIs and automated action list
-- Schermen: Screen status and revenue overview
-- Adverteerders: Advertiser management with payment status
-- Plaatsingen: Single source of truth for ad-to-screen mappings
-- Financieel: Read-only Moneybird data view
-- Instellingen: Toggle-based automation rules
+- Home: Control Room with real-time stats, alerts, and daily checklist (refreshes every 30s)
+- Onboarding: Quick wizards - New Screen, New Advertiser, New Ad + Placement
+- Schermen: Screen management with SCREEN_ID as central identifier
+- Ads & Plaatsingen: Ad management and screen-to-ad mappings
+- Adverteerders: Advertiser management
+- Instellingen: 5 tabs - Automations, Templates, Users, Integrations, Finance
 
 ## User Preferences
 

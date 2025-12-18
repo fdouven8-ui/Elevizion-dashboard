@@ -6,10 +6,10 @@ import DashboardLayout from "@/components/layout/DashboardLayout";
 
 import Login from "@/pages/Login";
 import Home from "@/pages/Home";
+import Onboarding from "@/pages/Onboarding";
 import Screens from "@/pages/Screens";
 import Advertisers from "@/pages/Advertisers";
 import Placements from "@/pages/Placements";
-import Finance from "@/pages/Finance";
 import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
 
@@ -18,10 +18,11 @@ function DashboardRouter() {
     <DashboardLayout>
       <Switch>
         <Route path="/dashboard" component={Home} />
+        <Route path="/onboarding" component={Onboarding} />
+        <Route path="/onboarding/:wizard" component={Onboarding} />
         <Route path="/screens" component={Screens} />
         <Route path="/advertisers" component={Advertisers} />
         <Route path="/placements" component={Placements} />
-        <Route path="/finance" component={Finance} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
       </Switch>

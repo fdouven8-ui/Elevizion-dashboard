@@ -14,10 +14,10 @@ import { useLocation } from "wouter";
 const pageNames: Record<string, string> = {
   "": "Home",
   "dashboard": "Home",
+  "onboarding": "Onboarding",
   "screens": "Schermen",
+  "placements": "Ads & Plaatsingen",
   "advertisers": "Adverteerders",
-  "placements": "Plaatsingen",
-  "finance": "Financieel",
   "settings": "Instellingen",
 };
 

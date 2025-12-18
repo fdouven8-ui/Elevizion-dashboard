@@ -3,284 +3,391 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Progress } from "@/components/ui/progress";
 import { 
   Monitor, 
-  Users, 
-  Euro, 
-  AlertTriangle, 
-  CheckCircle,
-  Clock,
-  MessageSquare,
-  Pause,
-  ExternalLink,
-  TrendingUp,
   Wifi,
   WifiOff,
+  Target,
+  AlertTriangle, 
+  CheckCircle,
+  ArrowRight,
+  ExternalLink,
+  MessageSquare,
+  Clock,
+  TrendingUp,
+  Users,
+  Loader2,
+  AlertCircle,
   Calendar,
   CreditCard
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 
-interface DashboardStats {
-  monthlyRevenue: number;
-  openAmount: number;
-  overdueAmount: number;
+interface ControlRoomStats {
   screensOnline: number;
   screensTotal: number;
-  activeAdvertisers: number;
-  freeAdSlots: number;
+  screensOffline: number;
+  adsLiveToday: number;
+  screensWithEmptySlots: number;
+  issuesOpen: number;
+  overdueAdvertisers: number;
 }
 
-interface ActionItem {
+interface Alert {
   id: string;
-  type: "offline_screen" | "overdue_invoice" | "ending_ad" | "empty_slots";
+  type: "screen_offline" | "screen_never_seen" | "empty_inventory" | "placement_expiring" | "overdue_payment";
+  severity: "high" | "medium" | "low";
   title: string;
   description: string;
-  severity: "high" | "medium" | "low";
-  entityId?: string;
-  entityType?: string;
-  daysOverdue?: number;
-  daysUntilEnd?: number;
+  screenId?: string;
+  advertiserId?: string;
+  createdAt: string;
+  minutesOffline?: number;
+}
+
+interface ChecklistItem {
+  id: string;
+  label: string;
+  completed: boolean;
+  link: string;
+  count?: number;
 }
 
 export default function Home() {
-  const { data: stats, isLoading: statsLoading } = useQuery<DashboardStats>({
-    queryKey: ["/api/dashboard/stats"],
+  const { data: stats, isLoading: statsLoading } = useQuery<ControlRoomStats>({
+    queryKey: ["/api/control-room/stats"],
     queryFn: async () => {
       try {
-        const res = await apiRequest("GET", "/api/dashboard/stats");
+        const res = await apiRequest("GET", "/api/control-room/stats");
         return res.json();
       } catch {
         return {
-          monthlyRevenue: 0,
-          openAmount: 0,
-          overdueAmount: 0,
           screensOnline: 0,
           screensTotal: 0,
-          activeAdvertisers: 0,
-          freeAdSlots: 0,
+          screensOffline: 0,
+          adsLiveToday: 0,
+          screensWithEmptySlots: 0,
+          issuesOpen: 0,
+          overdueAdvertisers: 0,
         };
       }
     },
+    refetchInterval: 30000,
   });
 
-  const { data: actions = [], isLoading: actionsLoading } = useQuery<ActionItem[]>({
-    queryKey: ["/api/dashboard/actions"],
+  const { data: alerts = [], isLoading: alertsLoading } = useQuery<Alert[]>({
+    queryKey: ["/api/control-room/alerts"],
     queryFn: async () => {
       try {
-        const res = await apiRequest("GET", "/api/dashboard/actions");
+        const res = await apiRequest("GET", "/api/control-room/alerts");
         return res.json();
       } catch {
         return [];
       }
     },
+    refetchInterval: 30000,
   });
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("nl-NL", {
-      style: "currency",
-      currency: "EUR",
-    }).format(amount);
-  };
+  const { data: checklist = [], isLoading: checklistLoading } = useQuery<ChecklistItem[]>({
+    queryKey: ["/api/control-room/checklist"],
+    queryFn: async () => {
+      try {
+        const res = await apiRequest("GET", "/api/control-room/checklist");
+        return res.json();
+      } catch {
+        return [
+          { id: "1", label: "Bevestig alle schermen online", completed: false, link: "/screens?status=offline" },
+          { id: "2", label: "Vul lege schermen", completed: false, link: "/screens?empty=true" },
+          { id: "3", label: "Keur wachtende creatives goed", completed: true, link: "/placements?pending=true" },
+          { id: "4", label: "Verleng aflopende plaatsingen", completed: false, link: "/placements?expiring=true" },
+        ];
+      }
+    },
+  });
+
+  const onlinePercentage = stats?.screensTotal ? Math.round((stats.screensOnline / stats.screensTotal) * 100) : 0;
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
-      case "high": return "border-red-200 bg-red-50";
-      case "medium": return "border-amber-200 bg-amber-50";
-      default: return "border-blue-200 bg-blue-50";
+      case "high": return "border-red-300 bg-red-50";
+      case "medium": return "border-amber-300 bg-amber-50";
+      default: return "border-blue-300 bg-blue-50";
     }
   };
 
-  const getActionIcon = (type: string) => {
+  const getAlertIcon = (type: string) => {
     switch (type) {
-      case "offline_screen": return <WifiOff className="h-5 w-5 text-red-600" />;
-      case "overdue_invoice": return <CreditCard className="h-5 w-5 text-amber-600" />;
-      case "ending_ad": return <Calendar className="h-5 w-5 text-blue-600" />;
-      case "empty_slots": return <Monitor className="h-5 w-5 text-gray-600" />;
-      default: return <AlertTriangle className="h-5 w-5" />;
+      case "screen_offline":
+      case "screen_never_seen":
+        return <WifiOff className="h-5 w-5 text-red-600" />;
+      case "empty_inventory":
+        return <Monitor className="h-5 w-5 text-amber-600" />;
+      case "placement_expiring":
+        return <Calendar className="h-5 w-5 text-blue-600" />;
+      case "overdue_payment":
+        return <CreditCard className="h-5 w-5 text-red-600" />;
+      default:
+        return <AlertTriangle className="h-5 w-5" />;
     }
   };
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold" data-testid="page-title">Cockpit</h1>
-        <p className="text-muted-foreground">Jouw Elevizion netwerk in één oogopslag</p>
+        <h1 className="text-2xl font-bold" data-testid="page-title">Control Room</h1>
+        <p className="text-muted-foreground">OPS-first overzicht van je Elevizion netwerk</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card data-testid="card-monthly-revenue">
+      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+        <Card className={stats?.screensOffline ? "border-green-200" : ""} data-testid="card-screens-online">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Maandomzet</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Online</CardTitle>
+            <Wifi className="h-4 w-4 text-green-600" />
           </CardHeader>
           <CardContent>
             {statsLoading ? (
-              <Skeleton className="h-8 w-24" />
+              <Skeleton className="h-8 w-16" />
             ) : (
               <div className="text-2xl font-bold text-green-600">
-                {formatCurrency(stats?.monthlyRevenue || 0)}
+                {stats?.screensOnline || 0} / {stats?.screensTotal || 0}
               </div>
             )}
-            <p className="text-xs text-muted-foreground">Deze maand</p>
           </CardContent>
         </Card>
 
-        <Card data-testid="card-open-amount">
+        <Card className={stats?.screensOffline ? "border-red-200 bg-red-50" : ""} data-testid="card-screens-offline">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Openstaand</CardTitle>
-            <Euro className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Offline</CardTitle>
+            <WifiOff className="h-4 w-4 text-red-600" />
           </CardHeader>
           <CardContent>
             {statsLoading ? (
-              <Skeleton className="h-8 w-24" />
+              <Skeleton className="h-8 w-16" />
             ) : (
-              <>
-                <div className="text-2xl font-bold">
-                  {formatCurrency(stats?.openAmount || 0)}
-                </div>
-                {(stats?.overdueAmount || 0) > 0 && (
-                  <p className="text-xs text-red-600">
-                    Waarvan {formatCurrency(stats?.overdueAmount || 0)} achterstallig
-                  </p>
-                )}
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card data-testid="card-screens-status">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Schermen</CardTitle>
-            <Monitor className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? (
-              <Skeleton className="h-8 w-24" />
-            ) : (
-              <div className="flex items-center gap-2">
-                <Wifi className="h-5 w-5 text-green-600" />
-                <span className="text-2xl font-bold">{stats?.screensOnline || 0}</span>
-                <span className="text-muted-foreground">/ {stats?.screensTotal || 0}</span>
+              <div className={`text-2xl font-bold ${(stats?.screensOffline || 0) > 0 ? "text-red-600" : "text-green-600"}`}>
+                {stats?.screensOffline || 0}
               </div>
             )}
-            <p className="text-xs text-muted-foreground">Online / Totaal</p>
           </CardContent>
         </Card>
 
-        <Card data-testid="card-advertisers">
+        <Card data-testid="card-ads-live">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Adverteerders</CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-sm font-medium">Ads Live</CardTitle>
+            <Target className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             {statsLoading ? (
-              <Skeleton className="h-8 w-24" />
+              <Skeleton className="h-8 w-16" />
             ) : (
-              <div className="text-2xl font-bold">{stats?.activeAdvertisers || 0}</div>
+              <div className="text-2xl font-bold">{stats?.adsLiveToday || 0}</div>
             )}
-            <p className="text-xs text-muted-foreground">Actief</p>
+          </CardContent>
+        </Card>
+
+        <Card className={stats?.screensWithEmptySlots ? "border-amber-200" : ""} data-testid="card-empty-slots">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Leeg (&lt;20)</CardTitle>
+            <Monitor className="h-4 w-4 text-amber-600" />
+          </CardHeader>
+          <CardContent>
+            {statsLoading ? (
+              <Skeleton className="h-8 w-16" />
+            ) : (
+              <div className={`text-2xl font-bold ${(stats?.screensWithEmptySlots || 0) > 0 ? "text-amber-600" : ""}`}>
+                {stats?.screensWithEmptySlots || 0}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className={stats?.issuesOpen ? "border-red-200" : ""} data-testid="card-issues-open">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Issues</CardTitle>
+            <AlertTriangle className="h-4 w-4 text-red-600" />
+          </CardHeader>
+          <CardContent>
+            {statsLoading ? (
+              <Skeleton className="h-8 w-16" />
+            ) : (
+              <div className={`text-2xl font-bold ${(stats?.issuesOpen || 0) > 0 ? "text-red-600" : ""}`}>
+                {stats?.issuesOpen || 0}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-gray-200" data-testid="card-overdue">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Betaalrisico</CardTitle>
+            <CreditCard className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            {statsLoading ? (
+              <Skeleton className="h-8 w-16" />
+            ) : (
+              <div className="text-2xl font-bold text-muted-foreground">{stats?.overdueAdvertisers || 0}</div>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {(stats?.freeAdSlots || 0) > 0 && (
-        <Card className="border-blue-200 bg-blue-50">
-          <CardContent className="pt-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Monitor className="h-6 w-6 text-blue-600" />
-                <div>
-                  <p className="font-medium">Vrije advertentieruimte</p>
-                  <p className="text-sm text-muted-foreground">
-                    {stats?.freeAdSlots} schermen hebben minder dan 20 ads
-                  </p>
-                </div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-red-600" />
+              Alerts
+            </CardTitle>
+            <CardDescription>Automatisch gegenereerde waarschuwingen - hoogste prioriteit eerst</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {alertsLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-16 w-full" />
+                <Skeleton className="h-16 w-full" />
               </div>
-              <Button variant="outline" size="sm" asChild>
-                <Link href="/screens">Bekijk schermen</Link>
-              </Button>
-            </div>
+            ) : alerts.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <CheckCircle className="h-12 w-12 mx-auto mb-3 text-green-500" />
+                <p className="font-medium">Alles onder controle!</p>
+                <p className="text-sm">Geen openstaande alerts.</p>
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[400px] overflow-y-auto">
+                {alerts.map((alert) => (
+                  <div
+                    key={alert.id}
+                    className={`p-4 rounded-lg border ${getSeverityColor(alert.severity)}`}
+                    data-testid={`alert-${alert.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-start gap-3">
+                        {getAlertIcon(alert.type)}
+                        <div>
+                          <p className="font-medium">{alert.title}</p>
+                          <p className="text-sm text-muted-foreground">{alert.description}</p>
+                          {alert.screenId && (
+                            <Badge variant="outline" className="mt-1 font-mono text-xs">
+                              {alert.screenId}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        {alert.type === "screen_offline" && (
+                          <>
+                            <Button size="sm" variant="outline" asChild>
+                              <Link href={`/screens?id=${alert.screenId}`}>
+                                <Monitor className="h-4 w-4 mr-1" />
+                                Open
+                              </Link>
+                            </Button>
+                            <Button size="sm" variant="outline">
+                              <ExternalLink className="h-4 w-4 mr-1" />
+                              Yodeck
+                            </Button>
+                          </>
+                        )}
+                        {alert.type === "overdue_payment" && (
+                          <Button size="sm" variant="outline">
+                            <MessageSquare className="h-4 w-4 mr-1" />
+                            WhatsApp
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost">
+                          <CheckCircle className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
-      )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CheckCircle className="h-5 w-5" />
+              Dagelijkse Checklist
+            </CardTitle>
+            <CardDescription>Taken voor vandaag</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {checklistLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+                <Skeleton className="h-10 w-full" />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {checklist.map((item) => (
+                  <Link
+                    key={item.id}
+                    href={item.link}
+                    className={`flex items-center justify-between p-3 rounded-lg border transition-colors hover:bg-accent ${
+                      item.completed ? "bg-green-50 border-green-200" : "bg-white"
+                    }`}
+                    data-testid={`checklist-${item.id}`}
+                  >
+                    <div className="flex items-center gap-3">
+                      {item.completed ? (
+                        <CheckCircle className="h-5 w-5 text-green-600" />
+                      ) : (
+                        <div className="h-5 w-5 rounded-full border-2 border-gray-300" />
+                      )}
+                      <span className={item.completed ? "text-green-700 line-through" : ""}>
+                        {item.label}
+                      </span>
+                      {item.count !== undefined && item.count > 0 && (
+                        <Badge variant="secondary">{item.count}</Badge>
+                      )}
+                    </div>
+                    <ArrowRight className="h-4 w-4 text-muted-foreground" />
+                  </Link>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5" />
-            Actielijst
+            <TrendingUp className="h-5 w-5" />
+            Netwerk Gezondheid
           </CardTitle>
-          <CardDescription>
-            Automatisch gegenereerde acties die aandacht nodig hebben
-          </CardDescription>
         </CardHeader>
         <CardContent>
-          {actionsLoading ? (
-            <div className="space-y-3">
-              <Skeleton className="h-16 w-full" />
-              <Skeleton className="h-16 w-full" />
-              <Skeleton className="h-16 w-full" />
+          <div className="space-y-4">
+            <div>
+              <div className="flex justify-between text-sm mb-2">
+                <span>Schermen Online</span>
+                <span className="font-medium">{onlinePercentage}%</span>
+              </div>
+              <Progress value={onlinePercentage} className="h-2" />
             </div>
-          ) : actions.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <CheckCircle className="h-12 w-12 mx-auto mb-3 text-green-500" />
-              <p className="font-medium">Alles onder controle!</p>
-              <p className="text-sm">Er zijn geen openstaande acties.</p>
+            <div className="grid grid-cols-3 gap-4 pt-4">
+              <div className="text-center p-4 bg-muted/50 rounded-lg">
+                <p className="text-2xl font-bold text-green-600">{stats?.screensOnline || 0}</p>
+                <p className="text-xs text-muted-foreground">Actief</p>
+              </div>
+              <div className="text-center p-4 bg-muted/50 rounded-lg">
+                <p className="text-2xl font-bold text-red-600">{stats?.screensOffline || 0}</p>
+                <p className="text-xs text-muted-foreground">Offline</p>
+              </div>
+              <div className="text-center p-4 bg-muted/50 rounded-lg">
+                <p className="text-2xl font-bold">{stats?.adsLiveToday || 0}</p>
+                <p className="text-xs text-muted-foreground">Plaatsingen</p>
+              </div>
             </div>
-          ) : (
-            <div className="space-y-3">
-              {actions.map((action) => (
-                <div
-                  key={action.id}
-                  className={`p-4 rounded-lg border ${getSeverityColor(action.severity)}`}
-                  data-testid={`action-item-${action.id}`}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-start gap-3">
-                      {getActionIcon(action.type)}
-                      <div>
-                        <p className="font-medium">{action.title}</p>
-                        <p className="text-sm text-muted-foreground">{action.description}</p>
-                      </div>
-                    </div>
-                    <div className="flex gap-2 shrink-0">
-                      {action.type === "overdue_invoice" && (
-                        <>
-                          <Button size="sm" variant="outline">
-                            <MessageSquare className="h-4 w-4 mr-1" />
-                            Herinnering
-                          </Button>
-                          {(action.daysOverdue || 0) > 14 && (
-                            <Button size="sm" variant="destructive">
-                              <Pause className="h-4 w-4 mr-1" />
-                              Pauzeer ads
-                            </Button>
-                          )}
-                        </>
-                      )}
-                      {action.type === "offline_screen" && (
-                        <Button size="sm" variant="outline">
-                          <ExternalLink className="h-4 w-4 mr-1" />
-                          Open Yodeck
-                        </Button>
-                      )}
-                      {action.type === "ending_ad" && (
-                        <Button size="sm" variant="outline">
-                          <MessageSquare className="h-4 w-4 mr-1" />
-                          Contact
-                        </Button>
-                      )}
-                      <Button size="sm" variant="ghost">
-                        <CheckCircle className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          </div>
         </CardContent>
       </Card>
     </div>

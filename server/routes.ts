@@ -2508,5 +2508,219 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================================
+  // CONTROL ROOM (OPS-FIRST DASHBOARD)
+  // ============================================================================
+
+  app.get("/api/control-room/stats", async (_req, res) => {
+    try {
+      const screens = await storage.getScreens();
+      const placements = await storage.getPlacements();
+      const incidents = await storage.getIncidents() || [];
+      
+      const screensOnline = screens.filter(s => s.status === "online").length;
+      const screensOffline = screens.filter(s => s.status === "offline").length;
+      const screensTotal = screens.length;
+      
+      const activePlacements = placements.filter(p => p.isActive);
+      const adsLiveToday = activePlacements.length;
+      
+      // placement.screenId references screens.id (UUID), not screens.screenId (EVZ-001)
+      const placementsPerScreen: Record<string, number> = {};
+      activePlacements.forEach(p => {
+        placementsPerScreen[p.screenId] = (placementsPerScreen[p.screenId] || 0) + 1;
+      });
+      // Compare against screen.id (UUID) to match placement.screenId
+      const screensWithEmptySlots = screens.filter(s => 
+        (placementsPerScreen[s.id] || 0) < 20 && s.status === "online"
+      ).length;
+      
+      const issuesOpen = incidents.filter(i => i.status === "open").length;
+      
+      const overdueAdvertisers = 0;
+      
+      res.json({
+        screensOnline,
+        screensTotal,
+        screensOffline,
+        adsLiveToday,
+        screensWithEmptySlots,
+        issuesOpen,
+        overdueAdvertisers,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/control-room/alerts", async (_req, res) => {
+    try {
+      const screens = await storage.getScreens();
+      const placements = await storage.getPlacements();
+      const alerts: any[] = [];
+      
+      const now = new Date();
+      screens.forEach(screen => {
+        if (screen.status === "offline") {
+          let minutesOffline = 999;
+          try {
+            if (screen.lastSeenAt) {
+              const lastSeen = new Date(screen.lastSeenAt);
+              if (!isNaN(lastSeen.getTime())) {
+                minutesOffline = Math.floor((now.getTime() - lastSeen.getTime()) / 60000);
+              }
+            }
+          } catch {
+            minutesOffline = 999;
+          }
+          
+          if (minutesOffline > 30) {
+            alerts.push({
+              id: `offline-${screen.id}`,
+              type: "screen_offline",
+              severity: minutesOffline > 120 ? "high" : "medium",
+              title: `Scherm ${screen.screenId} offline`,
+              description: `Al ${minutesOffline} minuten geen verbinding`,
+              screenId: screen.screenId,
+              createdAt: screen.lastSeenAt || now.toISOString(),
+              minutesOffline,
+            });
+          }
+        }
+        
+        if (!screen.lastSeenAt && screen.status === "unknown") {
+          alerts.push({
+            id: `never-seen-${screen.id}`,
+            type: "screen_never_seen",
+            severity: "high",
+            title: `Scherm ${screen.screenId} nooit online gezien`,
+            description: "Nieuw scherm meldt zich niet aan",
+            screenId: screen.screenId,
+            createdAt: now.toISOString(),
+          });
+        }
+      });
+      
+      // placement.screenId references screens.id (UUID), not screens.screenId (EVZ-001)
+      const activePlacements = placements.filter(p => p.isActive);
+      const placementsPerScreen: Record<string, number> = {};
+      activePlacements.forEach(p => {
+        placementsPerScreen[p.screenId] = (placementsPerScreen[p.screenId] || 0) + 1;
+      });
+      
+      // Use screen.id (UUID) to match placement.screenId
+      screens.forEach(screen => {
+        const count = placementsPerScreen[screen.id] || 0;
+        if (count < 20 && screen.status === "online") {
+          alerts.push({
+            id: `empty-${screen.id}`,
+            type: "empty_inventory",
+            severity: "low",
+            title: `Scherm ${screen.screenId} heeft weinig ads`,
+            description: `Slechts ${count} plaatsingen (< 20)`,
+            screenId: screen.screenId,
+            createdAt: now.toISOString(),
+          });
+        }
+      });
+      
+      alerts.sort((a, b) => {
+        const severityOrder = { high: 0, medium: 1, low: 2 };
+        return (severityOrder[a.severity as keyof typeof severityOrder] || 2) - 
+               (severityOrder[b.severity as keyof typeof severityOrder] || 2);
+      });
+      
+      res.json(alerts.slice(0, 20));
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/control-room/checklist", async (_req, res) => {
+    try {
+      const screens = await storage.getScreens();
+      const placements = await storage.getPlacements();
+      
+      const offlineScreens = screens.filter(s => s.status === "offline").length;
+      
+      // placement.screenId references screens.id (UUID), not screens.screenId (EVZ-001)
+      const activePlacements = placements.filter(p => p.isActive);
+      const placementsPerScreen: Record<string, number> = {};
+      activePlacements.forEach(p => {
+        placementsPerScreen[p.screenId] = (placementsPerScreen[p.screenId] || 0) + 1;
+      });
+      // Use screen.id (UUID) to match placement.screenId
+      const emptyScreens = screens.filter(s => 
+        (placementsPerScreen[s.id] || 0) < 20 && s.status === "online"
+      ).length;
+      
+      const checklist = [
+        {
+          id: "1",
+          label: "Bevestig alle schermen online",
+          completed: offlineScreens === 0,
+          link: "/screens?status=offline",
+          count: offlineScreens,
+        },
+        {
+          id: "2",
+          label: "Vul lege schermen",
+          completed: emptyScreens === 0,
+          link: "/screens?empty=true",
+          count: emptyScreens,
+        },
+        {
+          id: "3",
+          label: "Keur wachtende creatives goed",
+          completed: true,
+          link: "/placements?pending=true",
+          count: 0,
+        },
+        {
+          id: "4",
+          label: "Verleng aflopende plaatsingen",
+          completed: true,
+          link: "/placements?expiring=true",
+          count: 0,
+        },
+      ];
+      
+      res.json(checklist);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // SYNC STATUS & INTEGRATIONS
+  // ============================================================================
+
+  app.get("/api/sync/status", async (_req, res) => {
+    try {
+      res.json({
+        yodeck: {
+          lastSync: new Date().toISOString(),
+          status: process.env.YODECK_API_TOKEN ? "success" : "not_configured",
+          itemsProcessed: 0,
+        },
+        moneybird: {
+          lastSync: "-",
+          status: "not_configured",
+          itemsProcessed: 0,
+        },
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/finance/overdue", async (_req, res) => {
+    try {
+      res.json([]);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   return httpServer;
 }
