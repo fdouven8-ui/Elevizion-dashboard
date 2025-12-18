@@ -37,6 +37,12 @@ export const advertisers = pgTable("advertisers", {
   phone: text("phone"),
   vatNumber: text("vat_number"),
   address: text("address"),
+  // SEPA Automatisch Incasso velden
+  iban: text("iban"), // IBAN rekeningnummer voor incasso
+  ibanAccountHolder: text("iban_account_holder"), // Tenaamstelling rekening
+  sepaMandate: boolean("sepa_mandate").default(false), // Heeft machtiging getekend
+  sepaMandateReference: text("sepa_mandate_reference"), // Mandaat kenmerk (bijv. ELEVIZ-2024-001)
+  sepaMandateDate: date("sepa_mandate_date"), // Datum ondertekening machtiging
   moneybirdContactId: text("moneybird_contact_id"), // Synced from Moneybird
   status: text("status").notNull().default("active"), // active, paused, churned
   notes: text("notes"),
