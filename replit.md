@@ -67,6 +67,10 @@ Core entities with relationships:
 - **Moneybird**: Dutch accounting/invoicing software integration
   - Used for invoice generation and contact synchronization
   - Stores `moneybirdContactId` on advertisers and `moneybirdInvoiceId` on invoices
+  - **SEPA Direct Debit (Automatisch Incasso)**: Full support for automatic payment collection
+    - Advertiser fields: `iban`, `ibanAccountHolder`, `sepaMandate`, `sepaMandateReference`, `sepaMandateDate`
+    - When creating invoices in Moneybird, contacts with active SEPA mandate get `sepa_active: true`
+    - Invoice payment conditions set to "Betaling via automatische incasso"
 
 ### Key NPM Dependencies
 - `@tanstack/react-query`: Server state management
