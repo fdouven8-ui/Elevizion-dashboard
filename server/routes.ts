@@ -19,7 +19,13 @@ import {
   insertLocationSurveySchema,
   insertDigitalSignatureSchema,
   insertSalesActivitySchema,
+  insertSurveyPhotoSchema,
+  insertSupplyItemSchema,
+  insertSurveySupplySchema,
+  insertTaskSchema,
+  insertTaskAttachmentSchema,
 } from "@shared/schema";
+import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import {
   getIntegrationStatus,
   testYodeckConnection,
@@ -2256,6 +2262,211 @@ export async function registerRoutes(
         });
         res.json({ type: "location", entity: location });
       }
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // TASKS
+  // ============================================================================
+
+  app.get("/api/tasks", async (req, res) => {
+    const { assignee, role, status } = req.query;
+    let tasks;
+    if (assignee) {
+      tasks = await storage.getTasksByAssignee(assignee as string);
+    } else if (role) {
+      tasks = await storage.getTasksByRole(role as string);
+    } else if (status === "open") {
+      tasks = await storage.getOpenTasks();
+    } else {
+      tasks = await storage.getTasks();
+    }
+    res.json(tasks);
+  });
+
+  app.get("/api/tasks/:id", async (req, res) => {
+    const task = await storage.getTask(req.params.id);
+    if (!task) return res.status(404).json({ message: "Taak niet gevonden" });
+    res.json(task);
+  });
+
+  app.post("/api/tasks", async (req, res) => {
+    try {
+      const data = insertTaskSchema.parse(req.body);
+      const task = await storage.createTask(data);
+      res.status(201).json(task);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/tasks/:id", async (req, res) => {
+    try {
+      const task = await storage.updateTask(req.params.id, req.body);
+      if (!task) return res.status(404).json({ message: "Taak niet gevonden" });
+      res.json(task);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/tasks/:id", async (req, res) => {
+    await storage.deleteTask(req.params.id);
+    res.status(204).send();
+  });
+
+  // ============================================================================
+  // SUPPLY ITEMS (CATALOG)
+  // ============================================================================
+
+  app.get("/api/supply-items", async (_req, res) => {
+    const items = await storage.getSupplyItems();
+    res.json(items);
+  });
+
+  app.post("/api/supply-items", async (req, res) => {
+    try {
+      const data = insertSupplyItemSchema.parse(req.body);
+      const item = await storage.createSupplyItem(data);
+      res.status(201).json(item);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/supply-items/:id", async (req, res) => {
+    try {
+      const item = await storage.updateSupplyItem(req.params.id, req.body);
+      if (!item) return res.status(404).json({ message: "Artikel niet gevonden" });
+      res.json(item);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // SURVEY SUPPLIES & PHOTOS
+  // ============================================================================
+
+  app.get("/api/surveys/:id/supplies", async (req, res) => {
+    const supplies = await storage.getSurveySupplies(req.params.id);
+    res.json(supplies);
+  });
+
+  app.post("/api/surveys/:id/supplies", async (req, res) => {
+    try {
+      const data = insertSurveySupplySchema.parse({ ...req.body, surveyId: req.params.id });
+      const supply = await storage.createSurveySupply(data);
+      res.status(201).json(supply);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/survey-supplies/:id", async (req, res) => {
+    await storage.deleteSurveySupply(req.params.id);
+    res.status(204).send();
+  });
+
+  app.get("/api/surveys/:id/photos", async (req, res) => {
+    const photos = await storage.getSurveyPhotos(req.params.id);
+    res.json(photos);
+  });
+
+  app.post("/api/surveys/:id/photos", async (req, res) => {
+    try {
+      const data = insertSurveyPhotoSchema.parse({ ...req.body, surveyId: req.params.id });
+      const photo = await storage.createSurveyPhoto(data);
+      res.status(201).json(photo);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/survey-photos/:id", async (req, res) => {
+    await storage.deleteSurveyPhoto(req.params.id);
+    res.status(204).send();
+  });
+
+  // ============================================================================
+  // OBJECT STORAGE (FILE UPLOADS)
+  // ============================================================================
+
+  app.post("/api/objects/upload", async (_req, res) => {
+    try {
+      const objectStorageService = new ObjectStorageService();
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      res.json({ uploadURL });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/objects/:objectPath(*)", async (req, res) => {
+    const objectStorageService = new ObjectStorageService();
+    try {
+      const objectFile = await objectStorageService.getObjectEntityFile(req.path);
+      objectStorageService.downloadObject(objectFile, res);
+    } catch (error: any) {
+      if (error instanceof ObjectNotFoundError) {
+        return res.sendStatus(404);
+      }
+      return res.sendStatus(500);
+    }
+  });
+
+  // ============================================================================
+  // SURVEY FINALIZATION (AUTO-GENERATE TASKS)
+  // ============================================================================
+
+  app.post("/api/surveys/:id/finalize", async (req, res) => {
+    try {
+      const survey = await storage.getLocationSurvey(req.params.id);
+      if (!survey) return res.status(404).json({ message: "Schouw niet gevonden" });
+
+      const lead = survey.leadId ? await storage.getLead(survey.leadId) : null;
+      const locationName = lead?.companyName || "Onbekende locatie";
+
+      const supplies = await storage.getSurveySupplies(req.params.id);
+      const supplyList = supplies.map(s => `${s.quantity}x ${s.customName || 'Artikel'}`).join(", ");
+
+      const createdTasks: any[] = [];
+
+      const installTask = await storage.createTask({
+        title: `Installatie: ${locationName}`,
+        description: `Installeer ${survey.proposedScreenCount || 1} scherm(en) bij ${locationName}.\n\nLocaties: ${survey.proposedScreenLocations || 'Zie schouw'}\nNotities: ${survey.installationNotes || 'Geen'}`,
+        taskType: "installatie",
+        priority: "normaal",
+        status: "open",
+        surveyId: req.params.id,
+        leadId: survey.leadId || undefined,
+        assignedToRole: "ops",
+      });
+      createdTasks.push(installTask);
+
+      if (supplies.length > 0) {
+        const inkoopTask = await storage.createTask({
+          title: `Inkoop: ${locationName}`,
+          description: `Bestel materialen voor ${locationName}:\n\n${supplyList}\n\nGeschatte kosten: €${survey.estimatedInstallationCost || 0}`,
+          taskType: "inkoop",
+          priority: "hoog",
+          status: "open",
+          surveyId: req.params.id,
+          leadId: survey.leadId || undefined,
+          assignedToRole: "admin",
+        });
+        createdTasks.push(inkoopTask);
+      }
+
+      await storage.updateLocationSurvey(req.params.id, { status: "afgerond" });
+
+      if (survey.leadId) {
+        await storage.updateLead(survey.leadId, { status: "voorstel" });
+      }
+
+      res.json({ message: "Schouw afgerond, taken aangemaakt", tasks: createdTasks });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }

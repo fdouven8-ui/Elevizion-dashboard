@@ -41,6 +41,11 @@ import type {
   LocationSurvey, InsertLocationSurvey,
   DigitalSignature, InsertDigitalSignature,
   SalesActivity, InsertSalesActivity,
+  SurveyPhoto, InsertSurveyPhoto,
+  SupplyItem, InsertSupplyItem,
+  SurveySupply, InsertSurveySupply,
+  Task, InsertTask,
+  TaskAttachment, InsertTaskAttachment,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -223,6 +228,39 @@ export interface IStorage {
 
   getSalesActivities(leadId: string): Promise<SalesActivity[]>;
   createSalesActivity(data: InsertSalesActivity): Promise<SalesActivity>;
+
+  // Survey Photos
+  getSurveyPhotos(surveyId: string): Promise<SurveyPhoto[]>;
+  createSurveyPhoto(data: InsertSurveyPhoto): Promise<SurveyPhoto>;
+  deleteSurveyPhoto(id: string): Promise<boolean>;
+
+  // Supply Items (catalog)
+  getSupplyItems(): Promise<SupplyItem[]>;
+  getSupplyItem(id: string): Promise<SupplyItem | undefined>;
+  createSupplyItem(data: InsertSupplyItem): Promise<SupplyItem>;
+  updateSupplyItem(id: string, data: Partial<InsertSupplyItem>): Promise<SupplyItem | undefined>;
+
+  // Survey Supplies (per survey)
+  getSurveySupplies(surveyId: string): Promise<SurveySupply[]>;
+  createSurveySupply(data: InsertSurveySupply): Promise<SurveySupply>;
+  updateSurveySupply(id: string, data: Partial<InsertSurveySupply>): Promise<SurveySupply | undefined>;
+  deleteSurveySupply(id: string): Promise<boolean>;
+
+  // Tasks
+  getTasks(): Promise<Task[]>;
+  getTask(id: string): Promise<Task | undefined>;
+  getTasksByAssignee(userId: string): Promise<Task[]>;
+  getTasksByRole(role: string): Promise<Task[]>;
+  getTasksBySurvey(surveyId: string): Promise<Task[]>;
+  getOpenTasks(): Promise<Task[]>;
+  createTask(data: InsertTask): Promise<Task>;
+  updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
+  deleteTask(id: string): Promise<boolean>;
+
+  // Task Attachments
+  getTaskAttachments(taskId: string): Promise<TaskAttachment[]>;
+  createTaskAttachment(data: InsertTaskAttachment): Promise<TaskAttachment>;
+  deleteTaskAttachment(id: string): Promise<boolean>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1043,6 +1081,157 @@ export class DatabaseStorage implements IStorage {
   async createSalesActivity(data: InsertSalesActivity): Promise<SalesActivity> {
     const [activity] = await db.insert(schema.salesActivities).values(data).returning();
     return activity;
+  }
+
+  // ============================================================================
+  // SURVEY PHOTOS
+  // ============================================================================
+
+  async getSurveyPhotos(surveyId: string): Promise<SurveyPhoto[]> {
+    return await db.select().from(schema.surveyPhotos)
+      .where(eq(schema.surveyPhotos.surveyId, surveyId))
+      .orderBy(desc(schema.surveyPhotos.createdAt));
+  }
+
+  async createSurveyPhoto(data: InsertSurveyPhoto): Promise<SurveyPhoto> {
+    const [photo] = await db.insert(schema.surveyPhotos).values(data).returning();
+    return photo;
+  }
+
+  async deleteSurveyPhoto(id: string): Promise<boolean> {
+    await db.delete(schema.surveyPhotos).where(eq(schema.surveyPhotos.id, id));
+    return true;
+  }
+
+  // ============================================================================
+  // SUPPLY ITEMS (CATALOG)
+  // ============================================================================
+
+  async getSupplyItems(): Promise<SupplyItem[]> {
+    return await db.select().from(schema.supplyItems)
+      .where(eq(schema.supplyItems.isActive, true))
+      .orderBy(schema.supplyItems.category, schema.supplyItems.name);
+  }
+
+  async getSupplyItem(id: string): Promise<SupplyItem | undefined> {
+    const [item] = await db.select().from(schema.supplyItems).where(eq(schema.supplyItems.id, id));
+    return item;
+  }
+
+  async createSupplyItem(data: InsertSupplyItem): Promise<SupplyItem> {
+    const [item] = await db.insert(schema.supplyItems).values(data).returning();
+    return item;
+  }
+
+  async updateSupplyItem(id: string, data: Partial<InsertSupplyItem>): Promise<SupplyItem | undefined> {
+    const [item] = await db.update(schema.supplyItems)
+      .set(data)
+      .where(eq(schema.supplyItems.id, id))
+      .returning();
+    return item;
+  }
+
+  // ============================================================================
+  // SURVEY SUPPLIES
+  // ============================================================================
+
+  async getSurveySupplies(surveyId: string): Promise<SurveySupply[]> {
+    return await db.select().from(schema.surveySupplies)
+      .where(eq(schema.surveySupplies.surveyId, surveyId))
+      .orderBy(desc(schema.surveySupplies.createdAt));
+  }
+
+  async createSurveySupply(data: InsertSurveySupply): Promise<SurveySupply> {
+    const [supply] = await db.insert(schema.surveySupplies).values(data).returning();
+    return supply;
+  }
+
+  async updateSurveySupply(id: string, data: Partial<InsertSurveySupply>): Promise<SurveySupply | undefined> {
+    const [supply] = await db.update(schema.surveySupplies)
+      .set(data)
+      .where(eq(schema.surveySupplies.id, id))
+      .returning();
+    return supply;
+  }
+
+  async deleteSurveySupply(id: string): Promise<boolean> {
+    await db.delete(schema.surveySupplies).where(eq(schema.surveySupplies.id, id));
+    return true;
+  }
+
+  // ============================================================================
+  // TASKS
+  // ============================================================================
+
+  async getTasks(): Promise<Task[]> {
+    return await db.select().from(schema.tasks).orderBy(desc(schema.tasks.createdAt));
+  }
+
+  async getTask(id: string): Promise<Task | undefined> {
+    const [task] = await db.select().from(schema.tasks).where(eq(schema.tasks.id, id));
+    return task;
+  }
+
+  async getTasksByAssignee(userId: string): Promise<Task[]> {
+    return await db.select().from(schema.tasks)
+      .where(eq(schema.tasks.assignedToUserId, userId))
+      .orderBy(desc(schema.tasks.createdAt));
+  }
+
+  async getTasksByRole(role: string): Promise<Task[]> {
+    return await db.select().from(schema.tasks)
+      .where(eq(schema.tasks.assignedToRole, role))
+      .orderBy(desc(schema.tasks.createdAt));
+  }
+
+  async getTasksBySurvey(surveyId: string): Promise<Task[]> {
+    return await db.select().from(schema.tasks)
+      .where(eq(schema.tasks.surveyId, surveyId))
+      .orderBy(desc(schema.tasks.createdAt));
+  }
+
+  async getOpenTasks(): Promise<Task[]> {
+    return await db.select().from(schema.tasks)
+      .where(sql`${schema.tasks.status} IN ('open', 'in_progress')`)
+      .orderBy(schema.tasks.priority, desc(schema.tasks.createdAt));
+  }
+
+  async createTask(data: InsertTask): Promise<Task> {
+    const [task] = await db.insert(schema.tasks).values(data).returning();
+    return task;
+  }
+
+  async updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined> {
+    const [task] = await db.update(schema.tasks)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.tasks.id, id))
+      .returning();
+    return task;
+  }
+
+  async deleteTask(id: string): Promise<boolean> {
+    await db.delete(schema.tasks).where(eq(schema.tasks.id, id));
+    return true;
+  }
+
+  // ============================================================================
+  // TASK ATTACHMENTS
+  // ============================================================================
+
+  async getTaskAttachments(taskId: string): Promise<TaskAttachment[]> {
+    return await db.select().from(schema.taskAttachments)
+      .where(eq(schema.taskAttachments.taskId, taskId))
+      .orderBy(desc(schema.taskAttachments.createdAt));
+  }
+
+  async createTaskAttachment(data: InsertTaskAttachment): Promise<TaskAttachment> {
+    const [attachment] = await db.insert(schema.taskAttachments).values(data).returning();
+    return attachment;
+  }
+
+  async deleteTaskAttachment(id: string): Promise<boolean> {
+    await db.delete(schema.taskAttachments).where(eq(schema.taskAttachments.id, id));
+    return true;
   }
 }
 

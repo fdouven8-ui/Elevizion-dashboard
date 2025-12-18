@@ -677,6 +677,88 @@ export const salesActivities = pgTable("sales_activities", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+/**
+ * SurveyPhotos - Foto's gemaakt tijdens schouw
+ */
+export const surveyPhotos = pgTable("survey_photos", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  surveyId: varchar("survey_id").notNull().references(() => locationSurveys.id),
+  storagePath: text("storage_path").notNull(),
+  filename: text("filename").notNull(),
+  description: text("description"),
+  uploadedByUserId: varchar("uploaded_by_user_id"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * SupplyItems - Catalogus van materialen die besteld kunnen worden
+ */
+export const supplyItems = pgTable("supply_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  category: text("category").notNull(), // tv, kabel, kabelgoot, beugel, accessoire
+  description: text("description"),
+  defaultPrice: decimal("default_price", { precision: 10, scale: 2 }),
+  unit: text("unit").default("stuk"), // stuk, meter, set
+  isActive: boolean("is_active").notNull().default(true),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * SurveySupplies - Benodigde materialen per schouw
+ */
+export const surveySupplies = pgTable("survey_supplies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  surveyId: varchar("survey_id").notNull().references(() => locationSurveys.id),
+  supplyItemId: varchar("supply_item_id").references(() => supplyItems.id),
+  customName: text("custom_name"), // Als supplyItemId null is
+  quantity: integer("quantity").notNull().default(1),
+  notes: text("notes"),
+  estimatedPrice: decimal("estimated_price", { precision: 10, scale: 2 }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * Tasks - Taken die voortvloeien uit schouwen en andere processen
+ */
+export const tasks = pgTable("tasks", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  title: text("title").notNull(),
+  description: text("description"),
+  taskType: text("task_type").notNull(), // installatie, inkoop, administratie, contact, schouw
+  priority: text("priority").notNull().default("normaal"), // laag, normaal, hoog, urgent
+  status: text("status").notNull().default("open"), // open, in_progress, done, cancelled
+  dueDate: date("due_date"),
+  // Koppelingen
+  surveyId: varchar("survey_id").references(() => locationSurveys.id),
+  leadId: varchar("lead_id").references(() => leads.id),
+  locationId: varchar("location_id").references(() => locations.id),
+  advertiserId: varchar("advertiser_id").references(() => advertisers.id),
+  contractId: varchar("contract_id").references(() => contracts.id),
+  // Toewijzing
+  assignedToUserId: varchar("assigned_to_user_id"),
+  assignedToRole: text("assigned_to_role"), // ops, finance, admin voor role-based assignment
+  createdByUserId: varchar("created_by_user_id"),
+  completedAt: timestamp("completed_at"),
+  completedByUserId: varchar("completed_by_user_id"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * TaskAttachments - Bijlagen bij taken (documenten, foto's)
+ */
+export const taskAttachments = pgTable("task_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  taskId: varchar("task_id").notNull().references(() => tasks.id),
+  filename: text("filename").notNull(),
+  storagePath: text("storage_path").notNull(),
+  fileType: text("file_type"), // pdf, image, document
+  uploadedByUserId: varchar("uploaded_by_user_id"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
 // ============================================================================
 // INSERT SCHEMAS (for validation)
 // ============================================================================
@@ -685,6 +767,11 @@ export const insertLeadSchema = createInsertSchema(leads).omit({ id: true, creat
 export const insertLocationSurveySchema = createInsertSchema(locationSurveys).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertDigitalSignatureSchema = createInsertSchema(digitalSignatures).omit({ id: true, createdAt: true });
 export const insertSalesActivitySchema = createInsertSchema(salesActivities).omit({ id: true, createdAt: true });
+export const insertSurveyPhotoSchema = createInsertSchema(surveyPhotos).omit({ id: true, createdAt: true });
+export const insertSupplyItemSchema = createInsertSchema(supplyItems).omit({ id: true, createdAt: true });
+export const insertSurveySupplySchema = createInsertSchema(surveySupplies).omit({ id: true, createdAt: true });
+export const insertTaskSchema = createInsertSchema(tasks).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertTaskAttachmentSchema = createInsertSchema(taskAttachments).omit({ id: true, createdAt: true });
 
 export const insertAdvertiserSchema = createInsertSchema(advertisers).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertLocationSchema = createInsertSchema(locations).omit({ id: true, createdAt: true, updatedAt: true });
@@ -823,3 +910,18 @@ export type InsertDigitalSignature = z.infer<typeof insertDigitalSignatureSchema
 
 export type SalesActivity = typeof salesActivities.$inferSelect;
 export type InsertSalesActivity = z.infer<typeof insertSalesActivitySchema>;
+
+export type SurveyPhoto = typeof surveyPhotos.$inferSelect;
+export type InsertSurveyPhoto = z.infer<typeof insertSurveyPhotoSchema>;
+
+export type SupplyItem = typeof supplyItems.$inferSelect;
+export type InsertSupplyItem = z.infer<typeof insertSupplyItemSchema>;
+
+export type SurveySupply = typeof surveySupplies.$inferSelect;
+export type InsertSurveySupply = z.infer<typeof insertSurveySupplySchema>;
+
+export type Task = typeof tasks.$inferSelect;
+export type InsertTask = z.infer<typeof insertTaskSchema>;
+
+export type TaskAttachment = typeof taskAttachments.$inferSelect;
+export type InsertTaskAttachment = z.infer<typeof insertTaskAttachmentSchema>;
