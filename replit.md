@@ -121,6 +121,22 @@ All permission changes are logged to `audit_logs` table:
 
 ## Recent Changes
 
+### December 2025 - Cold Walk-in Onboarding Wizard
+- Added complete multi-step wizard for rapid field onboarding at `/acquisitie/new`
+  - Three onboarding types: Location Partner, Advertiser, or Both (dual-purpose deals)
+  - Step-by-step flow: Type → Company Details → Schouw → Screens → Contract → Review
+  - Transactional record creation (all-or-nothing approach)
+  - Duplicate detection with option to proceed anyway
+  - Automatic task generation (installatie + inkoop) on completion
+- New schema fields:
+  - `wifiPasswordEncrypted` on locationSurveys for secure WiFi credential storage
+  - `city`, `postcode`, `kvkNumber` on locations for better address/business data
+- Encryption utilities in `server/utils/encryption.ts` for AES-256-GCM encryption
+- New API endpoints:
+  - `POST /api/acquisitie/create` - Transactional onboarding with all records
+  - `GET /api/acquisitie/check-duplicates` - Duplicate detection by name/email/postcode
+- Sales page updated with "Cold Walk-in" quick-action card linking to wizard
+
 ### December 2025 - Sales & Acquisitie Module + Task Management
 - Added complete sales pipeline for lead management
   - Kanban-style board with pipeline stages: nieuw → contact → schouw_gepland → voorstel → onderhandeling → gewonnen/verloren
