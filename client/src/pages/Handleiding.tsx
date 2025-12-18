@@ -4,40 +4,86 @@ import { Badge } from "@/components/ui/badge";
 import { 
   Building2, MapPin, Monitor, FileText, Receipt, Wallet, 
   Camera, BarChart3, Users, Settings, Download, Shield,
-  CheckCircle, AlertCircle, HelpCircle, Smartphone, UserPlus, ClipboardList, ClipboardCheck
+  CheckCircle, AlertCircle, HelpCircle, Smartphone, UserPlus, ClipboardList, ClipboardCheck, Sparkles, Footprints
 } from "lucide-react";
 
 const sections = [
   {
-    id: "dashboard",
-    icon: <BarChart3 className="h-5 w-5" />,
-    title: "Dashboard (Overzicht)",
-    description: "Je startpagina met alle belangrijke cijfers",
+    id: "intro",
+    icon: <Footprints className="h-5 w-5" />,
+    title: "Waar Begin Ik?",
+    description: "De eerste stappen in Elevizion",
+    badge: "Start hier",
     content: `
-      Het dashboard laat in één oogopslag zien hoe je bedrijf draait:
+      Welkom bij Elevizion! Dit is de volgorde waarin je het systeem het beste kunt gebruiken:
       
-      **Aandachtspunten:**
-      • Bovenaan zie je direct wat er aandacht nodig heeft
-      • Offline schermen, openstaande facturen, schermen zonder ads
-      • Klik op "Aandachtspunten" om in/uit te klappen
-      • Elke melding heeft een directe actieknop
+      **1. Nieuwe klanten werven:**
+      • Gebruik de Cold Walk-in wizard voor snelle onboarding in het veld
+      • Of voeg leads toe via Acquisitie en werk ze stap voor stap af
       
-      **Statistieken:**
-      • Schermen online - Klik om naar schermbeheer te gaan
-      • Actieve campagnes - Klik voor advertentie-overzicht
-      • Openstaande facturen - Klik naar facturatie
-      • Actieve adverteerders - Klik naar adverteerdersbeheer
+      **2. Systeem inrichten:**
+      • Voeg locaties toe waar schermen komen
+      • Registreer adverteerders die willen adverteren
+      • Koppel schermen aan locaties
       
-      Alle kaarten zijn klikbaar en brengen je direct naar de juiste plek!
+      **3. Dagelijks werk:**
+      • Bekijk het Dashboard voor een overzicht
+      • Maak contracten en plaatsingen aan
+      • Houd taken bij
+      
+      **4. Maandelijkse administratie:**
+      • Voer maandafsluiting uit
+      • Controleer facturen
+      • Betaal locatie-eigenaren uit
+      
+      Tip: Lees hieronder verder per onderwerp!
+    `,
+  },
+  {
+    id: "cold-walkin",
+    icon: <Sparkles className="h-5 w-5" />,
+    title: "Cold Walk-in Wizard",
+    description: "Nieuwe klant in 2 minuten registreren",
+    badge: "Nieuw",
+    content: `
+      De snelste manier om een nieuwe klant toe te voegen, direct vanuit het veld.
+      
+      **Waar vind je het?**
+      Acquisitie → Klik op de groene "Cold Walk-in" kaart
+      
+      **Drie opties:**
+      • **Locatie Partner** - Een plek die schermen wil hosten
+      • **Adverteerder** - Een bedrijf dat wil adverteren
+      • **Beide** - Locatie wordt ook adverteerder (snelle deal!)
+      
+      **Stappen in de wizard:**
+      1. Kies het type (locatie, adverteerder, of beide)
+      2. Vul bedrijfsgegevens in (naam, contact, adres)
+      3. Voor locaties: vul de schouw-checklist in (WiFi, stroom, montage)
+      4. Configureer de schermen
+      5. Voor adverteerders: stel het contract in
+      6. Bevestig en klaar!
+      
+      **Wat gebeurt er automatisch?**
+      • Locatie + schermen worden aangemaakt
+      • Schouw-rapport wordt opgeslagen
+      • Installatie- en inkooptaken worden aangemaakt
+      • Adverteerder + contract worden aangemaakt (indien gekozen)
+      
+      **Tip:** WiFi wachtwoorden worden versleuteld opgeslagen!
     `,
   },
   {
     id: "acquisitie",
     icon: <UserPlus className="h-5 w-5" />,
-    title: "Acquisitie (Sales)",
-    description: "Leads beheren en nieuwe klanten werven",
+    title: "Acquisitie (Leads)",
+    description: "Potentiële klanten beheren",
     content: `
       Hier beheer je alle potentiële klanten (leads) in een visueel overzicht.
+      
+      **Wanneer gebruik je dit?**
+      Als je een lead wilt opvolgen over meerdere dagen/weken, gebruik je het Acquisitie bord.
+      Voor snelle registratie in het veld, gebruik de Cold Walk-in wizard.
       
       **Kanban bord:**
       • Leads worden weergegeven als kaarten in kolommen
@@ -52,9 +98,7 @@ const sections = [
       1. Voeg een nieuwe lead toe met de knop rechtsboven
       2. Plan een afspraak en zet de status op "Contact"
       3. Voor locaties: plan een schouw en zet op "Schouw Gepland"
-      4. Na de schouw: voeg foto's en materialen toe
-      5. Rond de schouw af om automatisch taken aan te maken
-      6. Bij succes: converteer de lead naar adverteerder of locatie
+      4. Na de schouw: converteer de lead naar adverteerder of locatie
     `,
   },
   {
@@ -112,9 +156,30 @@ const sections = [
       • Filter op rol: Alle, Ops, Admin, Finance
       • Bekijk open taken of afgeronde taken via de tabs
       
-      **Vanuit schouw:**
-      Taken worden automatisch aangemaakt wanneer je een schouw afrondt. 
+      **Vanuit schouw of wizard:**
+      Taken worden automatisch aangemaakt wanneer je een schouw afrondt of de Cold Walk-in wizard voltooit. 
       De materiaallijst wordt automatisch toegevoegd aan de taken.
+    `,
+  },
+  {
+    id: "locaties",
+    icon: <MapPin className="h-5 w-5" />,
+    title: "Locaties",
+    description: "Plekken waar je schermen hangen",
+    content: `
+      Locaties zijn de plekken waar je schermen hangen, zoals winkels, stations of kantoren.
+      
+      **Wat kun je doen?**
+      • Nieuwe locatie toevoegen
+      • Instellingen voor omzetdeling aanpassen
+      • Contactgegevens van de locatiebeheerder opslaan
+      
+      **Belangrijke velden:**
+      • **Omzetdeling (%)** - Hoeveel procent van de reclame-inkomsten naar de locatie gaat (standaard 10%)
+      • **Minimum uitbetaling** - Onder dit bedrag wordt niet uitbetaald (wordt doorgeschoven)
+      • **IBAN** - Bankrekeningnummer voor uitbetalingen
+      • **KvK-nummer** - Voor de administratie
+      • **Adres, postcode, plaats** - Waar de schermen hangen
     `,
   },
   {
@@ -145,25 +210,6 @@ const sections = [
     `,
   },
   {
-    id: "locaties",
-    icon: <MapPin className="h-5 w-5" />,
-    title: "Locaties",
-    description: "Plekken waar je schermen hangen",
-    content: `
-      Locaties zijn de plekken waar je schermen hangen, zoals winkels, stations of kantoren.
-      
-      **Wat kun je doen?**
-      • Nieuwe locatie toevoegen
-      • Instellingen voor omzetdeling aanpassen
-      • Contactgegevens van de locatiebeheerder opslaan
-      
-      **Belangrijke velden:**
-      • **Omzetdeling (%)** - Hoeveel procent van de reclame-inkomsten naar de locatie gaat
-      • **Minimum uitbetaling** - Onder dit bedrag wordt niet uitbetaald (wordt doorgeschoven)
-      • **IBAN** - Bankrekeningnummer voor uitbetalingen
-    `,
-  },
-  {
     id: "schermen",
     icon: <Monitor className="h-5 w-5" />,
     title: "Schermen",
@@ -179,6 +225,34 @@ const sections = [
       • Schermen toevoegen aan locaties
       • Schermstatus bekijken
       • Yodeck player koppelen (voor automatische synchronisatie)
+      
+      **Installatiestatus:**
+      • **Gepland** - Scherm moet nog geïnstalleerd worden
+      • **Geïnstalleerd** - Scherm hangt, maar speelt nog geen content
+      • **Live** - Scherm is volledig operationeel
+    `,
+  },
+  {
+    id: "dashboard",
+    icon: <BarChart3 className="h-5 w-5" />,
+    title: "Dashboard (Overzicht)",
+    description: "Je startpagina met alle belangrijke cijfers",
+    content: `
+      Het dashboard laat in één oogopslag zien hoe je bedrijf draait:
+      
+      **Aandachtspunten:**
+      • Bovenaan zie je direct wat er aandacht nodig heeft
+      • Offline schermen, openstaande facturen, schermen zonder ads
+      • Klik op "Aandachtspunten" om in/uit te klappen
+      • Elke melding heeft een directe actieknop
+      
+      **Statistieken:**
+      • Schermen online - Klik om naar schermbeheer te gaan
+      • Actieve campagnes - Klik voor advertentie-overzicht
+      • Openstaande facturen - Klik naar facturatie
+      • Actieve adverteerders - Klik naar adverteerdersbeheer
+      
+      Alle kaarten zijn klikbaar en brengen je direct naar de juiste plek!
     `,
   },
   {
@@ -195,10 +269,12 @@ const sections = [
       3. Stel de looptijd in (start- en einddatum)
       4. Koppel schermen via plaatsingen
       
-      **Contract ondertekenen:**
-      • Stuur het contract digitaal naar de klant
-      • De klant kan online ondertekenen
-      • Je krijgt een bevestiging als het is ondertekend
+      **Contract status:**
+      • **Actief** - Contract loopt, advertenties draaien
+      • **Concept** - Contract is aangemaakt maar nog niet actief
+      • **Verlopen** - Einddatum is gepasseerd
+      
+      **Tip:** Via de Cold Walk-in wizard kun je direct een contract aanmaken bij een nieuwe klant!
     `,
   },
   {
@@ -215,6 +291,9 @@ const sections = [
       **Instellingen:**
       • **Seconden per loop** - Hoe lang de advertentie per keer te zien is
       • **Afspeelmomenten per uur** - Hoe vaak per uur de advertentie wordt getoond
+      
+      **Automatisch aanmaken:**
+      Als je in de Cold Walk-in wizard "Beide" kiest (locatie + adverteerder), worden plaatsingen automatisch aangemaakt voor alle nieuwe schermen.
     `,
   },
   {
@@ -280,6 +359,28 @@ const sections = [
       
       **Waarom is dit belangrijk?**
       De maandafsluiting zorgt dat je achteraf altijd kunt bewijzen welke afspraken er waren, ongeacht latere wijzigingen.
+      
+      **Wanneer uitvoeren?**
+      Voer de maandafsluiting uit in de eerste week van de nieuwe maand. Bijvoorbeeld: sluit december af in de eerste week van januari.
+    `,
+  },
+  {
+    id: "gebruikers",
+    icon: <Users className="h-5 w-5" />,
+    title: "Gebruikers",
+    description: "Wie heeft toegang tot het systeem",
+    content: `
+      Beheer wie toegang heeft tot Elevizion en wat ze mogen doen.
+      
+      **Rollen:**
+      • **Admin** - Volledige toegang tot alles
+      • **Finance** - Toegang tot facturatie en betalingen
+      • **Ops** - Toegang tot schermen en monitoring
+      • **Viewer** - Alleen kijken, niets aanpassen
+      • **Partner** - Alleen eigen locatiegegevens zien
+      
+      **Nieuwe gebruiker:**
+      Gebruikers krijgen automatisch toegang via Replit login. Als admin kun je hun rol aanpassen.
     `,
   },
   {
@@ -303,25 +404,6 @@ const sections = [
     `,
   },
   {
-    id: "gebruikers",
-    icon: <Users className="h-5 w-5" />,
-    title: "Gebruikers",
-    description: "Wie heeft toegang tot het systeem",
-    content: `
-      Beheer wie toegang heeft tot Elevizion en wat ze mogen doen.
-      
-      **Rollen:**
-      • **Admin** - Volledige toegang tot alles
-      • **Finance** - Toegang tot facturatie en betalingen
-      • **Ops** - Toegang tot schermen en monitoring
-      • **Viewer** - Alleen kijken, niets aanpassen
-      • **Partner** - Alleen eigen locatiegegevens zien
-      
-      **Nieuwe gebruiker:**
-      Gebruikers krijgen automatisch toegang via Replit login. Als admin kun je hun rol aanpassen.
-    `,
-  },
-  {
     id: "mobiel",
     icon: <Smartphone className="h-5 w-5" />,
     title: "Mobiel Gebruik",
@@ -342,7 +424,7 @@ const sections = [
       
       **Tips:**
       • Alle functies werken hetzelfde als op desktop
-      • Aandachtspunten zijn inklapbaar voor meer ruimte
+      • Gebruik de Cold Walk-in wizard voor snelle registraties in het veld
       • Tabellen scrollen horizontaal op kleine schermen
     `,
   },
@@ -354,30 +436,30 @@ export default function Handleiding() {
       <div>
         <h1 className="text-2xl font-bold" data-testid="page-title">Handleiding</h1>
         <p className="text-muted-foreground">
-          Leer hoe je Elevizion gebruikt - stap voor stap uitgelegd
+          Leer hoe je Elevizion gebruikt - in de volgorde waarin je het nodig hebt
         </p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <Card className="border-blue-200 bg-blue-50">
+        <Card className="border-green-200 bg-green-50">
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
-              <HelpCircle className="h-8 w-8 text-blue-600" />
+              <Sparkles className="h-8 w-8 text-green-600" />
               <div>
-                <p className="font-medium">Hulp nodig?</p>
-                <p className="text-sm text-muted-foreground">Klik op een onderwerp hieronder</p>
+                <p className="font-medium">Nieuw hier?</p>
+                <p className="text-sm text-muted-foreground">Begin met "Waar Begin Ik?"</p>
               </div>
             </div>
           </CardContent>
         </Card>
         
-        <Card className="border-green-200 bg-green-50">
+        <Card className="border-blue-200 bg-blue-50">
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
-              <CheckCircle className="h-8 w-8 text-green-600" />
+              <HelpCircle className="h-8 w-8 text-blue-600" />
               <div>
-                <p className="font-medium">Alles in het Nederlands</p>
-                <p className="text-sm text-muted-foreground">Simpel en duidelijk uitgelegd</p>
+                <p className="font-medium">In logische volgorde</p>
+                <p className="text-sm text-muted-foreground">Van werving tot facturatie</p>
               </div>
             </div>
           </CardContent>
@@ -400,7 +482,7 @@ export default function Handleiding() {
         <CardHeader>
           <CardTitle>Alle Functies Uitgelegd</CardTitle>
           <CardDescription>
-            Klik op een onderwerp om meer te leren
+            Van klantwerving tot administratie - in de volgorde waarin je het nodig hebt
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -412,8 +494,15 @@ export default function Handleiding() {
                     <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-muted">
                       {section.icon}
                     </div>
-                    <div className="text-left">
-                      <p className="font-medium">{section.title}</p>
+                    <div className="text-left flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium">{section.title}</p>
+                        {"badge" in section && section.badge && (
+                          <Badge variant="secondary" className="text-xs">
+                            {section.badge}
+                          </Badge>
+                        )}
+                      </div>
                       <p className="text-sm text-muted-foreground font-normal">{section.description}</p>
                     </div>
                   </div>
@@ -458,42 +547,11 @@ export default function Handleiding() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertCircle className="h-5 w-5 text-orange-500" />
-            Veelgemaakte Fouten
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="flex gap-3 p-3 border rounded-lg">
-              <Badge variant="destructive">Fout</Badge>
-              <div>
-                <p className="font-medium">Geen backup maken</p>
-                <p className="text-sm text-muted-foreground">
-                  Maak elke week een backup via Backup & Export. Zo verlies je nooit je gegevens.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-3 p-3 border rounded-lg">
-              <Badge variant="destructive">Fout</Badge>
-              <div>
-                <p className="font-medium">Maandafsluiting overslaan</p>
-                <p className="text-sm text-muted-foreground">
-                  Sluit elke maand af via Maandafsluiting. Dit zorgt voor correcte facturen en uitbetalingen.
-                </p>
-              </div>
-            </div>
-            <div className="flex gap-3 p-3 border rounded-lg">
-              <Badge variant="destructive">Fout</Badge>
-              <div>
-                <p className="font-medium">Schermstatus niet controleren</p>
-                <p className="text-sm text-muted-foreground">
-                  Check regelmatig of alle schermen online zijn via Monitoring. Offline schermen = geen reclame.
-                </p>
-              </div>
-            </div>
+      <Card className="border-dashed">
+        <CardContent className="pt-6">
+          <div className="text-center text-muted-foreground">
+            <p className="mb-2">Nog vragen of suggesties?</p>
+            <p className="text-sm">Neem contact op met <strong>support@elevizion.nl</strong></p>
           </div>
         </CardContent>
       </Card>
