@@ -138,7 +138,7 @@ export default function TasksPage() {
   const [roleFilter, setRoleFilter] = useState<string>("all");
 
   const { data: tasks = [], isLoading } = useQuery<Task[]>({
-    queryKey: ["/api/tasks", { status: "open" }],
+    queryKey: ["/api/tasks"],
   });
 
   const updateTaskMutation = useMutation({
