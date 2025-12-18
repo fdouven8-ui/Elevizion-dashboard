@@ -294,7 +294,7 @@ export default function LocationSurveyPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Schouwdatum</Label>
                 <Input 
@@ -392,7 +392,7 @@ export default function LocationSurveyPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="flex items-center gap-2">
                 <Switch 
                   checked={formData.wallMountPossible}
