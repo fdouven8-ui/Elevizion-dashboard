@@ -117,6 +117,17 @@ All permission changes are logged to `audit_logs` table:
 
 ## Recent Changes
 
+### December 2025 - Dashboard Redesign (Screen-First)
+- Redesigned dashboard to focus on screens as primary element
+  - Visual card grid showing all screens with status indicators
+  - Each screen card shows: online/offline status, location, all active ads
+  - Ads display: advertiser name, seconds per loop, plays per hour
+  - Offline screens highlighted with red border and alert banner
+- Improved KPI cards: screen status, active campaigns, placements, unpaid invoices
+- Fixed metrics to only count truly active placements (active placement + active contract)
+- Top Advertisers now ranks by active placements on online screens only
+- Added scrollable ad list per screen card for screens with many ads
+
 ### December 2025 - Public Landing Page
 - Added public landing page at `/` for elevizion.nl
   - Hero section with main value proposition and CTAs
