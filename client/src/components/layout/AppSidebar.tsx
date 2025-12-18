@@ -4,7 +4,6 @@ import {
   SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
@@ -16,53 +15,22 @@ import {
   LayoutDashboard,
   Monitor,
   Users,
-  MapPin,
-  Calendar,
-  CreditCard,
-  Banknote,
+  Target,
+  Wallet,
   Settings,
   LogOut,
   LogIn,
-  CalendarCheck,
-  FileText,
-  AlertTriangle,
-  Rocket,
-  Download,
-  BookOpen,
-  Megaphone,
-  UserPlus,
-  ClipboardList,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
 
-const mainItems = [
-  { title: "Overzicht", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Acquisitie", url: "/sales", icon: UserPlus },
-  { title: "Taken", url: "/tasks", icon: ClipboardList },
-  { title: "Advertenties", url: "/advertenties", icon: Megaphone },
+const menuItems = [
+  { title: "Home", url: "/dashboard", icon: LayoutDashboard },
   { title: "Schermen", url: "/screens", icon: Monitor },
-  { title: "Monitoring", url: "/monitoring", icon: AlertTriangle },
-];
-
-const adminItems = [
   { title: "Adverteerders", url: "/advertisers", icon: Users },
-  { title: "Locaties", url: "/locations", icon: MapPin },
-  { title: "Contracten", url: "/contracts", icon: Calendar },
-];
-
-const financialItems = [
-  { title: "Facturatie", url: "/billing", icon: CreditCard },
-  { title: "Uitbetalingen", url: "/payouts", icon: Banknote },
-  { title: "Maandafsluiting", url: "/month-close", icon: CalendarCheck },
-  { title: "Rapportages", url: "/reports", icon: FileText },
-];
-
-const settingsItems = [
-  { title: "Onboarding", url: "/onboarding", icon: Rocket },
-  { title: "Gebruikers", url: "/users", icon: Users },
-  { title: "Backup", url: "/backup", icon: Download },
-  { title: "Handleiding", url: "/handleiding", icon: BookOpen },
+  { title: "Plaatsingen", url: "/placements", icon: Target },
+  { title: "Financieel", url: "/finance", icon: Wallet },
+  { title: "Instellingen", url: "/settings", icon: Settings },
 ];
 
 export function AppSidebar() {
@@ -109,66 +77,15 @@ export function AppSidebar() {
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Dagelijks</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {mainItems.map((item) => (
+              {menuItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild tooltip={item.title} isActive={location === item.url}>
-                    <Link href={item.url}>
-                      <item.icon />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>Beheer</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {adminItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild tooltip={item.title} isActive={location === item.url}>
-                    <Link href={item.url}>
-                      <item.icon />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>Financieel</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {financialItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild tooltip={item.title} isActive={location === item.url}>
-                    <Link href={item.url}>
-                      <item.icon />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarGroup>
-          <SidebarGroupLabel>Instellingen</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {settingsItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild tooltip={item.title} isActive={location === item.url}>
+                  <SidebarMenuButton 
+                    asChild 
+                    tooltip={item.title} 
+                    isActive={location === item.url || location.startsWith(item.url + "/")}
+                  >
                     <Link href={item.url}>
                       <item.icon />
                       <span>{item.title}</span>

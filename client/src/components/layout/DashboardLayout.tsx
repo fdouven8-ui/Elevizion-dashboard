@@ -12,22 +12,13 @@ import {
 import { useLocation } from "wouter";
 
 const pageNames: Record<string, string> = {
-  "": "Overzicht",
-  "advertenties": "Advertenties",
+  "": "Home",
+  "dashboard": "Home",
   "screens": "Schermen",
   "advertisers": "Adverteerders",
-  "locations": "Locaties",
-  "contracts": "Contracten",
-  "billing": "Facturatie",
-  "payouts": "Uitbetalingen",
-  "month-close": "Maandafsluiting",
-  "reports": "Rapportages",
-  "monitoring": "Monitoring",
-  "onboarding": "Onboarding",
-  "users": "Gebruikers",
-  "integrations": "Integraties",
-  "backup": "Backup",
-  "handleiding": "Handleiding",
+  "placements": "Plaatsingen",
+  "finance": "Financieel",
+  "settings": "Instellingen",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

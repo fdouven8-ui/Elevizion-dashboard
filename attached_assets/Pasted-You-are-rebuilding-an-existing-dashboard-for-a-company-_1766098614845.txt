@@ -1,0 +1,166 @@
+You are rebuilding an existing dashboard for a company called Elevizion.
+This dashboard is NOT a generic SaaS and NOT meant for multiple external companies.
+It is an internal control dashboard for one growing digital signage network.
+
+IMPORTANT GOAL:
+Make the system extremely simple to use, highly automated, and scalable,
+so the owner needs to do as little manual work as possible.
+
+CURRENT PROBLEM:
+The existing dashboard is too complex, too generic, and built like software
+for many companies. We need to simplify and refocus it for Elevizion only.
+
+GENERAL RULES:
+- Internal dashboard only (no client portal)
+- Easy login (admin + future staff roles)
+- Max 6 menu items
+- Everything should help with overview, automation, and action
+- No unnecessary features or SaaS-style overengineering
+
+CORE CONCEPT:
+The dashboard connects:
+- Yodeck (screens & online/offline status)
+- Moneybird (invoices, payments, overdue)
+- Internal database (screens, advertisers, ads, placements)
+
+SCREEN_ID is the main unique key (e.g. EVZ-001).
+This ID must be used consistently to link Yodeck devices, Moneybird records,
+and internal data.
+
+---
+
+MENU STRUCTURE (REPLACE CURRENT SIDEBAR):
+
+1. Home (Dashboard / Cockpit)
+2. Screens
+3. Advertisers
+4. Placements (Ads on Screens)
+5. Finance
+6. Settings / Automations
+
+Remove or disable:
+- Tasks
+- Acquisition
+- Generic monitoring
+- SaaS-style management sections
+
+---
+
+HOME (MOST IMPORTANT PAGE):
+
+Show at a glance:
+- Monthly revenue (current month)
+- Open / overdue amount (cash at risk)
+- Screens online vs total
+- Active advertisers
+- Free ad slots (screens with < 20 ads)
+
+Below this, show an automatically generated ACTION LIST:
+- Screens offline longer than X hours
+- Invoices overdue (grouped by days overdue)
+- Ads ending within 14 days
+- Screens with empty ad slots
+
+Each action must have 1-click buttons:
+- Send WhatsApp / Email (template)
+- Pause / Resume ads
+- Mark as resolved
+- Open related screen / advertiser
+
+---
+
+SCREENS PAGE:
+
+For each screen:
+- Screen ID
+- Location name
+- Online / offline status (from Yodeck)
+- Last seen
+- Number of active ads
+- Monthly revenue for that screen
+- Revenue share for location (percentage)
+
+Actions:
+- Open in Yodeck
+- Log issue
+- Contact location
+
+---
+
+ADVERTISERS PAGE:
+
+For each advertiser:
+- Name
+- Status (active / hold / stopped)
+- Payment status from Moneybird (paid / open / overdue)
+- Days overdue
+- Where ads are running (screens or groups)
+
+Actions:
+- Pause / Resume all ads
+- Send payment reminder
+- Open advertiser details
+
+---
+
+PLACEMENTS PAGE (CORE LOGIC):
+
+Manage which ad runs on which screen:
+- Advertiser
+- Ad / creative
+- Screen or screen group
+- Start date / end date
+- Monthly price
+- Status (active / hold)
+
+This page is the single source of truth for "where does what run".
+
+---
+
+FINANCE PAGE:
+
+Read-only overview from Moneybird:
+- Paid invoices
+- Open invoices
+- Overdue invoices
+- Monthly cashflow graph
+- Export data (CSV)
+
+---
+
+AUTOMATION SETTINGS (VERY IMPORTANT):
+
+Create toggle-based automation rules:
+- Invoice overdue > 3 days → send friendly reminder
+- Invoice overdue > 7 days → send reminder + create call task
+- Invoice overdue > 14 days → automatically put placements on HOLD
+- Screen offline > 60 minutes → create ops alert
+- Screen offline > 4 hours → escalate to owner
+
+Owner must be able to turn each rule ON or OFF.
+
+---
+
+ROLES (SIMPLE, FUTURE-PROOF):
+
+- Owner (full access)
+- Operations (screens & issues)
+- Sales (advertisers & placements)
+- Finance (read-only invoices)
+
+No complex permission system.
+
+---
+
+TECHNICAL REQUIREMENTS:
+
+- Use existing codebase as base
+- Simplify, do not expand unnecessarily
+- Data should come from internal database, not live API calls
+- Yodeck status via scheduled polling
+- Moneybird updates via webhook or polling
+- Prepare structure for growth to 100+ screens and 2000+ placements
+
+FINAL GOAL:
+This dashboard should feel like an operating system and autopilot
+for Elevizion, not like software built for many different companies.

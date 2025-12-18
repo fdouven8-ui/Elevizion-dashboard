@@ -4,55 +4,25 @@ import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 
-// Pages
 import Login from "@/pages/Login";
-import Overview from "@/pages/Overview";
-import Advertisers from "@/pages/Advertisers";
-import Locations from "@/pages/Locations";
+import Home from "@/pages/Home";
 import Screens from "@/pages/Screens";
-import Contracts from "@/pages/Contracts";
-import Billing from "@/pages/Billing";
-import Payouts from "@/pages/Payouts";
-import MonthClose from "@/pages/MonthClose";
-import Reports from "@/pages/Reports";
-import Monitoring from "@/pages/Monitoring";
-import Onboarding from "@/pages/Onboarding";
-import Users from "@/pages/Users";
-import Integrations from "@/pages/Integrations";
-import Backup from "@/pages/Backup";
-import Handleiding from "@/pages/Handleiding";
-import Advertenties from "@/pages/Advertenties";
-import SignContract from "@/pages/SignContract";
-import Sales from "@/pages/Sales";
-import LocationSurvey from "@/pages/LocationSurvey";
-import Tasks from "@/pages/Tasks";
-import AcquisitieWizard from "@/pages/AcquisitieWizard";
+import Advertisers from "@/pages/Advertisers";
+import Placements from "@/pages/Placements";
+import Finance from "@/pages/Finance";
+import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
   return (
     <DashboardLayout>
       <Switch>
-        <Route path="/dashboard" component={Overview} />
-        <Route path="/advertenties" component={Advertenties} />
-        <Route path="/advertisers" component={Advertisers} />
-        <Route path="/locations" component={Locations} />
+        <Route path="/dashboard" component={Home} />
         <Route path="/screens" component={Screens} />
-        <Route path="/contracts" component={Contracts} />
-        <Route path="/billing" component={Billing} />
-        <Route path="/payouts" component={Payouts} />
-        <Route path="/month-close" component={MonthClose} />
-        <Route path="/reports" component={Reports} />
-        <Route path="/monitoring" component={Monitoring} />
-        <Route path="/onboarding" component={Onboarding} />
-        <Route path="/users" component={Users} />
-        <Route path="/integrations" component={Integrations} />
-        <Route path="/backup" component={Backup} />
-        <Route path="/handleiding" component={Handleiding} />
-        <Route path="/sales" component={Sales} />
-        <Route path="/sales/survey/:leadId" component={LocationSurvey} />
-        <Route path="/acquisitie/new" component={AcquisitieWizard} />
-        <Route path="/tasks" component={Tasks} />
+        <Route path="/advertisers" component={Advertisers} />
+        <Route path="/placements" component={Placements} />
+        <Route path="/finance" component={Finance} />
+        <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>
@@ -63,7 +33,6 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Login} />
-      <Route path="/sign/:token" component={SignContract} />
       <Route component={DashboardRouter} />
     </Switch>
   );
