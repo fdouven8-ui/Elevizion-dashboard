@@ -2,13 +2,22 @@
 
 ## Overview
 
-Elevizion Dashboard is a centralized management system for digital signage advertising operations. It serves as the single source of truth for managing advertisers, partner locations, screens, contracts, billing, and revenue-sharing payouts. The platform is designed to scale from 25 screens to 500+ screens with full automation capabilities.
+Elevizion Dashboard is an internal operations dashboard for digital signage network management. Focus on automation and quick actions for the Elevizion team. The system provides a cockpit view with KPIs, automated action lists, and toggle-based automation rules.
 
-The application manages:
-- What advertisements run and where
-- Contract and billing cycles
-- Revenue sharing with partner locations (default 10%)
-- Integration with external services (Yodeck for screen management, Moneybird for invoicing)
+Core functionality:
+- Monitor screens (status, revenue per screen)
+- Manage advertisers (payment status, quick actions)
+- Configure ad placements (which ad runs on which screen)
+- View financial data (read-only from Moneybird)
+- Set automation rules (invoice reminders, screen monitoring)
+
+**Simplified Navigation (6 items)**:
+- Home: Cockpit with KPIs and automated action list
+- Schermen: Screen status and revenue overview
+- Adverteerders: Advertiser management with payment status
+- Plaatsingen: Single source of truth for ad-to-screen mappings
+- Financieel: Read-only Moneybird data view
+- Instellingen: Toggle-based automation rules
 
 ## User Preferences
 
