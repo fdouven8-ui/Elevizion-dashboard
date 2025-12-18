@@ -29,6 +29,7 @@ import {
   Rocket,
   Download,
   BookOpen,
+  Megaphone,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -38,6 +39,11 @@ const items = [
     title: "Overzicht",
     url: "/dashboard",
     icon: LayoutDashboard,
+  },
+  {
+    title: "Advertenties",
+    url: "/advertenties",
+    icon: Megaphone,
   },
   {
     title: "Schermen",

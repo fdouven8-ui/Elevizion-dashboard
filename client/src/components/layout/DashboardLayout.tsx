@@ -13,6 +13,7 @@ import { useLocation } from "wouter";
 
 const pageNames: Record<string, string> = {
   "": "Overzicht",
+  "advertenties": "Advertenties",
   "screens": "Schermen",
   "advertisers": "Adverteerders",
   "locations": "Locaties",
@@ -25,6 +26,8 @@ const pageNames: Record<string, string> = {
   "onboarding": "Onboarding",
   "users": "Gebruikers",
   "integrations": "Integraties",
+  "backup": "Backup",
+  "handleiding": "Handleiding",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

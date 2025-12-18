@@ -21,6 +21,7 @@ import Users from "@/pages/Users";
 import Integrations from "@/pages/Integrations";
 import Backup from "@/pages/Backup";
 import Handleiding from "@/pages/Handleiding";
+import Advertenties from "@/pages/Advertenties";
 import SignContract from "@/pages/SignContract";
 import NotFound from "@/pages/not-found";
 
@@ -29,6 +30,7 @@ function DashboardRouter() {
     <DashboardLayout>
       <Switch>
         <Route path="/dashboard" component={Overview} />
+        <Route path="/advertenties" component={Advertenties} />
         <Route path="/advertisers" component={Advertisers} />
         <Route path="/locations" component={Locations} />
         <Route path="/screens" component={Screens} />

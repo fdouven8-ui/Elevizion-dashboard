@@ -5,12 +5,12 @@ import { Button } from "@/components/ui/button";
 import { 
   Monitor, MapPin, Play, AlertCircle, CheckCircle2, 
   Wifi, WifiOff, Building2, Clock, Receipt, ArrowRight,
-  Eye, Zap, Megaphone, Tv2
+  Eye, Zap, Megaphone
 } from "lucide-react";
 import { Link } from "wouter";
 
 export default function Overview() {
-  const { kpis, screens, locations, placements, contracts, advertisers, invoices, advertisements } = useAppData();
+  const { screens, locations, placements, contracts, advertisers, invoices } = useAppData();
 
   const onlineScreens = screens.filter(s => s.status === 'online').length;
   const offlineScreens = screens.filter(s => s.status === 'offline').length;
@@ -157,100 +157,60 @@ export default function Overview() {
         </Card>
       )}
 
-      <Card className="overflow-hidden shadow-lg" data-testid="section-active-campaigns">
-        <div className="h-2 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500" />
-        <CardHeader className="pb-2">
-          <CardTitle className="text-xl flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-gradient-to-br from-emerald-100 to-teal-100">
-              <Megaphone className="h-5 w-5 text-emerald-600" />
-            </div>
-            Actieve Advertenties per Scherm
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">Overzicht van alle lopende campagnes en waar ze draaien</p>
-        </CardHeader>
-        <CardContent>
-          {(() => {
-            const activeContracts = contracts.filter(c => c.status === 'active');
-            
-            if (activeContracts.length === 0) {
-              return (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Tv2 className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                  <p>Nog geen actieve campagnes</p>
-                  <Link href="/contracts">
-                    <Button variant="outline" className="mt-4">Nieuw Contract Aanmaken</Button>
-                  </Link>
+      {(() => {
+        const activeContractsWithPlacements = contracts.filter(c => c.status === 'active' && placements.some(p => p.contractId === c.id && p.isActive));
+        if (activeContractsWithPlacements.length === 0) return null;
+        
+        const topCampaigns = activeContractsWithPlacements.slice(0, 3);
+        
+        return (
+          <Card className="overflow-hidden shadow-lg border-emerald-100" data-testid="section-active-campaigns-preview">
+            <div className="h-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500" />
+            <CardContent className="pt-4">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="p-1.5 rounded-lg bg-emerald-100">
+                    <Megaphone className="h-4 w-4 text-emerald-600" />
+                  </div>
+                  <h3 className="font-semibold">Actieve Campagnes</h3>
+                  <Badge variant="secondary">{activeContractsWithPlacements.length}</Badge>
                 </div>
-              );
-            }
-
-            return (
-              <div className="space-y-4">
-                {activeContracts.map(contract => {
+                <Link href="/advertenties">
+                  <Button variant="outline" size="sm" className="gap-1 border-emerald-200 text-emerald-700 hover:bg-emerald-50">
+                    Volledig Overzicht
+                    <ArrowRight className="h-3 w-3" />
+                  </Button>
+                </Link>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {topCampaigns.map(contract => {
                   const advertiser = advertisers.find(a => a.id === contract.advertiserId);
                   const contractPlacements = placements.filter(p => p.contractId === contract.id && p.isActive);
-                  
-                  if (contractPlacements.length === 0) return null;
-                  
                   return (
                     <div 
-                      key={contract.id} 
-                      className="p-4 rounded-xl border-2 border-emerald-100 bg-gradient-to-r from-emerald-50/50 to-teal-50/50 hover:border-emerald-200 transition-colors"
-                      data-testid={`campaign-row-${contract.id}`}
+                      key={contract.id}
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100"
                     >
-                      <div className="flex flex-col lg:flex-row lg:items-center gap-4">
-                        <div className="flex items-center gap-3 min-w-[200px]">
-                          <div className="p-2.5 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-200">
-                            <Building2 className="h-5 w-5 text-white" />
-                          </div>
-                          <div>
-                            <p className="font-semibold text-lg">{advertiser?.companyName || 'Onbekend'}</p>
-                            <p className="text-xs text-muted-foreground">Contract #{contract.id.slice(0, 8)}</p>
-                          </div>
-                        </div>
-                        
-                        <div className="flex-1">
-                          <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
-                            Draait op {contractPlacements.length} scherm{contractPlacements.length !== 1 ? 'en' : ''}:
-                          </p>
-                          <div className="flex flex-wrap gap-2">
-                            {contractPlacements.map(placement => {
-                              const screen = screens.find(s => s.id === placement.screenId);
-                              const location = screen ? locations.find(l => l.id === screen.locationId) : null;
-                              const isOnline = screen?.status === 'online';
-                              
-                              return (
-                                <div 
-                                  key={placement.id}
-                                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
-                                    isOnline 
-                                      ? 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-800 border border-green-200' 
-                                      : 'bg-gradient-to-r from-red-100 to-rose-100 text-red-800 border border-red-200'
-                                  }`}
-                                  data-testid={`placement-badge-${placement.id}`}
-                                >
-                                  <Monitor className={`h-3.5 w-3.5 ${isOnline ? 'text-green-600' : 'text-red-600'}`} />
-                                  <span>{screen?.name || 'Onbekend'}</span>
-                                  {location && (
-                                    <span className="text-xs opacity-75">({location.name})</span>
-                                  )}
-                                  <span className={`text-xs px-1.5 py-0.5 rounded ${isOnline ? 'bg-green-200 text-green-700' : 'bg-red-200 text-red-700'}`}>
-                                    {placement.secondsPerLoop}s
-                                  </span>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
+                      <Building2 className="h-4 w-4 text-blue-600" />
+                      <span className="font-medium">{advertiser?.companyName || 'Onbekend'}</span>
+                      <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-100 text-xs">
+                        {contractPlacements.length} scherm{contractPlacements.length !== 1 ? 'en' : ''}
+                      </Badge>
                     </div>
                   );
-                }).filter(Boolean)}
+                })}
+                {activeContractsWithPlacements.length > 3 && (
+                  <Link href="/advertenties">
+                    <div className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-slate-100 text-slate-600 cursor-pointer hover:bg-slate-200 transition-colors">
+                      +{activeContractsWithPlacements.length - 3} meer
+                    </div>
+                  </Link>
+                )}
               </div>
-            );
-          })()}
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       <div>
         <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
