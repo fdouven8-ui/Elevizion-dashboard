@@ -186,8 +186,12 @@ export async function createMoneybirdInvoice(invoiceData: {
 
     // Set payment method to direct debit if SEPA mandate is active
     if (invoiceData.sepaMandate && invoiceData.iban) {
+      // Moneybird uses direct_debit workflow for SEPA contacts
+      invoicePayload.sales_invoice.workflow_id = null; // Use default workflow
       invoicePayload.sales_invoice.payment_conditions = "Betaling via automatische incasso";
-      // Note: Moneybird will automatically use SEPA Direct Debit for contacts with active SEPA
+      // For SEPA direct debit, we need to set the invoice to be collected automatically
+      // The contact must have sepa_active = true for this to work
+      invoicePayload.sales_invoice.prices_are_incl_tax = false;
     }
 
     const invoiceResponse = await fetch(`${MONEYBIRD_BASE_URL}/${administrationId}/sales_invoices.json`, {

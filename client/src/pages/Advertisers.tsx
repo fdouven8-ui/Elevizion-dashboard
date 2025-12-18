@@ -191,12 +191,22 @@ function AdvertiserForm({ onSuccess }: { onSuccess: () => void }) {
   const [hasSepaMandate, setHasSepaMandate] = useState(false);
 
   const onSubmit = (data: any) => {
-    addAdvertiser({
+    const advertiserData: any = {
       ...data,
       sepaMandate: hasSepaMandate,
-      sepaMandateDate: hasSepaMandate ? new Date().toISOString().split('T')[0] : null,
       status: "active"
-    });
+    };
+    
+    // Only set mandate date if mandate is active
+    if (hasSepaMandate) {
+      advertiserData.sepaMandateDate = new Date().toISOString().split('T')[0];
+      // Generate mandate reference if not provided
+      if (!data.sepaMandateReference) {
+        advertiserData.sepaMandateReference = `ELEVIZ-${new Date().getFullYear()}-${Date.now().toString().slice(-6)}`;
+      }
+    }
+    
+    addAdvertiser(advertiserData);
     onSuccess();
   };
 
@@ -303,13 +313,17 @@ function SepaForm({ advertiser, onSuccess }: { advertiser: Advertiser; onSuccess
   const [hasSepaMandate, setHasSepaMandate] = useState(advertiser.sepaMandate || false);
 
   const onSubmit = (data: any) => {
-    updateAdvertiser(advertiser.id, {
+    const updateData: any = {
       ...data,
       sepaMandate: hasSepaMandate,
-      sepaMandateDate: hasSepaMandate && !advertiser.sepaMandateDate 
-        ? new Date().toISOString().split('T')[0] 
-        : advertiser.sepaMandateDate,
-    });
+    };
+    
+    // Set mandate date if activating mandate for the first time
+    if (hasSepaMandate && !advertiser.sepaMandateDate) {
+      updateData.sepaMandateDate = new Date().toISOString().split('T')[0];
+    }
+    
+    updateAdvertiser(advertiser.id, updateData);
     onSuccess();
   };
 
