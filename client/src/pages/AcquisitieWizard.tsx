@@ -304,8 +304,15 @@ export default function AcquisitieWizard() {
 
   const handleNext = async () => {
     if (step === 1 && !acknowledgedDuplicates && duplicates.length === 0) {
-      await checkDuplicatesMutation.mutateAsync();
-      if (duplicates.length > 0) return;
+      try {
+        const result = await checkDuplicatesMutation.mutateAsync();
+        if (result && result.length > 0) {
+          setDuplicates(result);
+          return;
+        }
+      } catch (error) {
+        console.warn("Duplicate check failed, proceeding anyway:", error);
+      }
     }
     
     if (step < getStepCount() - 1) {
