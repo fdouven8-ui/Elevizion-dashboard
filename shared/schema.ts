@@ -685,6 +685,7 @@ export const surveyPhotos = pgTable("survey_photos", {
   surveyId: varchar("survey_id").notNull().references(() => locationSurveys.id),
   storagePath: text("storage_path").notNull(),
   filename: text("filename").notNull(),
+  category: text("category"), // locatie, technisch, montage, overig
   description: text("description"),
   uploadedByUserId: varchar("uploaded_by_user_id"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

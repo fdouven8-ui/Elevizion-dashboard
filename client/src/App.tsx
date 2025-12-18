@@ -25,6 +25,7 @@ import Advertenties from "@/pages/Advertenties";
 import SignContract from "@/pages/SignContract";
 import Sales from "@/pages/Sales";
 import LocationSurvey from "@/pages/LocationSurvey";
+import Tasks from "@/pages/Tasks";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -49,6 +50,7 @@ function DashboardRouter() {
         <Route path="/handleiding" component={Handleiding} />
         <Route path="/sales" component={Sales} />
         <Route path="/sales/survey/:leadId" component={LocationSurvey} />
+        <Route path="/tasks" component={Tasks} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>

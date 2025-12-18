@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useLocation } from "wouter";
-import { ArrowLeft, Save, Check, X, Camera, Wifi, Power, MapPin, Users, Monitor, PenTool } from "lucide-react";
+import { ArrowLeft, Save, Check, X, Camera, Wifi, Power, MapPin, Users, Monitor, PenTool, Upload, Trash2, Package, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,7 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import type { Lead, LocationSurvey as SurveyType } from "@shared/schema";
+import { ObjectUploader } from "@/components/ObjectUploader";
+import type { Lead, LocationSurvey as SurveyType, SurveyPhoto, SurveySupply } from "@shared/schema";
 
 function SignaturePad({ 
   onSave, 
@@ -184,10 +185,26 @@ export default function LocationSurveyPage() {
   
   const [signerName, setSignerName] = useState("");
   const [isSigned, setIsSigned] = useState(false);
+  const [surveyId, setSurveyId] = useState<string | null>(null);
+  const [newSupply, setNewSupply] = useState({ name: "", quantity: 1, notes: "" });
 
   const { data: lead, isLoading } = useQuery<Lead>({
     queryKey: [`/api/leads/${leadId}`],
     enabled: !!leadId,
+  });
+
+  const { data: photos = [], refetch: refetchPhotos } = useQuery<SurveyPhoto[]>({
+    queryKey: [`/api/surveys/${surveyId}/photos`],
+    enabled: !!surveyId,
+  });
+
+  const { data: supplies = [], refetch: refetchSupplies } = useQuery<SurveySupply[]>({
+    queryKey: [`/api/surveys/${surveyId}/supplies`],
+    enabled: !!surveyId,
+  });
+
+  const { data: supplyItems = [] } = useQuery({
+    queryKey: ["/api/supply-items"],
   });
 
   const saveSurveyMutation = useMutation({
@@ -196,14 +213,83 @@ export default function LocationSurveyPage() {
       return res.json();
     },
     onSuccess: (survey) => {
+      setSurveyId(survey.id);
       queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
-      toast({ title: "Schouw opgeslagen!" });
+      toast({ title: "Schouw opgeslagen! Voeg nu foto's en materialen toe." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const addPhotoMutation = useMutation({
+    mutationFn: async (data: { storagePath: string; category: string; filename: string }) => {
+      const res = await apiRequest("POST", `/api/surveys/${surveyId}/photos`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      refetchPhotos();
+      toast({ title: "Foto toegevoegd!" });
+    },
+  });
+
+  const deletePhotoMutation = useMutation({
+    mutationFn: async (photoId: string) => {
+      await apiRequest("DELETE", `/api/survey-photos/${photoId}`);
+    },
+    onSuccess: () => {
+      refetchPhotos();
+      toast({ title: "Foto verwijderd" });
+    },
+  });
+
+  const addSupplyMutation = useMutation({
+    mutationFn: async (data: { customName: string; quantity: number; notes?: string }) => {
+      const res = await apiRequest("POST", `/api/surveys/${surveyId}/supplies`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      refetchSupplies();
+      setNewSupply({ name: "", quantity: 1, notes: "" });
+      toast({ title: "Materiaal toegevoegd!" });
+    },
+  });
+
+  const deleteSupplyMutation = useMutation({
+    mutationFn: async (supplyId: string) => {
+      await apiRequest("DELETE", `/api/survey-supplies/${supplyId}`);
+    },
+    onSuccess: () => {
+      refetchSupplies();
+      toast({ title: "Materiaal verwijderd" });
+    },
+  });
+
+  const finalizeSurveyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/surveys/${surveyId}/finalize`, {});
+      return res.json();
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
+      toast({ title: "Schouw afgerond!", description: `${result.tasks.length} taken aangemaakt` });
       navigate("/sales");
     },
     onError: (error: any) => {
       toast({ title: "Fout", description: error.message, variant: "destructive" });
     },
   });
+
+  const handlePhotoUpload = async (category: string, storagePath: string, filename: string) => {
+    await addPhotoMutation.mutateAsync({ storagePath, category, filename });
+  };
+
+  const getUploadParams = async () => {
+    const res = await apiRequest("POST", "/api/objects/upload", {});
+    const data = await res.json();
+    return { method: "PUT" as const, url: data.uploadURL };
+  };
 
   const saveSignatureMutation = useMutation({
     mutationFn: async (data: any) => {
@@ -437,6 +523,126 @@ export default function LocationSurveyPage() {
           </CardContent>
         </Card>
 
+        {/* Photos & Supplies - only visible after survey is saved */}
+        {surveyId && (
+          <>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Camera className="h-5 w-5" /> Foto's
+                </CardTitle>
+                <CardDescription>Voeg foto's toe van de locatie, stopcontacten, muren etc.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {["locatie", "technisch", "montage", "overig"].map((category) => (
+                    <ObjectUploader
+                      key={category}
+                      maxNumberOfFiles={5}
+                      maxFileSize={10 * 1024 * 1024}
+                      onGetUploadParameters={getUploadParams}
+                      onComplete={(result) => {
+                        result.successful?.forEach(file => {
+                          const urlPath = new URL(file.uploadURL || "").pathname;
+                          handlePhotoUpload(category, urlPath, file.name || "foto");
+                        });
+                      }}
+                    >
+                      <Upload className="h-4 w-4 mr-1" /> {category.charAt(0).toUpperCase() + category.slice(1)}
+                    </ObjectUploader>
+                  ))}
+                </div>
+                
+                {photos.length > 0 && (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mt-4">
+                    {photos.map((photo) => (
+                      <div key={photo.id} className="relative group">
+                        <img 
+                          src={photo.storagePath} 
+                          alt={photo.description || photo.category || "Foto"}
+                          className="w-full h-24 object-cover rounded-lg"
+                        />
+                        <div className="absolute top-1 right-1 opacity-0 group-hover:opacity-100">
+                          <Button 
+                            size="icon" 
+                            variant="destructive" 
+                            className="h-6 w-6"
+                            onClick={() => deletePhotoMutation.mutate(photo.id)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <span className="text-xs text-muted-foreground">{photo.category}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Package className="h-5 w-5" /> Benodigde Materialen
+                </CardTitle>
+                <CardDescription>TV's, kabels, kabelgoten, beugels etc.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                  <Input 
+                    value={newSupply.name}
+                    onChange={(e) => setNewSupply({ ...newSupply, name: e.target.value })}
+                    placeholder="Bijv. TV 55 inch, HDMI kabel"
+                    className="flex-1"
+                    data-testid="input-supply-name"
+                  />
+                  <Input 
+                    type="number"
+                    min="1"
+                    value={newSupply.quantity}
+                    onChange={(e) => setNewSupply({ ...newSupply, quantity: parseInt(e.target.value) || 1 })}
+                    className="w-20"
+                    data-testid="input-supply-qty"
+                  />
+                  <Button 
+                    type="button"
+                    onClick={() => {
+                      if (newSupply.name) {
+                        addSupplyMutation.mutate({ 
+                          customName: newSupply.name, 
+                          quantity: newSupply.quantity,
+                          notes: newSupply.notes || undefined
+                        });
+                      }
+                    }}
+                    disabled={!newSupply.name}
+                    data-testid="button-add-supply"
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+                
+                {supplies.length > 0 && (
+                  <div className="space-y-2 mt-4">
+                    {supplies.map((supply) => (
+                      <div key={supply.id} className="flex items-center justify-between p-2 bg-muted rounded-lg">
+                        <span className="font-medium">{supply.quantity}x {supply.customName}</span>
+                        <Button 
+                          size="icon" 
+                          variant="ghost"
+                          onClick={() => deleteSupplyMutation.mutate(supply.id)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -549,16 +755,40 @@ export default function LocationSurveyPage() {
           </CardContent>
         </Card>
 
-        <div className="sticky bottom-4 bg-background pt-4">
-          <Button 
-            type="submit" 
-            className="w-full h-12 text-lg"
-            disabled={saveSurveyMutation.isPending}
-            data-testid="button-save-survey"
-          >
-            <Save className="h-5 w-5 mr-2" />
-            {saveSurveyMutation.isPending ? "Opslaan..." : "Schouw Opslaan"}
-          </Button>
+        <div className="sticky bottom-4 bg-background pt-4 space-y-2">
+          {!surveyId ? (
+            <Button 
+              type="submit" 
+              className="w-full h-12 text-lg"
+              disabled={saveSurveyMutation.isPending}
+              data-testid="button-save-survey"
+            >
+              <Save className="h-5 w-5 mr-2" />
+              {saveSurveyMutation.isPending ? "Opslaan..." : "Schouw Opslaan"}
+            </Button>
+          ) : (
+            <div className="flex gap-2">
+              <Button 
+                type="button"
+                variant="outline"
+                className="flex-1 h-12"
+                onClick={() => navigate("/sales")}
+              >
+                <ArrowLeft className="h-5 w-5 mr-2" />
+                Terug
+              </Button>
+              <Button 
+                type="button"
+                className="flex-1 h-12 text-lg bg-green-600 hover:bg-green-700"
+                onClick={() => finalizeSurveyMutation.mutate()}
+                disabled={finalizeSurveyMutation.isPending}
+                data-testid="button-finalize-survey"
+              >
+                <Check className="h-5 w-5 mr-2" />
+                {finalizeSurveyMutation.isPending ? "Afronden..." : "Schouw Afronden & Taken Aanmaken"}
+              </Button>
+            </div>
+          )}
         </div>
       </form>
     </div>

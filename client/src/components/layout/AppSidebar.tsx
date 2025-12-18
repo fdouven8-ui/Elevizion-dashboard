@@ -31,6 +31,7 @@ import {
   BookOpen,
   Megaphone,
   UserPlus,
+  ClipboardList,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -38,6 +39,7 @@ import { useAuth } from "@/hooks/use-auth";
 const mainItems = [
   { title: "Overzicht", url: "/dashboard", icon: LayoutDashboard },
   { title: "Acquisitie", url: "/sales", icon: UserPlus },
+  { title: "Taken", url: "/tasks", icon: ClipboardList },
   { title: "Advertenties", url: "/advertenties", icon: Megaphone },
   { title: "Schermen", url: "/screens", icon: Monitor },
   { title: "Monitoring", url: "/monitoring", icon: AlertTriangle },
