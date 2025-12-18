@@ -16,6 +16,7 @@ Deze handleiding is specifiek voor jou als hoofdbeheerder van Elevizion OS. Hier
 8. [Backup & Herstel](#backup--herstel)
 9. [Problemen Oplossen](#problemen-oplossen)
 10. [Belangrijke Bestanden](#belangrijke-bestanden)
+11. [Mobiel Gebruik](#mobiel-gebruik)
 
 ---
 
@@ -114,19 +115,25 @@ Deze handleiding is specifiek voor jou als hoofdbeheerder van Elevizion OS. Hier
 
 ### Als Admin doe je:
 
-1. **Monitoring checken** (`/monitoring`)
+1. **Dashboard checken** (`/dashboard`)
+   - Bekijk de "Aandachtspunten" bovenaan (inklapbaar)
+   - Alle kaarten zijn klikbaar → directe acties
+   - Rood = urgent, oranje = aandacht nodig
+
+2. **Monitoring checken** (`/monitoring`)
    - Controleer of alle schermen online zijn
    - Bekijk alerts voor offline schermen
 
-2. **Nieuwe contracten verwerken**
+3. **Nieuwe contracten verwerken**
    - Bekijk inkomende contract-ondertekeningen
    - Activeer goedgekeurde contracten
 
-3. **Facturen beheren** (`/billing`)
+4. **Facturen beheren** (`/billing`)
    - Controleer openstaande facturen
-   - Markeer betaalde facturen als "Betaald"
+   - Bij incasso: wordt automatisch afgeschreven
+   - Bij overboeking: markeer als "Betaald" wanneer geld binnen is
 
-4. **Uitbetalingen verwerken** (`/payouts`)
+5. **Uitbetalingen verwerken** (`/payouts`)
    - Bekijk te betalen bedragen aan locaties
    - Maak overboekingen naar locatie-IBANs
    - Markeer als "Betaald"
@@ -183,6 +190,31 @@ Deze handleiding is specifiek voor jou als hoofdbeheerder van Elevizion OS. Hier
 - Ga naar Instellingen → Developers → API tokens
 - Maak een nieuw token aan
 - Voeg toe als Secret: `MONEYBIRD_API_TOKEN`
+- Voeg toe als Secret: `MONEYBIRD_ADMINISTRATION_ID` (staat in je Moneybird URL)
+
+### Automatisch Incasso (SEPA) via Moneybird
+
+**Voorwaarde:** Moneybird moet SEPA incasso ondersteunen (zakelijk account vereist)
+
+**Adverteerder instellen voor incasso:**
+1. Ga naar Adverteerders (`/advertisers`)
+2. Klik op ⋮ menu → "Incasso instellen"
+3. Vul in:
+   - IBAN rekeningnummer
+   - Tenaamstelling rekening
+   - Vink "SEPA Machtiging Getekend" aan
+4. Klik "Incasso Activeren"
+
+**Hoe het werkt:**
+- Bij facturatie: systeem stuurt SEPA info mee naar Moneybird
+- Moneybird markeert contact als SEPA-actief
+- Facturen krijgen betaalconditie "Automatische incasso"
+- Je verzamelt betalingen via Moneybird's SEPA batch
+
+**Machtiging verkrijgen:**
+- Stuur klant een SEPA machtigingsformulier
+- Na ondertekening: vink "Machtiging Getekend" aan
+- Bewaar getekende machtiging in je administratie
 
 ### SendGrid (Email)
 - Zie "Eerste Setup" sectie hierboven
@@ -335,6 +367,35 @@ Bij crash of dataverlies:
 1. In Replit: klik op de drie puntjes naast projectnaam
 2. Kies "Download as zip"
 3. Dit bevat alle code (niet de database)
+
+---
+
+## Mobiel Gebruik
+
+### Elevizion op je iPhone/iPad
+
+De app werkt volledig op mobiel en kan als "app" op je homescreen worden gezet:
+
+**Toevoegen aan homescreen:**
+1. Open de URL in Safari (niet Chrome)
+2. Tik op het Deel-icoon (vierkantje met pijl omhoog)
+3. Scroll naar beneden
+4. Kies "Zet op beginscherm"
+5. Geef het een naam ("Elevizion") en tik "Voeg toe"
+
+**Voordelen:**
+- Opent als volwaardige app (geen browser balk)
+- Snelle toegang vanaf homescreen
+- Alle functies beschikbaar
+- Push notificaties mogelijk (toekomstige feature)
+
+**Navigatie op mobiel:**
+- Tik op ☰ (hamburger menu) linksboven
+- Menu schuift uit als lade
+- Tik erbuiten om te sluiten
+- Aandachtspunten zijn inklapbaar voor meer ruimte
+
+**Tip:** Voeg de app toe op je telefoon zodat je onderweg snel kunt checken of alle schermen online zijn!
 
 ---
 
