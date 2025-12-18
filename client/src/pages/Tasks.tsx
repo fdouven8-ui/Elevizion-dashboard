@@ -46,46 +46,46 @@ const taskTypeConfig: Record<string, { label: string; icon: any }> = {
   overig: { label: "Overig", icon: Circle },
 };
 
-function TaskCard({ task, onStatusChange }: { task: Task; onStatusChange: (id: string, status: string) => void }) {
+function TaskCard({ task, onStatusChange, isUpdating }: { task: Task; onStatusChange: (id: string, status: string) => void; isUpdating?: boolean }) {
   const statusInfo = statusConfig[task.status] || statusConfig.open;
   const priorityInfo = priorityConfig[task.priority || "normaal"] || priorityConfig.normaal;
   const typeInfo = taskTypeConfig[task.taskType || "overig"] || taskTypeConfig.overig;
   const StatusIcon = statusInfo.icon;
   const TypeIcon = typeInfo.icon;
 
+  const isOpen = task.status === "open";
+  const isInProgress = task.status === "in_progress";
+
   return (
     <Card className="hover:shadow-md transition-shadow" data-testid={`task-card-${task.id}`}>
       <CardContent className="p-4">
         <div className="flex items-start gap-3">
-          <div className="mt-1">
-            <TypeIcon className="h-5 w-5 text-muted-foreground" />
+          <div className={`mt-1 p-2 rounded-lg ${task.taskType === "installatie" ? "bg-blue-100" : task.taskType === "inkoop" ? "bg-amber-100" : "bg-gray-100"}`}>
+            <TypeIcon className={`h-5 w-5 ${task.taskType === "installatie" ? "text-blue-700" : task.taskType === "inkoop" ? "text-amber-700" : "text-gray-700"}`} />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <h3 className="font-semibold truncate">{task.title}</h3>
+              <h3 className="font-semibold">{task.title}</h3>
               <Badge className={priorityInfo.color} variant="secondary">
                 {priorityInfo.label}
+              </Badge>
+              <Badge variant="outline" className={statusInfo.color}>
+                {statusInfo.label}
               </Badge>
             </div>
             
             {task.description && (
-              <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+              <p className="text-sm text-muted-foreground mt-2 whitespace-pre-wrap">
                 {task.description}
               </p>
             )}
             
             <div className="flex items-center gap-3 mt-3 text-xs text-muted-foreground flex-wrap">
               {task.assignedToRole && (
-                <span className="flex items-center gap-1">
-                  <Users className="h-3 w-3" />
-                  {task.assignedToRole}
-                </span>
-              )}
-              {task.assignedToUserId && (
-                <span className="flex items-center gap-1">
-                  <User className="h-3 w-3" />
-                  Toegewezen
-                </span>
+                <Badge variant="outline" className="text-xs">
+                  <Users className="h-3 w-3 mr-1" />
+                  {task.assignedToRole === "ops" ? "Bouwvakker" : task.assignedToRole === "admin" ? "Inkoop" : task.assignedToRole}
+                </Badge>
               )}
               {task.dueDate && (
                 <span className="flex items-center gap-1">
@@ -97,34 +97,65 @@ function TaskCard({ task, onStatusChange }: { task: Task; onStatusChange: (id: s
                 {formatDistanceToNow(new Date(task.createdAt), { addSuffix: true, locale: nl })}
               </span>
             </div>
+
+            <div className="flex gap-2 mt-4">
+              {isOpen && (
+                <Button 
+                  size="sm"
+                  onClick={() => onStatusChange(task.id, "in_progress")}
+                  disabled={isUpdating}
+                  data-testid={`button-start-task-${task.id}`}
+                >
+                  {isUpdating ? (
+                    <div className="animate-spin h-4 w-4 mr-1 border-2 border-white border-t-transparent rounded-full" />
+                  ) : (
+                    <Clock className="h-4 w-4 mr-1" />
+                  )}
+                  Start
+                </Button>
+              )}
+              {isInProgress && (
+                <Button 
+                  size="sm"
+                  className="bg-green-600 hover:bg-green-700"
+                  onClick={() => onStatusChange(task.id, "completed")}
+                  disabled={isUpdating}
+                  data-testid={`button-complete-task-${task.id}`}
+                >
+                  {isUpdating ? (
+                    <div className="animate-spin h-4 w-4 mr-1 border-2 border-white border-t-transparent rounded-full" />
+                  ) : (
+                    <CheckCircle2 className="h-4 w-4 mr-1" />
+                  )}
+                  Afronden
+                </Button>
+              )}
+              {(isOpen || isInProgress) && (
+                <Select 
+                  value={task.status} 
+                  onValueChange={(value) => onStatusChange(task.id, value)}
+                  disabled={isUpdating}
+                >
+                  <SelectTrigger className="w-[130px] h-8">
+                    <ChevronDown className="h-4 w-4" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(statusConfig).map(([key, config]) => {
+                      const Icon = config.icon;
+                      return (
+                        <SelectItem key={key} value={key}>
+                          <div className="flex items-center gap-2">
+                            <Icon className="h-4 w-4" />
+                            {config.label}
+                          </div>
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
           </div>
-          
-          <Select 
-            value={task.status} 
-            onValueChange={(value) => onStatusChange(task.id, value)}
-          >
-            <SelectTrigger className="w-[130px] h-8">
-              <SelectValue>
-                <div className="flex items-center gap-1">
-                  <StatusIcon className="h-3 w-3" />
-                  {statusInfo.label}
-                </div>
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {Object.entries(statusConfig).map(([key, config]) => {
-                const Icon = config.icon;
-                return (
-                  <SelectItem key={key} value={key}>
-                    <div className="flex items-center gap-2">
-                      <Icon className="h-4 w-4" />
-                      {config.label}
-                    </div>
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
         </div>
       </CardContent>
     </Card>
@@ -136,22 +167,30 @@ export default function TasksPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
 
   const { data: tasks = [], isLoading } = useQuery<Task[]>({
     queryKey: ["/api/tasks"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tasks");
+      return res.json();
+    },
   });
 
   const updateTaskMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      setUpdatingTaskId(id);
       const res = await apiRequest("PATCH", `/api/tasks/${id}`, { status });
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       toast({ title: "Taakstatus bijgewerkt" });
+      setUpdatingTaskId(null);
     },
     onError: (error: any) => {
       toast({ title: "Fout", description: error.message, variant: "destructive" });
+      setUpdatingTaskId(null);
     },
   });
 
@@ -275,6 +314,7 @@ export default function TasksPage() {
                   key={task.id} 
                   task={task} 
                   onStatusChange={handleStatusChange}
+                  isUpdating={updatingTaskId === task.id}
                 />
               ))}
             </div>
@@ -297,6 +337,7 @@ export default function TasksPage() {
                   key={task.id} 
                   task={task} 
                   onStatusChange={handleStatusChange}
+                  isUpdating={updatingTaskId === task.id}
                 />
               ))}
             </div>

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, Phone, Mail, MapPin, Calendar, ArrowRight, Building2, Store, Check, X, Edit, Trash2, ClipboardList } from "lucide-react";
+import { Plus, Phone, Mail, MapPin, Calendar, ArrowRight, Building2, Store, Check, X, Edit, Trash2, ClipboardList, Camera, Wrench, ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -95,7 +95,18 @@ function LeadCard({ lead, onEdit, onDelete, onConvert }: {
           </p>
         )}
         
-        <div className="flex gap-1 mt-3 pt-2 border-t">
+        {lead.type === "location" && lead.status !== "gewonnen" && lead.status !== "verloren" && (
+          <Button 
+            className="w-full mt-3 bg-purple-600 hover:bg-purple-700"
+            size="sm"
+            onClick={() => navigate(`/sales/survey/${lead.id}`)}
+            data-testid={`button-survey-lead-${lead.id}`}
+          >
+            <Camera className="h-4 w-4 mr-2" /> Start Schouw
+          </Button>
+        )}
+
+        <div className="flex gap-1 mt-2 pt-2 border-t">
           <Button 
             variant="ghost" 
             size="sm" 
@@ -105,17 +116,6 @@ function LeadCard({ lead, onEdit, onDelete, onConvert }: {
           >
             <Edit className="h-3 w-3 mr-1" /> Bewerk
           </Button>
-          
-          {lead.type === "location" && lead.status !== "gewonnen" && lead.status !== "verloren" && (
-            <Button 
-              variant="ghost" 
-              size="sm"
-              onClick={() => navigate(`/sales/survey/${lead.id}`)}
-              data-testid={`button-survey-lead-${lead.id}`}
-            >
-              <ClipboardList className="h-3 w-3 mr-1" /> Schouw
-            </Button>
-          )}
           
           {lead.status !== "gewonnen" && lead.status !== "verloren" && (
             <Button 
@@ -321,12 +321,50 @@ function LeadForm({
 export default function Sales() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, navigate] = useLocation();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<Lead | null>(null);
   const [filterType, setFilterType] = useState<string>("all");
+  const [quickSchouwOpen, setQuickSchouwOpen] = useState(false);
+  const [quickSchouwData, setQuickSchouwData] = useState({ companyName: "", contactName: "", address: "", phone: "" });
 
   const { data: leads = [], isLoading } = useQuery<Lead[]>({
     queryKey: ["/api/leads"],
+  });
+
+  const { data: tasks = [] } = useQuery<any[]>({
+    queryKey: ["/api/tasks"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/tasks");
+      return res.json();
+    },
+  });
+
+  const openTasks = tasks.filter((t: any) => t.status === "open" || t.status === "in_progress");
+  const installatieTasks = openTasks.filter((t: any) => t.taskType === "installatie");
+  const inkoopTasks = openTasks.filter((t: any) => t.taskType === "inkoop");
+
+  const quickSchouwMutation = useMutation({
+    mutationFn: async (data: any) => {
+      const res = await apiRequest("POST", "/api/leads", {
+        type: "location",
+        status: "schouw_gepland",
+        companyName: data.companyName,
+        contactName: data.contactName?.trim() || "Onbekend",
+        address: data.address?.trim() || null,
+        phone: data.phone?.trim() || null,
+      });
+      return res.json();
+    },
+    onSuccess: (newLead: Lead) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
+      setQuickSchouwOpen(false);
+      setQuickSchouwData({ companyName: "", contactName: "", address: "", phone: "" });
+      navigate(`/sales/survey/${newLead.id}`);
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
   });
 
   const createMutation = useMutation({
@@ -429,10 +467,148 @@ export default function Sales() {
           <h1 className="text-2xl font-bold" data-testid="text-page-title">Acquisitie</h1>
           <p className="text-muted-foreground">Beheer leads en prospects voor adverteerders en locaties</p>
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="border-purple-200 bg-purple-50 cursor-pointer hover:shadow-md transition-shadow" onClick={() => setQuickSchouwOpen(true)}>
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-purple-600 rounded-lg">
+                <Camera className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <p className="font-semibold text-lg">Nieuwe Schouw</p>
+                <p className="text-sm text-muted-foreground">Start direct een locatie-inspectie</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card 
+          className="border-blue-200 bg-blue-50 cursor-pointer hover:shadow-md transition-shadow" 
+          onClick={() => navigate("/tasks")}
+        >
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-blue-600 rounded-lg">
+                <Wrench className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <p className="font-semibold text-lg">Installaties</p>
+                <p className="text-sm text-muted-foreground">
+                  {installatieTasks.length > 0 ? `${installatieTasks.length} openstaand` : "Geen taken"}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card 
+          className="border-amber-200 bg-amber-50 cursor-pointer hover:shadow-md transition-shadow"
+          onClick={() => navigate("/tasks")}
+        >
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-amber-600 rounded-lg">
+                <ShoppingCart className="h-6 w-6 text-white" />
+              </div>
+              <div>
+                <p className="font-semibold text-lg">Inkoop</p>
+                <p className="text-sm text-muted-foreground">
+                  {inkoopTasks.length > 0 ? `${inkoopTasks.length} te bestellen` : "Geen taken"}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Dialog open={quickSchouwOpen} onOpenChange={setQuickSchouwOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Snelle Schouw Starten</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={(e) => { e.preventDefault(); quickSchouwMutation.mutate(quickSchouwData); }} className="space-y-4">
+            <div className="space-y-2">
+              <Label>Locatienaam / Bedrijfsnaam *</Label>
+              <Input 
+                value={quickSchouwData.companyName}
+                onChange={(e) => setQuickSchouwData({ ...quickSchouwData, companyName: e.target.value })}
+                placeholder="Bijv. Bakkerij De Hoek"
+                required
+                data-testid="input-quick-schouw-name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Contactpersoon</Label>
+              <Input 
+                value={quickSchouwData.contactName}
+                onChange={(e) => setQuickSchouwData({ ...quickSchouwData, contactName: e.target.value })}
+                placeholder="Naam eigenaar/beheerder"
+                data-testid="input-quick-schouw-contact"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Adres</Label>
+              <Input 
+                value={quickSchouwData.address}
+                onChange={(e) => setQuickSchouwData({ ...quickSchouwData, address: e.target.value })}
+                placeholder="Straat, huisnummer, plaats"
+                data-testid="input-quick-schouw-address"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Telefoonnummer</Label>
+              <Input 
+                value={quickSchouwData.phone}
+                onChange={(e) => setQuickSchouwData({ ...quickSchouwData, phone: e.target.value })}
+                placeholder="06-12345678"
+                data-testid="input-quick-schouw-phone"
+              />
+            </div>
+            <Button 
+              type="submit" 
+              className="w-full bg-purple-600 hover:bg-purple-700"
+              disabled={quickSchouwMutation.isPending}
+              data-testid="button-start-quick-schouw"
+            >
+              <Camera className="h-4 w-4 mr-2" />
+              {quickSchouwMutation.isPending ? "Bezig..." : "Start Schouw"}
+            </Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <div className="flex flex-wrap gap-4 items-center">
+        <div className="flex gap-2">
+          <Button 
+            variant={filterType === "all" ? "default" : "outline"} 
+            size="sm"
+            onClick={() => setFilterType("all")}
+          >
+            Alles ({leads.length})
+          </Button>
+          <Button 
+            variant={filterType === "advertiser" ? "default" : "outline"} 
+            size="sm"
+            onClick={() => setFilterType("advertiser")}
+          >
+            <Building2 className="h-4 w-4 mr-1" />
+            Adverteerders ({leads.filter(l => l.type === "advertiser").length})
+          </Button>
+          <Button 
+            variant={filterType === "location" ? "default" : "outline"} 
+            size="sm"
+            onClick={() => setFilterType("location")}
+          >
+            <Store className="h-4 w-4 mr-1" />
+            Locaties ({leads.filter(l => l.type === "location").length})
+          </Button>
+        </div>
         
         <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) setEditingLead(null); }}>
           <DialogTrigger asChild>
-            <Button data-testid="button-add-lead">
+            <Button variant="outline" data-testid="button-add-lead">
               <Plus className="h-4 w-4 mr-2" /> Nieuwe Lead
             </Button>
           </DialogTrigger>
@@ -475,13 +651,6 @@ export default function Sales() {
             <Store className="h-4 w-4 mr-1" />
             Locaties ({leads.filter(l => l.type === "location").length})
           </Button>
-        </div>
-        
-        <div className="ml-auto text-right">
-          <p className="text-sm text-muted-foreground">Verwachte waarde pipeline</p>
-          <p className="text-xl font-bold text-green-600">
-            €{totalExpectedValue.toLocaleString("nl-NL")}
-          </p>
         </div>
       </div>
 
