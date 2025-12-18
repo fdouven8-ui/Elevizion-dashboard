@@ -23,6 +23,8 @@ import Backup from "@/pages/Backup";
 import Handleiding from "@/pages/Handleiding";
 import Advertenties from "@/pages/Advertenties";
 import SignContract from "@/pages/SignContract";
+import Sales from "@/pages/Sales";
+import LocationSurvey from "@/pages/LocationSurvey";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -45,6 +47,8 @@ function DashboardRouter() {
         <Route path="/integrations" component={Integrations} />
         <Route path="/backup" component={Backup} />
         <Route path="/handleiding" component={Handleiding} />
+        <Route path="/sales" component={Sales} />
+        <Route path="/sales/survey/:leadId" component={LocationSurvey} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>
