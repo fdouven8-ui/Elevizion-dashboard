@@ -10,8 +10,8 @@ import { Link } from "wouter";
 
 export default function Landing() {
   return (
-    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
-      <header className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-50">
+    <div className="min-h-screen">
+      <header className="border-b bg-white/90 backdrop-blur-md sticky top-0 z-50 shadow-sm">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img 
@@ -22,42 +22,46 @@ export default function Landing() {
             />
           </div>
           <nav className="hidden md:flex items-center gap-8">
-            <a href="#diensten" className="text-sm font-medium text-slate-600 hover:text-slate-900">Diensten</a>
-            <a href="#voordelen" className="text-sm font-medium text-slate-600 hover:text-slate-900">Voordelen</a>
-            <a href="#locaties" className="text-sm font-medium text-slate-600 hover:text-slate-900">Voor Locaties</a>
-            <a href="#contact" className="text-sm font-medium text-slate-600 hover:text-slate-900">Contact</a>
+            <a href="#diensten" className="text-sm font-medium text-slate-600 hover:text-emerald-600 transition-colors">Diensten</a>
+            <a href="#voordelen" className="text-sm font-medium text-slate-600 hover:text-emerald-600 transition-colors">Voordelen</a>
+            <a href="#locaties" className="text-sm font-medium text-slate-600 hover:text-emerald-600 transition-colors">Voor Locaties</a>
+            <a href="#contact" className="text-sm font-medium text-slate-600 hover:text-emerald-600 transition-colors">Contact</a>
           </nav>
           <div className="flex items-center gap-3">
             <Link href="/dashboard">
-              <Button variant="outline" data-testid="button-login">Inloggen</Button>
+              <Button variant="outline" className="border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300" data-testid="button-login">Inloggen</Button>
             </Link>
             <a href="#contact">
-              <Button data-testid="button-contact">Contact opnemen</Button>
+              <Button className="bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-200" data-testid="button-contact">Contact opnemen</Button>
             </a>
           </div>
         </div>
       </header>
 
-      <section className="py-20 md:py-32">
-        <div className="container mx-auto px-4">
+      <section className="py-20 md:py-32 bg-gradient-to-br from-slate-50 via-white to-emerald-50 relative overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-emerald-100/40 via-transparent to-transparent" />
+        <div className="absolute top-20 right-10 w-72 h-72 bg-gradient-to-br from-purple-200/30 to-pink-200/30 rounded-full blur-3xl" />
+        <div className="absolute bottom-20 left-10 w-96 h-96 bg-gradient-to-br from-emerald-200/30 to-teal-200/30 rounded-full blur-3xl" />
+        <div className="container mx-auto px-4 relative">
           <div className="max-w-4xl mx-auto text-center">
-            <Badge className="mb-6" variant="secondary">Digital Signage Reclame</Badge>
-            <h1 className="text-4xl md:text-6xl font-bold text-slate-900 mb-6" data-testid="hero-title">
-              Bereik jouw doelgroep op de beste locaties
+            <Badge className="mb-6 bg-gradient-to-r from-emerald-500 to-teal-500 text-white border-0 px-4 py-1.5 text-sm shadow-lg">Digital Signage Reclame</Badge>
+            <h1 className="text-4xl md:text-6xl font-bold mb-6" data-testid="hero-title">
+              <span className="bg-clip-text text-transparent bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900">Bereik jouw doelgroep op </span>
+              <span className="bg-clip-text text-transparent bg-gradient-to-r from-emerald-600 to-teal-600">de beste locaties</span>
             </h1>
-            <p className="text-xl text-slate-600 mb-8 max-w-2xl mx-auto">
+            <p className="text-xl text-slate-600 mb-10 max-w-2xl mx-auto leading-relaxed">
               Elevizion beheert een netwerk van digitale reclameschermen op strategische locaties. 
               Maximale zichtbaarheid voor adverteerders, extra inkomsten voor locatiepartners.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <a href="#contact">
-                <Button size="lg" className="gap-2" data-testid="button-cta-adverteren">
+                <Button size="lg" className="gap-2 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-xl shadow-emerald-200 px-8" data-testid="button-cta-adverteren">
                   Start met adverteren
                   <ArrowRight className="h-4 w-4" />
                 </Button>
               </a>
               <a href="#locaties">
-                <Button size="lg" variant="outline" className="gap-2" data-testid="button-cta-partner">
+                <Button size="lg" variant="outline" className="gap-2 border-2 border-emerald-200 hover:bg-emerald-50 hover:border-emerald-300 px-8" data-testid="button-cta-partner">
                   Word locatiepartner
                   <MapPin className="h-4 w-4" />
                 </Button>
@@ -67,24 +71,25 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="py-16 bg-slate-900 text-white">
-        <div className="container mx-auto px-4">
+      <section className="py-16 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white relative overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-emerald-900/20 via-transparent to-transparent" />
+        <div className="container mx-auto px-4 relative">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
-            <div>
-              <p className="text-4xl font-bold text-emerald-400" data-testid="stat-screens">50+</p>
-              <p className="text-slate-300 mt-1">Actieve schermen</p>
+            <div className="group">
+              <p className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-emerald-400 to-teal-300" data-testid="stat-screens">50+</p>
+              <p className="text-slate-400 mt-2 group-hover:text-slate-300 transition-colors">Actieve schermen</p>
             </div>
-            <div>
-              <p className="text-4xl font-bold text-emerald-400" data-testid="stat-locations">25+</p>
-              <p className="text-slate-300 mt-1">Locaties</p>
+            <div className="group">
+              <p className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-purple-400 to-pink-400" data-testid="stat-locations">25+</p>
+              <p className="text-slate-400 mt-2 group-hover:text-slate-300 transition-colors">Locaties</p>
             </div>
-            <div>
-              <p className="text-4xl font-bold text-emerald-400" data-testid="stat-views">500K+</p>
-              <p className="text-slate-300 mt-1">Views per maand</p>
+            <div className="group">
+              <p className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-amber-400 to-orange-400" data-testid="stat-views">500K+</p>
+              <p className="text-slate-400 mt-2 group-hover:text-slate-300 transition-colors">Views per maand</p>
             </div>
-            <div>
-              <p className="text-4xl font-bold text-emerald-400" data-testid="stat-advertisers">30+</p>
-              <p className="text-slate-300 mt-1">Adverteerders</p>
+            <div className="group">
+              <p className="text-4xl md:text-5xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-blue-400" data-testid="stat-advertisers">30+</p>
+              <p className="text-slate-400 mt-2 group-hover:text-slate-300 transition-colors">Adverteerders</p>
             </div>
           </div>
         </div>

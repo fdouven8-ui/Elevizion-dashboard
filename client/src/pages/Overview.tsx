@@ -5,12 +5,12 @@ import { Button } from "@/components/ui/button";
 import { 
   Monitor, MapPin, Play, AlertCircle, CheckCircle2, 
   Wifi, WifiOff, Building2, Clock, Receipt, ArrowRight,
-  Eye, Zap
+  Eye, Zap, Megaphone, Tv2
 } from "lucide-react";
 import { Link } from "wouter";
 
 export default function Overview() {
-  const { kpis, screens, locations, placements, contracts, advertisers, invoices } = useAppData();
+  const { kpis, screens, locations, placements, contracts, advertisers, invoices, advertisements } = useAppData();
 
   const onlineScreens = screens.filter(s => s.status === 'online').length;
   const offlineScreens = screens.filter(s => s.status === 'offline').length;
@@ -67,14 +67,17 @@ export default function Overview() {
       </div>
 
       <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
-        <Card className={`${offlineScreens > 0 ? 'border-red-200 bg-red-50' : 'border-green-200 bg-green-50'}`} data-testid="card-screen-status">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              {offlineScreens > 0 ? (
-                <WifiOff className="h-8 w-8 text-red-600" />
-              ) : (
-                <Wifi className="h-8 w-8 text-green-600" />
-              )}
+        <Card className={`overflow-hidden ${offlineScreens > 0 ? 'shadow-lg' : 'shadow-glow'}`} data-testid="card-screen-status">
+          <div className={`h-1.5 ${offlineScreens > 0 ? 'bg-gradient-to-r from-red-500 to-rose-500' : 'bg-gradient-to-r from-emerald-500 to-teal-500'}`} />
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-4">
+              <div className={`p-3 rounded-xl ${offlineScreens > 0 ? 'bg-red-100' : 'bg-emerald-100'}`}>
+                {offlineScreens > 0 ? (
+                  <WifiOff className="h-6 w-6 text-red-600" />
+                ) : (
+                  <Wifi className="h-6 w-6 text-emerald-600" />
+                )}
+              </div>
               <div>
                 <p className="text-2xl font-bold" data-testid="text-online-count">
                   {onlineScreens}/{totalScreens}
@@ -85,10 +88,13 @@ export default function Overview() {
           </CardContent>
         </Card>
 
-        <Card data-testid="card-active-ads">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <Play className="h-8 w-8 text-blue-600" />
+        <Card className="overflow-hidden shadow-md hover:shadow-lg transition-shadow" data-testid="card-active-ads">
+          <div className="h-1.5 bg-gradient-to-r from-blue-500 to-indigo-500" />
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-xl bg-blue-100">
+                <Play className="h-6 w-6 text-blue-600" />
+              </div>
               <div>
                 <p className="text-2xl font-bold" data-testid="text-ads-count">{activeAdsCount}</p>
                 <p className="text-sm text-muted-foreground">Actieve campagnes</p>
@@ -97,10 +103,13 @@ export default function Overview() {
           </CardContent>
         </Card>
 
-        <Card data-testid="card-placements">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <Zap className="h-8 w-8 text-amber-600" />
+        <Card className="overflow-hidden shadow-md hover:shadow-lg transition-shadow" data-testid="card-placements">
+          <div className="h-1.5 bg-gradient-to-r from-purple-500 to-pink-500" />
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-4">
+              <div className="p-3 rounded-xl bg-purple-100">
+                <Zap className="h-6 w-6 text-purple-600" />
+              </div>
               <div>
                 <p className="text-2xl font-bold" data-testid="text-placements-count">{activePlacements.length}</p>
                 <p className="text-sm text-muted-foreground">Plaatsingen actief</p>
@@ -109,10 +118,13 @@ export default function Overview() {
           </CardContent>
         </Card>
 
-        <Card className={unpaidAmount > 0 ? 'border-amber-200 bg-amber-50' : ''} data-testid="card-invoices">
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-3">
-              <Receipt className="h-8 w-8 text-amber-600" />
+        <Card className={`overflow-hidden ${unpaidAmount > 0 ? 'shadow-lg' : 'shadow-md hover:shadow-lg transition-shadow'}`} data-testid="card-invoices">
+          <div className={`h-1.5 ${unpaidAmount > 0 ? 'bg-gradient-to-r from-amber-500 to-orange-500' : 'bg-gradient-to-r from-slate-300 to-slate-400'}`} />
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-4">
+              <div className={`p-3 rounded-xl ${unpaidAmount > 0 ? 'bg-amber-100' : 'bg-slate-100'}`}>
+                <Receipt className={`h-6 w-6 ${unpaidAmount > 0 ? 'text-amber-600' : 'text-slate-500'}`} />
+              </div>
               <div>
                 <p className="text-2xl font-bold" data-testid="text-unpaid">€{unpaidAmount.toLocaleString()}</p>
                 <p className="text-sm text-muted-foreground">{unpaidInvoices.length} openstaand</p>
@@ -145,6 +157,101 @@ export default function Overview() {
         </Card>
       )}
 
+      <Card className="overflow-hidden shadow-lg" data-testid="section-active-campaigns">
+        <div className="h-2 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500" />
+        <CardHeader className="pb-2">
+          <CardTitle className="text-xl flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-gradient-to-br from-emerald-100 to-teal-100">
+              <Megaphone className="h-5 w-5 text-emerald-600" />
+            </div>
+            Actieve Advertenties per Scherm
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">Overzicht van alle lopende campagnes en waar ze draaien</p>
+        </CardHeader>
+        <CardContent>
+          {(() => {
+            const activeContracts = contracts.filter(c => c.status === 'active');
+            
+            if (activeContracts.length === 0) {
+              return (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Tv2 className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                  <p>Nog geen actieve campagnes</p>
+                  <Link href="/contracts">
+                    <Button variant="outline" className="mt-4">Nieuw Contract Aanmaken</Button>
+                  </Link>
+                </div>
+              );
+            }
+
+            return (
+              <div className="space-y-4">
+                {activeContracts.map(contract => {
+                  const advertiser = advertisers.find(a => a.id === contract.advertiserId);
+                  const contractPlacements = placements.filter(p => p.contractId === contract.id && p.isActive);
+                  
+                  if (contractPlacements.length === 0) return null;
+                  
+                  return (
+                    <div 
+                      key={contract.id} 
+                      className="p-4 rounded-xl border-2 border-emerald-100 bg-gradient-to-r from-emerald-50/50 to-teal-50/50 hover:border-emerald-200 transition-colors"
+                      data-testid={`campaign-row-${contract.id}`}
+                    >
+                      <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                        <div className="flex items-center gap-3 min-w-[200px]">
+                          <div className="p-2.5 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 shadow-lg shadow-blue-200">
+                            <Building2 className="h-5 w-5 text-white" />
+                          </div>
+                          <div>
+                            <p className="font-semibold text-lg">{advertiser?.companyName || 'Onbekend'}</p>
+                            <p className="text-xs text-muted-foreground">Contract #{contract.id.slice(0, 8)}</p>
+                          </div>
+                        </div>
+                        
+                        <div className="flex-1">
+                          <p className="text-xs font-medium text-muted-foreground mb-2 uppercase tracking-wide">
+                            Draait op {contractPlacements.length} scherm{contractPlacements.length !== 1 ? 'en' : ''}:
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            {contractPlacements.map(placement => {
+                              const screen = screens.find(s => s.id === placement.screenId);
+                              const location = screen ? locations.find(l => l.id === screen.locationId) : null;
+                              const isOnline = screen?.status === 'online';
+                              
+                              return (
+                                <div 
+                                  key={placement.id}
+                                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                                    isOnline 
+                                      ? 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-800 border border-green-200' 
+                                      : 'bg-gradient-to-r from-red-100 to-rose-100 text-red-800 border border-red-200'
+                                  }`}
+                                  data-testid={`placement-badge-${placement.id}`}
+                                >
+                                  <Monitor className={`h-3.5 w-3.5 ${isOnline ? 'text-green-600' : 'text-red-600'}`} />
+                                  <span>{screen?.name || 'Onbekend'}</span>
+                                  {location && (
+                                    <span className="text-xs opacity-75">({location.name})</span>
+                                  )}
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${isOnline ? 'bg-green-200 text-green-700' : 'bg-red-200 text-red-700'}`}>
+                                    {placement.secondsPerLoop}s
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                }).filter(Boolean)}
+              </div>
+            );
+          })()}
+        </CardContent>
+      </Card>
+
       <div>
         <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
           <Monitor className="h-5 w-5" />
@@ -173,35 +280,40 @@ export default function Overview() {
               return (
                 <Card 
                   key={screen.id} 
-                  className={`relative overflow-hidden ${!isOnline ? 'border-red-200 bg-red-50/50' : ''}`}
+                  className={`relative overflow-hidden transition-all hover:shadow-lg ${!isOnline ? 'border-red-200 bg-gradient-to-br from-red-50 to-rose-50' : 'bg-gradient-to-br from-white to-slate-50 hover:shadow-emerald-100'}`}
                   data-testid={`screen-card-${screen.id}`}
                 >
-                  <div className={`absolute top-0 left-0 right-0 h-1 ${isOnline ? 'bg-green-500' : 'bg-red-500'}`} />
+                  <div className={`absolute top-0 left-0 right-0 h-1.5 ${isOnline ? 'bg-gradient-to-r from-emerald-400 to-teal-500' : 'bg-gradient-to-r from-red-400 to-rose-500'}`} />
                   <CardHeader className="pb-2">
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-2">
-                        <Monitor className={`h-5 w-5 ${isOnline ? 'text-green-600' : 'text-red-600'}`} />
+                        <div className={`p-1.5 rounded-lg ${isOnline ? 'bg-emerald-100' : 'bg-red-100'}`}>
+                          <Monitor className={`h-4 w-4 ${isOnline ? 'text-emerald-600' : 'text-red-600'}`} />
+                        </div>
                         <CardTitle className="text-base">{screen.name}</CardTitle>
                       </div>
                       <Badge 
-                        variant={isOnline ? 'default' : 'destructive'} 
-                        className="text-xs"
+                        className={`text-xs ${isOnline ? 'bg-emerald-500 hover:bg-emerald-600' : 'bg-red-500 hover:bg-red-600'}`}
                       >
                         {isOnline ? 'Online' : 'Offline'}
                       </Badge>
                     </div>
-                    <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                    <div className="flex items-center gap-1 text-sm text-muted-foreground ml-8">
                       <MapPin className="h-3 w-3" />
                       {getLocationName(screen.locationId)}
                     </div>
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-2">
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                        Actieve Advertenties ({ads.length})
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <div className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent" />
+                        <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                          {ads.length} Ad{ads.length !== 1 ? 's' : ''}
+                        </p>
+                        <div className="h-px flex-1 bg-gradient-to-r from-transparent via-border to-transparent" />
+                      </div>
                       {ads.length === 0 ? (
-                        <p className="text-sm text-muted-foreground italic">
+                        <p className="text-sm text-muted-foreground italic text-center py-2">
                           Geen actieve ads
                         </p>
                       ) : (
@@ -209,15 +321,15 @@ export default function Overview() {
                           {ads.map((ad, idx) => (
                             <div 
                               key={idx} 
-                              className="flex items-center justify-between p-2 bg-muted/50 rounded text-sm"
+                              className="flex items-center justify-between p-2 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg text-sm border border-blue-100"
                             >
                               <div className="flex items-center gap-2">
-                                <Building2 className="h-3 w-3 text-muted-foreground" />
+                                <Building2 className="h-3 w-3 text-blue-500" />
                                 <span className="font-medium truncate max-w-[120px]">{ad.advertiserName}</span>
                               </div>
-                              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <div className="flex items-center gap-1 text-xs text-blue-600 bg-blue-100 px-2 py-0.5 rounded-full">
                                 <Clock className="h-3 w-3" />
-                                {ad.secondsPerLoop}s × {ad.playsPerHour}/u
+                                {ad.secondsPerLoop}s
                               </div>
                             </div>
                           ))}
