@@ -121,6 +121,24 @@ All permission changes are logged to `audit_logs` table:
 
 ## Recent Changes
 
+### December 2025 - Sales & Acquisitie Module
+- Added complete sales pipeline for lead management
+  - Kanban-style board with pipeline stages: nieuw → contact → schouw_gepland → voorstel → onderhandeling → gewonnen/verloren
+  - Lead types: "adverteerder" (potential advertiser) and "locatie" (potential location partner)
+  - Filter leads by type, track expected deal value
+  - Convert won leads to actual advertisers or location partners
+- Location Survey (Schouw) form for on-site inspections
+  - Mobile-optimized form with technical checklist (WiFi, power, mounting options)
+  - Foot traffic estimates and target audience analysis
+  - Proposed screen count and locations
+  - Estimated installation costs
+- Digital signature component (canvas-based)
+  - Touch-friendly signature pad for tablets/phones
+  - Stores signature as base64 PNG with signer name
+  - Used for location owner agreement during schouw
+- New tables: leads, locationSurveys, digitalSignatures, salesActivities
+- API endpoints: /api/leads, /api/surveys, /api/signatures
+
 ### December 2025 - Dashboard Redesign (Screen-First)
 - Redesigned dashboard to focus on screens as primary element
   - Visual card grid showing all screens with status indicators
