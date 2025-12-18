@@ -15,6 +15,10 @@ import {
   insertPlacementSchema,
   insertInvoiceSchema,
   insertPayoutSchema,
+  insertLeadSchema,
+  insertLocationSurveySchema,
+  insertDigitalSignatureSchema,
+  insertSalesActivitySchema,
 } from "@shared/schema";
 import {
   getIntegrationStatus,
@@ -2103,6 +2107,157 @@ export async function registerRoutes(
       res.send("\uFEFF" + csvRows.join("\n"));
     } catch (error: any) {
       res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // SALES & ACQUISITIE (Leads, Surveys, Signatures)
+  // ============================================================================
+
+  app.get("/api/leads", async (_req, res) => {
+    const leads = await storage.getLeads();
+    res.json(leads);
+  });
+
+  app.get("/api/leads/:id", async (req, res) => {
+    const lead = await storage.getLead(req.params.id);
+    if (!lead) return res.status(404).json({ message: "Lead niet gevonden" });
+    res.json(lead);
+  });
+
+  app.post("/api/leads", async (req, res) => {
+    try {
+      const data = insertLeadSchema.parse(req.body);
+      const lead = await storage.createLead(data);
+      res.status(201).json(lead);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/leads/:id", async (req, res) => {
+    try {
+      const lead = await storage.updateLead(req.params.id, req.body);
+      if (!lead) return res.status(404).json({ message: "Lead niet gevonden" });
+      res.json(lead);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/leads/:id", async (req, res) => {
+    await storage.deleteLead(req.params.id);
+    res.status(204).send();
+  });
+
+  // Lead activities
+  app.get("/api/leads/:id/activities", async (req, res) => {
+    const activities = await storage.getSalesActivities(req.params.id);
+    res.json(activities);
+  });
+
+  app.post("/api/leads/:id/activities", async (req, res) => {
+    try {
+      const data = insertSalesActivitySchema.parse({ ...req.body, leadId: req.params.id });
+      const activity = await storage.createSalesActivity(data);
+      res.status(201).json(activity);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Location Surveys (Schouwdocumenten)
+  app.get("/api/surveys", async (_req, res) => {
+    const surveys = await storage.getLocationSurveys();
+    res.json(surveys);
+  });
+
+  app.get("/api/surveys/:id", async (req, res) => {
+    const survey = await storage.getLocationSurvey(req.params.id);
+    if (!survey) return res.status(404).json({ message: "Schouw niet gevonden" });
+    res.json(survey);
+  });
+
+  app.get("/api/leads/:id/surveys", async (req, res) => {
+    const surveys = await storage.getLocationSurveysByLead(req.params.id);
+    res.json(surveys);
+  });
+
+  app.post("/api/surveys", async (req, res) => {
+    try {
+      const data = insertLocationSurveySchema.parse(req.body);
+      const survey = await storage.createLocationSurvey(data);
+      res.status(201).json(survey);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/surveys/:id", async (req, res) => {
+    try {
+      const survey = await storage.updateLocationSurvey(req.params.id, req.body);
+      if (!survey) return res.status(404).json({ message: "Schouw niet gevonden" });
+      res.json(survey);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Digital Signatures
+  app.get("/api/signatures/:documentType/:documentId", async (req, res) => {
+    const signatures = await storage.getDigitalSignatures(req.params.documentType, req.params.documentId);
+    res.json(signatures);
+  });
+
+  app.post("/api/signatures", async (req, res) => {
+    try {
+      const data = insertDigitalSignatureSchema.parse(req.body);
+      const signature = await storage.createDigitalSignature(data);
+      res.status(201).json(signature);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Convert lead to advertiser or location
+  app.post("/api/leads/:id/convert", async (req, res) => {
+    try {
+      const lead = await storage.getLead(req.params.id);
+      if (!lead) return res.status(404).json({ message: "Lead niet gevonden" });
+      
+      if (lead.type === "advertiser") {
+        const advertiser = await storage.createAdvertiser({
+          name: lead.companyName,
+          contactPerson: lead.contactName,
+          email: lead.email || "",
+          phone: lead.phone || "",
+          address: lead.address || "",
+          status: "active",
+        });
+        await storage.updateLead(req.params.id, {
+          status: "gewonnen",
+          convertedAt: new Date(),
+          convertedToId: advertiser.id,
+        });
+        res.json({ type: "advertiser", entity: advertiser });
+      } else {
+        const location = await storage.createLocation({
+          name: lead.companyName,
+          ownerName: lead.contactName,
+          ownerEmail: lead.email || "",
+          ownerPhone: lead.phone || "",
+          address: lead.address || "",
+          status: "active",
+        });
+        await storage.updateLead(req.params.id, {
+          status: "gewonnen",
+          convertedAt: new Date(),
+          convertedToId: location.id,
+        });
+        res.json({ type: "location", entity: location });
+      }
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
     }
   });
 

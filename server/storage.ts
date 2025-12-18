@@ -37,6 +37,10 @@ import type {
   Creative, InsertCreative,
   CreativeVersion, InsertCreativeVersion,
   CreativeApproval, InsertCreativeApproval,
+  Lead, InsertLead,
+  LocationSurvey, InsertLocationSurvey,
+  DigitalSignature, InsertDigitalSignature,
+  SalesActivity, InsertSalesActivity,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -198,6 +202,27 @@ export interface IStorage {
   createCreativeVersion(data: InsertCreativeVersion): Promise<CreativeVersion>;
   getCreativeApprovals(creativeId: string): Promise<CreativeApproval[]>;
   createCreativeApproval(data: InsertCreativeApproval): Promise<CreativeApproval>;
+
+  // Sales & Acquisitie (Leads, Surveys, Signatures)
+  getLeads(): Promise<Lead[]>;
+  getLead(id: string): Promise<Lead | undefined>;
+  getLeadsByStatus(status: string): Promise<Lead[]>;
+  getLeadsByType(type: string): Promise<Lead[]>;
+  createLead(data: InsertLead): Promise<Lead>;
+  updateLead(id: string, data: Partial<InsertLead>): Promise<Lead | undefined>;
+  deleteLead(id: string): Promise<boolean>;
+
+  getLocationSurveys(): Promise<LocationSurvey[]>;
+  getLocationSurvey(id: string): Promise<LocationSurvey | undefined>;
+  getLocationSurveysByLead(leadId: string): Promise<LocationSurvey[]>;
+  createLocationSurvey(data: InsertLocationSurvey): Promise<LocationSurvey>;
+  updateLocationSurvey(id: string, data: Partial<InsertLocationSurvey>): Promise<LocationSurvey | undefined>;
+
+  getDigitalSignatures(documentType: string, documentId: string): Promise<DigitalSignature[]>;
+  createDigitalSignature(data: InsertDigitalSignature): Promise<DigitalSignature>;
+
+  getSalesActivities(leadId: string): Promise<SalesActivity[]>;
+  createSalesActivity(data: InsertSalesActivity): Promise<SalesActivity>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -922,6 +947,102 @@ export class DatabaseStorage implements IStorage {
   async createCreativeApproval(data: InsertCreativeApproval): Promise<CreativeApproval> {
     const [approval] = await db.insert(schema.creativeApprovals).values(data).returning();
     return approval;
+  }
+
+  // ============================================================================
+  // SALES & ACQUISITIE
+  // ============================================================================
+
+  async getLeads(): Promise<Lead[]> {
+    return await db.select().from(schema.leads).orderBy(desc(schema.leads.createdAt));
+  }
+
+  async getLead(id: string): Promise<Lead | undefined> {
+    const [lead] = await db.select().from(schema.leads).where(eq(schema.leads.id, id));
+    return lead;
+  }
+
+  async getLeadsByStatus(status: string): Promise<Lead[]> {
+    return await db.select().from(schema.leads)
+      .where(eq(schema.leads.status, status))
+      .orderBy(desc(schema.leads.createdAt));
+  }
+
+  async getLeadsByType(type: string): Promise<Lead[]> {
+    return await db.select().from(schema.leads)
+      .where(eq(schema.leads.type, type))
+      .orderBy(desc(schema.leads.createdAt));
+  }
+
+  async createLead(data: InsertLead): Promise<Lead> {
+    const [lead] = await db.insert(schema.leads).values(data).returning();
+    return lead;
+  }
+
+  async updateLead(id: string, data: Partial<InsertLead>): Promise<Lead | undefined> {
+    const [lead] = await db.update(schema.leads)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.leads.id, id))
+      .returning();
+    return lead;
+  }
+
+  async deleteLead(id: string): Promise<boolean> {
+    await db.delete(schema.leads).where(eq(schema.leads.id, id));
+    return true;
+  }
+
+  async getLocationSurveys(): Promise<LocationSurvey[]> {
+    return await db.select().from(schema.locationSurveys).orderBy(desc(schema.locationSurveys.createdAt));
+  }
+
+  async getLocationSurvey(id: string): Promise<LocationSurvey | undefined> {
+    const [survey] = await db.select().from(schema.locationSurveys).where(eq(schema.locationSurveys.id, id));
+    return survey;
+  }
+
+  async getLocationSurveysByLead(leadId: string): Promise<LocationSurvey[]> {
+    return await db.select().from(schema.locationSurveys)
+      .where(eq(schema.locationSurveys.leadId, leadId))
+      .orderBy(desc(schema.locationSurveys.createdAt));
+  }
+
+  async createLocationSurvey(data: InsertLocationSurvey): Promise<LocationSurvey> {
+    const [survey] = await db.insert(schema.locationSurveys).values(data).returning();
+    return survey;
+  }
+
+  async updateLocationSurvey(id: string, data: Partial<InsertLocationSurvey>): Promise<LocationSurvey | undefined> {
+    const [survey] = await db.update(schema.locationSurveys)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.locationSurveys.id, id))
+      .returning();
+    return survey;
+  }
+
+  async getDigitalSignatures(documentType: string, documentId: string): Promise<DigitalSignature[]> {
+    return await db.select().from(schema.digitalSignatures)
+      .where(and(
+        eq(schema.digitalSignatures.documentType, documentType),
+        eq(schema.digitalSignatures.documentId, documentId)
+      ))
+      .orderBy(desc(schema.digitalSignatures.signedAt));
+  }
+
+  async createDigitalSignature(data: InsertDigitalSignature): Promise<DigitalSignature> {
+    const [signature] = await db.insert(schema.digitalSignatures).values(data).returning();
+    return signature;
+  }
+
+  async getSalesActivities(leadId: string): Promise<SalesActivity[]> {
+    return await db.select().from(schema.salesActivities)
+      .where(eq(schema.salesActivities.leadId, leadId))
+      .orderBy(desc(schema.salesActivities.createdAt));
+  }
+
+  async createSalesActivity(data: InsertSalesActivity): Promise<SalesActivity> {
+    const [activity] = await db.insert(schema.salesActivities).values(data).returning();
+    return activity;
   }
 }
 

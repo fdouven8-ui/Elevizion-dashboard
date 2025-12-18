@@ -579,8 +579,112 @@ export const webhookDeliveries = pgTable("webhook_deliveries", {
 });
 
 // ============================================================================
+// SALES & ACQUISITIE (Leads, Schouwdocumenten, Handtekeningen)
+// ============================================================================
+
+/**
+ * Leads - Potentiële adverteerders of locaties
+ * Gebruikt tijdens acquisitie voordat ze klant worden
+ */
+export const leads = pgTable("leads", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  type: text("type").notNull(), // 'advertiser' of 'location'
+  companyName: text("company_name").notNull(),
+  contactName: text("contact_name").notNull(),
+  email: text("email"),
+  phone: text("phone"),
+  address: text("address"),
+  notes: text("notes"),
+  status: text("status").notNull().default("nieuw"), // nieuw, contact, schouw_gepland, voorstel, onderhandeling, gewonnen, verloren
+  source: text("source"), // website, beurs, cold_call, referral, etc.
+  assignedToUserId: varchar("assigned_to_user_id"),
+  expectedValue: decimal("expected_value", { precision: 10, scale: 2 }),
+  followUpDate: date("follow_up_date"),
+  convertedAt: timestamp("converted_at"), // Wanneer omgezet naar adverteerder/locatie
+  convertedToId: varchar("converted_to_id"), // ID van de aangemaakte adverteerder/locatie
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * LocationSurveys - Schouwdocumenten voor nieuwe schermlocaties
+ * Vastleggen wat er nodig is voor installatie
+ */
+export const locationSurveys = pgTable("location_surveys", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  leadId: varchar("lead_id").references(() => leads.id),
+  locationId: varchar("location_id").references(() => locations.id),
+  // Locatie details
+  surveyDate: date("survey_date").notNull(),
+  surveyByUserId: varchar("survey_by_user_id"),
+  // Schouw checklist
+  hasWifiAvailable: boolean("has_wifi_available"),
+  wifiNetworkName: text("wifi_network_name"),
+  hasPowerOutlet: boolean("has_power_outlet"),
+  powerOutletLocation: text("power_outlet_location"),
+  proposedScreenCount: integer("proposed_screen_count").default(1),
+  proposedScreenLocations: text("proposed_screen_locations"), // Beschrijving waar schermen komen
+  wallMountPossible: boolean("wall_mount_possible"),
+  ceilingMountPossible: boolean("ceiling_mount_possible"),
+  standMountPossible: boolean("stand_mount_possible"),
+  // Omgeving
+  footTrafficEstimate: text("foot_traffic_estimate"), // laag, gemiddeld, hoog
+  targetAudience: text("target_audience"),
+  competingScreens: boolean("competing_screens"),
+  competingScreensNotes: text("competing_screens_notes"),
+  // Voorwaarden
+  proposedRevenueShare: decimal("proposed_revenue_share", { precision: 5, scale: 2 }),
+  installationNotes: text("installation_notes"),
+  estimatedInstallationCost: decimal("estimated_installation_cost", { precision: 10, scale: 2 }),
+  // Status
+  status: text("status").notNull().default("concept"), // concept, afgerond, goedgekeurd, afgekeurd
+  // Foto's en documenten (URLs of base64)
+  photos: jsonb("photos").$type<string[]>(),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * DigitalSignatures - Handtekeningen voor contracten en overeenkomsten
+ */
+export const digitalSignatures = pgTable("digital_signatures", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  documentType: text("document_type").notNull(), // 'contract', 'locatie_overeenkomst', 'sepa_machtiging', 'schouw_akkoord'
+  documentId: varchar("document_id").notNull(), // ID van contract, lead, etc.
+  signerName: text("signer_name").notNull(),
+  signerEmail: text("signer_email"),
+  signerRole: text("signer_role"), // 'adverteerder', 'locatie_eigenaar', 'elevizion'
+  signatureData: text("signature_data"), // Base64 encoded signature image
+  signedAt: timestamp("signed_at").notNull().defaultNow(),
+  ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * SalesActivities - Log van alle sales activiteiten
+ */
+export const salesActivities = pgTable("sales_activities", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  leadId: varchar("lead_id").notNull().references(() => leads.id),
+  activityType: text("activity_type").notNull(), // call, email, meeting, schouw, voorstel, contract
+  description: text("description"),
+  outcome: text("outcome"),
+  nextAction: text("next_action"),
+  nextActionDate: date("next_action_date"),
+  performedByUserId: varchar("performed_by_user_id"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// ============================================================================
 // INSERT SCHEMAS (for validation)
 // ============================================================================
+
+export const insertLeadSchema = createInsertSchema(leads).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertLocationSurveySchema = createInsertSchema(locationSurveys).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertDigitalSignatureSchema = createInsertSchema(digitalSignatures).omit({ id: true, createdAt: true });
+export const insertSalesActivitySchema = createInsertSchema(salesActivities).omit({ id: true, createdAt: true });
 
 export const insertAdvertiserSchema = createInsertSchema(advertisers).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertLocationSchema = createInsertSchema(locations).omit({ id: true, createdAt: true, updatedAt: true });
@@ -706,3 +810,16 @@ export type InsertWebhook = z.infer<typeof insertWebhookSchema>;
 
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
 export type InsertWebhookDelivery = z.infer<typeof insertWebhookDeliverySchema>;
+
+// Sales & Acquisitie types
+export type Lead = typeof leads.$inferSelect;
+export type InsertLead = z.infer<typeof insertLeadSchema>;
+
+export type LocationSurvey = typeof locationSurveys.$inferSelect;
+export type InsertLocationSurvey = z.infer<typeof insertLocationSurveySchema>;
+
+export type DigitalSignature = typeof digitalSignatures.$inferSelect;
+export type InsertDigitalSignature = z.infer<typeof insertDigitalSignatureSchema>;
+
+export type SalesActivity = typeof salesActivities.$inferSelect;
+export type InsertSalesActivity = z.infer<typeof insertSalesActivitySchema>;
