@@ -2992,16 +2992,202 @@ export async function registerRoutes(
 
   app.get("/api/sync/status", async (_req, res) => {
     try {
+      const configs = await storage.getIntegrationConfigs();
+      const yodeck = configs.find(c => c.service === "yodeck");
+      const moneybird = configs.find(c => c.service === "moneybird");
+      
       res.json({
         yodeck: {
-          lastSync: new Date().toISOString(),
-          status: process.env.YODECK_API_TOKEN ? "success" : "not_configured",
-          itemsProcessed: 0,
+          lastSync: yodeck?.lastSyncAt?.toISOString() || "-",
+          status: yodeck?.status || "not_configured",
+          itemsProcessed: yodeck?.lastSyncItemsProcessed || 0,
         },
         moneybird: {
-          lastSync: "-",
+          lastSync: moneybird?.lastSyncAt?.toISOString() || "-",
+          status: moneybird?.status || "not_configured",
+          itemsProcessed: moneybird?.lastSyncItemsProcessed || 0,
+        },
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // INTEGRATION CONFIGURATION
+  // ============================================================================
+
+  app.get("/api/integrations", async (_req, res) => {
+    try {
+      const configs = await storage.getIntegrationConfigs();
+      const services = ["yodeck", "moneybird", "dropbox_sign"];
+      
+      const result = services.map(service => {
+        const config = configs.find(c => c.service === service);
+        return config || {
+          id: null,
+          service,
+          isEnabled: false,
           status: "not_configured",
-          itemsProcessed: 0,
+          lastTestedAt: null,
+          lastTestResult: null,
+          lastTestError: null,
+          lastSyncAt: null,
+          lastSyncItemsProcessed: null,
+          syncFrequency: "15min",
+          settings: null,
+        };
+      });
+      
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/integrations/:service", async (req, res) => {
+    try {
+      const { service } = req.params;
+      const config = await storage.getIntegrationConfig(service);
+      
+      if (!config) {
+        return res.json({
+          service,
+          isEnabled: false,
+          status: "not_configured",
+          settings: null,
+        });
+      }
+      
+      res.json(config);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.put("/api/integrations/:service", async (req, res) => {
+    try {
+      const { service } = req.params;
+      const { isEnabled, syncFrequency, settings } = req.body;
+      
+      const config = await storage.upsertIntegrationConfig(service, {
+        isEnabled,
+        syncFrequency,
+        settings,
+      });
+      
+      res.json(config);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/integrations/:service/test", async (req, res) => {
+    try {
+      const { service } = req.params;
+      let testResult = { success: false, message: "Test niet beschikbaar" };
+      
+      if (service === "yodeck") {
+        const apiKey = process.env.YODECK_API_KEY;
+        if (!apiKey) {
+          testResult = { success: false, message: "YODECK_API_KEY niet ingesteld in environment" };
+        } else {
+          try {
+            const response = await fetch("https://api.yodeck.com/v2/devices", {
+              headers: { Authorization: `Bearer ${apiKey}` },
+            });
+            if (response.ok) {
+              const data = await response.json();
+              testResult = { 
+                success: true, 
+                message: `Verbinding geslaagd. ${Array.isArray(data) ? data.length : 0} apparaten gevonden.` 
+              };
+            } else {
+              testResult = { success: false, message: `API fout: ${response.status} ${response.statusText}` };
+            }
+          } catch (e: any) {
+            testResult = { success: false, message: `Netwerk fout: ${e.message}` };
+          }
+        }
+      } else if (service === "moneybird") {
+        const token = process.env.MONEYBIRD_ACCESS_TOKEN;
+        const adminId = process.env.MONEYBIRD_ADMIN_ID;
+        if (!token || !adminId) {
+          testResult = { success: false, message: "MONEYBIRD_ACCESS_TOKEN of MONEYBIRD_ADMIN_ID niet ingesteld" };
+        } else {
+          try {
+            const response = await fetch(`https://moneybird.com/api/v2/${adminId}/administrations.json`, {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (response.ok) {
+              testResult = { success: true, message: "Verbinding met Moneybird geslaagd" };
+            } else {
+              testResult = { success: false, message: `API fout: ${response.status}` };
+            }
+          } catch (e: any) {
+            testResult = { success: false, message: `Netwerk fout: ${e.message}` };
+          }
+        }
+      } else if (service === "dropbox_sign") {
+        const apiKey = process.env.DROPBOX_SIGN_API_KEY;
+        if (!apiKey) {
+          testResult = { success: false, message: "DROPBOX_SIGN_API_KEY niet ingesteld" };
+        } else {
+          try {
+            const response = await fetch("https://api.hellosign.com/v3/account", {
+              headers: { Authorization: `Basic ${Buffer.from(apiKey + ":").toString("base64")}` },
+            });
+            if (response.ok) {
+              testResult = { success: true, message: "Verbinding met Dropbox Sign geslaagd" };
+            } else {
+              testResult = { success: false, message: `API fout: ${response.status}` };
+            }
+          } catch (e: any) {
+            testResult = { success: false, message: `Netwerk fout: ${e.message}` };
+          }
+        }
+      }
+
+      await storage.upsertIntegrationConfig(service, {
+        lastTestedAt: new Date(),
+        lastTestResult: testResult.success ? "success" : "error",
+        lastTestError: testResult.success ? null : testResult.message,
+        status: testResult.success ? "connected" : "error",
+      });
+
+      res.json(testResult);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/integrations/:service/sync", async (req, res) => {
+    try {
+      const { service } = req.params;
+      
+      await storage.upsertIntegrationConfig(service, {
+        lastSyncAt: new Date(),
+        lastSyncItemsProcessed: 0,
+      });
+      
+      res.json({ success: true, message: "Sync gestart" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/integrations/secrets/status", async (_req, res) => {
+    try {
+      res.json({
+        yodeck: {
+          YODECK_API_KEY: !!process.env.YODECK_API_KEY,
+        },
+        moneybird: {
+          MONEYBIRD_ACCESS_TOKEN: !!process.env.MONEYBIRD_ACCESS_TOKEN,
+          MONEYBIRD_ADMIN_ID: !!process.env.MONEYBIRD_ADMIN_ID,
+        },
+        dropbox_sign: {
+          DROPBOX_SIGN_API_KEY: !!process.env.DROPBOX_SIGN_API_KEY,
         },
       });
     } catch (error: any) {

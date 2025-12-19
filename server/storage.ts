@@ -22,6 +22,7 @@ import type {
   Payout, InsertPayout,
   CarryOver, InsertCarryOver,
   IntegrationLog, InsertIntegrationLog,
+  IntegrationConfig, InsertIntegrationConfig,
   Job, InsertJob,
   JobRun, InsertJobRun,
   AuditLog, InsertAuditLog,
@@ -175,6 +176,12 @@ export interface IStorage {
   // Integration Logs
   createIntegrationLog(data: InsertIntegrationLog): Promise<IntegrationLog>;
   getRecentIntegrationLogs(limit?: number): Promise<IntegrationLog[]>;
+
+  // Integration Configs
+  getIntegrationConfigs(): Promise<IntegrationConfig[]>;
+  getIntegrationConfig(service: string): Promise<IntegrationConfig | undefined>;
+  upsertIntegrationConfig(service: string, data: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig>;
+  updateIntegrationConfig(service: string, data: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig | undefined>;
 
   // Jobs
   getJobs(): Promise<Job[]>;
@@ -828,6 +835,44 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(schema.integrationLogs)
       .orderBy(desc(schema.integrationLogs.createdAt))
       .limit(limit);
+  }
+
+  // ============================================================================
+  // INTEGRATION CONFIGS
+  // ============================================================================
+
+  async getIntegrationConfigs(): Promise<IntegrationConfig[]> {
+    return await db.select().from(schema.integrationConfigs).orderBy(schema.integrationConfigs.service);
+  }
+
+  async getIntegrationConfig(service: string): Promise<IntegrationConfig | undefined> {
+    const [config] = await db.select().from(schema.integrationConfigs)
+      .where(eq(schema.integrationConfigs.service, service));
+    return config;
+  }
+
+  async upsertIntegrationConfig(service: string, data: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig> {
+    const existing = await this.getIntegrationConfig(service);
+    if (existing) {
+      const [updated] = await db.update(schema.integrationConfigs)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(schema.integrationConfigs.service, service))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(schema.integrationConfigs)
+        .values({ service, ...data })
+        .returning();
+      return created;
+    }
+  }
+
+  async updateIntegrationConfig(service: string, data: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig | undefined> {
+    const [updated] = await db.update(schema.integrationConfigs)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.integrationConfigs.service, service))
+      .returning();
+    return updated;
   }
 
   // ============================================================================
