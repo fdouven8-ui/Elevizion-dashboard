@@ -56,6 +56,20 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 - "Backup & Export" page for data backup (JSON/CSV).
 - "Handleiding" page for Dutch user manual.
 
+### Detail Pages (Owner-Friendly)
+**Screen Detail Page** (`/screens/:id`):
+- Header: Screen ID (EVZ-###), Location name, Online/Offline status, Last seen
+- Action buttons: Open in Yodeck, Contact locatie, Plaats Ad
+- Location/Contact block: Address, Contact person, Phone, Email, Notes
+- "Wat draait er op dit scherm?" table: Advertiser (linked), Creative, Start/End dates, Status, Open placement link
+- Statistics accordion: Uptime trend, offline incidents (coming when Yodeck is synced)
+
+**Advertiser Detail Page** (`/advertisers/:id`):
+- Header: Company name, Status badge
+- Contactgegevens: Contact person, Phone, Email, Address (street/zipcode/city), BTW-nummer, KVK-nummer
+- Moneybird link status, Notes, SEPA Incasso status
+- Contract status cards, "Waar draaien mijn ads?" placements list, Payment status
+
 ## External Dependencies
 
 ### Database
