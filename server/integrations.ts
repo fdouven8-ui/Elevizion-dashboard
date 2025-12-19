@@ -1,9 +1,8 @@
 // Yodeck API Integration
 // IMPORTANT: API key is read ONLY from process.env.YODECK_API_KEY - never from frontend or local files
-// Official API docs: https://app.yodeck.com/api-docs/
-// Base URL: https://app.yodeck.com/api/v1
-// Auth: Bearer <api_key>
-const YODECK_BASE_URL = "https://app.yodeck.com/api/v1";
+// Base URL: https://app.yodeck.com/api
+// Auth: Token <api_key>
+const YODECK_BASE_URL = "https://app.yodeck.com/api";
 
 export interface IntegrationCredentials {
   api_key?: string;
@@ -11,13 +10,9 @@ export interface IntegrationCredentials {
   admin_id?: string;
 }
 
-// Get the API key, stripping any prefix like "yodeck:" if present
+// Get the raw API key
 function getYodeckApiKey(): string | undefined {
-  const rawKey = process.env.YODECK_API_KEY;
-  if (!rawKey) return undefined;
-  // Strip common prefixes if present
-  if (rawKey.startsWith("yodeck:")) return rawKey.slice(7);
-  return rawKey;
+  return process.env.YODECK_API_KEY;
 }
 
 // Check if Yodeck is properly configured
@@ -58,7 +53,7 @@ export async function testYodeckConnection(): Promise<{
     const response = await fetch(fullUrl, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Token ${apiKey}`,
         "Accept": "application/json",
       },
     });
@@ -123,7 +118,7 @@ export async function syncYodeckScreens(): Promise<{ success: boolean; screens?:
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Token ${apiKey}`,
         "Accept": "application/json",
       },
     });
