@@ -22,7 +22,13 @@ import {
   Check,
   AlertCircle,
   FileText,
-  Send
+  Send,
+  FileSignature,
+  Clock,
+  Eye,
+  CheckCircle2,
+  RefreshCw,
+  Download
 } from "lucide-react";
 import { useState } from "react";
 import type { Advertiser } from "@shared/schema";
@@ -252,6 +258,88 @@ export default function AdvertiserDetail() {
           </Button>
         </div>
       </div>
+
+      <Card className="border-primary/20 bg-primary/5">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <FileSignature className="h-5 w-5" />
+            Contract Status
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-background rounded-lg p-4 border">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-medium">Reclame Contract</span>
+                <Badge variant="outline" className="bg-amber-50 text-amber-700">
+                  <Clock className="h-3 w-3 mr-1" />
+                  Niet verstuurd
+                </Badge>
+              </div>
+              <p className="text-sm text-muted-foreground mb-3">
+                Advertentie-overeenkomst voor plaatsing op schermen
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" variant="default" data-testid="button-send-contract">
+                  <Send className="h-4 w-4 mr-1" />
+                  Verstuur
+                </Button>
+                <Button size="sm" variant="outline" data-testid="button-copy-contract-link">
+                  <Copy className="h-4 w-4 mr-1" />
+                  Link kopiëren
+                </Button>
+              </div>
+            </div>
+
+            <div className="bg-background rounded-lg p-4 border">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-medium">SEPA Machtiging</span>
+                {advertiser.sepaMandate ? (
+                  <Badge className="bg-green-100 text-green-800">
+                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                    Getekend
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="bg-amber-50 text-amber-700">
+                    <Clock className="h-3 w-3 mr-1" />
+                    Niet verstuurd
+                  </Badge>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground mb-3">
+                Automatische incasso machtiging
+              </p>
+              <div className="flex gap-2">
+                {advertiser.sepaMandate ? (
+                  <Button size="sm" variant="outline" data-testid="button-download-sepa">
+                    <Download className="h-4 w-4 mr-1" />
+                    PDF downloaden
+                  </Button>
+                ) : (
+                  <>
+                    <Button size="sm" variant="default" data-testid="button-send-sepa">
+                      <Send className="h-4 w-4 mr-1" />
+                      Verstuur
+                    </Button>
+                    <Button size="sm" variant="ghost" data-testid="button-skip-sepa">
+                      Overslaan
+                    </Button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">
+              Contracten: {advertiser.sepaMandate ? "1" : "0"}/2 getekend
+            </span>
+            <Button variant="ghost" size="sm" data-testid="button-refresh-contracts">
+              <RefreshCw className="h-4 w-4 mr-1" />
+              Status verversen
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-1">

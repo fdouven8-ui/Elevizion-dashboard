@@ -609,14 +609,40 @@ export default function Settings() {
                         <Textarea
                           value={newTemplate.body}
                           onChange={(e) => setNewTemplate({ ...newTemplate, body: e.target.value })}
-                          placeholder="Template inhoud... Gebruik {{variabele_naam}} voor placeholders"
+                          placeholder="Schrijf je bericht hier. Gebruik [variabele naam] om dynamische velden in te voegen."
                           rows={8}
                           data-testid="textarea-template-body"
                         />
                       </div>
-                      <p className="text-xs text-muted-foreground">
-                        Beschikbare variabelen: {"{{advertiser_name}}"}, {"{{contact_name}}"}, {"{{phone}}"}, {"{{email}}"}, {"{{screen_id}}"}, {"{{location_name}}"}, {"{{price}}"}, {"{{start_date}}"}
-                      </p>
+                      <div className="bg-muted/50 rounded-lg p-3">
+                        <p className="text-xs font-medium mb-2">Klik om een veld toe te voegen:</p>
+                        <div className="flex flex-wrap gap-2">
+                          {["Bedrijfsnaam", "Contactpersoon", "Telefoon", "Email", "Scherm ID", "Locatie", "Prijs", "Startdatum"].map((field) => {
+                            const varName = {
+                              "Bedrijfsnaam": "advertiser_name",
+                              "Contactpersoon": "contact_name", 
+                              "Telefoon": "phone",
+                              "Email": "email",
+                              "Scherm ID": "screen_id",
+                              "Locatie": "location_name",
+                              "Prijs": "price",
+                              "Startdatum": "start_date"
+                            }[field];
+                            return (
+                              <Button
+                                key={field}
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="text-xs h-7"
+                                onClick={() => setNewTemplate({ ...newTemplate, body: newTemplate.body + `{{${varName}}}` })}
+                              >
+                                + {field}
+                              </Button>
+                            );
+                          })}
+                        </div>
+                      </div>
                       <Button 
                         className="w-full" 
                         onClick={() => createTemplateMutation.mutate(newTemplate)}
@@ -691,9 +717,29 @@ export default function Settings() {
                             {template.body}
                           </p>
                           {template.placeholders && template.placeholders.length > 0 && (
-                            <p className="text-xs text-muted-foreground mt-2">
-                              Variabelen: {template.placeholders.map(p => `{{${p}}}`).join(", ")}
-                            </p>
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              <span className="text-xs text-muted-foreground">Velden:</span>
+                              {template.placeholders.map(p => {
+                                const friendlyName: Record<string, string> = {
+                                  "advertiser_name": "Bedrijfsnaam",
+                                  "contact_name": "Contactpersoon",
+                                  "phone": "Telefoon",
+                                  "email": "Email",
+                                  "screen_id": "Scherm ID",
+                                  "location_name": "Locatie",
+                                  "price": "Prijs",
+                                  "start_date": "Startdatum",
+                                  "bedrijfsnaam": "Bedrijfsnaam",
+                                  "contactpersoon": "Contactpersoon",
+                                  "telefoon": "Telefoon"
+                                };
+                                return (
+                                  <Badge key={p} variant="secondary" className="text-xs">
+                                    {friendlyName[p] || p}
+                                  </Badge>
+                                );
+                              })}
+                            </div>
                           )}
                         </div>
                         <div className="flex flex-col gap-1">
