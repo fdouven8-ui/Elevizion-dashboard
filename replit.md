@@ -37,11 +37,17 @@ Key capabilities include:
 Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, Placements, ScheduleSnapshots (immutable monthly records), Invoices/Payments, and Payouts/CarryOvers. Monthly snapshots ensure billing accuracy by freezing critical business data (contracts, locations, carry-overs) at the time of creation.
 
 ### Authentication & Authorization
-- **Provider**: Replit OIDC authentication.
+- **Provider**: Username/password authentication with bcrypt hashing.
 - **Session Storage**: PostgreSQL-backed via `connect-pg-simple`.
-- **User Roles**: Five predefined roles (admin, finance, ops, viewer, partner) with hierarchical access control.
+- **User Roles**: Five predefined roles (eigenaar, finance, ops, viewer, partner) with hierarchical access control.
 - **Permission Middleware**: `requireRole()` for route protection.
 - **Audit Logging**: Tracks permission changes (role changes, activation/deactivation).
+- **Auto Admin Initialization**: On server startup, if `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables are set, the system automatically creates or syncs the admin user password. This ensures deployments are always accessible.
+
+### Required Deployment Secrets
+- `ADMIN_USERNAME`: Admin login username (required for auto-init)
+- `ADMIN_PASSWORD`: Admin login password (required for auto-init)
+- `SESSION_SECRET`: Session encryption key (must remain stable)
 
 ### UI/UX Decisions
 - **Home page** (`/dashboard`): Minimal owner-focused overview with 4 calm KPI tiles: Schermen online (count/total), Schermen offline, Ads online (active placements), Actief betalende adverteerders. All tiles are clickable and route to filtered pages. Below the tiles, a lightweight "Actie Overzicht" section shows operational items only (offline screens, screens without placements, paused placements) with subtle color-coded badges (red=error, yellow=warning, blue=info). Each item is clickable and routes to its detail page. No financial or contract items shown. Answers "How many screens are running, how many ads are live, how many customers are paying?" in 3 seconds.
