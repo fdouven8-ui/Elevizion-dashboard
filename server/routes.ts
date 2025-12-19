@@ -2883,71 +2883,70 @@ export async function registerRoutes(
     }
   });
 
-  // Action items for clean Action Overview table
+  // Action items for lightweight Action Overview (operational only, no financial/contract items)
   app.get("/api/control-room/actions", async (_req, res) => {
     try {
       const screens = await storage.getScreens();
-      const contracts = await storage.getContracts();
-      const advertisers = await storage.getAdvertisers();
-      const invoices = await storage.getInvoices();
+      const placements = await storage.getPlacements();
+      const locations = await storage.getLocations();
       const actions: any[] = [];
-      const now = new Date();
       
       // Offline screens
       screens.forEach(screen => {
         if (screen.status === "offline") {
+          const location = locations.find(l => l.id === screen.locationId);
           actions.push({
             id: `offline-${screen.id}`,
             type: "offline_screen",
             itemName: screen.screenId,
-            status: "Offline",
-            createdAt: screen.lastSeenAt || now.toISOString(),
-            link: `/screens?id=${screen.id}`,
+            description: location?.name || "Onbekende locatie",
+            severity: "error",
+            link: `/screens/${screen.id}`,
           });
         }
       });
       
-      // Pending contracts (awaiting signatures)
-      contracts.filter(c => c.status === "draft" || c.status === "pending").forEach(contract => {
-        const advertiser = advertisers.find(a => a.id === contract.advertiserId);
+      // Screens without active placements (new or empty)
+      const screensWithPlacements = new Set(
+        placements.filter(p => p.isActive).map(p => p.screenId)
+      );
+      screens.forEach(screen => {
+        if (screen.status !== "offline" && !screensWithPlacements.has(screen.id)) {
+          const location = locations.find(l => l.id === screen.locationId);
+          actions.push({
+            id: `empty-${screen.id}`,
+            type: "empty_screen",
+            itemName: screen.screenId,
+            description: location?.name || "Zonder actieve plaatsing",
+            severity: "info",
+            link: `/screens/${screen.id}`,
+          });
+        }
+      });
+      
+      // Paused placements
+      placements.filter(p => !p.isActive).forEach(placement => {
+        const screen = screens.find(s => s.id === placement.screenId);
         actions.push({
-          id: `contract-${contract.id}`,
-          type: "pending_contract",
-          itemName: advertiser?.companyName || `Contract #${contract.id}`,
-          status: contract.status === "draft" ? "Concept" : "Wacht op handtekening",
-          createdAt: contract.createdAt || now.toISOString(),
-          link: `/advertisers/${contract.advertiserId}`,
+          id: `paused-${placement.id}`,
+          type: "paused_placement",
+          itemName: screen?.screenId || "Onbekend scherm",
+          description: "Plaatsing gepauzeerd",
+          severity: "warning",
+          link: `/placements/${placement.id}`,
         });
       });
       
-      // Overdue payments (invoices past due date)
-      invoices.filter(i => i.status === "sent" || i.status === "overdue").forEach(invoice => {
-        const dueDate = invoice.dueDate ? new Date(invoice.dueDate) : null;
-        if (dueDate && dueDate < now) {
-          const advertiser = advertisers.find(a => a.id === invoice.advertiserId);
-          actions.push({
-            id: `overdue-${invoice.id}`,
-            type: "overdue_payment",
-            itemName: advertiser?.companyName || `Factuur #${invoice.invoiceNumber}`,
-            status: "Te laat",
-            createdAt: invoice.dueDate || now.toISOString(),
-            link: `/advertisers/${invoice.advertiserId}`,
-          });
-        }
-      });
-      
-      // Sort by type priority (offline first, then overdue, then pending contracts)
-      const typePriority: Record<string, number> = {
-        offline_screen: 0,
-        overdue_payment: 1,
-        pending_contract: 2,
-        pending_approval: 3,
+      // Sort by severity priority (error first, then warning, then info)
+      const severityPriority: Record<string, number> = {
+        error: 0,
+        warning: 1,
+        info: 2,
       };
       actions.sort((a, b) => {
-        const priorityA = typePriority[a.type] ?? 99;
-        const priorityB = typePriority[b.type] ?? 99;
-        if (priorityA !== priorityB) return priorityA - priorityB;
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+        const priorityA = severityPriority[a.severity] ?? 99;
+        const priorityB = severityPriority[b.severity] ?? 99;
+        return priorityA - priorityB;
       });
       
       res.json(actions);

@@ -1,11 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { 
   Wifi,
   WifiOff,
   Target,
   Users,
+  Monitor,
+  Pause,
+  ChevronRight,
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -18,8 +23,17 @@ interface ControlRoomStats {
   payingAdvertisers: number;
 }
 
+interface ActionItem {
+  id: string;
+  type: "offline_screen" | "empty_screen" | "paused_placement";
+  itemName: string;
+  description: string;
+  severity: "error" | "warning" | "info";
+  link: string;
+}
+
 export default function Home() {
-  const { data: stats, isLoading } = useQuery<ControlRoomStats>({
+  const { data: stats, isLoading: statsLoading } = useQuery<ControlRoomStats>({
     queryKey: ["/api/control-room/stats"],
     queryFn: async () => {
       try {
@@ -33,6 +47,19 @@ export default function Home() {
           activePlacements: 0,
           payingAdvertisers: 0,
         };
+      }
+    },
+    refetchInterval: 30000,
+  });
+
+  const { data: actionItems = [], isLoading: actionsLoading } = useQuery<ActionItem[]>({
+    queryKey: ["/api/control-room/actions"],
+    queryFn: async () => {
+      try {
+        const res = await apiRequest("GET", "/api/control-room/actions");
+        return res.json();
+      } catch {
+        return [];
       }
     },
     refetchInterval: 30000,
@@ -78,6 +105,41 @@ export default function Home() {
     },
   ];
 
+  const getTypeIcon = (type: string) => {
+    switch (type) {
+      case "offline_screen": return WifiOff;
+      case "empty_screen": return Monitor;
+      case "paused_placement": return Pause;
+      default: return Monitor;
+    }
+  };
+
+  const getTypeLabel = (type: string) => {
+    switch (type) {
+      case "offline_screen": return "Offline";
+      case "empty_screen": return "Leeg";
+      case "paused_placement": return "Gepauzeerd";
+      default: return type;
+    }
+  };
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case "error": return "text-red-600 bg-red-50";
+      case "warning": return "text-amber-600 bg-amber-50";
+      case "info": return "text-blue-600 bg-blue-50";
+      default: return "text-muted-foreground bg-muted";
+    }
+  };
+
+  const getBadgeVariant = (severity: string): "destructive" | "secondary" | "outline" => {
+    switch (severity) {
+      case "error": return "destructive";
+      case "warning": return "secondary";
+      default: return "outline";
+    }
+  };
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div>
@@ -93,7 +155,7 @@ export default function Home() {
               data-testid={`kpi-${tile.id}`}
             >
               <CardContent className="pt-5 pb-5">
-                {isLoading ? (
+                {statsLoading ? (
                   <Skeleton className="h-16 w-full" />
                 ) : (
                   <div className="flex items-center justify-between">
@@ -118,6 +180,60 @@ export default function Home() {
           </Link>
         ))}
       </div>
+
+      {/* Lightweight Action Overview */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base font-medium text-muted-foreground">Actie Overzicht</CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {actionsLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : actionItems.length === 0 ? (
+            <div className="text-center py-6 text-muted-foreground">
+              <Monitor className="h-8 w-8 mx-auto mb-2 opacity-40" />
+              <p className="text-sm">Geen items om te tonen</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {actionItems.map((item) => {
+                const Icon = getTypeIcon(item.type);
+                const colorClasses = getSeverityColor(item.severity);
+                return (
+                  <Link key={item.id} href={item.link}>
+                    <div 
+                      className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors cursor-pointer group"
+                      data-testid={`action-item-${item.id}`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-full ${colorClasses}`}>
+                          <Icon className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-sm">{item.itemName}</span>
+                            <Badge variant={getBadgeVariant(item.severity)} className="text-xs px-1.5 py-0">
+                              {getTypeLabel(item.type)}
+                            </Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground">{item.description}</p>
+                        </div>
+                      </div>
+                      <Button variant="ghost" size="sm" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                        Open
+                        <ChevronRight className="h-4 w-4 ml-1" />
+                      </Button>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
