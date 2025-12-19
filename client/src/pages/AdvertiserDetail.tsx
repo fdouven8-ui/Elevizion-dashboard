@@ -5,6 +5,20 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { 
@@ -28,9 +42,17 @@ import {
   Eye,
   CheckCircle2,
   RefreshCw,
-  Download
+  Download,
+  BarChart3,
+  TrendingUp,
+  Camera,
+  Share2,
+  AlertTriangle
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef } from "react";
+import { format, subDays } from "date-fns";
+import { nl } from "date-fns/locale";
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import type { Advertiser } from "@shared/schema";
 
 interface Template {
@@ -551,6 +573,9 @@ export default function AdvertiserDetail() {
         </Card>
       </div>
 
+      {/* Statistics Section */}
+      <AdvertiserStatistics advertiserId={id!} />
+
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">Betaalstatus</CardTitle>
@@ -678,5 +703,338 @@ export default function AdvertiserDetail() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+interface AdvertiserStatsData {
+  advertiserId: string;
+  advertiserName: string;
+  available: boolean;
+  unavailableReason?: string;
+  screens: {
+    screenId: string;
+    screenIdDisplay: string;
+    city: string;
+    locationName: string;
+    status: "online" | "offline";
+    plays: number;
+    durationMs: number;
+  }[];
+  playback: {
+    totalPlays: number;
+    totalDurationMs: number;
+    topCreatives: { name: string; plays: number; durationMs: number }[];
+    playsByCity: { city: string; plays: number }[];
+  };
+  dateRange: { startDate: string; endDate: string };
+}
+
+const CHART_COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
+
+function AdvertiserStatistics({ advertiserId }: { advertiserId: string }) {
+  const { toast } = useToast();
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [dateRange, setDateRange] = useState<"today" | "7d" | "30d">("7d");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const getDateParams = () => {
+    const end = new Date();
+    let start: Date;
+    
+    switch (dateRange) {
+      case "today":
+        start = new Date();
+        start.setHours(0, 0, 0, 0);
+        break;
+      case "7d":
+        start = subDays(end, 7);
+        break;
+      case "30d":
+        start = subDays(end, 30);
+        break;
+      default:
+        start = subDays(end, 7);
+    }
+    
+    return {
+      startDate: format(start, "yyyy-MM-dd"),
+      endDate: format(end, "yyyy-MM-dd"),
+    };
+  };
+
+  const { startDate, endDate } = getDateParams();
+
+  const { data: stats, isLoading, refetch } = useQuery<AdvertiserStatsData>({
+    queryKey: ["/api/advertisers", advertiserId, "stats", startDate, endDate],
+    queryFn: async () => {
+      const params = new URLSearchParams({ startDate, endDate });
+      const res = await fetch(`/api/advertisers/${advertiserId}/stats?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Fout bij ophalen statistieken");
+      return res.json();
+    },
+  });
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await refetch();
+      toast({ title: "Statistieken vernieuwd" });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const handleSnapshot = async () => {
+    if (!chartRef.current) return;
+    
+    try {
+      const html2canvas = (await import("html2canvas")).default;
+      const canvas = await html2canvas(chartRef.current, { backgroundColor: "#ffffff" });
+      const link = document.createElement("a");
+      link.download = `advertiser-stats-${advertiserId}-${format(new Date(), "yyyy-MM-dd")}.png`;
+      link.href = canvas.toDataURL();
+      link.click();
+      toast({ title: "Snapshot opgeslagen" });
+    } catch (error) {
+      toast({ title: "Snapshot mislukt", variant: "destructive" });
+    }
+  };
+
+  const handleCopyLink = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("startDate", startDate);
+    url.searchParams.set("endDate", endDate);
+    navigator.clipboard.writeText(url.toString());
+    toast({ title: "Link gekopieerd" });
+  };
+
+  const formatDuration = (ms: number) => {
+    const hours = Math.floor(ms / (1000 * 60 * 60));
+    const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+    if (hours > 0) return `${hours}u ${minutes}m`;
+    return `${minutes}m`;
+  };
+
+  const screenChartData = stats?.screens?.map((s) => ({
+    name: s.screenIdDisplay,
+    plays: s.plays,
+    city: s.city,
+    status: s.status,
+  })) || [];
+
+  const cityChartData = stats?.playback?.playsByCity?.map((c) => ({
+    name: c.city,
+    plays: c.plays,
+  })) || [];
+
+  const creativeChartData = stats?.playback?.topCreatives?.map((c) => ({
+    name: c.name.length > 15 ? c.name.substring(0, 15) + "..." : c.name,
+    plays: c.plays,
+  })) || [];
+
+  return (
+    <Accordion type="single" collapsible className="w-full">
+      <AccordionItem value="statistics" className="border rounded-lg px-4">
+        <AccordionTrigger className="hover:no-underline" data-testid="toggle-advertiser-statistics">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-5 w-5" />
+            <span className="font-semibold">Statistieken</span>
+            {stats?.playback?.totalPlays !== undefined && (
+              <Badge variant="secondary" className="ml-2">
+                {stats.playback.totalPlays.toLocaleString()} plays
+              </Badge>
+            )}
+          </div>
+        </AccordionTrigger>
+        <AccordionContent>
+          {isLoading ? (
+            <div className="space-y-4 py-4">
+              <div className="flex gap-4">
+                <Skeleton className="h-20 flex-1" />
+                <Skeleton className="h-20 flex-1" />
+                <Skeleton className="h-20 flex-1" />
+              </div>
+              <Skeleton className="h-48 w-full" />
+            </div>
+          ) : !stats?.available ? (
+            <div className="py-8 text-center">
+              <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-amber-500 opacity-50" />
+              <p className="text-muted-foreground mb-2">{stats?.unavailableReason || "Statistieken niet beschikbaar"}</p>
+              <p className="text-xs text-muted-foreground">
+                Controleer of de Yodeck API correct is geconfigureerd in Instellingen
+              </p>
+            </div>
+          ) : (
+            <div ref={chartRef} className="space-y-6 py-4">
+              <div className="flex flex-wrap items-center gap-3 bg-muted/30 rounded-lg p-3">
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                  <Select value={dateRange} onValueChange={(v: any) => setDateRange(v)}>
+                    <SelectTrigger className="w-32 h-8" data-testid="select-advertiser-date-range">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Vandaag</SelectItem>
+                      <SelectItem value="7d">7 dagen</SelectItem>
+                      <SelectItem value="30d">30 dagen</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex-1" />
+                <Button variant="ghost" size="sm" onClick={handleRefresh} disabled={isRefreshing} data-testid="button-refresh-advertiser-stats">
+                  <RefreshCw className={`h-4 w-4 mr-1 ${isRefreshing ? "animate-spin" : ""}`} />
+                  Vernieuwen
+                </Button>
+                <Button variant="ghost" size="sm" onClick={handleSnapshot} data-testid="button-advertiser-snapshot">
+                  <Camera className="h-4 w-4 mr-1" />
+                  Snapshot
+                </Button>
+                <Button variant="ghost" size="sm" onClick={handleCopyLink} data-testid="button-advertiser-share-link">
+                  <Share2 className="h-4 w-4 mr-1" />
+                  Link
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Card className="bg-gradient-to-br from-blue-50 to-blue-100/50 border-blue-200">
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-full bg-blue-500">
+                        <Play className="h-4 w-4 text-white" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Totaal plays</p>
+                        <p className="text-2xl font-bold">{stats.playback.totalPlays.toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-gradient-to-br from-purple-50 to-purple-100/50 border-purple-200">
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-full bg-purple-500">
+                        <Clock className="h-4 w-4 text-white" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Totale speeltijd</p>
+                        <p className="text-2xl font-bold">{formatDuration(stats.playback.totalDurationMs)}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-gradient-to-br from-green-50 to-green-100/50 border-green-200">
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-full bg-green-500">
+                        <Monitor className="h-4 w-4 text-white" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Schermen</p>
+                        <p className="text-2xl font-bold">{stats.screens.length}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {screenChartData.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Monitor className="h-4 w-4" />
+                      Plays per Scherm
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={screenChartData}>
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                        <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                        <YAxis tick={{ fontSize: 12 }} />
+                        <Tooltip
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length) {
+                              const data = payload[0].payload;
+                              return (
+                                <div className="bg-background border rounded-lg p-2 shadow-lg">
+                                  <p className="text-sm font-medium">{data.name}</p>
+                                  <p className="text-sm text-muted-foreground">{data.city}</p>
+                                  <p className="text-sm">{data.plays} plays</p>
+                                  <Badge variant={data.status === "online" ? "default" : "secondary"} className="text-xs mt-1">
+                                    {data.status}
+                                  </Badge>
+                                </div>
+                              );
+                            }
+                            return null;
+                          }}
+                        />
+                        <Bar dataKey="plays" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {cityChartData.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <MapPin className="h-4 w-4" />
+                        Plays per Stad
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ResponsiveContainer width="100%" height={180}>
+                        <PieChart>
+                          <Pie
+                            data={cityChartData}
+                            dataKey="plays"
+                            nameKey="name"
+                            cx="50%"
+                            cy="50%"
+                            outerRadius={60}
+                            label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                            labelLine={false}
+                          >
+                            {cityChartData.map((_, index) => (
+                              <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip />
+                        </PieChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                )}
+
+                {creativeChartData.length > 0 && (
+                  <Card>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <TrendingUp className="h-4 w-4" />
+                        Top Creatives
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <ResponsiveContainer width="100%" height={180}>
+                        <BarChart data={creativeChartData} layout="vertical">
+                          <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                          <XAxis type="number" tick={{ fontSize: 12 }} />
+                          <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 10 }} />
+                          <Tooltip />
+                          <Bar dataKey="plays" fill="#22c55e" radius={[0, 4, 4, 0]} />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            </div>
+          )}
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   );
 }
