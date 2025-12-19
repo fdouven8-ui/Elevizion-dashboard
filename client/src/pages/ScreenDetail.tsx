@@ -1,5 +1,5 @@
 import { useAppData } from "@/hooks/use-app-data";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +17,14 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { 
   Monitor, 
   Wifi, 
@@ -36,13 +44,20 @@ import {
   BarChart3,
   AlertTriangle,
   TrendingUp,
-  MessageCircle
+  MessageCircle,
+  RefreshCw,
+  Calendar,
+  Camera,
+  Share2,
+  Play
 } from "lucide-react";
-import { Link, useRoute, useLocation } from "wouter";
+import { Link, useRoute, useLocation, useSearch } from "wouter";
 import { placementsApi } from "@/lib/api";
-import { formatDistanceToNow, format } from "date-fns";
+import { formatDistanceToNow, format, subDays } from "date-fns";
 import { nl } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
+import { useState, useRef, useCallback } from "react";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 
 export default function ScreenDetail() {
   const [, params] = useRoute("/screens/:id");
@@ -447,32 +462,359 @@ export default function ScreenDetail() {
       </Card>
 
       {/* D) Statistics Section (Accordion) */}
-      <Accordion type="single" collapsible className="w-full">
-        <AccordionItem value="statistics" className="border rounded-lg px-4">
-          <AccordionTrigger className="hover:no-underline" data-testid="toggle-statistics">
-            <div className="flex items-center gap-2">
-              <BarChart3 className="h-5 w-5" />
-              <span className="font-semibold">Statistieken</span>
-              <Badge variant="outline" className="ml-2 text-xs">Binnenkort</Badge>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
+      <ScreenStatistics screenId={screen.id} yodeckPlayerId={screen.yodeckPlayerId} openInYodeck={openInYodeck} />
+    </div>
+  );
+}
+
+interface ScreenStatsData {
+  screenId: string;
+  screenIdDisplay: string;
+  yodeckPlayerId: string | null;
+  available: boolean;
+  unavailableReason?: string;
+  uptime: {
+    current: "online" | "offline" | "unknown";
+    lastSeen: string | null;
+    uptimePercent: number;
+    timeline: { timestamp: string; status: "online" | "offline"; duration: number }[];
+  };
+  playback: {
+    totalPlays: number;
+    totalDurationMs: number;
+    topCreatives: { name: string; plays: number; durationMs: number }[];
+  };
+  dateRange: { startDate: string; endDate: string };
+}
+
+function ScreenStatistics({ screenId, yodeckPlayerId, openInYodeck }: { screenId: string; yodeckPlayerId: string | null; openInYodeck: () => void }) {
+  const { toast } = useToast();
+  const chartRef = useRef<HTMLDivElement>(null);
+  const [dateRange, setDateRange] = useState<"today" | "7d" | "30d" | "custom">("7d");
+  const [granularity, setGranularity] = useState<"hour" | "day" | "week">("day");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const getDateParams = () => {
+    const end = new Date();
+    let start: Date;
+    
+    switch (dateRange) {
+      case "today":
+        start = new Date();
+        start.setHours(0, 0, 0, 0);
+        break;
+      case "7d":
+        start = subDays(end, 7);
+        break;
+      case "30d":
+        start = subDays(end, 30);
+        break;
+      default:
+        start = subDays(end, 7);
+    }
+    
+    return {
+      startDate: format(start, "yyyy-MM-dd"),
+      endDate: format(end, "yyyy-MM-dd"),
+    };
+  };
+
+  const { startDate, endDate } = getDateParams();
+
+  const { data: stats, isLoading, refetch } = useQuery<ScreenStatsData>({
+    queryKey: ["/api/screens", screenId, "stats", startDate, endDate, granularity],
+    queryFn: async () => {
+      const params = new URLSearchParams({
+        startDate,
+        endDate,
+        granularity,
+      });
+      const res = await fetch(`/api/screens/${screenId}/stats?${params}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Fout bij ophalen statistieken");
+      return res.json();
+    },
+  });
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await refetch();
+      toast({ title: "Statistieken vernieuwd" });
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const handleSnapshot = async () => {
+    if (!chartRef.current) return;
+    
+    try {
+      const html2canvas = (await import("html2canvas")).default;
+      const canvas = await html2canvas(chartRef.current, { backgroundColor: "#ffffff" });
+      const link = document.createElement("a");
+      link.download = `screen-stats-${screenId}-${format(new Date(), "yyyy-MM-dd")}.png`;
+      link.href = canvas.toDataURL();
+      link.click();
+      toast({ title: "Snapshot opgeslagen" });
+    } catch (error) {
+      toast({ title: "Snapshot mislukt", variant: "destructive" });
+    }
+  };
+
+  const handleCopyLink = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("startDate", startDate);
+    url.searchParams.set("endDate", endDate);
+    url.searchParams.set("granularity", granularity);
+    navigator.clipboard.writeText(url.toString());
+    toast({ title: "Link gekopieerd" });
+  };
+
+  const formatDuration = (ms: number) => {
+    const hours = Math.floor(ms / (1000 * 60 * 60));
+    const minutes = Math.floor((ms % (1000 * 60 * 60)) / (1000 * 60));
+    if (hours > 0) return `${hours}u ${minutes}m`;
+    return `${minutes}m`;
+  };
+
+  const uptimeChartData = stats?.uptime?.timeline?.map((point) => ({
+    time: format(new Date(point.timestamp), granularity === "hour" ? "HH:mm" : "d MMM", { locale: nl }),
+    value: point.status === "online" ? 100 : 0,
+    status: point.status,
+  })) || [];
+
+  const playbackChartData = stats?.playback?.topCreatives?.map((c) => ({
+    name: c.name.length > 15 ? c.name.substring(0, 15) + "..." : c.name,
+    plays: c.plays,
+    duration: Math.round(c.durationMs / 1000 / 60),
+  })) || [];
+
+  return (
+    <Accordion type="single" collapsible className="w-full" defaultValue="statistics">
+      <AccordionItem value="statistics" className="border rounded-lg px-4">
+        <AccordionTrigger className="hover:no-underline" data-testid="toggle-statistics">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="h-5 w-5" />
+            <span className="font-semibold">Statistieken</span>
+            {stats?.uptime?.uptimePercent !== undefined && (
+              <Badge variant={stats.uptime.uptimePercent >= 95 ? "default" : "secondary"} className="ml-2">
+                {stats.uptime.uptimePercent}% uptime
+              </Badge>
+            )}
+          </div>
+        </AccordionTrigger>
+        <AccordionContent>
+          {!yodeckPlayerId ? (
             <div className="py-8 text-center">
               <BarChart3 className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
-              <p className="text-muted-foreground mb-2">Statistieken komen beschikbaar zodra Yodeck is gekoppeld</p>
-              <p className="text-xs text-muted-foreground">
-                Uptime trend, offline incidenten en duur worden automatisch verzameld via Yodeck-synchronisatie
+              <p className="text-muted-foreground mb-2">Dit scherm is niet gekoppeld aan Yodeck</p>
+              <p className="text-xs text-muted-foreground mb-4">
+                Koppel dit scherm aan een Yodeck player om statistieken te bekijken
               </p>
-              {!screen.yodeckPlayerId && (
-                <Button variant="outline" size="sm" className="mt-4" onClick={openInYodeck}>
-                  <ExternalLink className="h-4 w-4 mr-2" />
-                  Koppel aan Yodeck
+              <Button variant="outline" size="sm" onClick={openInYodeck}>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Koppel aan Yodeck
+              </Button>
+            </div>
+          ) : isLoading ? (
+            <div className="space-y-4 py-4">
+              <div className="flex gap-4">
+                <Skeleton className="h-20 flex-1" />
+                <Skeleton className="h-20 flex-1" />
+                <Skeleton className="h-20 flex-1" />
+              </div>
+              <Skeleton className="h-48 w-full" />
+            </div>
+          ) : !stats?.available ? (
+            <div className="py-8 text-center">
+              <AlertTriangle className="h-12 w-12 mx-auto mb-4 text-amber-500 opacity-50" />
+              <p className="text-muted-foreground mb-2">{stats?.unavailableReason || "Statistieken niet beschikbaar"}</p>
+              <p className="text-xs text-muted-foreground">
+                Controleer of de Yodeck API correct is geconfigureerd in Instellingen
+              </p>
+            </div>
+          ) : (
+            <div ref={chartRef} className="space-y-6 py-4">
+              <div className="flex flex-wrap items-center gap-3 bg-muted/30 rounded-lg p-3">
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-muted-foreground" />
+                  <Select value={dateRange} onValueChange={(v: any) => setDateRange(v)}>
+                    <SelectTrigger className="w-32 h-8" data-testid="select-date-range">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="today">Vandaag</SelectItem>
+                      <SelectItem value="7d">7 dagen</SelectItem>
+                      <SelectItem value="30d">30 dagen</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <Select value={granularity} onValueChange={(v: any) => setGranularity(v)}>
+                    <SelectTrigger className="w-28 h-8" data-testid="select-granularity">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="hour">Per uur</SelectItem>
+                      <SelectItem value="day">Per dag</SelectItem>
+                      <SelectItem value="week">Per week</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex-1" />
+                <Button variant="ghost" size="sm" onClick={handleRefresh} disabled={isRefreshing} data-testid="button-refresh-stats">
+                  <RefreshCw className={`h-4 w-4 mr-1 ${isRefreshing ? "animate-spin" : ""}`} />
+                  Vernieuwen
                 </Button>
+                <Button variant="ghost" size="sm" onClick={handleSnapshot} data-testid="button-snapshot">
+                  <Camera className="h-4 w-4 mr-1" />
+                  Snapshot
+                </Button>
+                <Button variant="ghost" size="sm" onClick={handleCopyLink} data-testid="button-share-link">
+                  <Share2 className="h-4 w-4 mr-1" />
+                  Link
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <Card className="bg-gradient-to-br from-green-50 to-green-100/50 border-green-200">
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 rounded-full ${stats.uptime.current === "online" ? "bg-green-500" : "bg-red-500"}`}>
+                        {stats.uptime.current === "online" ? (
+                          <Wifi className="h-4 w-4 text-white" />
+                        ) : (
+                          <WifiOff className="h-4 w-4 text-white" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Uptime</p>
+                        <p className="text-2xl font-bold">{stats.uptime.uptimePercent}%</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-gradient-to-br from-blue-50 to-blue-100/50 border-blue-200">
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-full bg-blue-500">
+                        <Play className="h-4 w-4 text-white" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Totaal plays</p>
+                        <p className="text-2xl font-bold">{stats.playback.totalPlays.toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+                <Card className="bg-gradient-to-br from-purple-50 to-purple-100/50 border-purple-200">
+                  <CardContent className="pt-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 rounded-full bg-purple-500">
+                        <Clock className="h-4 w-4 text-white" />
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Speeltijd</p>
+                        <p className="text-2xl font-bold">{formatDuration(stats.playback.totalDurationMs)}</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4" />
+                    Uptime Trend
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {uptimeChartData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={200}>
+                      <AreaChart data={uptimeChartData}>
+                        <defs>
+                          <linearGradient id="uptimeGradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="#22c55e" stopOpacity={0.3} />
+                            <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                        <XAxis dataKey="time" tick={{ fontSize: 12 }} />
+                        <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} tickFormatter={(v) => `${v}%`} />
+                        <Tooltip
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length) {
+                              const data = payload[0].payload;
+                              return (
+                                <div className="bg-background border rounded-lg p-2 shadow-lg">
+                                  <p className="text-sm font-medium">{data.time}</p>
+                                  <p className={`text-sm ${data.status === "online" ? "text-green-600" : "text-red-600"}`}>
+                                    {data.status === "online" ? "Online" : "Offline"}
+                                  </p>
+                                </div>
+                              );
+                            }
+                            return null;
+                          }}
+                        />
+                        <Area
+                          type="stepAfter"
+                          dataKey="value"
+                          stroke="#22c55e"
+                          fill="url(#uptimeGradient)"
+                          strokeWidth={2}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-48 flex items-center justify-center text-muted-foreground">
+                      Geen uptime data beschikbaar
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {playbackChartData.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Play className="h-4 w-4" />
+                      Top Creatives
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <BarChart data={playbackChartData} layout="vertical">
+                        <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                        <XAxis type="number" tick={{ fontSize: 12 }} />
+                        <YAxis dataKey="name" type="category" width={120} tick={{ fontSize: 11 }} />
+                        <Tooltip
+                          content={({ active, payload }) => {
+                            if (active && payload && payload.length) {
+                              const data = payload[0].payload;
+                              return (
+                                <div className="bg-background border rounded-lg p-2 shadow-lg">
+                                  <p className="text-sm font-medium">{data.name}</p>
+                                  <p className="text-sm text-muted-foreground">{data.plays} plays</p>
+                                  <p className="text-sm text-muted-foreground">{data.duration} min</p>
+                                </div>
+                              );
+                            }
+                            return null;
+                          }}
+                        />
+                        <Bar dataKey="plays" fill="#3b82f6" radius={[0, 4, 4, 0]} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </CardContent>
+                </Card>
               )}
             </div>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
-    </div>
+          )}
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   );
 }
