@@ -1,6 +1,7 @@
 // Yodeck API Integration
 // IMPORTANT: API key is read ONLY from process.env.YODECK_API_KEY - never from frontend or local files
-const YODECK_BASE_URL = "https://app.yodeck.com/api/v1";
+// API v3 docs: https://app.yodeck.com/api-docs/
+const YODECK_BASE_URL = "https://app.yodeck.com/api/v3";
 
 export interface IntegrationCredentials {
   api_key?: string;
@@ -40,24 +41,44 @@ export async function testYodeckConnection(): Promise<{
     return { ok: false, message: "YODECK_API_KEY ontbreekt of is ongeldig", statusCode: 400 };
   }
 
+  const url = `${YODECK_BASE_URL}/screens`;
+  console.log(`[Yodeck] Calling: GET ${url}`);
+
   try {
-    const response = await fetch(`${YODECK_BASE_URL}/screens`, {
+    const response = await fetch(url, {
+      method: "GET",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+        "Accept": "application/json",
       },
     });
 
     const statusCode = response.status;
+    const contentType = response.headers.get("content-type") || "";
+    const bodyText = await response.text();
+    
+    console.log(`[Yodeck] Response status: ${statusCode}, content-type: ${contentType}`);
+    console.log(`[Yodeck] Response body (first 100 chars): ${bodyText.substring(0, 100)}`);
+
+    // Check if we got HTML instead of JSON (wrong endpoint)
+    if (contentType.includes("text/html") || bodyText.startsWith("<!") || bodyText.startsWith("<html")) {
+      console.log("[Yodeck] Test failed - received HTML instead of JSON");
+      return { ok: false, message: "Wrong Yodeck API URL/endpoint (HTML Not Found)", statusCode };
+    }
 
     if (response.ok) {
-      const data = await response.json();
-      const deviceCount = Array.isArray(data) ? data.length : (data.results?.length || 0);
-      console.log(`[Yodeck] Test success - ${deviceCount} devices found`);
-      return { ok: true, message: "Verbonden met Yodeck", deviceCount, statusCode };
+      try {
+        const data = JSON.parse(bodyText);
+        // v3 API returns { results: [...], count: N }
+        const deviceCount = data.count ?? (Array.isArray(data) ? data.length : (data.results?.length || 0));
+        console.log(`[Yodeck] Test success - ${deviceCount} devices found`);
+        return { ok: true, message: "Verbonden met Yodeck", deviceCount, statusCode };
+      } catch (parseError) {
+        console.log(`[Yodeck] Test failed - JSON parse error`);
+        return { ok: false, message: "Invalid JSON response from Yodeck", statusCode };
+      }
     } else {
-      const error = await response.text();
-      console.log(`[Yodeck] Test failed - status ${statusCode}: ${error.substring(0, 100)}`);
+      console.log(`[Yodeck] Test failed - status ${statusCode}`);
       return { ok: false, message: `API Fout: ${statusCode}`, statusCode };
     }
   } catch (error: any) {
@@ -76,19 +97,39 @@ export async function syncYodeckScreens(): Promise<{ success: boolean; screens?:
     return { success: false, message: "YODECK_API_KEY ontbreekt" };
   }
 
+  const url = `${YODECK_BASE_URL}/screens`;
+  console.log(`[Yodeck] Sync calling: GET ${url}`);
+
   try {
-    const response = await fetch(`${YODECK_BASE_URL}/screens`, {
+    const response = await fetch(url, {
+      method: "GET",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
+        "Accept": "application/json",
       },
     });
 
+    const contentType = response.headers.get("content-type") || "";
+    const bodyText = await response.text();
+    
+    console.log(`[Yodeck] Sync response status: ${response.status}, content-type: ${contentType}`);
+    console.log(`[Yodeck] Sync body (first 100 chars): ${bodyText.substring(0, 100)}`);
+
+    // Check if we got HTML instead of JSON
+    if (contentType.includes("text/html") || bodyText.startsWith("<!") || bodyText.startsWith("<html")) {
+      return { success: false, message: "Wrong Yodeck API URL/endpoint (HTML Not Found)" };
+    }
+
     if (response.ok) {
-      const screens = await response.json();
-      const screenList = Array.isArray(screens) ? screens : (screens.results || []);
-      console.log(`[Yodeck] Sync success - ${screenList.length} screens`);
-      return { success: true, screens: screenList };
+      try {
+        const data = JSON.parse(bodyText);
+        // v3 API returns { results: [...], count: N }
+        const screenList = data.results || (Array.isArray(data) ? data : []);
+        console.log(`[Yodeck] Sync success - ${screenList.length} screens`);
+        return { success: true, screens: screenList };
+      } catch (parseError) {
+        return { success: false, message: "Invalid JSON response from Yodeck" };
+      }
     } else {
       console.log(`[Yodeck] Sync failed - status ${response.status}`);
       return { success: false, message: `Schermen ophalen mislukt: ${response.status}` };
