@@ -1,8 +1,9 @@
 // Yodeck API Integration
 // IMPORTANT: API key is read ONLY from process.env.YODECK_API_KEY - never from frontend or local files
-// API base: https://api.yodeck.com
+// Official API docs: https://app.yodeck.com/api-docs/
+// Base URL: https://app.yodeck.com/api/v1
 // Auth: Bearer <api_key>
-const YODECK_BASE_URL = "https://api.yodeck.com";
+const YODECK_BASE_URL = "https://app.yodeck.com/api/v1";
 
 export interface IntegrationCredentials {
   api_key?: string;
@@ -49,8 +50,8 @@ export async function testYodeckConnection(): Promise<{
     return { ok: false, message: "YODECK_API_KEY ontbreekt of is ongeldig", statusCode: 400 };
   }
 
-  // Use /devices endpoint to list devices
-  const fullUrl = `${YODECK_BASE_URL}/devices`;
+  // Use /screens endpoint to list screens (per official docs)
+  const fullUrl = `${YODECK_BASE_URL}/screens`;
   console.log(`[YODECK TEST] requesting: ${fullUrl}`);
 
   try {
@@ -71,12 +72,12 @@ export async function testYodeckConnection(): Promise<{
     console.log(`[YODECK TEST] content-type: ${contentType}`);
     console.log(`[YODECK TEST] body (first 200 chars): ${bodyPreview}`);
 
-    // Check if we got HTML instead of JSON (wrong endpoint)
-    if (contentType.includes("text/html") || bodyText.startsWith("<!") || bodyText.startsWith("<html")) {
-      console.log("[YODECK TEST] FAIL - received HTML instead of JSON");
+    // Check if we got JSON response - if not, treat as failure
+    if (!contentType.includes("application/json")) {
+      console.log(`[YODECK TEST] FAIL - received non-JSON response: ${contentType}`);
       return { 
         ok: false, 
-        message: "Wrong Yodeck API URL/endpoint (HTML Not Found)", 
+        message: `Yodeck returned non-JSON response (${contentType || "unknown"})`, 
         statusCode,
         requestedUrl: fullUrl,
         contentType,
@@ -115,7 +116,7 @@ export async function syncYodeckScreens(): Promise<{ success: boolean; screens?:
     return { success: false, message: "YODECK_API_KEY ontbreekt" };
   }
 
-  const url = `${YODECK_BASE_URL}/devices`;
+  const url = `${YODECK_BASE_URL}/screens`;
   console.log(`[Yodeck] Sync calling: GET ${url}`);
 
   try {

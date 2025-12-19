@@ -1139,23 +1139,27 @@ export async function registerRoutes(
     try {
       const result = await testYodeckConnection();
       console.log(`[YODECK TEST] result: ok=${result.ok}, deviceCount=${result.deviceCount || 0}`);
+      
+      // If Yodeck returned non-JSON or non-2xx, return 502 Bad Gateway
       if (!result.ok) {
-        return res.status(result.statusCode || 400).json({
+        const httpStatus = (result.contentType && !result.contentType.includes("application/json")) ? 502 : (result.statusCode || 400);
+        return res.status(httpStatus).json({
           ok: false,
           success: false,
           message: result.message,
-          statusCode: result.statusCode,
+          status: result.statusCode,
           requestedUrl: result.requestedUrl,
           contentType: result.contentType,
           bodyPreview: result.bodyPreview,
         });
       }
+      
       res.json({
         ok: true,
         success: true,
         message: result.message,
         deviceCount: result.deviceCount,
-        statusCode: result.statusCode,
+        status: result.statusCode,
         requestedUrl: result.requestedUrl,
       });
     } catch (error: any) {
@@ -1164,7 +1168,7 @@ export async function registerRoutes(
         ok: false,
         success: false,
         message: `Server error: ${error.message}`,
-        statusCode: 500,
+        status: 500,
       });
     }
   });
