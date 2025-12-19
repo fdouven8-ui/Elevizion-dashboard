@@ -391,6 +391,8 @@ export const integrationConfigs = pgTable("integration_configs", {
   lastSyncItemsProcessed: integer("last_sync_items_processed"),
   syncFrequency: text("sync_frequency").default("15min"), // 5min, 15min, 30min, 1hour, manual
   settings: jsonb("settings"), // service-specific non-secret settings
+  encryptedCredentials: text("encrypted_credentials"), // AES-256 encrypted JSON of API keys
+  credentialsConfigured: jsonb("credentials_configured").$type<Record<string, boolean>>(), // which keys are set (e.g., {api_key: true, admin_id: true})
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

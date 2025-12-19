@@ -182,6 +182,9 @@ export interface IStorage {
   getIntegrationConfig(service: string): Promise<IntegrationConfig | undefined>;
   upsertIntegrationConfig(service: string, data: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig>;
   updateIntegrationConfig(service: string, data: Partial<InsertIntegrationConfig>): Promise<IntegrationConfig | undefined>;
+  saveIntegrationCredentials(service: string, encryptedCreds: string, configuredKeys: Record<string, boolean>): Promise<IntegrationConfig>;
+  deleteIntegrationCredentials(service: string): Promise<IntegrationConfig>;
+  getIntegrationEncryptedCredentials(service: string): Promise<string | null>;
 
   // Jobs
   getJobs(): Promise<Job[]>;
@@ -873,6 +876,61 @@ export class DatabaseStorage implements IStorage {
       .where(eq(schema.integrationConfigs.service, service))
       .returning();
     return updated;
+  }
+
+  async saveIntegrationCredentials(
+    service: string, 
+    encryptedCreds: string, 
+    configuredKeys: Record<string, boolean>
+  ): Promise<IntegrationConfig> {
+    const existing = await this.getIntegrationConfig(service);
+    if (existing) {
+      const [updated] = await db.update(schema.integrationConfigs)
+        .set({ 
+          encryptedCredentials: encryptedCreds,
+          credentialsConfigured: configuredKeys,
+          updatedAt: new Date() 
+        })
+        .where(eq(schema.integrationConfigs.service, service))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(schema.integrationConfigs)
+        .values({ 
+          service, 
+          encryptedCredentials: encryptedCreds,
+          credentialsConfigured: configuredKeys 
+        })
+        .returning();
+      return created;
+    }
+  }
+
+  async deleteIntegrationCredentials(service: string): Promise<IntegrationConfig> {
+    const existing = await this.getIntegrationConfig(service);
+    if (existing) {
+      const [updated] = await db.update(schema.integrationConfigs)
+        .set({ 
+          encryptedCredentials: null,
+          credentialsConfigured: null,
+          status: "not_configured",
+          isEnabled: false,
+          updatedAt: new Date() 
+        })
+        .where(eq(schema.integrationConfigs.service, service))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(schema.integrationConfigs)
+        .values({ service })
+        .returning();
+      return created;
+    }
+  }
+
+  async getIntegrationEncryptedCredentials(service: string): Promise<string | null> {
+    const config = await this.getIntegrationConfig(service);
+    return config?.encryptedCredentials ?? null;
   }
 
   // ============================================================================

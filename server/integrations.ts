@@ -1,11 +1,17 @@
 // Yodeck API Integration
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v1";
 
-export async function testYodeckConnection(): Promise<{ success: boolean; message: string; data?: any }> {
-  const apiToken = process.env.YODECK_API_TOKEN;
+export interface IntegrationCredentials {
+  api_key?: string;
+  access_token?: string;
+  admin_id?: string;
+}
+
+export async function testYodeckConnection(credentials?: IntegrationCredentials): Promise<{ success: boolean; message: string; data?: any }> {
+  const apiToken = credentials?.api_key || process.env.YODECK_API_TOKEN;
   
   if (!apiToken) {
-    return { success: false, message: "YODECK_API_TOKEN not configured" };
+    return { success: false, message: "API key niet geconfigureerd" };
   }
 
   try {
@@ -18,21 +24,21 @@ export async function testYodeckConnection(): Promise<{ success: boolean; messag
 
     if (response.ok) {
       const data = await response.json();
-      return { success: true, message: "Connected successfully", data };
+      return { success: true, message: "Verbinding succesvol", data };
     } else {
       const error = await response.text();
-      return { success: false, message: `API Error: ${response.status} - ${error}` };
+      return { success: false, message: `API Fout: ${response.status} - ${error}` };
     }
   } catch (error: any) {
-    return { success: false, message: `Connection failed: ${error.message}` };
+    return { success: false, message: `Verbinding mislukt: ${error.message}` };
   }
 }
 
-export async function syncYodeckScreens(): Promise<{ success: boolean; screens?: any[]; message?: string }> {
-  const apiToken = process.env.YODECK_API_TOKEN;
+export async function syncYodeckScreens(credentials?: IntegrationCredentials): Promise<{ success: boolean; screens?: any[]; message?: string }> {
+  const apiToken = credentials?.api_key || process.env.YODECK_API_TOKEN;
   
   if (!apiToken) {
-    return { success: false, message: "YODECK_API_TOKEN not configured" };
+    return { success: false, message: "API key niet geconfigureerd" };
   }
 
   try {
@@ -47,7 +53,7 @@ export async function syncYodeckScreens(): Promise<{ success: boolean; screens?:
       const screens = await response.json();
       return { success: true, screens };
     } else {
-      return { success: false, message: `Failed to fetch screens: ${response.status}` };
+      return { success: false, message: `Schermen ophalen mislukt: ${response.status}` };
     }
   } catch (error: any) {
     return { success: false, message: error.message };
@@ -57,16 +63,16 @@ export async function syncYodeckScreens(): Promise<{ success: boolean; screens?:
 // Moneybird API Integration
 const MONEYBIRD_BASE_URL = "https://moneybird.com/api/v2";
 
-export async function testMoneybirdConnection(): Promise<{ success: boolean; message: string; data?: any }> {
-  const apiToken = process.env.MONEYBIRD_API_TOKEN;
-  const administrationId = process.env.MONEYBIRD_ADMINISTRATION_ID;
+export async function testMoneybirdConnection(credentials?: IntegrationCredentials): Promise<{ success: boolean; message: string; data?: any }> {
+  const apiToken = credentials?.access_token || process.env.MONEYBIRD_API_TOKEN;
+  const administrationId = credentials?.admin_id || process.env.MONEYBIRD_ADMINISTRATION_ID;
   
   if (!apiToken) {
-    return { success: false, message: "MONEYBIRD_API_TOKEN not configured" };
+    return { success: false, message: "Access token niet geconfigureerd" };
   }
   
   if (!administrationId) {
-    return { success: false, message: "MONEYBIRD_ADMINISTRATION_ID not configured" };
+    return { success: false, message: "Administratie ID niet geconfigureerd" };
   }
 
   try {
@@ -79,13 +85,40 @@ export async function testMoneybirdConnection(): Promise<{ success: boolean; mes
 
     if (response.ok) {
       const data = await response.json();
-      return { success: true, message: "Connected successfully", data };
+      return { success: true, message: "Verbinding succesvol", data };
     } else {
       const error = await response.text();
-      return { success: false, message: `API Error: ${response.status} - ${error}` };
+      return { success: false, message: `API Fout: ${response.status} - ${error}` };
     }
   } catch (error: any) {
-    return { success: false, message: `Connection failed: ${error.message}` };
+    return { success: false, message: `Verbinding mislukt: ${error.message}` };
+  }
+}
+
+export async function testDropboxSignConnection(credentials?: IntegrationCredentials): Promise<{ success: boolean; message: string; data?: any }> {
+  const apiKey = credentials?.api_key || process.env.DROPBOX_SIGN_API_KEY;
+  
+  if (!apiKey) {
+    return { success: false, message: "API key niet geconfigureerd" };
+  }
+
+  try {
+    const response = await fetch("https://api.hellosign.com/v3/account", {
+      headers: {
+        "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
+        "Accept": "application/json",
+      },
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return { success: true, message: "Verbinding succesvol", data };
+    } else {
+      const error = await response.text();
+      return { success: false, message: `API Fout: ${response.status} - ${error}` };
+    }
+  } catch (error: any) {
+    return { success: false, message: `Verbinding mislukt: ${error.message}` };
   }
 }
 

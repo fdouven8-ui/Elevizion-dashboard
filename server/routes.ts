@@ -32,6 +32,7 @@ import {
   getIntegrationStatus,
   testYodeckConnection,
   testMoneybirdConnection,
+  testDropboxSignConnection,
   syncYodeckScreens,
 } from "./integrations";
 import {
@@ -3113,67 +3114,24 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Ongeldige service" });
       }
 
+      const encryptedCreds = await storage.getIntegrationEncryptedCredentials(service);
+      let credentials: Record<string, string> = {};
+      
+      if (encryptedCreds) {
+        try {
+          credentials = decryptCredentials(encryptedCreds);
+        } catch {
+        }
+      }
+
       let testResult = { success: false, message: "Test niet beschikbaar" };
       
       if (service === "yodeck") {
-        const apiKey = process.env.YODECK_API_KEY;
-        if (!apiKey) {
-          testResult = { success: false, message: "YODECK_API_KEY niet ingesteld in environment" };
-        } else {
-          try {
-            const response = await fetch("https://api.yodeck.com/v2/devices", {
-              headers: { Authorization: `Bearer ${apiKey}` },
-            });
-            if (response.ok) {
-              const data = await response.json();
-              testResult = { 
-                success: true, 
-                message: `Verbinding geslaagd. ${Array.isArray(data) ? data.length : 0} apparaten gevonden.` 
-              };
-            } else {
-              testResult = { success: false, message: `API fout: ${response.status} ${response.statusText}` };
-            }
-          } catch (e: any) {
-            testResult = { success: false, message: `Netwerk fout: ${e.message}` };
-          }
-        }
+        testResult = await testYodeckConnection(credentials);
       } else if (service === "moneybird") {
-        const token = process.env.MONEYBIRD_ACCESS_TOKEN;
-        const adminId = process.env.MONEYBIRD_ADMIN_ID;
-        if (!token || !adminId) {
-          testResult = { success: false, message: "MONEYBIRD_ACCESS_TOKEN of MONEYBIRD_ADMIN_ID niet ingesteld" };
-        } else {
-          try {
-            const response = await fetch(`https://moneybird.com/api/v2/${adminId}/administrations.json`, {
-              headers: { Authorization: `Bearer ${token}` },
-            });
-            if (response.ok) {
-              testResult = { success: true, message: "Verbinding met Moneybird geslaagd" };
-            } else {
-              testResult = { success: false, message: `API fout: ${response.status}` };
-            }
-          } catch (e: any) {
-            testResult = { success: false, message: `Netwerk fout: ${e.message}` };
-          }
-        }
+        testResult = await testMoneybirdConnection(credentials);
       } else if (service === "dropbox_sign") {
-        const apiKey = process.env.DROPBOX_SIGN_API_KEY;
-        if (!apiKey) {
-          testResult = { success: false, message: "DROPBOX_SIGN_API_KEY niet ingesteld" };
-        } else {
-          try {
-            const response = await fetch("https://api.hellosign.com/v3/account", {
-              headers: { Authorization: `Basic ${Buffer.from(apiKey + ":").toString("base64")}` },
-            });
-            if (response.ok) {
-              testResult = { success: true, message: "Verbinding met Dropbox Sign geslaagd" };
-            } else {
-              testResult = { success: false, message: `API fout: ${response.status}` };
-            }
-          } catch (e: any) {
-            testResult = { success: false, message: `Netwerk fout: ${e.message}` };
-          }
-        }
+        testResult = await testDropboxSignConnection(credentials);
       }
 
       await storage.upsertIntegrationConfig(service, {
@@ -3217,18 +3175,115 @@ export async function registerRoutes(
 
   app.get("/api/integrations/secrets/status", requirePermission("manage_integrations"), async (req, res) => {
     try {
-      res.json({
-        yodeck: {
-          YODECK_API_KEY: !!process.env.YODECK_API_KEY,
-        },
-        moneybird: {
-          MONEYBIRD_ACCESS_TOKEN: !!process.env.MONEYBIRD_ACCESS_TOKEN,
-          MONEYBIRD_ADMIN_ID: !!process.env.MONEYBIRD_ADMIN_ID,
-        },
-        dropbox_sign: {
-          DROPBOX_SIGN_API_KEY: !!process.env.DROPBOX_SIGN_API_KEY,
-        },
+      const configs = await storage.getIntegrationConfigs();
+      const result: Record<string, Record<string, boolean>> = {
+        yodeck: { api_key: false },
+        moneybird: { access_token: false, admin_id: false },
+        dropbox_sign: { api_key: false },
+      };
+      
+      for (const config of configs) {
+        if (config.credentialsConfigured) {
+          result[config.service] = config.credentialsConfigured as Record<string, boolean>;
+        }
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  const { encryptCredentials, decryptCredentials, maskApiKey } = await import("./crypto");
+
+  const credentialsSchema = z.object({
+    credentials: z.record(z.string().min(1)),
+  });
+
+  app.post("/api/integrations/:service/credentials", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { service } = req.params;
+      if (!VALID_SERVICES.includes(service)) {
+        return res.status(400).json({ message: "Ongeldige service" });
+      }
+
+      const parseResult = credentialsSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({ message: "Ongeldige credentials formaat" });
+      }
+
+      const { credentials } = parseResult.data;
+      
+      const existingEncrypted = await storage.getIntegrationEncryptedCredentials(service);
+      let mergedCredentials = { ...credentials };
+      
+      if (existingEncrypted) {
+        try {
+          const existing = decryptCredentials(existingEncrypted);
+          mergedCredentials = { ...existing, ...credentials };
+        } catch {
+        }
+      }
+
+      const encrypted = encryptCredentials(mergedCredentials);
+      const configuredKeys: Record<string, boolean> = {};
+      for (const key of Object.keys(mergedCredentials)) {
+        configuredKeys[key] = true;
+      }
+
+      const config = await storage.saveIntegrationCredentials(service, encrypted, configuredKeys);
+      
+      res.json({ 
+        success: true, 
+        message: "Credentials opgeslagen",
+        credentialsConfigured: configuredKeys,
       });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/integrations/:service/credentials", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { service } = req.params;
+      if (!VALID_SERVICES.includes(service)) {
+        return res.status(400).json({ message: "Ongeldige service" });
+      }
+
+      await storage.deleteIntegrationCredentials(service);
+      res.json({ success: true, message: "Credentials verwijderd" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/integrations/:service/credentials/:key", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { service, key } = req.params;
+      if (!VALID_SERVICES.includes(service)) {
+        return res.status(400).json({ message: "Ongeldige service" });
+      }
+
+      const existingEncrypted = await storage.getIntegrationEncryptedCredentials(service);
+      if (!existingEncrypted) {
+        return res.status(404).json({ message: "Geen credentials gevonden" });
+      }
+
+      const existing = decryptCredentials(existingEncrypted);
+      delete existing[key];
+
+      if (Object.keys(existing).length === 0) {
+        await storage.deleteIntegrationCredentials(service);
+      } else {
+        const encrypted = encryptCredentials(existing);
+        const configuredKeys: Record<string, boolean> = {};
+        for (const k of Object.keys(existing)) {
+          configuredKeys[k] = true;
+        }
+        await storage.saveIntegrationCredentials(service, encrypted, configuredKeys);
+      }
+
+      res.json({ success: true, message: "Credential verwijderd" });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
