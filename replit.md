@@ -47,6 +47,7 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 - Dashboard features a "Control Room" with real-time stats and alerts.
 - Onboarding via quick wizards.
 - Specific sections for Schermen, Ads & Plaatsingen, Adverteerders, and Instellingen.
+- **Screens module**: City-first organization with "Plaats" (city) as primary filter and "Locatie/Bedrijf" as secondary cascading filter. Table columns: Screen ID, Plaats, Locatie/Bedrijf, Status, Actieve plaatsingen, Actie. "Laatst gezien" removed from list view (only shown on detail page).
 - "Template Center" for managing various communication templates with versioning and preview.
 - "Cold Walk-in Onboarding Wizard" for rapid field onboarding of locations and advertisers.
 - Sales pipeline with Kanban board for lead management, including location surveys with photo upload and supply lists.
