@@ -1,0 +1,244 @@
+You are working inside the EXISTING Replit codebase of my dashboard. Do NOT start a new project. Refactor the current version into an Elevizion-specific internal operating system that connects:
+
+- Dropbox Sign = all contracts + signing status + signed PDFs
+- Moneybird = customers + invoices/quotes + SEPA direct debit (automatic incasso) + payment status
+- Yodeck = screens/devices + online/offline status + “last seen” + content playback
+- Our Dashboard = the glue/autopilot: onboarding, overview, placements truth, automations, templates-as-forms, document storage links
+
+HIGH-LEVEL PRINCIPLE:
+This is NOT a generic SaaS for many companies. It is built for ONE network: Elevizion.
+The UI must be extremely simple (owner-first, staff-friendly), with automation to minimize human error.
+Keep it clean and modern, but prioritize “one-click actions” over complex analytics.
+
+====================================================
+1) SIMPLIFY NAVIGATION (replace current sidebar)
+====================================================
+Keep MAX 6 menu items:
+1) Home (Control Room)
+2) Onboarding
+3) Screens
+4) Advertisers
+5) Placements
+6) Settings (includes Templates, Automations, Users, Integrations, Finance)
+
+Remove/disable any generic SaaS modules (acquisition, tasks, deep admin sections) unless they directly support onboarding or daily operations.
+
+====================================================
+2) CORE DATA & UNIQUE KEYS (must be consistent)
+====================================================
+- SCREEN_ID like EVZ-001 is mandatory and used everywhere.
+- Yodeck devices must include SCREEN_ID in device name or tag.
+- Dashboard stores mapping: screen_id <-> yodeck_device_id.
+- Moneybird stores advertiser contacts; dashboard stores mapping: advertiser_id <-> moneybird_contact_id.
+- Contracts stored in Dropbox Sign; dashboard stores mapping: advertiser/location <-> esign_document_ids + status + pdf links.
+
+Dashboard DB must store what external tools don’t store as “our truth”:
+- Placements (what runs where, dates, status)
+- Contract send/sign status
+- Automation toggles + thresholds
+- Audit logs (who did what)
+- Optional: simple Issues (screen problems)
+
+====================================================
+3) HOME (CONTROL ROOM) — OPS-FIRST, ACTION-FIRST
+====================================================
+Home must NOT be “read-only analytics”. It must tell the owner what to do NOW.
+
+Top tiles (simple):
+- Screens Online / Total
+- Offline Screens
+- Screens not full (<20 active placements)
+- Pending creatives / pending approvals (if implemented)
+- Open issues (optional)
+- Payment risk (overdue advertisers) as a SMALL secondary tile
+
+Below: “FIX NOW” list (max 5 items, highest impact first)
+- Offline screens above threshold
+- Screens with very low inventory
+- Contracts not signed after X days
+- Overdue advertisers (if automation enabled)
+Each item MUST have one-click actions:
+- Open Screen / Open Advertiser
+- Open in Yodeck (for screens)
+- Send reminder (template)
+- Mark resolved / create issue
+
+Add “QUICK ACTIONS” buttons always visible:
+- + New Screen
+- + New Advertiser
+- + Upload Creative
+- + Place Ad / Fill screens
+
+Optional small ops graphs ONLY (not finance-first):
+- Offline incidents last 7 days
+- Online % trend
+- Inventory/empty screens trend
+
+====================================================
+4) ONBOARDING — THE MAIN WORK (WIZARDS)
+====================================================
+
+A) New Screen / Location Onboarding Wizard
+Step 1: Create/select Location (host business)
+- name, address, contact, phone/email, revenue_share_percent optional
+Step 2: Generate screen_id (EVZ-###)
+Step 3: Link/select Yodeck device OR paste yodeck_device_id
+Step 4: Validate connectivity (online/offline + last seen from Yodeck)
+Step 5: Finish with shortcut “Add placements now”
+Optional: send “location agreement/confirmation” via Dropbox Sign if enabled.
+
+B) New Advertiser Onboarding Wizard (hands-off)
+Step 1: Create advertiser (name, phone, email, notes)
+Step 2: Link Moneybird contact (search/select OR create later)
+Step 3: Upload creative(s) (image/video/html) + duration seconds
+Step 4: Place Ad (select screens or groups, start/end dates, status)
+Step 5: Contracts & SEPA:
+- Send Advertising Contract via Dropbox Sign
+- Send SEPA authorization via Dropbox Sign (only if you use SEPA-as-document)
+- Alternatively, if SEPA is handled only in Moneybird, still send the advertising contract and store “SEPA in Moneybird: yes/no” flag
+Step 6: Finish screen:
+- Show “Contracts: 0/2 signed” + quick resend buttons
+
+BUSINESS RULE (must implement):
+- If required contracts are not signed => advertiser status = PENDING and placements default to HOLD (not live)
+- When contracts become SIGNED => advertiser becomes ACTIVE and placements automatically become ACTIVE (live)
+
+====================================================
+5) ADVERTISERS — PHONE-CALL FRIENDLY
+====================================================
+Advertisers page:
+- Big search bar (name/phone/email/advertiser_id)
+- Simple table: Name, Status (Pending/Active/Hold/Stopped), Active placements count, Contract status badge, Payment badge (small)
+
+Advertiser detail page MUST show (in this order):
+1) Contact info + notes
+2) Contract status:
+   - Advertising Contract: NOT SENT / SENT / VIEWED / SIGNED
+   - SEPA document: NOT SENT / SENT / VIEWED / SIGNED (if used)
+   - Buttons: Send/Resend, Copy reminder message
+   - Signed PDF links
+3) “Where are my ads running?”:
+   - list grouped by ScreenID + Location name + start/end + status
+   - Button: open filtered placements
+4) Creatives:
+   - thumbnails, duration, approved/pending
+   - upload/replace actions
+5) Payment status (secondary):
+   - Moneybird paid/open/overdue + days overdue
+   - Button: copy payment reminder template
+
+Goal: In <10 seconds you can answer a caller:
+- who they are
+- where their ads run
+- contract signed or not
+- payment status
+
+====================================================
+6) SCREENS — OPS-FIRST
+====================================================
+Screens page:
+- table with filters: online/offline, low inventory (<20), group/location
+- columns: screen_id, location, online status, last seen, active placements, empty slots
+- actions: Open in Yodeck, Add placements, Create issue, Contact location template
+
+Screen detail:
+- Yodeck status + last seen
+- what is placed on this screen (placements list)
+- button “Fill this screen to 20” (guided flow: select ads and auto-fill slots)
+
+====================================================
+7) PLACEMENTS — SINGLE SOURCE OF TRUTH
+====================================================
+Placements page:
+- must answer instantly “what runs where?”
+- filter by ScreenID or by Advertiser
+- show: advertiser, creative, target screen/group, start/end, status (active/hold/paused)
+- bulk actions: pause/resume/hold, assign to group, change dates
+- warnings: expired, missing creative, screen offline, duplicates/conflicts
+
+Placements are what connect advertisers + screens + running schedule.
+Do not hide this behind too many steps, but keep UI simple.
+
+====================================================
+8) SETTINGS — TEMPLATES AS FORMS (NO PLACEHOLDER SYNTAX FOR USER)
+====================================================
+There is already a small Templates section. Keep it, but expand it.
+
+Key requirement:
+The owner/staff must NOT write or see placeholder syntax like {{price}}.
+Instead, templates are “fixed text + required input fields (forms)”.
+
+Templates section must support categories/types:
+- Email templates
+- WhatsApp templates
+- Contract templates (Dropbox Sign)
+- Moneybird message templates (invoice/quote email text)
+
+Each template must define:
+- name, category/type, enabled toggle
+- subject (email)
+- fixed body text (standard wording)
+- REQUIRED FIELD SET (friendly inputs): e.g. price/month, start date, contract length, spot duration, screens selected
+- PREVIEW button: select an advertiser and/or screen and preview final output with real data
+- versioning + audit log for edits
+
+Sending behavior:
+- Email/WhatsApp: generate final message text and provide send/copy workflow
+- Dropbox Sign: generate final contract content and send for signature (or map to a provider template id)
+- Moneybird: do NOT recreate invoice layouts; only manage the email/message template used when sending Moneybird invoices/quotes.
+
+====================================================
+9) AUTOMATIONS (TOGGLES) — MINIMIZE HUMAN ERROR
+====================================================
+Implement automations as toggles with thresholds in Settings > Automations.
+Ops-first rules (ON by default):
+- Screen offline > 60 min => create alert/issue
+- Screen offline > 4 hours => escalate to owner in Home “FIX NOW”
+- Screen inventory <20 => alert + quick action “Fill now”
+- Contract SENT but not SIGNED after 48 hours => reminder template
+Payment rules (OFF by default initially):
+- Moneybird overdue > 14 days => set placements to HOLD automatically
+
+All automation actions must create AuditLog entries.
+
+====================================================
+10) INTEGRATIONS & STORAGE
+====================================================
+- Do not call external APIs on every page load.
+- Implement background sync:
+  - Yodeck polling every 5–10 minutes -> store online/offline + last seen in DB
+  - Moneybird sync via webhook if possible, else periodic -> store payment status in DB
+  - Dropbox Sign webhook for document status -> store sent/viewed/signed + signed PDF link
+- Signed documents:
+  - keep reference in Dropbox Sign AND store a copy in our storage (optional but recommended)
+  - in dashboard show “Download PDF” for each signed doc
+
+Add “Sync Health” status somewhere (Settings and small indicator on Home).
+
+====================================================
+11) SECURITY & RELIABILITY (must)
+====================================================
+- hashed passwords (bcrypt/argon2)
+- secure sessions (httpOnly cookies)
+- role-based authorization checks server-side
+- input validation, prevent XSS/SQLi/IDOR
+- rate limit login
+- audit log sensitive actions (template edits, placement changes, sending contracts, holds/pauses)
+- graceful error handling (UI works with last known data if sync fails)
+
+====================================================
+IMPLEMENTATION ORDER (important)
+====================================================
+1) Simplify navigation + rebuild Home as action-first
+2) Implement Advertisers module with “where ads run” + contract status
+3) Expand Templates section to “templates as forms” (no placeholder syntax for user)
+4) Implement Onboarding wizards (new screen + new advertiser)
+5) Implement Placements + bulk actions + fill-to-20 flow
+6) Add integrations sync jobs + webhooks + sync health
+7) Security hardening + audit logs + documentation/help
+
+Deliver a clean Elevizion control room that uses:
+- Dropbox Sign for contracts
+- Moneybird for finance/customers/incasso
+- Yodeck for screens
+and the dashboard as the glue/autopilot.

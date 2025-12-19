@@ -28,8 +28,8 @@ const menuItems = [
   { title: "Home", url: "/dashboard", icon: LayoutDashboard },
   { title: "Onboarding", url: "/onboarding", icon: Rocket },
   { title: "Schermen", url: "/screens", icon: Monitor },
-  { title: "Ads & Plaatsingen", url: "/placements", icon: Target },
   { title: "Adverteerders", url: "/advertisers", icon: Users },
+  { title: "Plaatsingen", url: "/placements", icon: Target },
   { title: "Instellingen", url: "/settings", icon: Settings },
 ];
 
