@@ -34,6 +34,7 @@ import {
   testMoneybirdConnection,
   testDropboxSignConnection,
   syncYodeckScreens,
+  getYodeckConfigStatus,
 } from "./integrations";
 import {
   isEmailConfigured,
@@ -1123,9 +1124,30 @@ export async function registerRoutes(
     res.json(status);
   });
 
+  // Yodeck config-status endpoint - checks if YODECK_API_KEY is set
+  app.get("/api/integrations/yodeck/config-status", async (_req, res) => {
+    const status = getYodeckConfigStatus();
+    res.json(status);
+  });
+
+  // Yodeck test connection - uses ONLY process.env.YODECK_API_KEY
   app.post("/api/integrations/yodeck/test", async (_req, res) => {
     const result = await testYodeckConnection();
-    res.json(result);
+    if (!result.ok) {
+      return res.status(result.statusCode || 400).json({
+        ok: false,
+        success: false,
+        message: result.message,
+        statusCode: result.statusCode,
+      });
+    }
+    res.json({
+      ok: true,
+      success: true,
+      message: result.message,
+      deviceCount: result.deviceCount,
+      statusCode: result.statusCode,
+    });
   });
 
   app.post("/api/integrations/moneybird/test", async (_req, res) => {
@@ -1133,6 +1155,7 @@ export async function registerRoutes(
     res.json(result);
   });
 
+  // Yodeck sync - uses ONLY process.env.YODECK_API_KEY
   app.post("/api/integrations/yodeck/sync", async (_req, res) => {
     const result = await syncYodeckScreens();
     if (result.success && result.screens) {
@@ -3180,24 +3203,33 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Ongeldige service" });
       }
 
-      const encryptedCreds = await storage.getIntegrationEncryptedCredentials(service);
-      let credentials: Record<string, string> = {};
+      let testResult: { success: boolean; message: string; deviceCount?: number } = { success: false, message: "Test niet beschikbaar" };
       
-      if (encryptedCreds) {
-        try {
-          credentials = decryptCredentials(encryptedCreds);
-        } catch {
-        }
-      }
-
-      let testResult = { success: false, message: "Test niet beschikbaar" };
-      
+      // Yodeck uses ONLY process.env.YODECK_API_KEY - no credentials from database
       if (service === "yodeck") {
-        testResult = await testYodeckConnection(credentials);
-      } else if (service === "moneybird") {
-        testResult = await testMoneybirdConnection(credentials);
-      } else if (service === "dropbox_sign") {
-        testResult = await testDropboxSignConnection(credentials);
+        const yodeckResult = await testYodeckConnection();
+        testResult = { 
+          success: yodeckResult.ok, 
+          message: yodeckResult.message,
+          deviceCount: yodeckResult.deviceCount
+        };
+      } else {
+        // Other services use stored credentials
+        const encryptedCreds = await storage.getIntegrationEncryptedCredentials(service);
+        let credentials: Record<string, string> = {};
+        
+        if (encryptedCreds) {
+          try {
+            credentials = decryptCredentials(encryptedCreds);
+          } catch {
+          }
+        }
+
+        if (service === "moneybird") {
+          testResult = await testMoneybirdConnection(credentials);
+        } else if (service === "dropbox_sign") {
+          testResult = await testDropboxSignConnection(credentials);
+        }
       }
 
       await storage.upsertIntegrationConfig(service, {

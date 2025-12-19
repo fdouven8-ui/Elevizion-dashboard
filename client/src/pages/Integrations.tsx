@@ -2,7 +2,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Check, X, RefreshCw, Loader2 } from "lucide-react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
 
@@ -11,12 +11,29 @@ interface IntegrationStatus {
   moneybird: { isConfigured: boolean };
 }
 
+interface YodeckConfigStatus {
+  configured: boolean;
+}
+
+interface YodeckTestResult {
+  ok: boolean;
+  success: boolean;
+  message: string;
+  deviceCount?: number;
+  statusCode?: number;
+}
+
 async function fetchIntegrationStatus(): Promise<IntegrationStatus> {
   const res = await fetch("/api/integrations/status");
   return res.json();
 }
 
-async function testYodeck() {
+async function fetchYodeckConfigStatus(): Promise<YodeckConfigStatus> {
+  const res = await fetch("/api/integrations/yodeck/config-status");
+  return res.json();
+}
+
+async function testYodeck(): Promise<YodeckTestResult> {
   const res = await fetch("/api/integrations/yodeck/test", { method: "POST" });
   return res.json();
 }
@@ -37,21 +54,40 @@ export default function Integrations() {
   const [testingYodeck, setTestingYodeck] = useState(false);
   const [testingMoneybird, setTestingMoneybird] = useState(false);
   const [syncingYodeck, setSyncingYodeck] = useState(false);
+  const [yodeckTestResult, setYodeckTestResult] = useState<YodeckTestResult | null>(null);
 
   const { data: status, isLoading } = useQuery({
     queryKey: ["integrations-status"],
     queryFn: fetchIntegrationStatus,
   });
 
+  const { data: yodeckConfig, refetch: refetchYodeckConfig } = useQuery({
+    queryKey: ["yodeck-config-status"],
+    queryFn: fetchYodeckConfigStatus,
+    refetchInterval: 10000,
+  });
+
+  const yodeckConfigured = yodeckConfig?.configured ?? status?.yodeck?.isConfigured ?? false;
+
   const handleTestYodeck = async () => {
     setTestingYodeck(true);
+    setYodeckTestResult(null);
     try {
       const result = await testYodeck();
-      toast({
-        title: result.success ? "Yodeck Verbonden" : "Verbinding Mislukt",
-        description: result.message,
-        variant: result.success ? "default" : "destructive",
-      });
+      setYodeckTestResult(result);
+      if (result.ok || result.success) {
+        toast({
+          title: "Verbonden met Yodeck",
+          description: `${result.deviceCount ?? 0} schermen gevonden`,
+        });
+      } else {
+        toast({
+          title: "Verbinding Mislukt",
+          description: `${result.message}${result.statusCode ? ` (status ${result.statusCode})` : ""}`,
+          variant: "destructive",
+        });
+      }
+      refetchYodeckConfig();
     } catch (error) {
       toast({ title: "Fout", description: "Kan verbinding niet testen", variant: "destructive" });
     }
@@ -75,11 +111,13 @@ export default function Integrations() {
 
   const handleSyncYodeck = async () => {
     setSyncingYodeck(true);
+    toast({ title: "Synchroniseren...", description: "Schermen worden opgehaald van Yodeck" });
     try {
       const result = await syncYodeck();
       if (result.success) {
         toast({ title: "Synchronisatie Voltooid", description: `${result.screens?.length || 0} schermen gesynchroniseerd vanuit Yodeck` });
         queryClient.invalidateQueries({ queryKey: ["screens"] });
+        refetchYodeckConfig();
       } else {
         toast({ title: "Synchronisatie Mislukt", description: result.message, variant: "destructive" });
       }
@@ -107,8 +145,8 @@ export default function Integrations() {
           <CardHeader>
             <CardTitle className="flex items-center gap-3">
               Yodeck
-              <Badge variant={status?.yodeck.isConfigured ? "default" : "secondary"}>
-                {status?.yodeck.isConfigured ? (
+              <Badge variant={yodeckConfigured ? "default" : "secondary"} data-testid="badge-yodeck-status">
+                {yodeckConfigured ? (
                   <><Check className="h-3 w-3 mr-1" /> Geconfigureerd</>
                 ) : (
                   <><X className="h-3 w-3 mr-1" /> Niet Geconfigureerd</>
@@ -121,15 +159,26 @@ export default function Integrations() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="text-sm text-muted-foreground">
-              {status?.yodeck.isConfigured ? (
-                <p>Uw Yodeck API-token is geconfigureerd. U kunt de verbinding testen of schermgegevens synchroniseren.</p>
+              {yodeckConfigured ? (
+                <div className="space-y-2">
+                  <p>Uw Yodeck API-key is geconfigureerd. U kunt de verbinding testen of schermgegevens synchroniseren.</p>
+                  {yodeckTestResult && (
+                    <div className={`p-3 rounded-md ${yodeckTestResult.ok ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
+                      {yodeckTestResult.ok ? (
+                        <p className="text-green-700">Verbonden met Yodeck - {yodeckTestResult.deviceCount ?? 0} schermen</p>
+                      ) : (
+                        <p className="text-red-700">{yodeckTestResult.message} {yodeckTestResult.statusCode ? `(status ${yodeckTestResult.statusCode})` : ""}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               ) : (
                 <div className="space-y-2">
-                  <p>Om Yodeck te verbinden, voeg deze omgevingsvariabelen toe:</p>
+                  <p>Om Yodeck te verbinden, voeg deze omgevingsvariabele toe in de Deployment secrets:</p>
                   <code className="block bg-muted p-3 rounded-md text-xs">
-                    YODECK_API_TOKEN=uw_api_token_hier
+                    YODECK_API_KEY=uw_api_key_hier
                   </code>
-                  <p className="text-xs">Haal uw API-token op van Yodeck: Instellingen → Geavanceerd → API Tokens</p>
+                  <p className="text-xs">Haal uw API-key op van Yodeck: Instellingen → Geavanceerd → API Tokens</p>
                 </div>
               )}
             </div>
@@ -137,21 +186,23 @@ export default function Integrations() {
               <Button 
                 variant="outline" 
                 onClick={handleTestYodeck}
-                disabled={!status?.yodeck.isConfigured || testingYodeck}
+                disabled={!yodeckConfigured || testingYodeck}
+                data-testid="button-test-yodeck"
               >
                 {testingYodeck && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Verbinding Testen
+                Test Verbinding
               </Button>
               <Button 
                 onClick={handleSyncYodeck}
-                disabled={!status?.yodeck.isConfigured || syncingYodeck}
+                disabled={!yodeckConfigured || syncingYodeck}
+                data-testid="button-sync-yodeck"
               >
                 {syncingYodeck ? (
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                 ) : (
                   <RefreshCw className="h-4 w-4 mr-2" />
                 )}
-                Schermen Synchroniseren
+                Sync Nu
               </Button>
             </div>
           </CardContent>

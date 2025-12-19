@@ -1,4 +1,5 @@
 // Yodeck API Integration
+// IMPORTANT: API key is read ONLY from process.env.YODECK_API_KEY - never from frontend or local files
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v1";
 
 export interface IntegrationCredentials {
@@ -7,55 +8,87 @@ export interface IntegrationCredentials {
   admin_id?: string;
 }
 
-export async function testYodeckConnection(credentials?: IntegrationCredentials): Promise<{ success: boolean; message: string; data?: any }> {
-  const apiToken = credentials?.api_key || process.env.YODECK_API_TOKEN;
+// Check if Yodeck is properly configured
+export function isYodeckConfigured(): boolean {
+  const apiKey = process.env.YODECK_API_KEY;
+  return !!apiKey && apiKey.length > 10;
+}
+
+// Get Yodeck config status (safe for API response)
+export function getYodeckConfigStatus(): { configured: boolean } {
+  return { configured: isYodeckConfigured() };
+}
+
+export async function testYodeckConnection(): Promise<{ 
+  ok: boolean; 
+  message: string; 
+  deviceCount?: number;
+  statusCode?: number;
+}> {
+  const apiKey = process.env.YODECK_API_KEY;
   
-  if (!apiToken) {
-    return { success: false, message: "API key niet geconfigureerd" };
+  console.log(`[Yodeck] Test connection - configured: ${isYodeckConfigured()}`);
+  
+  if (!apiKey || apiKey.length <= 10) {
+    console.log("[Yodeck] Test failed - YODECK_API_KEY missing or too short");
+    return { ok: false, message: "YODECK_API_KEY ontbreekt of is ongeldig", statusCode: 400 };
   }
 
   try {
     const response = await fetch(`${YODECK_BASE_URL}/screens`, {
       headers: {
-        "Authorization": `Bearer ${apiToken}`,
+        "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
     });
 
+    const statusCode = response.status;
+
     if (response.ok) {
       const data = await response.json();
-      return { success: true, message: "Verbinding succesvol", data };
+      const deviceCount = Array.isArray(data) ? data.length : (data.results?.length || 0);
+      console.log(`[Yodeck] Test success - ${deviceCount} devices found`);
+      return { ok: true, message: "Verbonden met Yodeck", deviceCount, statusCode };
     } else {
       const error = await response.text();
-      return { success: false, message: `API Fout: ${response.status} - ${error}` };
+      console.log(`[Yodeck] Test failed - status ${statusCode}: ${error.substring(0, 100)}`);
+      return { ok: false, message: `API Fout: ${statusCode}`, statusCode };
     }
   } catch (error: any) {
-    return { success: false, message: `Verbinding mislukt: ${error.message}` };
+    console.log(`[Yodeck] Test failed - network error: ${error.message}`);
+    return { ok: false, message: `Verbinding mislukt: ${error.message}`, statusCode: 0 };
   }
 }
 
-export async function syncYodeckScreens(credentials?: IntegrationCredentials): Promise<{ success: boolean; screens?: any[]; message?: string }> {
-  const apiToken = credentials?.api_key || process.env.YODECK_API_TOKEN;
+export async function syncYodeckScreens(): Promise<{ success: boolean; screens?: any[]; message?: string }> {
+  const apiKey = process.env.YODECK_API_KEY;
   
-  if (!apiToken) {
-    return { success: false, message: "API key niet geconfigureerd" };
+  console.log(`[Yodeck] Sync screens - configured: ${isYodeckConfigured()}`);
+  
+  if (!apiKey || apiKey.length <= 10) {
+    console.log("[Yodeck] Sync failed - YODECK_API_KEY missing");
+    return { success: false, message: "YODECK_API_KEY ontbreekt" };
   }
 
   try {
     const response = await fetch(`${YODECK_BASE_URL}/screens`, {
       headers: {
-        "Authorization": `Bearer ${apiToken}`,
+        "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
     });
 
     if (response.ok) {
       const screens = await response.json();
-      return { success: true, screens };
+      const screenList = Array.isArray(screens) ? screens : (screens.results || []);
+      console.log(`[Yodeck] Sync success - ${screenList.length} screens`);
+      return { success: true, screens: screenList };
     } else {
+      console.log(`[Yodeck] Sync failed - status ${response.status}`);
       return { success: false, message: `Schermen ophalen mislukt: ${response.status}` };
     }
   } catch (error: any) {
+    console.log(`[Yodeck] Sync failed - error: ${error.message}`);
     return { success: false, message: error.message };
   }
 }
@@ -301,7 +334,7 @@ export async function updateMoneybirdSepaMandate(data: {
 export function getIntegrationStatus() {
   return {
     yodeck: {
-      isConfigured: !!process.env.YODECK_API_TOKEN,
+      isConfigured: isYodeckConfigured(),
     },
     moneybird: {
       isConfigured: !!process.env.MONEYBIRD_API_TOKEN && !!process.env.MONEYBIRD_ADMINISTRATION_ID,
