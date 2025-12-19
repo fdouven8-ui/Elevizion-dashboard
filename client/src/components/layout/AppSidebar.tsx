@@ -24,47 +24,71 @@ import {
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
+import { PERMISSIONS } from "@shared/models/auth";
 
-const menuItems = [
-  { title: "Home", url: "/dashboard", icon: LayoutDashboard },
-  { title: "Onboarding", url: "/onboarding", icon: Rocket },
-  { title: "Schermen", url: "/screens", icon: Monitor },
-  { title: "Adverteerders", url: "/advertisers", icon: Users },
-  { title: "Plaatsingen", url: "/placements", icon: Target },
-  { title: "Financieel", url: "/finance", icon: Euro },
-  { title: "Instellingen", url: "/settings", icon: Settings },
+interface MenuItem {
+  title: string;
+  url: string;
+  icon: React.ComponentType<{ className?: string }>;
+  requiredPermissions?: string[];
+  anyPermission?: boolean;
+}
+
+const menuItems: MenuItem[] = [
+  { title: "Home", url: "/dashboard", icon: LayoutDashboard, requiredPermissions: [PERMISSIONS.VIEW_HOME] },
+  { title: "Onboarding", url: "/onboarding", icon: Rocket, requiredPermissions: [PERMISSIONS.VIEW_ONBOARDING, PERMISSIONS.ONBOARD_ADVERTISERS, PERMISSIONS.ONBOARD_SCREENS], anyPermission: true },
+  { title: "Schermen", url: "/screens", icon: Monitor, requiredPermissions: [PERMISSIONS.VIEW_SCREENS] },
+  { title: "Adverteerders", url: "/advertisers", icon: Users, requiredPermissions: [PERMISSIONS.VIEW_ADVERTISERS] },
+  { title: "Plaatsingen", url: "/placements", icon: Target, requiredPermissions: [PERMISSIONS.VIEW_PLACEMENTS] },
+  { title: "Financieel", url: "/finance", icon: Euro, requiredPermissions: [PERMISSIONS.VIEW_FINANCE] },
+  { title: "Instellingen", url: "/settings", icon: Settings, requiredPermissions: [PERMISSIONS.MANAGE_USERS, PERMISSIONS.EDIT_SYSTEM_SETTINGS, PERMISSIONS.MANAGE_TEMPLATES, PERMISSIONS.MANAGE_INTEGRATIONS], anyPermission: true },
 ];
 
 export function AppSidebar() {
   const [location] = useLocation();
-  const { user, isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading, logout, hasPermission, hasAnyPermission } = useAuth();
 
   const handleLogin = () => {
-    window.location.href = "/api/login";
+    window.location.href = "/login";
   };
 
   const handleLogout = () => {
-    window.location.href = "/api/logout";
+    logout();
   };
 
   const getUserInitials = () => {
     if (!user) return "?";
+    if (user.displayName) {
+      const parts = user.displayName.split(" ");
+      return parts.map(p => p[0]).join("").toUpperCase().slice(0, 2);
+    }
     const first = user.firstName?.[0] || "";
     const last = user.lastName?.[0] || "";
-    return (first + last).toUpperCase() || user.email?.[0]?.toUpperCase() || "?";
+    return (first + last).toUpperCase() || user.email?.[0]?.toUpperCase() || user.username?.[0]?.toUpperCase() || "?";
   };
 
   const getUserDisplayName = () => {
     if (!user) return "";
+    if (user.displayName) return user.displayName;
     if (user.firstName && user.lastName) {
       return `${user.firstName} ${user.lastName}`;
     }
-    return user.email || "";
+    return user.username || user.email || "";
   };
 
   const isActive = (url: string) => {
     return location === url || location.startsWith(url + "/");
   };
+
+  const canViewItem = (item: MenuItem): boolean => {
+    if (!item.requiredPermissions || item.requiredPermissions.length === 0) return true;
+    if (item.anyPermission) {
+      return hasAnyPermission(...item.requiredPermissions);
+    }
+    return item.requiredPermissions.every(p => hasPermission(p));
+  };
+
+  const visibleMenuItems = menuItems.filter(canViewItem);
 
   return (
     <Sidebar collapsible="icon" className="border-r border-border/50">
@@ -85,14 +109,14 @@ export function AppSidebar() {
         <SidebarGroup className="py-1">
           <SidebarGroupContent>
             <SidebarMenu className="gap-0.5">
-              {menuItems.map((item) => (
+              {visibleMenuItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton 
                     asChild 
                     tooltip={item.title}
                     className={`h-9 rounded-lg transition-all ${isActive(item.url) ? 'bg-primary/10 font-medium border-l-2 border-primary' : 'hover:bg-muted/30'}`}
                   >
-                    <Link href={item.url}>
+                    <Link href={item.url} data-testid={`nav-${item.url.replace('/', '')}`}>
                       <item.icon className={`h-4 w-4 ${isActive(item.url) ? 'text-primary' : 'text-muted-foreground'}`} />
                       <span className="text-sm">{item.title}</span>
                     </Link>

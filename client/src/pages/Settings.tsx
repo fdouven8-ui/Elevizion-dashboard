@@ -12,6 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
+import { Checkbox } from "@/components/ui/checkbox";
 import { 
   Zap, 
   MessageSquare,
@@ -36,10 +37,14 @@ import {
   ToggleLeft,
   ToggleRight,
   Target,
+  Key,
+  UserPlus,
+  Shield,
 } from "lucide-react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PERMISSIONS, ROLE_PRESETS, type RolePreset } from "@shared/models/auth";
 
 interface AutomationRule {
   id: string;
@@ -96,11 +101,18 @@ interface Screen {
 
 interface UserRole {
   id: string;
-  firstName: string;
-  lastName: string;
-  email: string;
+  username: string | null;
+  displayName: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
   role: string;
+  rolePreset: string | null;
+  permissions: string[] | null;
   isActive: boolean;
+  forcePasswordChange: boolean;
+  lastLoginAt: string | null;
+  createdAt: string | null;
 }
 
 interface SyncStatus {
@@ -197,6 +209,496 @@ function formatTemplateBody(body: string): string {
     const friendlyName = FIELD_NAMES[varName.trim()] || varName;
     return `[${friendlyName}]`;
   });
+}
+
+const PERMISSION_LABELS: Record<string, { label: string; category: string }> = {
+  [PERMISSIONS.VIEW_HOME]: { label: "Home bekijken", category: "Core" },
+  [PERMISSIONS.VIEW_SCREENS]: { label: "Schermen bekijken", category: "Core" },
+  [PERMISSIONS.EDIT_SCREENS]: { label: "Schermen bewerken", category: "Core" },
+  [PERMISSIONS.VIEW_ADVERTISERS]: { label: "Adverteerders bekijken", category: "Core" },
+  [PERMISSIONS.EDIT_ADVERTISERS]: { label: "Adverteerders bewerken", category: "Core" },
+  [PERMISSIONS.VIEW_PLACEMENTS]: { label: "Plaatsingen bekijken", category: "Core" },
+  [PERMISSIONS.EDIT_PLACEMENTS]: { label: "Plaatsingen bewerken", category: "Core" },
+  [PERMISSIONS.VIEW_FINANCE]: { label: "Financiën bekijken", category: "Core" },
+  [PERMISSIONS.VIEW_ONBOARDING]: { label: "Onboarding bekijken", category: "Onboarding" },
+  [PERMISSIONS.ONBOARD_ADVERTISERS]: { label: "Adverteerders onboarden", category: "Onboarding" },
+  [PERMISSIONS.ONBOARD_SCREENS]: { label: "Schermen onboarden", category: "Onboarding" },
+  [PERMISSIONS.MANAGE_TEMPLATES]: { label: "Templates beheren", category: "Admin" },
+  [PERMISSIONS.MANAGE_INTEGRATIONS]: { label: "Integraties beheren", category: "Admin" },
+  [PERMISSIONS.MANAGE_USERS]: { label: "Gebruikers beheren", category: "Admin" },
+  [PERMISSIONS.EDIT_SYSTEM_SETTINGS]: { label: "Systeeminstellingen", category: "Admin" },
+};
+
+function UsersManagementTab({ users, queryClient, toast }: { users: UserRole[]; queryClient: any; toast: any }) {
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<UserRole | null>(null);
+  const [newUser, setNewUser] = useState({
+    username: "",
+    displayName: "",
+    email: "",
+    password: "",
+    rolePreset: "readonly" as RolePreset,
+    forcePasswordChange: true,
+  });
+  const [selectedPermissions, setSelectedPermissions] = useState<string[]>([]);
+  const [tempPassword, setTempPassword] = useState<string | null>(null);
+
+  const createUserMutation = useMutation({
+    mutationFn: async (data: typeof newUser) => {
+      const permissions = ROLE_PRESETS[data.rolePreset]?.permissions || [];
+      const res = await fetch("/api/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          ...data,
+          permissions,
+        }),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Fout bij aanmaken gebruiker");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      setIsCreateOpen(false);
+      setNewUser({ username: "", displayName: "", email: "", password: "", rolePreset: "readonly", forcePasswordChange: true });
+      toast({ title: "Gebruiker aangemaakt", description: "De nieuwe gebruiker kan nu inloggen." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const updatePermissionsMutation = useMutation({
+    mutationFn: async ({ userId, permissions, rolePreset }: { userId: string; permissions: string[]; rolePreset: string | null }) => {
+      const res = await fetch(`/api/users/${userId}/permissions`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ permissions, rolePreset }),
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Fout bij bijwerken rechten");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      setIsEditOpen(false);
+      setEditingUser(null);
+      toast({ title: "Rechten bijgewerkt" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const resetPasswordMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      const res = await fetch(`/api/users/${userId}/reset-password`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Fout bij resetten wachtwoord");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setTempPassword(data.temporaryPassword);
+      toast({ title: "Wachtwoord gereset", description: "Tijdelijk wachtwoord is gegenereerd." });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const toggleActiveMutation = useMutation({
+    mutationFn: async ({ userId, activate }: { userId: string; activate: boolean }) => {
+      const res = await fetch(`/api/users/${userId}/${activate ? "activate" : "deactivate"}`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Fout bij wijzigen status");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      toast({ title: "Status bijgewerkt" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const openEditDialog = (user: UserRole) => {
+    setEditingUser(user);
+    setSelectedPermissions(user.permissions || []);
+    setIsEditOpen(true);
+  };
+
+  const applyRolePreset = (preset: RolePreset) => {
+    const presetData = ROLE_PRESETS[preset];
+    if (presetData) {
+      setSelectedPermissions([...presetData.permissions]);
+    }
+  };
+
+  const togglePermission = (permission: string) => {
+    setSelectedPermissions((prev) =>
+      prev.includes(permission) ? prev.filter((p) => p !== permission) : [...prev, permission]
+    );
+  };
+
+  const getMatchingPreset = (permissions: string[]): RolePreset | null => {
+    for (const [key, preset] of Object.entries(ROLE_PRESETS)) {
+      const presetPerms = [...preset.permissions].sort();
+      const userPerms = [...permissions].sort();
+      if (presetPerms.length === userPerms.length && presetPerms.every((p, i) => p === userPerms[i])) {
+        return key as RolePreset;
+      }
+    }
+    return null;
+  };
+
+  const getRolePresetBadge = (preset: string | null) => {
+    if (!preset) return <Badge variant="outline">Aangepast</Badge>;
+    const presetData = ROLE_PRESETS[preset as RolePreset];
+    if (!presetData) return <Badge variant="outline">{preset}</Badge>;
+    const colors: Record<string, string> = {
+      eigenaar: "bg-purple-100 text-purple-800",
+      operatie: "bg-blue-100 text-blue-800",
+      sales: "bg-green-100 text-green-800",
+      finance: "bg-yellow-100 text-yellow-800",
+      readonly: "bg-gray-100 text-gray-800",
+    };
+    return <Badge className={colors[preset] || ""}>{presetData.name}</Badge>;
+  };
+
+  const permissionsByCategory = Object.entries(PERMISSION_LABELS).reduce(
+    (acc, [permission, { label, category }]) => {
+      if (!acc[category]) acc[category] = [];
+      acc[category].push({ permission, label });
+      return acc;
+    },
+    {} as Record<string, { permission: string; label: string }[]>
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Gebruikersbeheer
+            </CardTitle>
+            <CardDescription>Beheer wie toegang heeft en met welke rechten</CardDescription>
+          </div>
+          <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+            <DialogTrigger asChild>
+              <Button data-testid="button-create-user">
+                <UserPlus className="h-4 w-4 mr-2" />
+                Nieuwe gebruiker
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Nieuwe gebruiker aanmaken</DialogTitle>
+                <DialogDescription>Maak een nieuw account aan met inloggegevens</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <Label htmlFor="new-username">Gebruikersnaam *</Label>
+                  <Input
+                    id="new-username"
+                    value={newUser.username}
+                    onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
+                    placeholder="bijv. jan.jansen"
+                    data-testid="input-new-username"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new-displayname">Weergavenaam</Label>
+                  <Input
+                    id="new-displayname"
+                    value={newUser.displayName}
+                    onChange={(e) => setNewUser({ ...newUser, displayName: e.target.value })}
+                    placeholder="bijv. Jan Jansen"
+                    data-testid="input-new-displayname"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new-email">Email (optioneel)</Label>
+                  <Input
+                    id="new-email"
+                    type="email"
+                    value={newUser.email}
+                    onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                    placeholder="jan@bedrijf.nl"
+                    data-testid="input-new-email"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="new-password">Wachtwoord *</Label>
+                  <Input
+                    id="new-password"
+                    type="password"
+                    value={newUser.password}
+                    onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
+                    placeholder="Minimaal 8 karakters"
+                    data-testid="input-new-password"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Rol</Label>
+                  <Select
+                    value={newUser.rolePreset}
+                    onValueChange={(v) => setNewUser({ ...newUser, rolePreset: v as RolePreset })}
+                  >
+                    <SelectTrigger data-testid="select-role-preset">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(ROLE_PRESETS).map(([key, preset]) => (
+                        <SelectItem key={key} value={key}>
+                          {preset.name} - {preset.description}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="force-change"
+                    checked={newUser.forcePasswordChange}
+                    onCheckedChange={(checked) => setNewUser({ ...newUser, forcePasswordChange: checked as boolean })}
+                  />
+                  <Label htmlFor="force-change" className="text-sm">
+                    Wachtwoord wijzigen bij eerste login
+                  </Label>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsCreateOpen(false)}>
+                  Annuleren
+                </Button>
+                <Button
+                  onClick={() => createUserMutation.mutate(newUser)}
+                  disabled={!newUser.username || !newUser.password || createUserMutation.isPending}
+                  data-testid="button-confirm-create-user"
+                >
+                  Aanmaken
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {users.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground">
+            <Users className="h-12 w-12 mx-auto mb-3 opacity-50" />
+            <p>Nog geen gebruikers</p>
+            <p className="text-sm">Klik op "Nieuwe gebruiker" om te beginnen</p>
+          </div>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Gebruiker</TableHead>
+                <TableHead>Rol</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Laatst ingelogd</TableHead>
+                <TableHead className="text-right">Acties</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {users.map((user) => (
+                <TableRow key={user.id} data-testid={`row-user-${user.id}`}>
+                  <TableCell>
+                    <div>
+                      <p className="font-medium">{user.displayName || user.username || "Onbekend"}</p>
+                      <p className="text-sm text-muted-foreground">@{user.username || "-"}</p>
+                      {user.email && <p className="text-xs text-muted-foreground">{user.email}</p>}
+                    </div>
+                  </TableCell>
+                  <TableCell>{getRolePresetBadge(user.rolePreset)}</TableCell>
+                  <TableCell>
+                    {user.isActive ? (
+                      <Badge className="bg-green-100 text-green-800">Actief</Badge>
+                    ) : (
+                      <Badge variant="secondary">Inactief</Badge>
+                    )}
+                    {user.forcePasswordChange && (
+                      <Badge variant="outline" className="ml-1 text-xs">
+                        Moet wachtwoord wijzigen
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString("nl-NL") : "Nooit"}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openEditDialog(user)}
+                        data-testid={`button-edit-user-${user.id}`}
+                      >
+                        <Shield className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => resetPasswordMutation.mutate(user.id)}
+                        disabled={resetPasswordMutation.isPending}
+                        data-testid={`button-reset-password-${user.id}`}
+                      >
+                        <Key className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => toggleActiveMutation.mutate({ userId: user.id, activate: !user.isActive })}
+                        disabled={toggleActiveMutation.isPending}
+                        data-testid={`button-toggle-active-${user.id}`}
+                      >
+                        {user.isActive ? <ToggleRight className="h-4 w-4" /> : <ToggleLeft className="h-4 w-4" />}
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+
+        <Dialog open={!!tempPassword} onOpenChange={() => setTempPassword(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Tijdelijk wachtwoord</DialogTitle>
+              <DialogDescription>Deel dit wachtwoord veilig met de gebruiker</DialogDescription>
+            </DialogHeader>
+            <div className="py-4">
+              <div className="flex items-center gap-2 p-3 bg-muted rounded-lg">
+                <code className="flex-1 font-mono text-lg">{tempPassword}</code>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    navigator.clipboard.writeText(tempPassword || "");
+                    toast({ title: "Gekopieerd!" });
+                  }}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+              <p className="text-sm text-muted-foreground mt-2">
+                De gebruiker moet dit wachtwoord wijzigen bij de volgende login.
+              </p>
+            </div>
+            <DialogFooter>
+              <Button onClick={() => setTempPassword(null)}>Sluiten</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+          <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Rechten bewerken: {editingUser?.displayName || editingUser?.username}</DialogTitle>
+              <DialogDescription>Kies een preset of pas individuele rechten aan</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-6 py-4">
+              <div className="space-y-2">
+                <Label>Rol preset</Label>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(ROLE_PRESETS).map(([key, preset]) => (
+                    <Button
+                      key={key}
+                      variant={getMatchingPreset(selectedPermissions) === key ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => applyRolePreset(key as RolePreset)}
+                    >
+                      {preset.name}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="space-y-4">
+                {Object.entries(permissionsByCategory).map(([category, permissions]) => (
+                  <div key={category}>
+                    <h4 className="font-medium mb-2">{category}</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                      {permissions.map(({ permission, label }) => (
+                        <div key={permission} className="flex items-center gap-2">
+                          <Checkbox
+                            id={permission}
+                            checked={selectedPermissions.includes(permission)}
+                            onCheckedChange={() => togglePermission(permission)}
+                          />
+                          <Label htmlFor={permission} className="text-sm font-normal">
+                            {label}
+                          </Label>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsEditOpen(false)}>
+                Annuleren
+              </Button>
+              <Button
+                onClick={() => {
+                  if (editingUser) {
+                    updatePermissionsMutation.mutate({
+                      userId: editingUser.id,
+                      permissions: selectedPermissions,
+                      rolePreset: getMatchingPreset(selectedPermissions),
+                    });
+                  }
+                }}
+                disabled={updatePermissionsMutation.isPending}
+              >
+                Opslaan
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Separator className="my-6" />
+
+        <div>
+          <h4 className="font-medium mb-3">Beschikbare rollen</h4>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            {Object.entries(ROLE_PRESETS).map(([key, preset]) => (
+              <div key={key} className="p-3 border rounded-lg">
+                {getRolePresetBadge(key)}
+                <p className="text-xs text-muted-foreground mt-1">{preset.description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function Settings() {
@@ -1071,79 +1573,7 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="users" className="mt-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Users className="h-5 w-5" />
-                Gebruikers & Rollen
-              </CardTitle>
-              <CardDescription>
-                Wie heeft toegang en met welke rol
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {users.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Users className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                  <p>Nog geen gebruikers</p>
-                  <p className="text-sm">Gebruikers worden automatisch toegevoegd na inloggen</p>
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Naam</TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Rol</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {users.map((user) => (
-                      <TableRow key={user.id}>
-                        <TableCell className="font-medium">
-                          {user.firstName} {user.lastName}
-                        </TableCell>
-                        <TableCell>{user.email}</TableCell>
-                        <TableCell>{getRoleBadge(user.role)}</TableCell>
-                        <TableCell>
-                          {user.isActive ? (
-                            <Badge className="bg-green-100 text-green-800">Actief</Badge>
-                          ) : (
-                            <Badge variant="secondary">Inactief</Badge>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-
-              <Separator className="my-6" />
-
-              <div>
-                <h4 className="font-medium mb-3">Beschikbare rollen</h4>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <div className="p-3 border rounded-lg">
-                    {getRoleBadge("admin")}
-                    <p className="text-xs text-muted-foreground mt-1">Volledige toegang</p>
-                  </div>
-                  <div className="p-3 border rounded-lg">
-                    {getRoleBadge("ops")}
-                    <p className="text-xs text-muted-foreground mt-1">Schermen & issues</p>
-                  </div>
-                  <div className="p-3 border rounded-lg">
-                    {getRoleBadge("sales")}
-                    <p className="text-xs text-muted-foreground mt-1">Adverteerders</p>
-                  </div>
-                  <div className="p-3 border rounded-lg">
-                    {getRoleBadge("finance")}
-                    <p className="text-xs text-muted-foreground mt-1">Alleen-lezen</p>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <UsersManagementTab users={users} queryClient={queryClient} toast={toast} />
         </TabsContent>
 
         <TabsContent value="integrations" className="mt-6">
