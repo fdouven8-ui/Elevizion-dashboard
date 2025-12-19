@@ -46,6 +46,8 @@ import type {
   SurveySupply, InsertSurveySupply,
   Task, InsertTask,
   TaskAttachment, InsertTaskAttachment,
+  Template, InsertTemplate,
+  TemplateVersion, InsertTemplateVersion,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -256,6 +258,17 @@ export interface IStorage {
   createTask(data: InsertTask): Promise<Task>;
   updateTask(id: string, data: Partial<InsertTask>): Promise<Task | undefined>;
   deleteTask(id: string): Promise<boolean>;
+
+  // Templates
+  getTemplates(): Promise<Template[]>;
+  getTemplate(id: string): Promise<Template | undefined>;
+  getTemplatesByCategory(category: string): Promise<Template[]>;
+  createTemplate(data: InsertTemplate): Promise<Template>;
+  updateTemplate(id: string, data: Partial<InsertTemplate>): Promise<Template | undefined>;
+  deleteTemplate(id: string): Promise<boolean>;
+  getTemplateVersions(templateId: string): Promise<TemplateVersion[]>;
+  createTemplateVersion(data: InsertTemplateVersion): Promise<TemplateVersion>;
+  restoreTemplateVersion(templateId: string, version: number): Promise<Template | undefined>;
 
   // Task Attachments
   getTaskAttachments(taskId: string): Promise<TaskAttachment[]>;
@@ -1232,6 +1245,107 @@ export class DatabaseStorage implements IStorage {
   async deleteTaskAttachment(id: string): Promise<boolean> {
     await db.delete(schema.taskAttachments).where(eq(schema.taskAttachments.id, id));
     return true;
+  }
+
+  // ============================================================================
+  // TEMPLATES
+  // ============================================================================
+
+  async getTemplates(): Promise<Template[]> {
+    return await db.select().from(schema.templates).orderBy(schema.templates.category, schema.templates.name);
+  }
+
+  async getTemplate(id: string): Promise<Template | undefined> {
+    const [template] = await db.select().from(schema.templates).where(eq(schema.templates.id, id));
+    return template;
+  }
+
+  async getTemplatesByCategory(category: string): Promise<Template[]> {
+    return await db.select().from(schema.templates)
+      .where(eq(schema.templates.category, category))
+      .orderBy(schema.templates.name);
+  }
+
+  async createTemplate(data: InsertTemplate): Promise<Template> {
+    const placeholders = this.extractPlaceholders(data.body);
+    const [template] = await db.insert(schema.templates)
+      .values({ ...data, placeholders })
+      .returning();
+    return template;
+  }
+
+  async updateTemplate(id: string, data: Partial<InsertTemplate>): Promise<Template | undefined> {
+    const current = await this.getTemplate(id);
+    if (!current) return undefined;
+
+    // Save version history
+    await this.createTemplateVersion({
+      templateId: id,
+      version: current.version,
+      subject: current.subject,
+      body: current.body,
+      placeholders: current.placeholders,
+      editedBy: current.lastEditedBy,
+    });
+
+    // Clean up old versions (keep last 5)
+    const versions = await this.getTemplateVersions(id);
+    if (versions.length > 5) {
+      const oldVersions = versions.slice(5);
+      for (const v of oldVersions) {
+        await db.delete(schema.templateVersions).where(eq(schema.templateVersions.id, v.id));
+      }
+    }
+
+    const placeholders = data.body ? this.extractPlaceholders(data.body) : current.placeholders;
+    const [template] = await db.update(schema.templates)
+      .set({ 
+        ...data, 
+        placeholders,
+        version: current.version + 1,
+        updatedAt: new Date() 
+      })
+      .where(eq(schema.templates.id, id))
+      .returning();
+    return template;
+  }
+
+  async deleteTemplate(id: string): Promise<boolean> {
+    await db.delete(schema.templateVersions).where(eq(schema.templateVersions.templateId, id));
+    await db.delete(schema.templates).where(eq(schema.templates.id, id));
+    return true;
+  }
+
+  async getTemplateVersions(templateId: string): Promise<TemplateVersion[]> {
+    return await db.select().from(schema.templateVersions)
+      .where(eq(schema.templateVersions.templateId, templateId))
+      .orderBy(desc(schema.templateVersions.version));
+  }
+
+  async createTemplateVersion(data: InsertTemplateVersion): Promise<TemplateVersion> {
+    const [version] = await db.insert(schema.templateVersions).values(data).returning();
+    return version;
+  }
+
+  async restoreTemplateVersion(templateId: string, version: number): Promise<Template | undefined> {
+    const [targetVersion] = await db.select().from(schema.templateVersions)
+      .where(and(
+        eq(schema.templateVersions.templateId, templateId),
+        eq(schema.templateVersions.version, version)
+      ));
+    
+    if (!targetVersion) return undefined;
+
+    return await this.updateTemplate(templateId, {
+      subject: targetVersion.subject,
+      body: targetVersion.body,
+    });
+  }
+
+  private extractPlaceholders(body: string): string[] {
+    const regex = /\{\{([^}]+)\}\}/g;
+    const matches = body.match(regex) || [];
+    return [...new Set(matches.map(m => m.replace(/[{}]/g, '')))];
   }
 }
 

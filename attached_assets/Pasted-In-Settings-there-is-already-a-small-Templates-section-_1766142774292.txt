@@ -1,0 +1,75 @@
+In Settings there is already a small "Templates" section. Keep that section and its UI style, but expand it into a full Template Center used by the entire dashboard.
+
+GOAL:
+All templates used by the system must be managed from this Templates section, while still using Moneybird and the e-sign provider for the actual sending/signing. Do NOT add complex document editors. Keep it simple, editable, and scalable.
+
+1) Template categories (add tabs or dropdown inside the existing Templates page):
+A) WhatsApp templates
+B) Email templates
+C) Contract templates (Advertising Agreement + SEPA mandate/authorization)
+D) Quote/Invoice text blocks (email body text, intros/outros, payment instructions)
+E) Internal notes/templates (optional): call scripts, follow-up scripts
+
+2) Template structure:
+Each template must have:
+- name
+- category
+- subject (for email templates)
+- body (text)
+- language (optional)
+- enabled toggle
+- last edited timestamp
+- version number (simple increment)
+- placeholders list (auto-detect)
+- "test render" preview
+
+3) Placeholders:
+Support placeholders across all templates, such as:
+{{advertiser_name}}, {{contact_name}}, {{phone}}, {{email}}
+{{screen_ids}}, {{location_names}}
+{{price}}, {{start_date}}, {{end_date}}, {{package_name}}
+{{invoice_number}}, {{invoice_amount}}, {{invoice_due_date}}, {{invoice_url}}
+{{contract_url}}, {{sepa_url}}
+
+Add a "Preview" mode where the user can select an Advertiser and/or Screen and see the template rendered with real data (no sending, just preview).
+
+4) Where templates are used in the system:
+- On Advertiser detail page: buttons "Send WhatsApp", "Send Email" must pick templates from Template Center.
+- On onboarding wizards: after creating an advertiser, user can send contract and SEPA using contract templates.
+- On payment overdue: automation reminders must use selected templates from Template Center.
+- On contract follow-up: reminders must use contract reminder templates.
+
+5) Integration behavior (use external tools, dashboard remains small):
+A) Moneybird:
+- The dashboard should NOT try to fully recreate Moneybird invoice/quote templates.
+- Instead, store and manage:
+  - Email text blocks and sending text (intro/outro/payment instructions) in Template Center
+  - Which Moneybird document style to use (a selectable "Moneybird document style ID/name" setting)
+- When sending an invoice/quote via Moneybird API, use the email text template from Template Center as the message.
+- If Moneybird does not support editing invoice/quote layout templates via API, do not build a replacement. Keep it as: choose Moneybird style + send with dashboard email templates.
+
+B) E-sign:
+- Contract templates in Template Center define the content/variables OR map to an e-sign provider template ID.
+- Store for each contract template:
+  - e_sign_template_id (optional)
+  - signing order (optional)
+  - required documents: Advertising Agreement, SEPA Authorization
+- When sending for signature, use the e-sign provider to send and track status (sent/viewed/signed).
+- Store signed PDF URL and status in the system.
+
+6) Admin handling and safety:
+- Add template permissions: Owner can edit all templates; Sales/Ops can use templates but not edit (optional).
+- Add an audit log entry whenever a template is edited or disabled.
+- Add "Restore previous version" (keep last 5 versions) OR at minimum keep version history.
+
+7) UI requirements:
+- Keep the Templates section compact and consistent with current design.
+- Add search + filter by category.
+- Add quick buttons:
+  - Duplicate template
+  - Disable/enable
+  - Preview with real advertiser/screen
+  - Copy to clipboard (for WhatsApp)
+
+DELIVERABLE:
+A more complete Templates Center inside Settings that controls all messaging and document templates used by the dashboard, while still using Moneybird and e-sign for actual invoicing/signing.

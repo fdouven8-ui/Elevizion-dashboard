@@ -943,6 +943,69 @@ export type InsertWebhook = z.infer<typeof insertWebhookSchema>;
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
 export type InsertWebhookDelivery = z.infer<typeof insertWebhookDeliverySchema>;
 
+// ============================================================================
+// TEMPLATE CENTER
+// ============================================================================
+
+/**
+ * Templates - Central repository for all messaging and document templates
+ * Used for WhatsApp, Email, Contracts, Invoices, etc.
+ */
+export const templates = pgTable("templates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(),
+  category: text("category").notNull(), // whatsapp, email, contract, invoice, internal
+  subject: text("subject"), // For email templates
+  body: text("body").notNull(),
+  language: text("language").default("nl"), // nl, en
+  isEnabled: boolean("is_enabled").notNull().default(true),
+  version: integer("version").notNull().default(1),
+  placeholders: text("placeholders").array(), // Auto-detected placeholders like {{advertiser_name}}
+  // E-sign integration
+  eSignTemplateId: text("e_sign_template_id"), // External e-sign provider template ID
+  eSignSigningOrder: text("e_sign_signing_order").array(), // Order of signers
+  eSignRequiredDocs: text("e_sign_required_docs").array(), // Required documents
+  // Moneybird integration
+  moneybirdStyleId: text("moneybird_style_id"), // Moneybird document style ID
+  // Metadata
+  createdBy: varchar("created_by").references(() => users.id),
+  lastEditedBy: varchar("last_edited_by").references(() => users.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * TemplateVersions - Version history for templates (keep last 5 versions)
+ */
+export const templateVersions = pgTable("template_versions", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  templateId: varchar("template_id").notNull().references(() => templates.id),
+  version: integer("version").notNull(),
+  subject: text("subject"),
+  body: text("body").notNull(),
+  placeholders: text("placeholders").array(),
+  editedBy: varchar("edited_by").references(() => users.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertTemplateSchema = createInsertSchema(templates).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertTemplateVersionSchema = createInsertSchema(templateVersions).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Template types
+export type Template = typeof templates.$inferSelect;
+export type InsertTemplate = z.infer<typeof insertTemplateSchema>;
+
+export type TemplateVersion = typeof templateVersions.$inferSelect;
+export type InsertTemplateVersion = z.infer<typeof insertTemplateVersionSchema>;
+
 // Sales & Acquisitie types
 export type Lead = typeof leads.$inferSelect;
 export type InsertLead = z.infer<typeof insertLeadSchema>;
