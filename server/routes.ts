@@ -1126,28 +1126,43 @@ export async function registerRoutes(
 
   // Yodeck config-status endpoint - checks if YODECK_API_KEY is set
   app.get("/api/integrations/yodeck/config-status", async (_req, res) => {
+    console.log("[YODECK CONFIG-STATUS] handler hit");
     const status = getYodeckConfigStatus();
     res.json(status);
   });
+  
+  console.log("[routes] Yodeck routes registered: GET /api/integrations/yodeck/config-status, POST /api/integrations/yodeck/test");
 
   // Yodeck test connection - uses ONLY process.env.YODECK_API_KEY
   app.post("/api/integrations/yodeck/test", async (_req, res) => {
-    const result = await testYodeckConnection();
-    if (!result.ok) {
-      return res.status(result.statusCode || 400).json({
-        ok: false,
-        success: false,
+    console.log("[YODECK TEST] handler hit");
+    try {
+      const result = await testYodeckConnection();
+      console.log(`[YODECK TEST] result: ok=${result.ok}, deviceCount=${result.deviceCount || 0}`);
+      if (!result.ok) {
+        return res.status(result.statusCode || 400).json({
+          ok: false,
+          success: false,
+          message: result.message,
+          statusCode: result.statusCode,
+        });
+      }
+      res.json({
+        ok: true,
+        success: true,
         message: result.message,
+        deviceCount: result.deviceCount,
         statusCode: result.statusCode,
       });
+    } catch (error: any) {
+      console.error("[YODECK TEST] error:", error.message);
+      res.status(500).json({
+        ok: false,
+        success: false,
+        message: `Server error: ${error.message}`,
+        statusCode: 500,
+      });
     }
-    res.json({
-      ok: true,
-      success: true,
-      message: result.message,
-      deviceCount: result.deviceCount,
-      statusCode: result.statusCode,
-    });
   });
 
   app.post("/api/integrations/moneybird/test", async (_req, res) => {
