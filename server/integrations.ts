@@ -31,21 +31,25 @@ export async function testYodeckConnection(): Promise<{
   message: string; 
   deviceCount?: number;
   statusCode?: number;
+  requestedUrl?: string;
+  contentType?: string;
+  bodyPreview?: string;
 }> {
   const apiKey = normalizeYodeckApiKey(process.env.YODECK_API_KEY);
   
-  console.log(`[Yodeck] Test connection - configured: ${isYodeckConfigured()}`);
+  console.log(`[YODECK TEST] configured: ${isYodeckConfigured()}`);
+  console.log(`[YODECK TEST] YODECK_BASE_URL = "${YODECK_BASE_URL}"`);
   
   if (!apiKey || apiKey.length <= 10) {
-    console.log("[Yodeck] Test failed - YODECK_API_KEY missing or too short");
+    console.log("[YODECK TEST] FAIL - YODECK_API_KEY missing or too short");
     return { ok: false, message: "YODECK_API_KEY ontbreekt of is ongeldig", statusCode: 400 };
   }
 
-  const url = `${YODECK_BASE_URL}/screens`;
-  console.log(`[Yodeck] Calling: GET ${url}`);
+  const fullUrl = `${YODECK_BASE_URL}/screens`;
+  console.log(`[YODECK TEST] requesting: ${fullUrl}`);
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(fullUrl, {
       method: "GET",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -56,14 +60,23 @@ export async function testYodeckConnection(): Promise<{
     const statusCode = response.status;
     const contentType = response.headers.get("content-type") || "";
     const bodyText = await response.text();
+    const bodyPreview = bodyText.substring(0, 200);
     
-    console.log(`[Yodeck] Response status: ${statusCode}, content-type: ${contentType}`);
-    console.log(`[Yodeck] Response body (first 100 chars): ${bodyText.substring(0, 100)}`);
+    console.log(`[YODECK TEST] status: ${statusCode}`);
+    console.log(`[YODECK TEST] content-type: ${contentType}`);
+    console.log(`[YODECK TEST] body (first 200 chars): ${bodyPreview}`);
 
     // Check if we got HTML instead of JSON (wrong endpoint)
     if (contentType.includes("text/html") || bodyText.startsWith("<!") || bodyText.startsWith("<html")) {
-      console.log("[Yodeck] Test failed - received HTML instead of JSON");
-      return { ok: false, message: "Wrong Yodeck API URL/endpoint (HTML Not Found)", statusCode };
+      console.log("[YODECK TEST] FAIL - received HTML instead of JSON");
+      return { 
+        ok: false, 
+        message: "Wrong Yodeck API URL/endpoint (HTML Not Found)", 
+        statusCode,
+        requestedUrl: fullUrl,
+        contentType,
+        bodyPreview,
+      };
     }
 
     if (response.ok) {
@@ -71,19 +84,19 @@ export async function testYodeckConnection(): Promise<{
         const data = JSON.parse(bodyText);
         // v3 API returns { results: [...], count: N }
         const deviceCount = data.count ?? (Array.isArray(data) ? data.length : (data.results?.length || 0));
-        console.log(`[Yodeck] Test success - ${deviceCount} devices found`);
-        return { ok: true, message: "Verbonden met Yodeck", deviceCount, statusCode };
+        console.log(`[YODECK TEST] SUCCESS - ${deviceCount} devices found`);
+        return { ok: true, message: "Verbonden met Yodeck", deviceCount, statusCode, requestedUrl: fullUrl };
       } catch (parseError) {
-        console.log(`[Yodeck] Test failed - JSON parse error`);
-        return { ok: false, message: "Invalid JSON response from Yodeck", statusCode };
+        console.log(`[YODECK TEST] FAIL - JSON parse error`);
+        return { ok: false, message: "Invalid JSON response from Yodeck", statusCode, requestedUrl: fullUrl, bodyPreview };
       }
     } else {
-      console.log(`[Yodeck] Test failed - status ${statusCode}`);
-      return { ok: false, message: `API Fout: ${statusCode}`, statusCode };
+      console.log(`[YODECK TEST] FAIL - status ${statusCode}`);
+      return { ok: false, message: `API Fout: ${statusCode}`, statusCode, requestedUrl: fullUrl, contentType, bodyPreview };
     }
   } catch (error: any) {
-    console.log(`[Yodeck] Test failed - network error: ${error.message}`);
-    return { ok: false, message: `Verbinding mislukt: ${error.message}`, statusCode: 0 };
+    console.log(`[YODECK TEST] FAIL - network error: ${error.message}`);
+    return { ok: false, message: `Verbinding mislukt: ${error.message}`, statusCode: 0, requestedUrl: fullUrl };
   }
 }
 

@@ -1145,6 +1145,9 @@ export async function registerRoutes(
           success: false,
           message: result.message,
           statusCode: result.statusCode,
+          requestedUrl: result.requestedUrl,
+          contentType: result.contentType,
+          bodyPreview: result.bodyPreview,
         });
       }
       res.json({
@@ -1153,6 +1156,7 @@ export async function registerRoutes(
         message: result.message,
         deviceCount: result.deviceCount,
         statusCode: result.statusCode,
+        requestedUrl: result.requestedUrl,
       });
     } catch (error: any) {
       console.error("[YODECK TEST] error:", error.message);
