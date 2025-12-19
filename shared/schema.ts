@@ -62,6 +62,9 @@ export const locations = pgTable("locations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
   address: text("address").notNull(),
+  street: text("street"),
+  zipcode: text("zipcode"),
+  city: text("city"), // Plaats - used for filtering screens
   contactName: text("contact_name").notNull(),
   email: text("email").notNull(),
   phone: text("phone"),

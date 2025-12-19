@@ -1,8 +1,7 @@
 import { useAppData } from "@/hooks/use-app-data";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Monitor, ExternalLink, Filter, X } from "lucide-react";
+import { Plus, Monitor, Filter, X } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -18,10 +17,7 @@ import { Label } from "@/components/ui/label";
 import { useState, useMemo } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useForm } from "react-hook-form";
-import { apiRequest } from "@/lib/queryClient";
 import { useLocation, Link } from "wouter";
-import { formatDistanceToNow } from "date-fns";
-import { nl } from "date-fns/locale";
 import {
   Select,
   SelectContent,
@@ -46,7 +42,6 @@ import {
 export default function Screens() {
   const { screens, locations, addScreen, placements } = useAppData();
   const [location] = useLocation();
-  const queryClient = useQueryClient();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
   // Parse URL params for initial filter state
@@ -54,14 +49,23 @@ export default function Screens() {
   const initialStatus = urlParams.get('status');
 
   // Filter state
+  const [cityFilter, setCityFilter] = useState<string>("");
+  const [locationFilter, setLocationFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string[]>(
     initialStatus ? [initialStatus] : []
   );
-  const [locationFilter, setLocationFilter] = useState<string>("");
   const [minPlacements, setMinPlacements] = useState<string>("");
   const [maxPlacements, setMaxPlacements] = useState<string>("");
-  const [lastSeenFilter, setLastSeenFilter] = useState<string>("");
+  const [cityPopoverOpen, setCityPopoverOpen] = useState(false);
   const [locationPopoverOpen, setLocationPopoverOpen] = useState(false);
+
+  // Get unique cities from locations
+  const uniqueCities = useMemo(() => {
+    const cities = locations
+      .map(loc => loc.city)
+      .filter((city): city is string => !!city && city.trim() !== "");
+    return [...new Set(cities)].sort();
+  }, [locations]);
 
   // Count active placements per screen
   const getActivePlacementsCount = (screenId: string) => {
@@ -70,16 +74,28 @@ export default function Screens() {
     ).length;
   };
 
+  // Get location for a screen
+  const getLocation = (locationId: string) => {
+    return locations.find(l => l.id === locationId);
+  };
+
   // Filter logic
   const filteredScreens = useMemo(() => {
     return screens.filter(scr => {
-      // Status filter (multi-select)
-      if (statusFilter.length > 0 && !statusFilter.includes(scr.status)) {
+      const loc = getLocation(scr.locationId);
+
+      // City filter (Plaats)
+      if (cityFilter && loc?.city !== cityFilter) {
         return false;
       }
 
-      // Location filter
+      // Location filter (Locatie/Bedrijf)
       if (locationFilter && scr.locationId !== locationFilter) {
+        return false;
+      }
+
+      // Status filter (multi-select)
+      if (statusFilter.length > 0 && !statusFilter.includes(scr.status)) {
         return false;
       }
 
@@ -94,30 +110,18 @@ export default function Screens() {
         return false;
       }
 
-      // Last seen filter
-      if (lastSeenFilter && scr.lastSeenAt) {
-        const lastSeen = new Date(scr.lastSeenAt);
-        const now = new Date();
-        const hoursDiff = (now.getTime() - lastSeen.getTime()) / (1000 * 60 * 60);
-
-        switch (lastSeenFilter) {
-          case "today":
-            if (hoursDiff > 24) return false;
-            break;
-          case "1hour":
-            if (hoursDiff <= 1) return false;
-            break;
-          case "24hours":
-            if (hoursDiff <= 24) return false;
-            break;
-        }
-      }
-
       return true;
     });
-  }, [screens, statusFilter, locationFilter, minPlacements, maxPlacements, lastSeenFilter, placements]);
+  }, [screens, cityFilter, locationFilter, statusFilter, minPlacements, maxPlacements, placements, locations]);
+
+  // Filter locations by selected city
+  const filteredLocations = useMemo(() => {
+    if (!cityFilter) return locations;
+    return locations.filter(loc => loc.city === cityFilter);
+  }, [locations, cityFilter]);
 
   const getLocationName = (id: string) => locations.find(l => l.id === id)?.name || "Onbekend";
+  const getLocationCity = (id: string) => locations.find(l => l.id === id)?.city || "-";
   const selectedLocationName = locationFilter ? getLocationName(locationFilter) : "";
 
   const getStatusColor = (status: string) => {
@@ -136,16 +140,6 @@ export default function Screens() {
     }
   };
 
-  const formatLastSeen = (dateValue: Date | string | null) => {
-    if (!dateValue) return "-";
-    try {
-      const date = typeof dateValue === 'string' ? new Date(dateValue) : dateValue;
-      return formatDistanceToNow(date, { addSuffix: true, locale: nl });
-    } catch {
-      return "-";
-    }
-  };
-
   const toggleStatusFilter = (status: string) => {
     setStatusFilter(prev => 
       prev.includes(status) 
@@ -155,14 +149,14 @@ export default function Screens() {
   };
 
   const clearFilters = () => {
-    setStatusFilter([]);
+    setCityFilter("");
     setLocationFilter("");
+    setStatusFilter([]);
     setMinPlacements("");
     setMaxPlacements("");
-    setLastSeenFilter("");
   };
 
-  const hasActiveFilters = statusFilter.length > 0 || locationFilter || minPlacements || maxPlacements || lastSeenFilter;
+  const hasActiveFilters = cityFilter || locationFilter || statusFilter.length > 0 || minPlacements || maxPlacements;
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -207,34 +201,59 @@ export default function Screens() {
           </div>
           
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            {/* Status filter (multi-select) */}
+            {/* City filter (Plaats) - PRIMARY */}
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Status</Label>
-              <div className="flex gap-3">
-                <div className="flex items-center gap-1.5">
-                  <Checkbox 
-                    id="status-online"
-                    checked={statusFilter.includes("online")}
-                    onCheckedChange={() => toggleStatusFilter("online")}
-                    data-testid="filter-status-online"
-                  />
-                  <Label htmlFor="status-online" className="text-sm cursor-pointer">Online</Label>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Checkbox 
-                    id="status-offline"
-                    checked={statusFilter.includes("offline")}
-                    onCheckedChange={() => toggleStatusFilter("offline")}
-                    data-testid="filter-status-offline"
-                  />
-                  <Label htmlFor="status-offline" className="text-sm cursor-pointer">Offline</Label>
-                </div>
-              </div>
+              <Label className="text-xs text-muted-foreground">Plaats</Label>
+              <Popover open={cityPopoverOpen} onOpenChange={setCityPopoverOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    className="w-full justify-between h-9 font-normal"
+                    data-testid="filter-city"
+                  >
+                    {cityFilter || "Alle plaatsen"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[200px] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Zoek plaats..." />
+                    <CommandList>
+                      <CommandEmpty>Geen plaats gevonden</CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem 
+                          value="" 
+                          onSelect={() => {
+                            setCityFilter("");
+                            setLocationFilter(""); // Clear location when city changes
+                            setCityPopoverOpen(false);
+                          }}
+                        >
+                          Alle plaatsen
+                        </CommandItem>
+                        {uniqueCities.map((city) => (
+                          <CommandItem
+                            key={city}
+                            value={city}
+                            onSelect={() => {
+                              setCityFilter(city);
+                              setLocationFilter(""); // Clear location when city changes
+                              setCityPopoverOpen(false);
+                            }}
+                          >
+                            {city}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
 
-            {/* Location filter (searchable dropdown) */}
+            {/* Location filter (Locatie/Bedrijf) - SECONDARY */}
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Locatie</Label>
+              <Label className="text-xs text-muted-foreground">Locatie/Bedrijf</Label>
               <Popover open={locationPopoverOpen} onOpenChange={setLocationPopoverOpen}>
                 <PopoverTrigger asChild>
                   <Button
@@ -261,7 +280,7 @@ export default function Screens() {
                         >
                           Alle locaties
                         </CommandItem>
-                        {locations.map((loc) => (
+                        {filteredLocations.map((loc) => (
                           <CommandItem
                             key={loc.id}
                             value={loc.name}
@@ -278,6 +297,31 @@ export default function Screens() {
                   </Command>
                 </PopoverContent>
               </Popover>
+            </div>
+
+            {/* Status filter (multi-select) */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Status</Label>
+              <div className="flex gap-3 h-9 items-center">
+                <div className="flex items-center gap-1.5">
+                  <Checkbox 
+                    id="status-online"
+                    checked={statusFilter.includes("online")}
+                    onCheckedChange={() => toggleStatusFilter("online")}
+                    data-testid="filter-status-online"
+                  />
+                  <Label htmlFor="status-online" className="text-sm cursor-pointer">Online</Label>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Checkbox 
+                    id="status-offline"
+                    checked={statusFilter.includes("offline")}
+                    onCheckedChange={() => toggleStatusFilter("offline")}
+                    data-testid="filter-status-offline"
+                  />
+                  <Label htmlFor="status-offline" className="text-sm cursor-pointer">Offline</Label>
+                </div>
+              </div>
             </div>
 
             {/* Active placements range */}
@@ -304,22 +348,6 @@ export default function Screens() {
               </div>
             </div>
 
-            {/* Last seen filter */}
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Laatst gezien</Label>
-              <Select value={lastSeenFilter || "all"} onValueChange={(val) => setLastSeenFilter(val === "all" ? "" : val)}>
-                <SelectTrigger className="h-9" data-testid="filter-last-seen">
-                  <SelectValue placeholder="Alle" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Alle</SelectItem>
-                  <SelectItem value="today">Vandaag</SelectItem>
-                  <SelectItem value="1hour">&gt; 1 uur geleden</SelectItem>
-                  <SelectItem value="24hours">&gt; 24 uur geleden</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
             {/* Results count */}
             <div className="flex items-end">
               <Badge variant="secondary" className="h-9 px-3">
@@ -336,9 +364,9 @@ export default function Screens() {
           <TableHeader>
             <TableRow>
               <TableHead>Screen ID</TableHead>
-              <TableHead>Locatie</TableHead>
+              <TableHead>Plaats</TableHead>
+              <TableHead>Locatie/Bedrijf</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead>Laatst gezien</TableHead>
               <TableHead className="text-center">Actieve plaatsingen</TableHead>
               <TableHead className="w-[100px] text-right">Actie</TableHead>
             </TableRow>
@@ -352,14 +380,12 @@ export default function Screens() {
                     {scr.screenId || scr.name}
                   </div>
                 </TableCell>
+                <TableCell>{getLocationCity(scr.locationId)}</TableCell>
                 <TableCell>{getLocationName(scr.locationId)}</TableCell>
                 <TableCell>
                   <Badge variant={getStatusColor(scr.status) as any}>
                     {getStatusLabel(scr.status)}
                   </Badge>
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground">
-                  {formatLastSeen(scr.lastSeenAt)}
                 </TableCell>
                 <TableCell className="text-center">
                   <Badge variant="outline">{getActivePlacementsCount(scr.id)}</Badge>
