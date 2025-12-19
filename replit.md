@@ -65,13 +65,21 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 - Action buttons: Open in Yodeck, Contact locatie, Plaats Ad
 - Location/Contact block: Address, Contact person, Phone, Email, Notes
 - "Wat draait er op dit scherm?" table: Advertiser (linked), Creative, Start/End dates, Status, Open placement link
-- Statistics accordion: Uptime trend, offline incidents (coming when Yodeck is synced)
+- **Statistieken accordion**: Uptime timeline (AreaChart), playback metrics (BarChart), 3 KPI cards (Uptime %, Totaal plays, Speeltijd), date range filters (today/7d/30d), granularity selector (hour/day/week), snapshot (PNG export), shareable link
 
 **Advertiser Detail Page** (`/advertisers/:id`):
 - Header: Company name, Status badge
 - Contactgegevens: Contact person, Phone, Email, Address (street/zipcode/city), BTW-nummer, KVK-nummer
 - Moneybird link status, Notes, SEPA Incasso status
 - Contract status cards, "Waar draaien mijn ads?" placements list, Payment status
+- **Statistieken accordion**: Plays per scherm (BarChart), plays per stad (PieChart), top creatives (BarChart), 3 KPI cards (Totaal plays, Totale speeltijd, Schermen), date range filters, snapshot, shareable link
+
+### Yodeck Statistics Integration
+- Backend service: `server/yodeckStats.ts` with 5-minute caching via memoizee
+- API endpoints: `GET /api/screens/:id/stats` and `GET /api/advertisers/:id/stats` with date range and granularity filters
+- Frontend uses Recharts library for data visualization
+- Graceful fallback when Yodeck API not configured or screen not linked
+- Share links persist exact date ranges via URL parameters
 
 ## External Dependencies
 
