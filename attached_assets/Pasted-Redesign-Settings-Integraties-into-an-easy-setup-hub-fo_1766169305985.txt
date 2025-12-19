@@ -1,0 +1,60 @@
+Redesign Settings > Integraties into an easy setup hub for all API connections.
+Goal: I can configure everything here without technical knowledge.
+
+1) Integrations included:
+- Yodeck
+- Moneybird
+- Dropbox Sign
+(Keep it extendable for future integrations.)
+
+2) For each integration, provide a simple setup section with:
+- Enable toggle
+- Required credentials inputs (API keys / IDs)
+- “Test verbinding” button that validates credentials and shows a clear result:
+  - Green: Connected
+  - Red: Not connected + human-readable error message
+- Sync options (checkboxes) + sync frequency selector (simple)
+- “Sync nu” button
+
+3) Replace developer-style tips with user-friendly guidance:
+- Show exactly what to paste where.
+- Show copy buttons for URLs/IDs (e.g., OAuth callback URL)
+- Provide 2–3 troubleshooting bullets when failing.
+- Provide a “Copy error details” button for support/developer.
+
+4) Status display:
+Each integration card should show:
+- Status badge: Niet ingesteld / Verbonden / Fout
+- Last sync time (human readable, e.g. “2 uur geleden”)
+- Items processed (optional)
+- Buttons: Instellen, Test, Sync nu
+
+5) Yodeck specific requirements:
+- Add a setting “ScreenID mapping method”:
+  - Device name contains EVZ-###
+  - Device tag field (screen_id)
+- Validate that devices can be matched to our Screen IDs.
+
+6) Moneybird specific requirements:
+- Show required fields used by our implementation (client id/secret/admin id).
+- Provide a copyable callback URL if OAuth is used.
+- Allow choosing what to sync (contacts, invoices status, payments).
+
+7) Dropbox Sign specific requirements:
+- Store API key and template IDs (contract + SEPA).
+- Toggle: store signed PDFs in our storage (recommended).
+- Track webhook status (optional simple indicator).
+
+8) Security:
+- Do NOT display full secrets once saved (mask them).
+- Allow “Replace key” flow.
+- Store secrets securely (prefer env vars or encrypted storage).
+- Ensure only Eigenaar (admin) can access Integrations settings.
+
+9) UI constraints:
+- Keep the page clean and quick.
+- No large technical paragraphs.
+- Everything should feel like a setup wizard.
+
+Outcome:
+Integrations tab becomes a simple “connect and verify” setup hub for all APIs.

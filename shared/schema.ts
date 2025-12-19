@@ -376,6 +376,26 @@ export const integrationLogs = pgTable("integration_logs", {
 });
 
 /**
+ * IntegrationConfigs - Store settings for external API integrations
+ * Secrets are stored encrypted or as references to env vars
+ */
+export const integrationConfigs = pgTable("integration_configs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  service: text("service").notNull().unique(), // yodeck, moneybird, dropbox_sign
+  isEnabled: boolean("is_enabled").notNull().default(false),
+  status: text("status").notNull().default("not_configured"), // not_configured, connected, error
+  lastTestedAt: timestamp("last_tested_at"),
+  lastTestResult: text("last_test_result"), // success, error
+  lastTestError: text("last_test_error"),
+  lastSyncAt: timestamp("last_sync_at"),
+  lastSyncItemsProcessed: integer("last_sync_items_processed"),
+  syncFrequency: text("sync_frequency").default("15min"), // 5min, 15min, 30min, 1hour, manual
+  settings: jsonb("settings"), // service-specific non-secret settings
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
  * Jobs - Background job definitions and schedules
  */
 export const jobs = pgTable("jobs", {
@@ -854,6 +874,7 @@ export const insertPaymentSchema = createInsertSchema(payments).omit({ id: true,
 export const insertPayoutSchema = createInsertSchema(payouts).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertCarryOverSchema = createInsertSchema(carryOvers).omit({ id: true, createdAt: true });
 export const insertIntegrationLogSchema = createInsertSchema(integrationLogs).omit({ id: true, createdAt: true });
+export const insertIntegrationConfigSchema = createInsertSchema(integrationConfigs).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertJobSchema = createInsertSchema(jobs).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertJobRunSchema = createInsertSchema(jobRuns).omit({ id: true, createdAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, createdAt: true });
@@ -918,6 +939,9 @@ export type InsertCarryOver = z.infer<typeof insertCarryOverSchema>;
 
 export type IntegrationLog = typeof integrationLogs.$inferSelect;
 export type InsertIntegrationLog = z.infer<typeof insertIntegrationLogSchema>;
+
+export type IntegrationConfig = typeof integrationConfigs.$inferSelect;
+export type InsertIntegrationConfig = z.infer<typeof insertIntegrationConfigSchema>;
 
 export type Job = typeof jobs.$inferSelect;
 export type InsertJob = z.infer<typeof insertJobSchema>;
