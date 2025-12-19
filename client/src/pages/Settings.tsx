@@ -34,7 +34,8 @@ import {
   Trash2,
   FileText,
   ToggleLeft,
-  ToggleRight
+  ToggleRight,
+  Target,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -47,6 +48,13 @@ interface AutomationRule {
   trigger: string;
   enabled: boolean;
   threshold?: number;
+  thresholdType?: "hours" | "days" | "percentage" | "count";
+}
+
+interface ActiveHoursSettings {
+  startTime: string;
+  endTime: string;
+  enabled: boolean;
 }
 
 interface DbTemplate {
@@ -109,46 +117,57 @@ interface OverdueAdvertiser {
 
 const defaultRules: AutomationRule[] = [
   {
-    id: "screen_offline_30",
-    name: "Scherm offline > 30 min",
-    description: "Maak automatisch een Issue aan",
-    trigger: "screen_offline",
+    id: "screen_offline_active",
+    name: "Scherm offline tijdens actieve uren",
+    description: "Toon melding wanneer scherm offline is tijdens openingstijden",
+    trigger: "screen_offline_active",
     enabled: true,
-    threshold: 30,
+    threshold: 2,
+    thresholdType: "hours",
   },
   {
-    id: "screen_offline_120",
-    name: "Scherm offline > 2 uur",
-    description: "Escaleer alert naar eigenaar",
-    trigger: "screen_offline",
+    id: "screen_offline_days",
+    name: "Scherm meerdere dagen offline",
+    description: "Toon melding wanneer scherm langere tijd niet gezien is",
+    trigger: "screen_offline_days",
     enabled: true,
-    threshold: 120,
+    threshold: 3,
+    thresholdType: "days",
   },
   {
-    id: "empty_inventory",
-    name: "Lege inventaris (< 20 plaatsingen)",
-    description: "Alert + checklist item aanmaken",
-    trigger: "empty_inventory",
+    id: "screen_mostly_empty",
+    name: "Scherm grotendeels leeg",
+    description: "Toon melding wanneer scherm weinig actieve ads heeft",
+    trigger: "screen_mostly_empty",
     enabled: true,
-    threshold: 20,
+    threshold: 50,
+    thresholdType: "percentage",
   },
   {
     id: "placement_expiring",
-    name: "Plaatsing verloopt in 14 dagen",
-    description: "Alert tonen in Control Room",
+    name: "Plaatsing loopt binnenkort af",
+    description: "Toon melding bij naderende einddatum",
     trigger: "placement_expiring",
     enabled: true,
     threshold: 14,
+    thresholdType: "days",
   },
   {
-    id: "overdue_hold",
-    name: "Achterstallig > 14 dagen → HOLD",
-    description: "Zet plaatsingen automatisch op HOLD (UIT voor V1)",
+    id: "overdue_notice",
+    name: "Betaling nog niet ontvangen",
+    description: "Toon melding bij openstaande facturen (UIT voor V1)",
     trigger: "overdue_payment",
     enabled: false,
     threshold: 14,
+    thresholdType: "days",
   },
 ];
+
+const defaultActiveHours: ActiveHoursSettings = {
+  startTime: "07:00",
+  endTime: "23:00",
+  enabled: true,
+};
 
 const TEMPLATE_CATEGORIES = [
   { value: "all", label: "Alle" },
@@ -184,6 +203,7 @@ export default function Settings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [rules, setRules] = useState<AutomationRule[]>(defaultRules);
+  const [activeHours, setActiveHours] = useState<ActiveHoursSettings>(defaultActiveHours);
   const [templateCategory, setTemplateCategory] = useState("all");
   const [templateSearch, setTemplateSearch] = useState("");
   const [editingTemplate, setEditingTemplate] = useState<DbTemplate | null>(null);
@@ -194,6 +214,11 @@ export default function Settings() {
   const [showVersions, setShowVersions] = useState<string | null>(null);
   const [isNewTemplateOpen, setIsNewTemplateOpen] = useState(false);
   const [newTemplate, setNewTemplate] = useState({ name: "", category: "whatsapp", subject: "", body: "" });
+  const updateRuleThresholdType = (ruleId: string, thresholdType: "percentage" | "count") => {
+    setRules(rules.map(r => 
+      r.id === ruleId ? { ...r, thresholdType } : r
+    ));
+  };
 
   const { data: users = [] } = useQuery<UserRole[]>({
     queryKey: ["/api/users"],
@@ -448,13 +473,59 @@ export default function Settings() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              {/* Active Hours Setting */}
+              <div className="p-4 border rounded-lg bg-muted/30">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex items-center gap-3">
+                    <Clock className="h-5 w-5 text-primary" />
+                    <div>
+                      <p className="font-medium">Actieve schermuren</p>
+                      <p className="text-sm text-muted-foreground">
+                        Schermen buiten deze uren worden niet als offline gemeld
+                      </p>
+                    </div>
+                  </div>
+                  <Switch
+                    checked={activeHours.enabled}
+                    onCheckedChange={(checked) => setActiveHours({ ...activeHours, enabled: checked })}
+                    data-testid="switch-active-hours"
+                  />
+                </div>
+                {activeHours.enabled && (
+                  <div className="flex items-center gap-4 ml-8">
+                    <div className="flex items-center gap-2">
+                      <Label className="text-sm text-muted-foreground">Van</Label>
+                      <Input
+                        type="time"
+                        value={activeHours.startTime}
+                        onChange={(e) => setActiveHours({ ...activeHours, startTime: e.target.value })}
+                        className="w-28"
+                        data-testid="input-start-time"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Label className="text-sm text-muted-foreground">Tot</Label>
+                      <Input
+                        type="time"
+                        value={activeHours.endTime}
+                        onChange={(e) => setActiveHours({ ...activeHours, endTime: e.target.value })}
+                        className="w-28"
+                        data-testid="input-end-time"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
               <div>
                 <h3 className="font-medium mb-4 flex items-center gap-2">
                   <Monitor className="h-4 w-4" />
                   Scherm Monitoring
                 </h3>
                 <div className="space-y-4">
-                  {rules.filter(r => r.trigger === "screen_offline").map((rule) => (
+                  {rules.filter(r => r.trigger === "screen_offline_active" || r.trigger === "screen_offline_days").map((rule) => (
                     <div 
                       key={rule.id} 
                       className="flex items-center justify-between p-4 border rounded-lg"
@@ -471,14 +542,18 @@ export default function Settings() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
+                        <span className="text-sm text-muted-foreground">langer dan</span>
                         <Input
                           type="number"
                           value={rule.threshold}
                           onChange={(e) => updateThreshold(rule.id, parseInt(e.target.value) || 0)}
-                          className="w-20"
+                          className="w-16"
                           disabled={!rule.enabled}
+                          min={1}
                         />
-                        <span className="text-sm text-muted-foreground">min</span>
+                        <span className="text-sm text-muted-foreground">
+                          {rule.thresholdType === "hours" ? "uur" : "dagen"}
+                        </span>
                       </div>
                     </div>
                   ))}
@@ -489,11 +564,12 @@ export default function Settings() {
 
               <div>
                 <h3 className="font-medium mb-4 flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4" />
+                  <Target className="h-4 w-4" />
                   Inventaris & Plaatsingen
                 </h3>
                 <div className="space-y-4">
-                  {rules.filter(r => r.trigger === "empty_inventory" || r.trigger === "placement_expiring").map((rule) => (
+                  {/* Screen mostly empty rule with flexible threshold */}
+                  {rules.filter(r => r.trigger === "screen_mostly_empty").map((rule) => (
                     <div 
                       key={rule.id} 
                       className="flex items-center justify-between p-4 border rounded-lg"
@@ -509,16 +585,59 @@ export default function Settings() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
+                        <span className="text-sm text-muted-foreground">minder dan</span>
                         <Input
                           type="number"
                           value={rule.threshold}
                           onChange={(e) => updateThreshold(rule.id, parseInt(e.target.value) || 0)}
-                          className="w-20"
+                          className="w-16"
                           disabled={!rule.enabled}
+                          min={1}
                         />
-                        <span className="text-sm text-muted-foreground">
-                          {rule.trigger === "empty_inventory" ? "plaatsingen" : "dagen"}
-                        </span>
+                        <Select 
+                          value={rule.thresholdType || "percentage"} 
+                          onValueChange={(v) => updateRuleThresholdType(rule.id, v as "percentage" | "count")}
+                          disabled={!rule.enabled}
+                        >
+                          <SelectTrigger className="w-28">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="percentage">% gevuld</SelectItem>
+                            <SelectItem value="count">actieve ads</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {/* Placement expiring rule */}
+                  {rules.filter(r => r.trigger === "placement_expiring").map((rule) => (
+                    <div 
+                      key={rule.id} 
+                      className="flex items-center justify-between p-4 border rounded-lg"
+                    >
+                      <div className="flex items-center gap-4">
+                        <Switch
+                          checked={rule.enabled}
+                          onCheckedChange={() => toggleRule(rule.id)}
+                        />
+                        <div>
+                          <p className="font-medium">{rule.name}</p>
+                          <p className="text-sm text-muted-foreground">{rule.description}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm text-muted-foreground">binnen</span>
+                        <Input
+                          type="number"
+                          value={rule.threshold}
+                          onChange={(e) => updateThreshold(rule.id, parseInt(e.target.value) || 0)}
+                          className="w-16"
+                          disabled={!rule.enabled}
+                          min={1}
+                        />
+                        <span className="text-sm text-muted-foreground">dagen</span>
                       </div>
                     </div>
                   ))}
@@ -530,7 +649,7 @@ export default function Settings() {
               <div>
                 <h3 className="font-medium mb-4 flex items-center gap-2 text-muted-foreground">
                   <Wallet className="h-4 w-4" />
-                  Betaling (secundair in V1)
+                  Betalingen (secundair in V1)
                 </h3>
                 <div className="space-y-4">
                   {rules.filter(r => r.trigger === "overdue_payment").map((rule) => (
@@ -549,12 +668,14 @@ export default function Settings() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
+                        <span className="text-sm text-muted-foreground">na</span>
                         <Input
                           type="number"
                           value={rule.threshold}
                           onChange={(e) => updateThreshold(rule.id, parseInt(e.target.value) || 0)}
-                          className="w-20"
+                          className="w-16"
                           disabled={!rule.enabled}
+                          min={1}
                         />
                         <span className="text-sm text-muted-foreground">dagen</span>
                       </div>
