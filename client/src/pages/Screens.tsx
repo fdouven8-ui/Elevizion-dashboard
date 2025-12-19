@@ -85,10 +85,12 @@ export default function Screens() {
 
       // Active placements range
       const placementCount = getActivePlacementsCount(scr.id);
-      if (minPlacements && placementCount < parseInt(minPlacements)) {
+      const minVal = minPlacements ? parseInt(minPlacements, 10) : NaN;
+      const maxVal = maxPlacements ? parseInt(maxPlacements, 10) : NaN;
+      if (!isNaN(minVal) && placementCount < minVal) {
         return false;
       }
-      if (maxPlacements && placementCount > parseInt(maxPlacements)) {
+      if (!isNaN(maxVal) && placementCount > maxVal) {
         return false;
       }
 
@@ -305,12 +307,12 @@ export default function Screens() {
             {/* Last seen filter */}
             <div className="space-y-2">
               <Label className="text-xs text-muted-foreground">Laatst gezien</Label>
-              <Select value={lastSeenFilter} onValueChange={setLastSeenFilter}>
+              <Select value={lastSeenFilter || "all"} onValueChange={(val) => setLastSeenFilter(val === "all" ? "" : val)}>
                 <SelectTrigger className="h-9" data-testid="filter-last-seen">
                   <SelectValue placeholder="Alle" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Alle</SelectItem>
+                  <SelectItem value="all">Alle</SelectItem>
                   <SelectItem value="today">Vandaag</SelectItem>
                   <SelectItem value="1hour">&gt; 1 uur geleden</SelectItem>
                   <SelectItem value="24hours">&gt; 24 uur geleden</SelectItem>

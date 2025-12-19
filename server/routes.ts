@@ -13,6 +13,7 @@ import {
   insertPackagePlanSchema,
   insertContractSchema,
   insertPlacementSchema,
+  placementUpdateSchema,
   insertInvoiceSchema,
   insertPayoutSchema,
   insertLeadSchema,
@@ -297,6 +298,28 @@ export async function registerRoutes(
   app.delete("/api/placements/:id", async (req, res) => {
     await storage.deletePlacement(req.params.id);
     res.status(204).send();
+  });
+
+  app.patch("/api/placements/:id", async (req, res) => {
+    try {
+      const parseResult = placementUpdateSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({ message: parseResult.error.message });
+      }
+      
+      const updateData = parseResult.data;
+      if (Object.keys(updateData).length === 0) {
+        return res.status(400).json({ message: "No valid fields to update" });
+      }
+      
+      const placement = await storage.updatePlacement(req.params.id, updateData);
+      if (!placement) {
+        return res.status(404).json({ message: "Placement not found" });
+      }
+      res.json(placement);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
   });
 
   // ============================================================================

@@ -80,10 +80,28 @@ export default function ScreenDetail() {
   };
 
   const handlePauseAll = async () => {
+    let successCount = 0;
+    let failCount = 0;
+    
     for (const placement of activePlacements) {
-      await updatePlacementMutation.mutateAsync({ id: placement.id, data: { isActive: false } });
+      try {
+        await updatePlacementMutation.mutateAsync({ id: placement.id, data: { isActive: false } });
+        successCount++;
+      } catch (error) {
+        failCount++;
+      }
     }
-    toast({ title: `${activePlacements.length} plaatsingen gepauzeerd` });
+    
+    if (failCount === 0) {
+      toast({ title: `${successCount} plaatsingen gepauzeerd` });
+    } else if (successCount === 0) {
+      toast({ title: "Kon geen plaatsingen pauzeren", variant: "destructive" });
+    } else {
+      toast({ 
+        title: `${successCount} gepauzeerd, ${failCount} mislukt`, 
+        variant: "destructive" 
+      });
+    }
   };
 
   const openInYodeck = () => {

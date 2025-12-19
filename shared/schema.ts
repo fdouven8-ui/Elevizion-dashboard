@@ -820,6 +820,16 @@ export const insertContractSchema = createInsertSchema(contracts).omit({ id: tru
 export const insertContractEventSchema = createInsertSchema(contractEvents).omit({ id: true, createdAt: true });
 export const insertContractFileSchema = createInsertSchema(contractFiles).omit({ id: true, createdAt: true });
 export const insertPlacementSchema = createInsertSchema(placements).omit({ id: true, createdAt: true, updatedAt: true });
+
+// Placement update schema - for PATCH operations, only allows specific fields
+export const placementUpdateSchema = insertPlacementSchema.pick({
+  isActive: true,
+  startDate: true,
+  endDate: true,
+  notes: true,
+  secondsPerLoop: true,
+  playsPerHour: true,
+}).partial().strict();
 export const insertScheduleSnapshotSchema = createInsertSchema(scheduleSnapshots).omit({ id: true, createdAt: true });
 export const insertSnapshotPlacementSchema = createInsertSchema(snapshotPlacements).omit({ id: true, createdAt: true });
 export const insertInvoiceSchema = createInsertSchema(invoices).omit({ id: true, createdAt: true, updatedAt: true });

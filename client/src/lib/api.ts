@@ -9,6 +9,10 @@ import type {
   Invoice,
   Payout,
 } from "@shared/schema";
+import type { z } from "zod";
+import { placementUpdateSchema } from "@shared/schema";
+
+type PlacementUpdate = z.infer<typeof placementUpdateSchema>;
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -121,7 +125,7 @@ export const placementsApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
-  update: (id: string, data: Partial<Placement>) =>
+  update: (id: string, data: PlacementUpdate) =>
     fetchJson<Placement>(`/api/placements/${id}`, {
       method: "PATCH",
       body: JSON.stringify(data),
