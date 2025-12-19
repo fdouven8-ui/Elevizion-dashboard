@@ -2709,37 +2709,36 @@ export async function registerRoutes(
       const screens = await storage.getScreens();
       const placements = await storage.getPlacements();
       const contracts = await storage.getContracts();
-      const incidents = await storage.getIncidents() || [];
       
       const screensOnline = screens.filter(s => s.status === "online").length;
       const screensOffline = screens.filter(s => s.status === "offline").length;
       const screensTotal = screens.length;
       
-      const activeContractIds = new Set(
-        contracts.filter(c => c.status === "active").map(c => c.id)
+      // Active placements count
+      const activePlacementsList = placements.filter(p => p.isActive);
+      const activePlacements = activePlacementsList.length;
+      
+      // Paying advertisers: advertisers with active/signed contract AND active placements
+      const activeContracts = contracts.filter(c => 
+        c.status === "signed" || c.status === "active"
       );
-      const activePlacementsList = placements.filter(p => 
-        p.isActive && activeContractIds.has(p.contractId)
+      const activePlacementContractIds = new Set(
+        activePlacementsList.map(p => p.contractId)
       );
-      const adsLiveToday = activePlacementsList.length;
-      
-      const issuesOpen = incidents.filter(i => i.status === "open").length;
-      
-      // Count contracts pending signatures (not yet active)
-      const pendingContracts = contracts.filter(c => c.status === "draft" || c.status === "pending").length;
-      
-      // Overdue advertisers (simplified - would need invoice data)
-      const overdueAdvertisers = 0;
+      const payingAdvertiserIds = new Set<string>();
+      activeContracts.forEach(contract => {
+        if (activePlacementContractIds.has(contract.id)) {
+          payingAdvertiserIds.add(contract.advertiserId);
+        }
+      });
+      const payingAdvertisers = payingAdvertiserIds.size;
       
       res.json({
         screensOnline,
         screensTotal,
         screensOffline,
-        adsLiveToday,
-        issuesOpen,
-        overdueAdvertisers,
-        pendingContracts,
-        activePlacements: activePlacementsList.length,
+        activePlacements,
+        payingAdvertisers,
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });

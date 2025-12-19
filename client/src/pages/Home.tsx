@@ -1,66 +1,25 @@
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { 
-  Monitor, 
   Wifi,
   WifiOff,
   Target,
   Users,
-  CreditCard,
-  Plus,
-  Upload,
-  Zap,
-  ChevronDown,
-  FileSignature
 } from "lucide-react";
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
-import { formatDistanceToNow } from "date-fns";
-import { nl } from "date-fns/locale";
 
 interface ControlRoomStats {
   screensOnline: number;
   screensTotal: number;
   screensOffline: number;
-  adsLiveToday: number;
-  screensWithEmptySlots: number;
-  issuesOpen: number;
-  overdueAdvertisers: number;
-  pendingContracts?: number;
-  activePlacements?: number;
+  activePlacements: number;
+  payingAdvertisers: number;
 }
-
-interface ActionItem {
-  id: string;
-  type: "offline_screen" | "pending_contract" | "overdue_payment" | "pending_approval";
-  itemName: string;
-  status: string;
-  createdAt: string;
-  link: string;
-}
-
 
 export default function Home() {
-  const [, navigate] = useLocation();
-
-  const { data: stats, isLoading: statsLoading } = useQuery<ControlRoomStats>({
+  const { data: stats, isLoading } = useQuery<ControlRoomStats>({
     queryKey: ["/api/control-room/stats"],
     queryFn: async () => {
       try {
@@ -71,178 +30,86 @@ export default function Home() {
           screensOnline: 0,
           screensTotal: 0,
           screensOffline: 0,
-          adsLiveToday: 0,
-          screensWithEmptySlots: 0,
-          issuesOpen: 0,
-          overdueAdvertisers: 0,
-          pendingContracts: 0,
           activePlacements: 0,
+          payingAdvertisers: 0,
         };
       }
     },
     refetchInterval: 30000,
   });
 
-  const { data: actionItems = [], isLoading: actionsLoading } = useQuery<ActionItem[]>({
-    queryKey: ["/api/control-room/actions"],
-    queryFn: async () => {
-      try {
-        const res = await apiRequest("GET", "/api/control-room/actions");
-        return res.json();
-      } catch {
-        return [];
-      }
-    },
-    refetchInterval: 30000,
-  });
-
-
-  const getTypeLabel = (type: string) => {
-    switch (type) {
-      case "offline_screen": return "Scherm Offline";
-      case "pending_contract": return "Contract";
-      case "overdue_payment": return "Betaling";
-      case "pending_approval": return "Goedkeuring";
-      default: return type;
-    }
-  };
-
-  const getTypeBadgeVariant = (type: string): "destructive" | "secondary" | "outline" | "default" => {
-    switch (type) {
-      case "offline_screen": return "destructive";
-      case "overdue_payment": return "destructive";
-      case "pending_contract": return "secondary";
-      case "pending_approval": return "outline";
-      default: return "default";
-    }
-  };
-
-  const formatAge = (dateString: string) => {
-    try {
-      return formatDistanceToNow(new Date(dateString), { addSuffix: false, locale: nl });
-    } catch {
-      return "-";
-    }
-  };
-
   const kpiTiles = [
     {
       id: "online",
-      title: "Online",
+      title: "Schermen online",
       value: stats?.screensOnline || 0,
       subtitle: `/ ${stats?.screensTotal || 0}`,
       icon: Wifi,
       iconColor: "text-green-600",
       bgColor: "bg-green-50",
-      borderColor: "border-green-200",
       link: "/screens?status=online",
     },
     {
       id: "offline",
-      title: "Offline",
+      title: "Schermen offline",
       value: stats?.screensOffline || 0,
       icon: WifiOff,
-      iconColor: "text-red-600",
-      bgColor: (stats?.screensOffline || 0) > 0 ? "bg-red-50" : "",
-      borderColor: (stats?.screensOffline || 0) > 0 ? "border-red-300" : "",
+      iconColor: "text-muted-foreground",
+      bgColor: "",
       link: "/screens?status=offline",
-      highlight: (stats?.screensOffline || 0) > 0,
     },
     {
-      id: "pending",
-      title: "Wacht op handtekening",
-      value: stats?.pendingContracts || 0,
-      icon: FileSignature,
-      iconColor: "text-amber-600",
-      bgColor: (stats?.pendingContracts || 0) > 0 ? "bg-amber-50" : "",
-      borderColor: (stats?.pendingContracts || 0) > 0 ? "border-amber-300" : "",
-      link: "/advertisers?filter=pending_signatures",
-    },
-    {
-      id: "overdue",
-      title: "Te laat betaald",
-      value: stats?.overdueAdvertisers || 0,
-      icon: CreditCard,
-      iconColor: "text-red-600",
-      bgColor: (stats?.overdueAdvertisers || 0) > 0 ? "bg-red-50" : "",
-      borderColor: (stats?.overdueAdvertisers || 0) > 0 ? "border-red-300" : "",
-      link: "/advertisers?filter=overdue",
-    },
-    {
-      id: "placements",
-      title: "Actieve plaatsingen",
-      value: stats?.activePlacements || stats?.adsLiveToday || 0,
+      id: "ads",
+      title: "Ads online",
+      value: stats?.activePlacements || 0,
       icon: Target,
-      iconColor: "text-primary",
-      bgColor: "bg-primary/5",
-      borderColor: "border-primary/20",
+      iconColor: "text-blue-600",
+      bgColor: "bg-blue-50",
       link: "/placements?status=active",
+    },
+    {
+      id: "advertisers",
+      title: "Actief betalende adverteerders",
+      value: stats?.payingAdvertisers || 0,
+      icon: Users,
+      iconColor: "text-purple-600",
+      bgColor: "bg-purple-50",
+      link: "/advertisers?filter=paying",
     },
   ];
 
   return (
-    <div className="space-y-6">
-      {/* Header with Quick Actions */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold" data-testid="page-title">Control Room</h1>
-          <p className="text-sm text-muted-foreground">Overzicht van je Elevizion netwerk</p>
-        </div>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="default" size="sm" className="gap-2" data-testid="button-quick-actions">
-              <Zap className="h-4 w-4" />
-              Snelle Acties
-              <ChevronDown className="h-3 w-3" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            <DropdownMenuItem onClick={() => navigate("/onboarding/screen")} data-testid="dropdown-new-screen">
-              <Plus className="h-4 w-4 mr-2" />
-              Nieuw Scherm
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => navigate("/onboarding/advertiser")} data-testid="dropdown-new-advertiser">
-              <Users className="h-4 w-4 mr-2" />
-              Nieuwe Adverteerder
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => navigate("/onboarding/placement")} data-testid="dropdown-upload">
-              <Upload className="h-4 w-4 mr-2" />
-              Upload Creative
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => navigate("/onboarding/placement")} data-testid="dropdown-place-ad">
-              <Target className="h-4 w-4 mr-2" />
-              Plaats Ad
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div>
+        <h1 className="text-2xl font-bold" data-testid="page-title">Home</h1>
+        <p className="text-muted-foreground">Overzicht van je Elevizion netwerk</p>
       </div>
 
-      {/* KPI Tiles - Clickable */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {kpiTiles.map((tile) => (
           <Link key={tile.id} href={tile.link}>
             <Card 
-              className={`${tile.borderColor} ${tile.bgColor} cursor-pointer transition-all hover:shadow-md hover:scale-[1.02]`}
+              className={`${tile.bgColor} cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] border`}
               data-testid={`kpi-${tile.id}`}
             >
-              <CardContent className="pt-4 pb-4">
-                {statsLoading ? (
-                  <Skeleton className="h-12 w-full" />
+              <CardContent className="pt-5 pb-5">
+                {isLoading ? (
+                  <Skeleton className="h-16 w-full" />
                 ) : (
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-xs text-muted-foreground font-medium mb-0.5">{tile.title}</p>
+                      <p className="text-sm text-muted-foreground font-medium mb-1">{tile.title}</p>
                       <div className="flex items-baseline gap-1">
-                        <span className={`text-2xl font-bold ${tile.highlight ? 'text-red-600' : ''}`}>
+                        <span className="text-3xl font-bold">
                           {tile.value}
                         </span>
                         {tile.subtitle && (
-                          <span className="text-sm text-muted-foreground">{tile.subtitle}</span>
+                          <span className="text-lg text-muted-foreground">{tile.subtitle}</span>
                         )}
                       </div>
                     </div>
-                    <div className={`p-2 rounded-full ${tile.bgColor || 'bg-muted/50'}`}>
-                      <tile.icon className={`h-5 w-5 ${tile.iconColor}`} />
+                    <div className={`p-3 rounded-full ${tile.bgColor || 'bg-muted/50'}`}>
+                      <tile.icon className={`h-6 w-6 ${tile.iconColor}`} />
                     </div>
                   </div>
                 )}
@@ -251,65 +118,6 @@ export default function Home() {
           </Link>
         ))}
       </div>
-
-      {/* Action Overview Table */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-lg font-semibold">Actie Overzicht</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {actionsLoading ? (
-            <div className="space-y-2">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-            </div>
-          ) : actionItems.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Monitor className="h-10 w-10 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">Geen openstaande acties</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-[120px]">Type</TableHead>
-                  <TableHead>Item</TableHead>
-                  <TableHead className="w-[120px]">Status</TableHead>
-                  <TableHead className="w-[100px]">Leeftijd</TableHead>
-                  <TableHead className="w-[80px] text-right">Actie</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {actionItems.map((item) => (
-                  <TableRow key={item.id} data-testid={`action-row-${item.id}`}>
-                    <TableCell>
-                      <Badge variant={getTypeBadgeVariant(item.type)} className="text-xs">
-                        {getTypeLabel(item.type)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-medium">{item.itemName}</TableCell>
-                    <TableCell>
-                      <span className="text-sm text-muted-foreground">{item.status}</span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-muted-foreground">{formatAge(item.createdAt)}</span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="outline" size="sm" asChild>
-                        <Link href={item.link}>
-                          Open
-                        </Link>
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
     </div>
   );
 }
