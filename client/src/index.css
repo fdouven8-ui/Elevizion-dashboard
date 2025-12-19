@@ -168,7 +168,7 @@
     @apply bg-white/10 backdrop-blur-md border border-white/20;
   }
   .card-hover {
-    @apply transition-all duration-300 hover:shadow-lg hover:-translate-y-1;
+    @apply transition-all duration-300 hover:shadow-md hover:-translate-y-0.5;
   }
   .gradient-primary {
     @apply bg-gradient-to-br from-emerald-500 to-teal-600;
@@ -196,5 +196,10 @@
   }
   .shadow-glow-accent {
     box-shadow: 0 0 40px -10px hsl(262 83% 58% / 0.3);
+  }
+  
+  /* Active filter styling */
+  .filter-active {
+    @apply ring-2 ring-primary ring-offset-1;
   }
 }

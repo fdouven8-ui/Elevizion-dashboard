@@ -72,8 +72,9 @@ export default function Home() {
       value: stats?.screensOnline || 0,
       subtitle: `/ ${stats?.screensTotal || 0}`,
       icon: Wifi,
-      iconColor: "text-green-600",
-      bgColor: "bg-green-50",
+      iconColor: "text-emerald-600",
+      iconBg: "bg-emerald-50",
+      accentBg: "bg-emerald-500",
       link: "/screens?status=online",
     },
     {
@@ -81,8 +82,9 @@ export default function Home() {
       title: "Schermen offline",
       value: stats?.screensOffline || 0,
       icon: WifiOff,
-      iconColor: "text-muted-foreground",
-      bgColor: "",
+      iconColor: "text-slate-500",
+      iconBg: "bg-slate-100",
+      accentBg: "bg-slate-400",
       link: "/screens?status=offline",
     },
     {
@@ -91,7 +93,8 @@ export default function Home() {
       value: stats?.activePlacements || 0,
       icon: Target,
       iconColor: "text-blue-600",
-      bgColor: "bg-blue-50",
+      iconBg: "bg-blue-50",
+      accentBg: "bg-blue-500",
       link: "/placements?status=active",
     },
     {
@@ -100,7 +103,8 @@ export default function Home() {
       value: stats?.payingAdvertisers || 0,
       icon: Users,
       iconColor: "text-purple-600",
-      bgColor: "bg-purple-50",
+      iconBg: "bg-purple-50",
+      accentBg: "bg-purple-500",
       link: "/advertisers?filter=paying",
     },
   ];
@@ -150,11 +154,12 @@ export default function Home() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {kpiTiles.map((tile) => (
           <Link key={tile.id} href={tile.link}>
-            <Card 
-              className={`${tile.bgColor} cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] border`}
+            <div 
+              className="bg-card rounded-lg shadow-sm cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] border border-border overflow-hidden"
               data-testid={`kpi-${tile.id}`}
             >
-              <CardContent className="pt-5 pb-5">
+              <div className={`h-1 ${tile.accentBg}`} />
+              <div className="p-5">
                 {statsLoading ? (
                   <Skeleton className="h-16 w-full" />
                 ) : (
@@ -170,13 +175,13 @@ export default function Home() {
                         )}
                       </div>
                     </div>
-                    <div className={`p-3 rounded-full ${tile.bgColor || 'bg-muted/50'}`}>
+                    <div className={`p-3 rounded-full ${tile.iconBg}`}>
                       <tile.icon className={`h-6 w-6 ${tile.iconColor}`} />
                     </div>
                   </div>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           </Link>
         ))}
       </div>

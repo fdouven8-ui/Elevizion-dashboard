@@ -90,10 +90,10 @@ export function AppSidebar() {
                   <SidebarMenuButton 
                     asChild 
                     tooltip={item.title}
-                    className={`h-9 ${isActive(item.url) ? 'bg-muted/40 font-medium' : 'hover:bg-muted/30'}`}
+                    className={`h-9 rounded-lg transition-all ${isActive(item.url) ? 'bg-primary/10 font-medium border-l-2 border-primary' : 'hover:bg-muted/30'}`}
                   >
                     <Link href={item.url}>
-                      <item.icon className={`h-4 w-4 ${isActive(item.url) ? 'text-primary' : ''}`} />
+                      <item.icon className={`h-4 w-4 ${isActive(item.url) ? 'text-primary' : 'text-muted-foreground'}`} />
                       <span className="text-sm">{item.title}</span>
                     </Link>
                   </SidebarMenuButton>
