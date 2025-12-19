@@ -49,7 +49,7 @@ export function AppSidebar() {
   const { user, isAuthenticated, isLoading, logout, hasPermission, hasAnyPermission } = useAuth();
 
   const handleLogin = () => {
-    window.location.href = "/login";
+    window.location.href = "/";
   };
 
   const handleLogout = () => {
