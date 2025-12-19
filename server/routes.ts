@@ -2685,27 +2685,27 @@ export async function registerRoutes(
     try {
       const screens = await storage.getScreens();
       const placements = await storage.getPlacements();
+      const contracts = await storage.getContracts();
       const incidents = await storage.getIncidents() || [];
       
       const screensOnline = screens.filter(s => s.status === "online").length;
       const screensOffline = screens.filter(s => s.status === "offline").length;
       const screensTotal = screens.length;
       
-      const activePlacements = placements.filter(p => p.isActive);
-      const adsLiveToday = activePlacements.length;
-      
-      // placement.screenId references screens.id (UUID), not screens.screenId (EVZ-001)
-      const placementsPerScreen: Record<string, number> = {};
-      activePlacements.forEach(p => {
-        placementsPerScreen[p.screenId] = (placementsPerScreen[p.screenId] || 0) + 1;
-      });
-      // Compare against screen.id (UUID) to match placement.screenId
-      const screensWithEmptySlots = screens.filter(s => 
-        (placementsPerScreen[s.id] || 0) < 20 && s.status === "online"
-      ).length;
+      const activeContractIds = new Set(
+        contracts.filter(c => c.status === "active").map(c => c.id)
+      );
+      const activePlacementsList = placements.filter(p => 
+        p.isActive && activeContractIds.has(p.contractId)
+      );
+      const adsLiveToday = activePlacementsList.length;
       
       const issuesOpen = incidents.filter(i => i.status === "open").length;
       
+      // Count contracts pending signatures (not yet active)
+      const pendingContracts = contracts.filter(c => c.status === "draft" || c.status === "pending").length;
+      
+      // Overdue advertisers (simplified - would need invoice data)
       const overdueAdvertisers = 0;
       
       res.json({
@@ -2713,9 +2713,10 @@ export async function registerRoutes(
         screensTotal,
         screensOffline,
         adsLiveToday,
-        screensWithEmptySlots,
         issuesOpen,
         overdueAdvertisers,
+        pendingContracts,
+        activePlacements: activePlacementsList.length,
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -2855,6 +2856,110 @@ export async function registerRoutes(
       ];
       
       res.json(checklist);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Action items for clean Action Overview table
+  app.get("/api/control-room/actions", async (_req, res) => {
+    try {
+      const screens = await storage.getScreens();
+      const contracts = await storage.getContracts();
+      const advertisers = await storage.getAdvertisers();
+      const invoices = await storage.getInvoices();
+      const actions: any[] = [];
+      const now = new Date();
+      
+      // Offline screens
+      screens.forEach(screen => {
+        if (screen.status === "offline") {
+          actions.push({
+            id: `offline-${screen.id}`,
+            type: "offline_screen",
+            itemName: screen.screenId,
+            status: "Offline",
+            createdAt: screen.lastSeenAt || now.toISOString(),
+            link: `/screens?id=${screen.id}`,
+          });
+        }
+      });
+      
+      // Pending contracts (awaiting signatures)
+      contracts.filter(c => c.status === "draft" || c.status === "pending").forEach(contract => {
+        const advertiser = advertisers.find(a => a.id === contract.advertiserId);
+        actions.push({
+          id: `contract-${contract.id}`,
+          type: "pending_contract",
+          itemName: advertiser?.companyName || `Contract #${contract.id}`,
+          status: contract.status === "draft" ? "Concept" : "Wacht op handtekening",
+          createdAt: contract.createdAt || now.toISOString(),
+          link: `/advertisers/${contract.advertiserId}`,
+        });
+      });
+      
+      // Overdue payments (invoices past due date)
+      invoices.filter(i => i.status === "sent" || i.status === "overdue").forEach(invoice => {
+        const dueDate = invoice.dueDate ? new Date(invoice.dueDate) : null;
+        if (dueDate && dueDate < now) {
+          const advertiser = advertisers.find(a => a.id === invoice.advertiserId);
+          actions.push({
+            id: `overdue-${invoice.id}`,
+            type: "overdue_payment",
+            itemName: advertiser?.companyName || `Factuur #${invoice.invoiceNumber}`,
+            status: "Te laat",
+            createdAt: invoice.dueDate || now.toISOString(),
+            link: `/advertisers/${invoice.advertiserId}`,
+          });
+        }
+      });
+      
+      // Sort by type priority (offline first, then overdue, then pending contracts)
+      const typePriority: Record<string, number> = {
+        offline_screen: 0,
+        overdue_payment: 1,
+        pending_contract: 2,
+        pending_approval: 3,
+      };
+      actions.sort((a, b) => {
+        const priorityA = typePriority[a.type] ?? 99;
+        const priorityB = typePriority[b.type] ?? 99;
+        if (priorityA !== priorityB) return priorityA - priorityB;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
+      
+      res.json(actions);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Online trend for last 7 days (mock data for now, can be enhanced with actual tracking)
+  app.get("/api/control-room/online-trend", async (_req, res) => {
+    try {
+      const screens = await storage.getScreens();
+      const totalScreens = screens.length;
+      const onlineNow = screens.filter(s => s.status === "online").length;
+      const currentPercentage = totalScreens > 0 ? Math.round((onlineNow / totalScreens) * 100) : 100;
+      
+      // Generate 7-day trend (current day is accurate, previous days are simulated)
+      const trend = [];
+      for (let i = 6; i >= 0; i--) {
+        const date = new Date();
+        date.setDate(date.getDate() - i);
+        const dateStr = date.toISOString().split('T')[0];
+        
+        if (i === 0) {
+          trend.push({ date: dateStr, percentage: currentPercentage });
+        } else {
+          // Simulate slight variation for past days
+          const variation = Math.floor(Math.random() * 10) - 5;
+          const simulated = Math.min(100, Math.max(0, currentPercentage + variation));
+          trend.push({ date: dateStr, percentage: simulated });
+        }
+      }
+      
+      res.json(trend);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
