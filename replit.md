@@ -48,6 +48,7 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 - Onboarding via quick wizards.
 - Specific sections for Schermen, Ads & Plaatsingen, Adverteerders, and Instellingen.
 - **Screens module**: City-first organization with "Plaats" (city) as primary filter and "Locatie/Bedrijf" as secondary cascading filter. Table columns: Screen ID, Plaats, Locatie/Bedrijf, Status, Actieve plaatsingen, Actie. "Laatst gezien" removed from list view (only shown on detail page).
+- **Placements module**: Operational-first design with 2 KPIs (Active placements, Placements on offline screens). No financial metrics. Filters: Plaats, Locatie/Scherm, Adverteerder, Status. Search matches advertiser, screen ID, location, city. Table columns: Adverteerder, Plaats, Locatie/Scherm, Creative, Periode, Status (with warning badges), Actie. Placement detail page shows advertiser, screen/location, creative, period, status with warnings, and actions (Pause/Resume, Move, Open in Yodeck).
 - "Template Center" for managing various communication templates with versioning and preview.
 - "Cold Walk-in Onboarding Wizard" for rapid field onboarding of locations and advertisers.
 - Sales pipeline with Kanban board for lead management, including location surveys with photo upload and supply lists.
