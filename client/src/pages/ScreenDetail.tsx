@@ -490,36 +490,73 @@ interface ScreenStatsData {
 function ScreenStatistics({ screenId, yodeckPlayerId, openInYodeck }: { screenId: string; yodeckPlayerId: string | null; openInYodeck: () => void }) {
   const { toast } = useToast();
   const chartRef = useRef<HTMLDivElement>(null);
-  const [dateRange, setDateRange] = useState<"today" | "7d" | "30d" | "custom">("7d");
-  const [granularity, setGranularity] = useState<"hour" | "day" | "week">("day");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const getDateParams = () => {
-    const end = new Date();
-    let start: Date;
+  const getInitialDates = () => {
+    const params = new URLSearchParams(window.location.search);
+    const urlStartDate = params.get("startDate");
+    const urlEndDate = params.get("endDate");
     
-    switch (dateRange) {
-      case "today":
-        start = new Date();
-        start.setHours(0, 0, 0, 0);
-        break;
-      case "7d":
-        start = subDays(end, 7);
-        break;
-      case "30d":
-        start = subDays(end, 30);
-        break;
-      default:
-        start = subDays(end, 7);
+    if (urlStartDate && urlEndDate) {
+      return { startDate: urlStartDate, endDate: urlEndDate };
     }
     
-    return {
-      startDate: format(start, "yyyy-MM-dd"),
-      endDate: format(end, "yyyy-MM-dd"),
-    };
+    const end = new Date();
+    const start = subDays(end, 7);
+    return { startDate: format(start, "yyyy-MM-dd"), endDate: format(end, "yyyy-MM-dd") };
   };
 
-  const { startDate, endDate } = getDateParams();
+  const getInitialPreset = (startDate: string, endDate: string): "today" | "7d" | "30d" => {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const daysDiff = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    if (daysDiff <= 1) return "today";
+    if (daysDiff <= 7) return "7d";
+    return "30d";
+  };
+
+  const getInitialGranularity = (): "hour" | "day" | "week" => {
+    const params = new URLSearchParams(window.location.search);
+    const g = params.get("granularity");
+    if (g === "hour" || g === "day" || g === "week") return g;
+    return "day";
+  };
+
+  const initialDates = getInitialDates();
+  const [startDate, setStartDate] = useState(initialDates.startDate);
+  const [endDate, setEndDate] = useState(initialDates.endDate);
+  const [datePreset, setDatePreset] = useState<"today" | "7d" | "30d">(getInitialPreset(initialDates.startDate, initialDates.endDate));
+  const [granularity, setGranularityState] = useState<"hour" | "day" | "week">(getInitialGranularity);
+
+  const updateUrlParams = (newStartDate: string, newEndDate: string, newGranularity: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("startDate", newStartDate);
+    url.searchParams.set("endDate", newEndDate);
+    url.searchParams.set("granularity", newGranularity);
+    window.history.replaceState({}, "", url.toString());
+  };
+
+  const setDateRange = (newPreset: "today" | "7d" | "30d") => {
+    const end = new Date();
+    let start: Date;
+    switch (newPreset) {
+      case "today": start = new Date(); start.setHours(0, 0, 0, 0); break;
+      case "7d": start = subDays(end, 7); break;
+      case "30d": start = subDays(end, 30); break;
+      default: start = subDays(end, 7);
+    }
+    const newStartDate = format(start, "yyyy-MM-dd");
+    const newEndDate = format(end, "yyyy-MM-dd");
+    setStartDate(newStartDate);
+    setEndDate(newEndDate);
+    setDatePreset(newPreset);
+    updateUrlParams(newStartDate, newEndDate, granularity);
+  };
+
+  const setGranularity = (newValue: "hour" | "day" | "week") => {
+    setGranularityState(newValue);
+    updateUrlParams(startDate, endDate, newValue);
+  };
 
   const { data: stats, isLoading, refetch } = useQuery<ScreenStatsData>({
     queryKey: ["/api/screens", screenId, "stats", startDate, endDate, granularity],
@@ -638,7 +675,7 @@ function ScreenStatistics({ screenId, yodeckPlayerId, openInYodeck }: { screenId
               <div className="flex flex-wrap items-center gap-3 bg-muted/30 rounded-lg p-3">
                 <div className="flex items-center gap-2">
                   <Calendar className="h-4 w-4 text-muted-foreground" />
-                  <Select value={dateRange} onValueChange={(v: any) => setDateRange(v)}>
+                  <Select value={datePreset} onValueChange={(v: any) => setDateRange(v)}>
                     <SelectTrigger className="w-32 h-8" data-testid="select-date-range">
                       <SelectValue />
                     </SelectTrigger>
