@@ -4,6 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Progress } from "@/components/ui/progress";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { 
   Monitor, 
   Wifi,
@@ -14,19 +21,22 @@ import {
   ArrowRight,
   ExternalLink,
   MessageSquare,
-  Clock,
   TrendingUp,
   Users,
-  Loader2,
   AlertCircle,
   Calendar,
   CreditCard,
   Plus,
   Upload,
-  Zap
+  Zap,
+  ChevronDown,
+  ChevronUp,
+  PlayCircle
 } from "lucide-react";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
+import { motion, AnimatePresence } from "framer-motion";
+import { useState, useEffect, useRef } from "react";
 
 interface ControlRoomStats {
   screensOnline: number;
@@ -59,6 +69,12 @@ interface ChecklistItem {
 }
 
 export default function Home() {
+  const [, navigate] = useLocation();
+  const [fixNowOpen, setFixNowOpen] = useState(true);
+  const [previousAlertIds, setPreviousAlertIds] = useState<Set<string>>(new Set());
+  const [newAlertIds, setNewAlertIds] = useState<Set<string>>(new Set());
+  const isInitialMount = useRef(true);
+
   const { data: stats, isLoading: statsLoading } = useQuery<ControlRoomStats>({
     queryKey: ["/api/control-room/stats"],
     queryFn: async () => {
@@ -92,6 +108,32 @@ export default function Home() {
     },
     refetchInterval: 30000,
   });
+
+  // Track new alerts for animation
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      setPreviousAlertIds(new Set(alerts.map(a => a.id)));
+      return;
+    }
+
+    const currentIds = new Set(alerts.map(a => a.id));
+    const newIds = new Set<string>();
+    
+    currentIds.forEach(id => {
+      if (!previousAlertIds.has(id)) {
+        newIds.add(id);
+      }
+    });
+
+    if (newIds.size > 0) {
+      setNewAlertIds(newIds);
+      // Clear new status after animation
+      setTimeout(() => setNewAlertIds(new Set()), 2000);
+    }
+
+    setPreviousAlertIds(currentIds);
+  }, [alerts]);
 
   const { data: checklist = [], isLoading: checklistLoading } = useQuery<ChecklistItem[]>({
     queryKey: ["/api/control-room/checklist"],
@@ -136,238 +178,252 @@ export default function Home() {
     }
   };
 
+  const statusCards = [
+    {
+      id: "online",
+      title: "Online",
+      value: stats?.screensOnline || 0,
+      subtitle: `/ ${stats?.screensTotal || 0}`,
+      icon: Wifi,
+      iconColor: "text-green-600",
+      bgColor: "bg-green-50",
+      borderColor: "border-green-200",
+      valueColor: "text-green-600",
+    },
+    {
+      id: "offline",
+      title: "Offline",
+      value: stats?.screensOffline || 0,
+      icon: WifiOff,
+      iconColor: "text-red-600",
+      bgColor: (stats?.screensOffline || 0) > 0 ? "bg-red-50" : "",
+      borderColor: (stats?.screensOffline || 0) > 0 ? "border-red-300" : "",
+      valueColor: (stats?.screensOffline || 0) > 0 ? "text-red-600" : "text-green-600",
+    },
+    {
+      id: "ads",
+      title: "Ads Live",
+      value: stats?.adsLiveToday || 0,
+      icon: PlayCircle,
+      iconColor: "text-primary",
+      bgColor: "bg-primary/5",
+      borderColor: "border-primary/20",
+      valueColor: "text-primary",
+    },
+    {
+      id: "empty",
+      title: "Leeg (<20)",
+      value: stats?.screensWithEmptySlots || 0,
+      icon: Monitor,
+      iconColor: "text-amber-600",
+      bgColor: (stats?.screensWithEmptySlots || 0) > 0 ? "bg-amber-50" : "",
+      borderColor: (stats?.screensWithEmptySlots || 0) > 0 ? "border-amber-300" : "",
+      valueColor: (stats?.screensWithEmptySlots || 0) > 0 ? "text-amber-600" : "",
+    },
+    {
+      id: "issues",
+      title: "Issues",
+      value: stats?.issuesOpen || 0,
+      icon: AlertTriangle,
+      iconColor: "text-red-600",
+      bgColor: (stats?.issuesOpen || 0) > 0 ? "bg-red-50" : "",
+      borderColor: (stats?.issuesOpen || 0) > 0 ? "border-red-300" : "",
+      valueColor: (stats?.issuesOpen || 0) > 0 ? "text-red-600" : "",
+    },
+    {
+      id: "overdue",
+      title: "Betaalrisico",
+      value: stats?.overdueAdvertisers || 0,
+      icon: CreditCard,
+      iconColor: "text-muted-foreground",
+      bgColor: "",
+      borderColor: "",
+      valueColor: "text-muted-foreground",
+    },
+  ];
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold" data-testid="page-title">Control Room</h1>
-        <p className="text-muted-foreground">OPS-first overzicht van je Elevizion netwerk</p>
+    <div className="space-y-8">
+      {/* Header with Quick Actions Dropdown */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold" data-testid="page-title">Control Room</h1>
+          <p className="text-sm text-muted-foreground">Real-time overzicht van je Elevizion netwerk</p>
+        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="default" size="sm" className="gap-2" data-testid="button-quick-actions">
+              <Zap className="h-4 w-4" />
+              Snelle Acties
+              <ChevronDown className="h-3 w-3" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuItem onClick={() => navigate("/onboarding/screen")} data-testid="dropdown-new-screen">
+              <Plus className="h-4 w-4 mr-2" />
+              Nieuw Scherm
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate("/onboarding/advertiser")} data-testid="dropdown-new-advertiser">
+              <Users className="h-4 w-4 mr-2" />
+              Nieuwe Adverteerder
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate("/onboarding/placement")} data-testid="dropdown-upload">
+              <Upload className="h-4 w-4 mr-2" />
+              Upload Creative
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => navigate("/onboarding/placement")} data-testid="dropdown-place-ad">
+              <Target className="h-4 w-4 mr-2" />
+              Plaats Ad
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
-        <Card className={stats?.screensOffline ? "border-green-200" : ""} data-testid="card-screens-online">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Online</CardTitle>
-            <Wifi className="h-4 w-4 text-green-600" />
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <div className="text-2xl font-bold text-green-600">
-                {stats?.screensOnline || 0} / {stats?.screensTotal || 0}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className={stats?.screensOffline ? "border-red-200 bg-red-50" : ""} data-testid="card-screens-offline">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Offline</CardTitle>
-            <WifiOff className="h-4 w-4 text-red-600" />
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <div className={`text-2xl font-bold ${(stats?.screensOffline || 0) > 0 ? "text-red-600" : "text-green-600"}`}>
-                {stats?.screensOffline || 0}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card data-testid="card-ads-live">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Ads Live</CardTitle>
-            <Target className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <div className="text-2xl font-bold">{stats?.adsLiveToday || 0}</div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className={stats?.screensWithEmptySlots ? "border-amber-200" : ""} data-testid="card-empty-slots">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Leeg (&lt;20)</CardTitle>
-            <Monitor className="h-4 w-4 text-amber-600" />
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <div className={`text-2xl font-bold ${(stats?.screensWithEmptySlots || 0) > 0 ? "text-amber-600" : ""}`}>
-                {stats?.screensWithEmptySlots || 0}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className={stats?.issuesOpen ? "border-red-200" : ""} data-testid="card-issues-open">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Issues</CardTitle>
-            <AlertTriangle className="h-4 w-4 text-red-600" />
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <div className={`text-2xl font-bold ${(stats?.issuesOpen || 0) > 0 ? "text-red-600" : ""}`}>
-                {stats?.issuesOpen || 0}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="border-gray-200" data-testid="card-overdue">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Betaalrisico</CardTitle>
-            <CreditCard className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {statsLoading ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <div className="text-2xl font-bold text-muted-foreground">{stats?.overdueAdvertisers || 0}</div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card className="bg-gradient-to-r from-primary/5 to-primary/10 border-primary/20">
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2">
-            <Zap className="h-5 w-5 text-primary" />
-            Quick Actions
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Link href="/onboarding/screen">
-              <Button className="w-full h-14 text-left justify-start gap-3" variant="outline" data-testid="button-quick-new-screen">
-                <Plus className="h-5 w-5" />
-                <div>
-                  <div className="font-medium">Nieuw Scherm</div>
-                  <div className="text-xs text-muted-foreground">+ Screen toevoegen</div>
-                </div>
-              </Button>
-            </Link>
-            <Link href="/onboarding/advertiser">
-              <Button className="w-full h-14 text-left justify-start gap-3" variant="outline" data-testid="button-quick-new-advertiser">
-                <Users className="h-5 w-5" />
-                <div>
-                  <div className="font-medium">Nieuwe Adverteerder</div>
-                  <div className="text-xs text-muted-foreground">+ Klant toevoegen</div>
-                </div>
-              </Button>
-            </Link>
-            <Link href="/onboarding/placement">
-              <Button className="w-full h-14 text-left justify-start gap-3" variant="outline" data-testid="button-quick-upload">
-                <Upload className="h-5 w-5" />
-                <div>
-                  <div className="font-medium">Upload Creative</div>
-                  <div className="text-xs text-muted-foreground">+ Nieuwe advertentie</div>
-                </div>
-              </Button>
-            </Link>
-            <Link href="/onboarding/placement">
-              <Button className="w-full h-14 text-left justify-start gap-3" variant="default" data-testid="button-quick-place-ad">
-                <Target className="h-5 w-5" />
-                <div>
-                  <div className="font-medium">Plaats Ad</div>
-                  <div className="text-xs text-muted-foreground">Meest gebruikte flow</div>
-                </div>
-              </Button>
-            </Link>
-          </div>
-        </CardContent>
-      </Card>
-
-      <div className="grid gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-red-600" />
-              FIX NOW
-            </CardTitle>
-            <CardDescription>Hoogste prioriteit acties - maximaal 5 items</CardDescription>
-          </CardHeader>
-          <CardContent>
-            {alertsLoading ? (
-              <div className="space-y-3">
+      {/* Status Cards Grid - 2x3 with more spacing */}
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
+        {statusCards.map((card) => (
+          <Card 
+            key={card.id}
+            className={`${card.borderColor} ${card.bgColor} transition-all hover:shadow-md`}
+            data-testid={`card-${card.id}`}
+          >
+            <CardContent className="pt-6">
+              {statsLoading ? (
                 <Skeleton className="h-16 w-full" />
-                <Skeleton className="h-16 w-full" />
-              </div>
-            ) : alerts.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">
-                <CheckCircle className="h-12 w-12 mx-auto mb-3 text-green-500" />
-                <p className="font-medium">Alles onder controle!</p>
-                <p className="text-sm">Geen openstaande alerts.</p>
-              </div>
-            ) : (
-              <div className="space-y-3 max-h-[400px] overflow-y-auto">
-                {alerts.map((alert) => (
-                  <div
-                    key={alert.id}
-                    className={`p-4 rounded-lg border ${getSeverityColor(alert.severity)}`}
-                    data-testid={`alert-${alert.id}`}
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-start gap-3">
-                        {getAlertIcon(alert.type)}
-                        <div>
-                          <p className="font-medium">{alert.title}</p>
-                          <p className="text-sm text-muted-foreground">{alert.description}</p>
-                          {alert.screenId && (
-                            <Badge variant="outline" className="mt-1 font-mono text-xs">
-                              {alert.screenId}
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex gap-2 shrink-0">
-                        {alert.type === "screen_offline" && (
-                          <>
-                            <Button size="sm" variant="outline" asChild>
-                              <Link href={`/screens?id=${alert.screenId}`}>
-                                <Monitor className="h-4 w-4 mr-1" />
-                                Open
-                              </Link>
-                            </Button>
-                            <Button size="sm" variant="outline">
-                              <ExternalLink className="h-4 w-4 mr-1" />
-                              Yodeck
-                            </Button>
-                          </>
-                        )}
-                        {alert.type === "overdue_payment" && (
-                          <Button size="sm" variant="outline">
-                            <MessageSquare className="h-4 w-4 mr-1" />
-                            WhatsApp
-                          </Button>
-                        )}
-                        <Button size="sm" variant="ghost">
-                          <CheckCircle className="h-4 w-4" />
-                        </Button>
-                      </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm text-muted-foreground font-medium mb-1">{card.title}</p>
+                    <div className="flex items-baseline gap-1">
+                      <span className={`text-3xl font-bold ${card.valueColor}`}>{card.value}</span>
+                      {card.subtitle && (
+                        <span className="text-sm text-muted-foreground">{card.subtitle}</span>
+                      )}
                     </div>
                   </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                  <div className={`p-3 rounded-full ${card.bgColor || 'bg-muted/50'}`}>
+                    <card.icon className={`h-6 w-6 ${card.iconColor}`} />
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
+      {/* Main Content Grid */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* FIX NOW Section - Collapsible */}
+        <div className="lg:col-span-2">
+          <Collapsible open={fixNowOpen} onOpenChange={setFixNowOpen}>
+            <Card>
+              <CollapsibleTrigger asChild>
+                <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors rounded-t-lg">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="h-5 w-5 text-red-600" />
+                      <CardTitle className="text-xl font-semibold">FIX NOW</CardTitle>
+                      {alerts.length > 0 && (
+                        <Badge variant="destructive" className="ml-2">{alerts.length}</Badge>
+                      )}
+                    </div>
+                    {fixNowOpen ? (
+                      <ChevronUp className="h-5 w-5 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                    )}
+                  </div>
+                  <CardDescription className="text-sm text-muted-foreground">
+                    Hoogste prioriteit acties - maximaal 5 items
+                  </CardDescription>
+                </CardHeader>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <CardContent>
+                  {alertsLoading ? (
+                    <div className="space-y-3">
+                      <Skeleton className="h-16 w-full" />
+                      <Skeleton className="h-16 w-full" />
+                    </div>
+                  ) : alerts.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <CheckCircle className="h-12 w-12 mx-auto mb-3 text-green-500" />
+                      <p className="font-medium">Alles onder controle!</p>
+                      <p className="text-sm text-muted-foreground">Geen openstaande alerts.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-[400px] overflow-y-auto">
+                      <AnimatePresence>
+                        {alerts.map((alert) => (
+                          <motion.div
+                            key={alert.id}
+                            initial={newAlertIds.has(alert.id) ? { opacity: 0, x: -20, scale: 0.95 } : false}
+                            animate={{ opacity: 1, x: 0, scale: 1 }}
+                            exit={{ opacity: 0, x: 20 }}
+                            transition={{ duration: 0.3, ease: "easeOut" }}
+                            className={`p-4 rounded-lg border ${getSeverityColor(alert.severity)} ${
+                              newAlertIds.has(alert.id) ? 'ring-2 ring-red-400 ring-opacity-50' : ''
+                            }`}
+                            data-testid={`alert-${alert.id}`}
+                          >
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="flex items-start gap-3">
+                                {getAlertIcon(alert.type)}
+                                <div>
+                                  <p className="font-medium">{alert.title}</p>
+                                  <p className="text-sm text-muted-foreground">{alert.description}</p>
+                                  {alert.screenId && (
+                                    <Badge variant="outline" className="mt-1 font-mono text-xs">
+                                      {alert.screenId}
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="flex gap-2 shrink-0">
+                                {alert.type === "screen_offline" && (
+                                  <>
+                                    <Button size="sm" variant="outline" asChild>
+                                      <Link href={`/screens?id=${alert.screenId}`}>
+                                        <Monitor className="h-4 w-4 mr-1" />
+                                        Open
+                                      </Link>
+                                    </Button>
+                                    <Button size="sm" variant="outline">
+                                      <ExternalLink className="h-4 w-4 mr-1" />
+                                      Yodeck
+                                    </Button>
+                                  </>
+                                )}
+                                {alert.type === "overdue_payment" && (
+                                  <Button size="sm" variant="outline">
+                                    <MessageSquare className="h-4 w-4 mr-1" />
+                                    WhatsApp
+                                  </Button>
+                                )}
+                                <Button size="sm" variant="ghost">
+                                  <CheckCircle className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </AnimatePresence>
+                    </div>
+                  )}
+                </CardContent>
+              </CollapsibleContent>
+            </Card>
+          </Collapsible>
+        </div>
+
+        {/* Daily Checklist */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
+            <CardTitle className="text-xl font-semibold flex items-center gap-2">
               <CheckCircle className="h-5 w-5" />
               Dagelijkse Checklist
             </CardTitle>
-            <CardDescription>Taken voor vandaag</CardDescription>
+            <CardDescription className="text-sm text-muted-foreground">Taken voor vandaag</CardDescription>
           </CardHeader>
           <CardContent>
             {checklistLoading ? (
@@ -409,9 +465,10 @@ export default function Home() {
         </Card>
       </div>
 
+      {/* Network Health */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle className="text-xl font-semibold flex items-center gap-2">
             <TrendingUp className="h-5 w-5" />
             Netwerk Gezondheid
           </CardTitle>
@@ -419,24 +476,24 @@ export default function Home() {
         <CardContent>
           <div className="space-y-4">
             <div>
-              <div className="flex justify-between text-sm mb-2">
+              <div className="flex justify-between text-sm text-muted-foreground mb-2">
                 <span>Schermen Online</span>
-                <span className="font-medium">{onlinePercentage}%</span>
+                <span className="font-medium text-foreground">{onlinePercentage}%</span>
               </div>
               <Progress value={onlinePercentage} className="h-2" />
             </div>
             <div className="grid grid-cols-3 gap-4 pt-4">
-              <div className="text-center p-4 bg-muted/50 rounded-lg">
+              <div className="text-center p-4 bg-green-50 rounded-lg border border-green-100">
                 <p className="text-2xl font-bold text-green-600">{stats?.screensOnline || 0}</p>
-                <p className="text-xs text-muted-foreground">Actief</p>
+                <p className="text-sm text-muted-foreground">Actief</p>
               </div>
-              <div className="text-center p-4 bg-muted/50 rounded-lg">
+              <div className="text-center p-4 bg-red-50 rounded-lg border border-red-100">
                 <p className="text-2xl font-bold text-red-600">{stats?.screensOffline || 0}</p>
-                <p className="text-xs text-muted-foreground">Offline</p>
+                <p className="text-sm text-muted-foreground">Offline</p>
               </div>
-              <div className="text-center p-4 bg-muted/50 rounded-lg">
+              <div className="text-center p-4 bg-muted/50 rounded-lg border">
                 <p className="text-2xl font-bold">{stats?.adsLiveToday || 0}</p>
-                <p className="text-xs text-muted-foreground">Plaatsingen</p>
+                <p className="text-sm text-muted-foreground">Plaatsingen</p>
               </div>
             </div>
           </div>

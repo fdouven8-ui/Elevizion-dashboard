@@ -60,35 +60,39 @@ export function AppSidebar() {
     return user.email || "";
   };
 
+  const isActive = (url: string) => {
+    return location === url || location.startsWith(url + "/");
+  };
+
   return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader>
+    <Sidebar collapsible="icon" className="border-r border-border/50">
+      <SidebarHeader className="pb-2">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
               <img 
                 src="/elevizion-logo.png" 
                 alt="Elevizion" 
-                className="h-8 w-auto object-contain"
+                className="h-7 w-auto object-contain"
               />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
+        <SidebarGroup className="py-1">
           <SidebarGroupContent>
-            <SidebarMenu>
+            <SidebarMenu className="gap-0.5">
               {menuItems.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton 
                     asChild 
-                    tooltip={item.title} 
-                    isActive={location === item.url || location.startsWith(item.url + "/")}
+                    tooltip={item.title}
+                    className={`h-9 ${isActive(item.url) ? 'bg-muted/40 font-medium' : 'hover:bg-muted/30'}`}
                   >
                     <Link href={item.url}>
-                      <item.icon />
-                      <span>{item.title}</span>
+                      <item.icon className={`h-4 w-4 ${isActive(item.url) ? 'text-primary' : ''}`} />
+                      <span className="text-sm">{item.title}</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -97,31 +101,31 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter>
-        <SidebarMenu>
+      <SidebarFooter className="pt-2 pb-3">
+        <SidebarMenu className="gap-0.5">
           {isAuthenticated && user ? (
             <>
               <SidebarMenuItem>
-                <SidebarMenuButton className="cursor-default">
-                  <Avatar className="h-6 w-6">
+                <SidebarMenuButton className="cursor-default h-9">
+                  <Avatar className="h-5 w-5">
                     <AvatarImage src={user.profileImageUrl || undefined} alt={getUserDisplayName()} />
-                    <AvatarFallback className="text-xs">{getUserInitials()}</AvatarFallback>
+                    <AvatarFallback className="text-[10px]">{getUserInitials()}</AvatarFallback>
                   </Avatar>
-                  <span className="truncate">{getUserDisplayName()}</span>
+                  <span className="truncate text-sm">{getUserDisplayName()}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton onClick={handleLogout} data-testid="button-logout">
-                  <LogOut />
-                  <span>Uitloggen</span>
+                <SidebarMenuButton onClick={handleLogout} data-testid="button-logout" className="h-9 hover:bg-muted/30">
+                  <LogOut className="h-4 w-4" />
+                  <span className="text-sm">Uitloggen</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </>
           ) : (
             <SidebarMenuItem>
-              <SidebarMenuButton onClick={handleLogin} data-testid="button-login" disabled={isLoading}>
-                <LogIn />
-                <span>{isLoading ? "Laden..." : "Inloggen"}</span>
+              <SidebarMenuButton onClick={handleLogin} data-testid="button-login" disabled={isLoading} className="h-9 hover:bg-muted/30">
+                <LogIn className="h-4 w-4" />
+                <span className="text-sm">{isLoading ? "Laden..." : "Inloggen"}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           )}

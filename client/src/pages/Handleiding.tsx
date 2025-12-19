@@ -4,7 +4,8 @@ import { Badge } from "@/components/ui/badge";
 import { 
   Building2, MapPin, Monitor, FileText, Receipt, Wallet, 
   Camera, BarChart3, Users, Settings, Download, Shield,
-  CheckCircle, AlertCircle, HelpCircle, Smartphone, UserPlus, ClipboardList, ClipboardCheck, Sparkles, Footprints
+  CheckCircle, HelpCircle, Smartphone, UserPlus, ClipboardList, ClipboardCheck, Sparkles, Footprints,
+  LayoutDashboard, Rocket, Target, Zap, Bell, MessageSquare
 } from "lucide-react";
 
 const sections = [
@@ -27,9 +28,9 @@ const sections = [
       • Koppel schermen aan locaties
       
       **3. Dagelijks werk:**
-      • Bekijk het Dashboard voor een overzicht
-      • Maak contracten en plaatsingen aan
-      • Houd taken bij
+      • Bekijk de Control Room (Home) voor een real-time overzicht
+      • Gebruik de "Snelle Acties" knop rechtsboven voor veelgebruikte taken
+      • Bekijk en los FIX NOW alerts direct op
       
       **4. Maandelijkse administratie:**
       • Voer maandafsluiting uit
@@ -40,16 +41,93 @@ const sections = [
     `,
   },
   {
+    id: "navigatie",
+    icon: <LayoutDashboard className="h-5 w-5" />,
+    title: "Navigatie",
+    description: "De 6 hoofdonderdelen van Elevizion",
+    badge: "Nieuw",
+    content: `
+      De sidebar bevat 6 hoofdonderdelen:
+      
+      **1. Home (Control Room)**
+      • Real-time statuskaarten: Online, Offline, Ads Live, Lege schermen, Issues, Betaalrisico
+      • FIX NOW sectie met hoogste prioriteit alerts (inklapbaar)
+      • Dagelijkse checklist met taken
+      • Netwerk gezondheid overzicht
+      
+      **2. Onboarding**
+      • Wizards voor nieuwe schermen, adverteerders en plaatsingen
+      • Cold Walk-in wizard voor snelle registratie in het veld
+      
+      **3. Schermen**
+      • Alle fysieke displays beheren
+      • Status bijhouden (online/offline)
+      • SCREEN_ID (EVZ-001 formaat) als centrale identifier
+      
+      **4. Adverteerders**
+      • Bedrijven die adverteren beheren
+      • Contract status per adverteerder
+      • SEPA machtiging instellen
+      
+      **5. Plaatsingen**
+      • Welke ad draait op welk scherm
+      • Instellingen per plaatsing (seconden, frequentie)
+      
+      **6. Instellingen**
+      • Automations: Automatische alerts en regels
+      • Templates: Berichten voor WhatsApp, Email, etc.
+      • Gebruikers: Toegangsbeheer
+      • Integraties: Yodeck, Moneybird koppeling
+      • Finance: Pakketprijzen en facturatie-instellingen
+    `,
+  },
+  {
+    id: "control-room",
+    icon: <Zap className="h-5 w-5" />,
+    title: "Control Room (Home)",
+    description: "Je commandocentrum voor dagelijks werk",
+    badge: "Verbeterd",
+    content: `
+      De Control Room is je startpagina met alles wat je direct moet weten.
+      
+      **Statuskaarten (2x3 grid)**
+      • Online/Offline - Hoeveel schermen werken
+      • Ads Live - Aantal actieve advertenties
+      • Leeg (<20) - Schermen met te weinig content
+      • Issues - Openstaande problemen
+      • Betaalrisico - Adverteerders met betalingsachterstand
+      
+      **Snelle Acties (dropdown rechtsboven)**
+      • Nieuw Scherm toevoegen
+      • Nieuwe Adverteerder registreren
+      • Creative uploaden
+      • Ad plaatsen
+      
+      **FIX NOW sectie (inklapbaar)**
+      • Hoogste prioriteit alerts
+      • Maximaal 5 items tegelijk
+      • Direct actieknoppen per alert
+      • Nieuwe alerts krijgen een animatie
+      
+      **Dagelijkse Checklist**
+      • Taken voor vandaag
+      • Klik om direct naar de juiste plek te gaan
+      
+      **Netwerk Gezondheid**
+      • Percentage schermen online
+      • Overzicht actieve/offline schermen
+    `,
+  },
+  {
     id: "cold-walkin",
     icon: <Sparkles className="h-5 w-5" />,
     title: "Cold Walk-in Wizard",
     description: "Nieuwe klant in 2 minuten registreren",
-    badge: "Nieuw",
     content: `
       De snelste manier om een nieuwe klant toe te voegen, direct vanuit het veld.
       
       **Waar vind je het?**
-      Acquisitie → Klik op de groene "Cold Walk-in" kaart
+      Onboarding → Klik op de groene "Cold Walk-in" kaart
       
       **Drie opties:**
       • **Locatie Partner** - Een plek die schermen wil hosten
@@ -71,6 +149,66 @@ const sections = [
       • Adverteerder + contract worden aangemaakt (indien gekozen)
       
       **Tip:** WiFi wachtwoorden worden versleuteld opgeslagen!
+    `,
+  },
+  {
+    id: "automations",
+    icon: <Bell className="h-5 w-5" />,
+    title: "Automations",
+    description: "Automatische alerts en regels",
+    badge: "Nieuw",
+    content: `
+      Stel regels in die automatisch acties uitvoeren.
+      
+      **Waar vind je het?**
+      Instellingen → Automations tab
+      
+      **Beschikbare regels:**
+      • **Scherm Offline Alert** - Stuur een melding als een scherm offline gaat
+      • **Lege Inventaris Waarschuwing** - Alert als scherm te weinig content heeft
+      • **Plaatsing Verloopt** - Waarschuwing voordat een plaatsing eindigt
+      • **Betaling Te Laat** - Herinnering voor openstaande facturen
+      
+      **Hoe werkt het?**
+      1. Zet een regel aan met de schakelaar
+      2. Configureer drempels (bijv. na 15 minuten offline)
+      3. Alerts verschijnen in de FIX NOW sectie op Home
+    `,
+  },
+  {
+    id: "templates",
+    icon: <MessageSquare className="h-5 w-5" />,
+    title: "Templates",
+    description: "Standaard berichten voor klantcommunicatie",
+    badge: "Nieuw",
+    content: `
+      Maak herbruikbare berichten voor WhatsApp, email en contracten.
+      
+      **Waar vind je het?**
+      Instellingen → Templates tab
+      
+      **Categorieën:**
+      • WhatsApp - Snelle berichten naar klanten
+      • Email - Formele communicatie
+      • Contract - Contractteksten
+      • Factuur - Betalingsherinneringen
+      • Intern - Notities voor collega's
+      
+      **Velden invoegen:**
+      • Klik op de veldknoppen om dynamische content toe te voegen
+      • Beschikbaar: Bedrijfsnaam, Contactpersoon, Telefoon, Email, etc.
+      • Velden worden automatisch ingevuld bij verzenden
+      
+      **Template gebruiken:**
+      1. Ga naar een adverteerder
+      2. Klik op WhatsApp of Email knop
+      3. Kies een template
+      4. Bekijk de preview met ingevulde gegevens
+      5. Verzend of kopieer naar klembord
+      
+      **Versioning:**
+      • Templates bewaren de laatste 5 versies
+      • Herstel een oudere versie indien nodig
     `,
   },
   {
@@ -188,7 +326,7 @@ const sections = [
     title: "Adverteerders",
     description: "Bedrijven die reclame maken op je schermen",
     content: `
-      Hier beheer je alle bedrijven die bij jou adverteren:
+      Hier beheer je alle bedrijven die bij jou adverteren.
       
       **Wat kun je doen?**
       • Nieuwe adverteerder toevoegen met de "Nieuwe Adverteerder" knop
@@ -196,11 +334,15 @@ const sections = [
       • Status wijzigen (actief, gepauzeerd)
       • Automatisch incasso instellen (SEPA)
       
-      **Belangrijke velden:**
-      • **Bedrijfsnaam** - De officiële naam van het bedrijf
-      • **Contactpersoon** - Met wie je contact hebt
-      • **Email** - Waar facturen naartoe gaan
-      • **BTW-nummer** - Nodig voor de factuur
+      **Contract Status (bovenaan detail pagina):**
+      • Reclamecontract - Status en verstuur/kopieer acties
+      • SEPA Machtiging - Status met verstuur/download opties
+      • Voortgang indicator (0/2, 1/2, 2/2 getekend)
+      
+      **Template berichten:**
+      • Klik op WhatsApp of Email knop
+      • Kies een template met vooraf ingevulde gegevens
+      • Bekijk preview en verzend
       
       **Automatisch Incasso (SEPA):**
       • Klik op ⋮ → "Incasso instellen" bij een adverteerder
@@ -216,6 +358,9 @@ const sections = [
     description: "De fysieke displays die content tonen",
     content: `
       Elk scherm is een fysieke display op een locatie. Schermen worden gekoppeld aan een locatie.
+      
+      **SCREEN_ID (EVZ-001 formaat):**
+      Dit is de centrale identifier in het hele systeem. Elk scherm heeft een unieke ID in dit formaat.
       
       **Status betekenissen:**
       • 🟢 **Online** - Scherm werkt en speelt content af
@@ -233,26 +378,22 @@ const sections = [
     `,
   },
   {
-    id: "dashboard",
-    icon: <BarChart3 className="h-5 w-5" />,
-    title: "Dashboard (Overzicht)",
-    description: "Je startpagina met alle belangrijke cijfers",
+    id: "plaatsingen",
+    icon: <Target className="h-5 w-5" />,
+    title: "Plaatsingen",
+    description: "Welke advertentie draait op welk scherm",
     content: `
-      Het dashboard laat in één oogopslag zien hoe je bedrijf draait:
+      Plaatsingen bepalen welke reclame op welk scherm draait.
       
-      **Aandachtspunten:**
-      • Bovenaan zie je direct wat er aandacht nodig heeft
-      • Offline schermen, openstaande facturen, schermen zonder ads
-      • Klik op "Aandachtspunten" om in/uit te klappen
-      • Elke melding heeft een directe actieknop
+      **Wat is een plaatsing?**
+      Een plaatsing koppelt een contract aan een specifiek scherm. Zo weet het systeem welke reclame waar moet draaien.
       
-      **Statistieken:**
-      • Schermen online - Klik om naar schermbeheer te gaan
-      • Actieve campagnes - Klik voor advertentie-overzicht
-      • Openstaande facturen - Klik naar facturatie
-      • Actieve adverteerders - Klik naar adverteerdersbeheer
+      **Instellingen:**
+      • **Seconden per loop** - Hoe lang de advertentie per keer te zien is
+      • **Afspeelmomenten per uur** - Hoe vaak per uur de advertentie wordt getoond
       
-      Alle kaarten zijn klikbaar en brengen je direct naar de juiste plek!
+      **Automatisch aanmaken:**
+      Als je in de Cold Walk-in wizard "Beide" kiest (locatie + adverteerder), worden plaatsingen automatisch aangemaakt voor alle nieuwe schermen.
     `,
   },
   {
@@ -275,25 +416,6 @@ const sections = [
       • **Verlopen** - Einddatum is gepasseerd
       
       **Tip:** Via de Cold Walk-in wizard kun je direct een contract aanmaken bij een nieuwe klant!
-    `,
-  },
-  {
-    id: "plaatsingen",
-    icon: <Camera className="h-5 w-5" />,
-    title: "Plaatsingen",
-    description: "Welke advertentie draait op welk scherm",
-    content: `
-      Plaatsingen bepalen welke reclame op welk scherm draait.
-      
-      **Wat is een plaatsing?**
-      Een plaatsing koppelt een contract aan een specifiek scherm. Zo weet het systeem welke reclame waar moet draaien.
-      
-      **Instellingen:**
-      • **Seconden per loop** - Hoe lang de advertentie per keer te zien is
-      • **Afspeelmomenten per uur** - Hoe vaak per uur de advertentie wordt getoond
-      
-      **Automatisch aanmaken:**
-      Als je in de Cold Walk-in wizard "Beide" kiest (locatie + adverteerder), worden plaatsingen automatisch aangemaakt voor alle nieuwe schermen.
     `,
   },
   {
@@ -420,12 +542,14 @@ const sections = [
       **Navigatie op mobiel:**
       • Tik op het menu-icoon linksboven (☰)
       • Het menu schuift uit als een lade
+      • De sidebar is compacter op mobiel
       • Tik ergens anders om het menu te sluiten
       
       **Tips:**
       • Alle functies werken hetzelfde als op desktop
       • Gebruik de Cold Walk-in wizard voor snelle registraties in het veld
-      • Tabellen scrollen horizontaal op kleine schermen
+      • De Control Room statuskaarten zijn geoptimaliseerd voor mobiel (2x3 grid)
+      • Snelle Acties dropdown rechtsboven werkt perfect op mobiel
     `,
   },
 ];
@@ -434,8 +558,8 @@ export default function Handleiding() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold" data-testid="page-title">Handleiding</h1>
-        <p className="text-muted-foreground">
+        <h1 className="text-xl font-semibold" data-testid="page-title">Handleiding</h1>
+        <p className="text-sm text-muted-foreground">
           Leer hoe je Elevizion gebruikt - in de volgorde waarin je het nodig hebt
         </p>
       </div>
@@ -458,8 +582,8 @@ export default function Handleiding() {
             <div className="flex items-center gap-3">
               <HelpCircle className="h-8 w-8 text-blue-600" />
               <div>
-                <p className="font-medium">In logische volgorde</p>
-                <p className="text-sm text-muted-foreground">Van werving tot facturatie</p>
+                <p className="font-medium">6 hoofdonderdelen</p>
+                <p className="text-sm text-muted-foreground">Home → Instellingen</p>
               </div>
             </div>
           </CardContent>
@@ -480,8 +604,8 @@ export default function Handleiding() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Alle Functies Uitgelegd</CardTitle>
-          <CardDescription>
+          <CardTitle className="text-xl font-semibold">Alle Functies Uitgelegd</CardTitle>
+          <CardDescription className="text-sm text-muted-foreground">
             Van klantwerving tot administratie - in de volgorde waarin je het nodig hebt
           </CardDescription>
         </CardHeader>
@@ -491,7 +615,7 @@ export default function Handleiding() {
               <AccordionItem key={section.id} value={section.id} data-testid={`accordion-${section.id}`}>
                 <AccordionTrigger className="hover:no-underline">
                   <div className="flex items-center gap-3">
-                    <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-muted">
+                    <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-muted/40">
                       {section.icon}
                     </div>
                     <div className="text-left flex-1">
