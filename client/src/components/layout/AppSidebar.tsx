@@ -20,6 +20,7 @@ import {
   LogOut,
   LogIn,
   Rocket,
+  Euro,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -30,6 +31,7 @@ const menuItems = [
   { title: "Schermen", url: "/screens", icon: Monitor },
   { title: "Adverteerders", url: "/advertisers", icon: Users },
   { title: "Plaatsingen", url: "/placements", icon: Target },
+  { title: "Financieel", url: "/finance", icon: Euro },
   { title: "Instellingen", url: "/settings", icon: Settings },
 ];
 

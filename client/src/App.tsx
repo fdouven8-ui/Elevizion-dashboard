@@ -13,6 +13,7 @@ import Advertisers from "@/pages/Advertisers";
 import AdvertiserDetail from "@/pages/AdvertiserDetail";
 import Placements from "@/pages/Placements";
 import PlacementDetail from "@/pages/PlacementDetail";
+import Finance from "@/pages/Finance";
 import Settings from "@/pages/Settings";
 import NotFound from "@/pages/not-found";
 
@@ -29,6 +30,7 @@ function DashboardRouter() {
         <Route path="/advertisers/:id" component={AdvertiserDetail} />
         <Route path="/placements" component={Placements} />
         <Route path="/placements/:id" component={PlacementDetail} />
+        <Route path="/finance" component={Finance} />
         <Route path="/settings" component={Settings} />
         <Route component={NotFound} />
       </Switch>
