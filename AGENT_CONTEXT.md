@@ -72,12 +72,16 @@ shared/
 ```
 
 ## Huidige Status
-- Dashboard volledig operationeel
+- Dashboard (Control Room) volledig operationeel met verbeterde UI:
+  - Status cards in 2x3 grid met icons en kleuraccenten
+  - FIX NOW sectie inklapbaar met Framer Motion animaties
+  - Quick Actions via dropdown menu ("Snelle Acties" knop)
+  - Compacte sidebar met bg-muted/40 voor actieve tab
 - Template systeem met visuele preview (placeholder syntax verborgen)
 - Contract status tracking op adverteerder detail
 - Sales & Acquisitie module compleet
 - Backup & Export functionaliteit beschikbaar
-- Handleiding in het Nederlands beschikbaar
+- Handleiding in het Nederlands beschikbaar (bijgewerkt met nieuwe navigatie en features)
 
 ## Belangrijke Notes voor Development
 - `placement.screenId` verwijst naar `screens.id` (UUID), NIET naar `screens.screenId` (EVZ-001)
