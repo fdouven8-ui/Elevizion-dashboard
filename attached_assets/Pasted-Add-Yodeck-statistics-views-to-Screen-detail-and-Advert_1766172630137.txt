@@ -1,0 +1,56 @@
+Add Yodeck statistics views to Screen detail and Advertiser detail pages.
+Stats must be filterable and support snapshots. Do not change other app behavior.
+
+1) Data source
+- Use Yodeck API as the source of truth for statistics (reporting/playback/uptime if available).
+- Implement a backend service layer: yodeckStatsService
+- If an endpoint is unavailable for the current Yodeck plan/API, show a friendly “Stats not available” state.
+
+2) Screen detail page
+- Add a “Statistieken” tab/section.
+- Show:
+  A) Uptime chart (online/offline over time) based on Yodeck device status/history if available
+  B) Playback metrics if Yodeck provides them (total plays, duration)
+  C) Optional: Top creatives on this screen (plays) when available
+- Filters (compact bar above charts):
+  - Date range: Today / 7d / 30d / Custom
+  - Toggle: “Alleen actieve uren” (use global active hours setting)
+  - Granularity: per day / per hour (when supported)
+  - Refresh button
+- Deep-link filters in URL query params.
+
+3) Advertiser detail page
+- Add a “Statistieken” tab/section.
+- Show advertiser-level stats using Yodeck data mapping:
+  - Total plays across all screens (if available)
+  - Breakdown by screen, by city, and by creative (if available)
+- Filters:
+  - Date range: Today / 7d / 30d / Custom
+  - Creative selector: All creatives / single creative
+  - Screen/city filter (optional)
+
+4) Mapping requirements (critical)
+- Ensure we can map Yodeck entities to our dashboard entities:
+  - Screens: map by Device name or tag containing EVZ-###
+  - Creatives/Playlists/Campaigns: map to our “Placement” records via stored Yodeck IDs
+- Store only the IDs needed for mapping (device_id, creative_id, playlist_id, etc.), not full stats logs.
+
+5) Snapshots
+- Add a “Snapshot” button in stats sections:
+  - Captures the visible chart + selected filters + title (Screen/Advertiser name + date range)
+  - Produces a PNG (client-side capture is fine)
+- Add optional “Export PDF” if simple.
+- Provide “Copy share link” that preserves filters.
+
+6) Performance & caching
+- Do not store full stats history in DB.
+- Use short-lived caching (e.g., 5–15 minutes) for API responses to avoid rate limits.
+- Allow manual refresh to bypass cache.
+
+7) UI rules
+- Keep stats UI clean and secondary (not overwhelming).
+- Show loading skeleton while fetching.
+- Show friendly empty state when no data.
+
+Goal:
+When I click a Screen or Advertiser, I can immediately view Yodeck-based statistics, filter them, and create shareable snapshots—without building a heavy analytics warehouse.

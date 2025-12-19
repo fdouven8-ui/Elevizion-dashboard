@@ -50,6 +50,7 @@ import {
   formatClientInfo,
 } from "./contract-signing";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requirePermission } from "./replit_integrations/auth";
+import { getScreenStats, getAdvertiserStats, clearStatsCache } from "./yodeckStats";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -201,6 +202,71 @@ export async function registerRoutes(
   app.delete("/api/screens/:id", async (req, res) => {
     await storage.deleteScreen(req.params.id);
     res.status(204).send();
+  });
+
+  // ============================================================================
+  // SCREEN STATISTICS (Yodeck)
+  // ============================================================================
+
+  const statsFilterSchema = z.object({
+    startDate: z.string().optional().default(() => {
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      return d.toISOString().split("T")[0];
+    }),
+    endDate: z.string().optional().default(() => new Date().toISOString().split("T")[0]),
+    granularity: z.enum(["hour", "day", "week"]).optional().default("day"),
+    activeHoursOnly: z.coerce.boolean().optional().default(false),
+    forceRefresh: z.coerce.boolean().optional().default(false),
+  });
+
+  app.get("/api/screens/:id/stats", async (req, res) => {
+    try {
+      const screen = await storage.getScreen(req.params.id);
+      if (!screen) return res.status(404).json({ message: "Screen not found" });
+
+      const query = statsFilterSchema.parse(req.query);
+      const stats = await getScreenStats(req.params.id, {
+        dateRange: { startDate: query.startDate, endDate: query.endDate },
+        granularity: query.granularity,
+        activeHoursOnly: query.activeHoursOnly,
+        forceRefresh: query.forceRefresh,
+      });
+
+      res.json(stats);
+    } catch (error: any) {
+      console.error("Error fetching screen stats:", error);
+      res.status(500).json({ message: error.message || "Fout bij ophalen statistieken" });
+    }
+  });
+
+  app.get("/api/advertisers/:id/stats", async (req, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) return res.status(404).json({ message: "Advertiser not found" });
+
+      const query = statsFilterSchema.parse(req.query);
+      const stats = await getAdvertiserStats(req.params.id, {
+        dateRange: { startDate: query.startDate, endDate: query.endDate },
+        granularity: query.granularity,
+        activeHoursOnly: query.activeHoursOnly,
+        forceRefresh: query.forceRefresh,
+      });
+
+      res.json(stats);
+    } catch (error: any) {
+      console.error("Error fetching advertiser stats:", error);
+      res.status(500).json({ message: error.message || "Fout bij ophalen statistieken" });
+    }
+  });
+
+  app.post("/api/stats/refresh", isAuthenticated, async (_req, res) => {
+    try {
+      clearStatsCache();
+      res.json({ success: true, message: "Stats cache cleared" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
   });
 
   // ============================================================================
