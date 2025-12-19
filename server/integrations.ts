@@ -8,9 +8,15 @@ export interface IntegrationCredentials {
   admin_id?: string;
 }
 
+// Normalize Yodeck API key - strip "yodeck:" prefix if present
+function normalizeYodeckApiKey(rawKey: string | undefined): string | undefined {
+  if (!rawKey) return undefined;
+  return rawKey.startsWith("yodeck:") ? rawKey.slice(7) : rawKey;
+}
+
 // Check if Yodeck is properly configured
 export function isYodeckConfigured(): boolean {
-  const apiKey = process.env.YODECK_API_KEY;
+  const apiKey = normalizeYodeckApiKey(process.env.YODECK_API_KEY);
   return !!apiKey && apiKey.length > 10;
 }
 
@@ -25,7 +31,7 @@ export async function testYodeckConnection(): Promise<{
   deviceCount?: number;
   statusCode?: number;
 }> {
-  const apiKey = process.env.YODECK_API_KEY;
+  const apiKey = normalizeYodeckApiKey(process.env.YODECK_API_KEY);
   
   console.log(`[Yodeck] Test connection - configured: ${isYodeckConfigured()}`);
   
@@ -61,7 +67,7 @@ export async function testYodeckConnection(): Promise<{
 }
 
 export async function syncYodeckScreens(): Promise<{ success: boolean; screens?: any[]; message?: string }> {
-  const apiKey = process.env.YODECK_API_KEY;
+  const apiKey = normalizeYodeckApiKey(process.env.YODECK_API_KEY);
   
   console.log(`[Yodeck] Sync screens - configured: ${isYodeckConfigured()}`);
   
