@@ -2389,6 +2389,140 @@ export async function registerRoutes(
   });
 
   // ============================================================================
+  // TEMPLATES
+  // ============================================================================
+
+  app.get("/api/templates", async (req, res) => {
+    const { category } = req.query;
+    let templates;
+    if (category && category !== "all") {
+      templates = await storage.getTemplatesByCategory(category as string);
+    } else {
+      templates = await storage.getTemplates();
+    }
+    res.json(templates);
+  });
+
+  app.get("/api/templates/:id", async (req, res) => {
+    const template = await storage.getTemplate(req.params.id);
+    if (!template) return res.status(404).json({ message: "Template niet gevonden" });
+    res.json(template);
+  });
+
+  app.post("/api/templates", async (req, res) => {
+    try {
+      const template = await storage.createTemplate(req.body);
+      res.status(201).json(template);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/templates/:id", async (req, res) => {
+    try {
+      const template = await storage.updateTemplate(req.params.id, req.body);
+      if (!template) return res.status(404).json({ message: "Template niet gevonden" });
+      res.json(template);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/templates/:id", async (req, res) => {
+    await storage.deleteTemplate(req.params.id);
+    res.status(204).send();
+  });
+
+  app.get("/api/templates/:id/versions", async (req, res) => {
+    const versions = await storage.getTemplateVersions(req.params.id);
+    res.json(versions);
+  });
+
+  app.post("/api/templates/:id/restore/:version", async (req, res) => {
+    try {
+      const version = parseInt(req.params.version);
+      const template = await storage.restoreTemplateVersion(req.params.id, version);
+      if (!template) return res.status(404).json({ message: "Versie niet gevonden" });
+      res.json(template);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/templates/:id/preview", async (req, res) => {
+    try {
+      const template = await storage.getTemplate(req.params.id);
+      if (!template) return res.status(404).json({ message: "Template niet gevonden" });
+      
+      const { advertiserId, screenId } = req.body;
+      let data: Record<string, string> = {};
+
+      if (advertiserId) {
+        const advertiser = await storage.getAdvertiser(advertiserId);
+        if (advertiser) {
+          data.advertiser_name = advertiser.companyName;
+          data.contact_name = advertiser.contactName;
+          data.phone = advertiser.phone || "";
+          data.email = advertiser.email;
+        }
+      }
+
+      if (screenId) {
+        const screen = await storage.getScreen(screenId);
+        if (screen) {
+          data.screen_id = screen.screenId || "";
+          data.screen_name = screen.name;
+          const location = await storage.getLocation(screen.locationId);
+          if (location) {
+            data.location_name = location.name;
+          }
+        }
+      }
+
+      let renderedBody = template.body;
+      let renderedSubject = template.subject || "";
+      
+      for (const [key, value] of Object.entries(data)) {
+        const placeholder = `{{${key}}}`;
+        renderedBody = renderedBody.replace(new RegExp(placeholder.replace(/[{}]/g, "\\$&"), "g"), value);
+        renderedSubject = renderedSubject.replace(new RegExp(placeholder.replace(/[{}]/g, "\\$&"), "g"), value);
+      }
+
+      res.json({
+        subject: renderedSubject,
+        body: renderedBody,
+        placeholdersUsed: template.placeholders,
+        dataProvided: data,
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/templates/:id/duplicate", async (req, res) => {
+    try {
+      const original = await storage.getTemplate(req.params.id);
+      if (!original) return res.status(404).json({ message: "Template niet gevonden" });
+      
+      const duplicate = await storage.createTemplate({
+        name: `${original.name} (kopie)`,
+        category: original.category,
+        subject: original.subject,
+        body: original.body,
+        language: original.language,
+        isEnabled: false,
+        eSignTemplateId: original.eSignTemplateId,
+        eSignSigningOrder: original.eSignSigningOrder,
+        eSignRequiredDocs: original.eSignRequiredDocs,
+        moneybirdStyleId: original.moneybirdStyleId,
+      });
+      res.status(201).json(duplicate);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
   // SUPPLY ITEMS (CATALOG)
   // ============================================================================
 
