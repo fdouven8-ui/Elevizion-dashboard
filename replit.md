@@ -44,7 +44,7 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 - **Audit Logging**: Tracks permission changes (role changes, activation/deactivation).
 
 ### UI/UX Decisions
-- Dashboard features a "Control Room" with real-time stats and alerts.
+- **Home page** (`/dashboard`): Minimal owner-focused overview with 4 calm KPI tiles: Schermen online (count/total), Schermen offline, Ads online (active placements), Actief betalende adverteerders. All tiles are clickable and route to filtered pages. No action tables, no warnings, no admin noise. Answers "How many screens are running, how many ads are live, how many customers are paying?" in 3 seconds.
 - Onboarding via quick wizards.
 - Specific sections for Schermen, Ads & Plaatsingen, Adverteerders, and Instellingen.
 - **Screens module**: City-first organization with "Plaats" (city) as primary filter and "Locatie/Bedrijf" as secondary cascading filter. Table columns: Screen ID, Plaats, Locatie/Bedrijf, Status, Actieve plaatsingen, Actie. "Laatst gezien" removed from list view (only shown on detail page).
