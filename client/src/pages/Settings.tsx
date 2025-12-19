@@ -159,6 +159,27 @@ const TEMPLATE_CATEGORIES = [
   { value: "internal", label: "Intern" },
 ];
 
+const FIELD_NAMES: Record<string, string> = {
+  "advertiser_name": "Bedrijfsnaam",
+  "contact_name": "Contactpersoon",
+  "phone": "Telefoon",
+  "email": "Email",
+  "screen_id": "Scherm ID",
+  "location_name": "Locatie",
+  "price": "Prijs",
+  "start_date": "Startdatum",
+  "bedrijfsnaam": "Bedrijfsnaam",
+  "contactpersoon": "Contactpersoon",
+  "telefoon": "Telefoon"
+};
+
+function formatTemplateBody(body: string): string {
+  return body.replace(/\{\{([^}]+)\}\}/g, (_, varName) => {
+    const friendlyName = FIELD_NAMES[varName.trim()] || varName;
+    return `[${friendlyName}]`;
+  });
+}
+
 export default function Settings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -605,14 +626,18 @@ export default function Settings() {
                         </div>
                       )}
                       <div className="space-y-2">
-                        <Label>Inhoud</Label>
-                        <Textarea
-                          value={newTemplate.body}
-                          onChange={(e) => setNewTemplate({ ...newTemplate, body: e.target.value })}
-                          placeholder="Schrijf je bericht hier. Gebruik [variabele naam] om dynamische velden in te voegen."
-                          rows={8}
-                          data-testid="textarea-template-body"
-                        />
+                        <Label>Bericht samenstellen</Label>
+                        <div className="border rounded-lg p-3 min-h-[120px] bg-white">
+                          {newTemplate.body ? (
+                            <p className="text-sm whitespace-pre-wrap">
+                              {formatTemplateBody(newTemplate.body)}
+                            </p>
+                          ) : (
+                            <p className="text-sm text-muted-foreground italic">
+                              Klik op de velden hieronder om je bericht op te bouwen, of typ direct in het tekstveld.
+                            </p>
+                          )}
+                        </div>
                       </div>
                       <div className="bg-muted/50 rounded-lg p-3">
                         <p className="text-xs font-medium mb-2">Klik om een veld toe te voegen:</p>
@@ -643,6 +668,17 @@ export default function Settings() {
                           })}
                         </div>
                       </div>
+                      <details className="text-xs">
+                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Bewerk tekst direct</summary>
+                        <Textarea
+                          value={newTemplate.body}
+                          onChange={(e) => setNewTemplate({ ...newTemplate, body: e.target.value })}
+                          placeholder="Typ hier je bericht..."
+                          rows={5}
+                          className="mt-2 font-mono text-xs"
+                          data-testid="textarea-template-body"
+                        />
+                      </details>
                       <Button 
                         className="w-full" 
                         onClick={() => createTemplateMutation.mutate(newTemplate)}
@@ -714,31 +750,16 @@ export default function Settings() {
                             </p>
                           )}
                           <p className="text-sm bg-muted p-3 rounded whitespace-pre-wrap max-h-32 overflow-auto">
-                            {template.body}
+                            {formatTemplateBody(template.body)}
                           </p>
                           {template.placeholders && template.placeholders.length > 0 && (
                             <div className="flex flex-wrap gap-1 mt-2">
                               <span className="text-xs text-muted-foreground">Velden:</span>
-                              {template.placeholders.map(p => {
-                                const friendlyName: Record<string, string> = {
-                                  "advertiser_name": "Bedrijfsnaam",
-                                  "contact_name": "Contactpersoon",
-                                  "phone": "Telefoon",
-                                  "email": "Email",
-                                  "screen_id": "Scherm ID",
-                                  "location_name": "Locatie",
-                                  "price": "Prijs",
-                                  "start_date": "Startdatum",
-                                  "bedrijfsnaam": "Bedrijfsnaam",
-                                  "contactpersoon": "Contactpersoon",
-                                  "telefoon": "Telefoon"
-                                };
-                                return (
-                                  <Badge key={p} variant="secondary" className="text-xs">
-                                    {friendlyName[p] || p}
-                                  </Badge>
-                                );
-                              })}
+                              {template.placeholders.map(p => (
+                                <Badge key={p} variant="secondary" className="text-xs">
+                                  {FIELD_NAMES[p] || p}
+                                </Badge>
+                              ))}
                             </div>
                           )}
                         </div>
