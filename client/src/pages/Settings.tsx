@@ -26,8 +26,19 @@ import {
   XCircle,
   ExternalLink,
   Copy,
-  RefreshCw
+  RefreshCw,
+  Plus,
+  Search,
+  Eye,
+  History,
+  Trash2,
+  FileText,
+  ToggleLeft,
+  ToggleRight
 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 
 interface AutomationRule {
   id: string;
@@ -38,11 +49,41 @@ interface AutomationRule {
   threshold?: number;
 }
 
-interface Template {
+interface DbTemplate {
   id: string;
   name: string;
-  type: string;
-  content: string;
+  category: string;
+  subject?: string | null;
+  body: string;
+  language?: string | null;
+  isEnabled: boolean;
+  version: number;
+  placeholders?: string[] | null;
+  eSignTemplateId?: string | null;
+  moneybirdStyleId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface TemplateVersion {
+  id: string;
+  templateId: string;
+  version: number;
+  subject?: string | null;
+  body: string;
+  createdAt: string;
+}
+
+interface Advertiser {
+  id: string;
+  companyName: string;
+  contactName: string;
+}
+
+interface Screen {
+  id: string;
+  screenId?: string | null;
+  name: string;
 }
 
 interface UserRole {
@@ -109,33 +150,29 @@ const defaultRules: AutomationRule[] = [
   },
 ];
 
-const defaultTemplates: Template[] = [
-  {
-    id: "whatsapp_offline",
-    name: "WhatsApp - Scherm Offline",
-    type: "whatsapp",
-    content: "Hoi! Scherm {screenId} bij {locationName} lijkt offline. Kun je even checken of de stroom en wifi werken? Bedankt!",
-  },
-  {
-    id: "whatsapp_reminder",
-    name: "WhatsApp - Betaalherinnering",
-    type: "whatsapp",
-    content: "Hoi {contactName}, factuur {invoiceNumber} van €{amount} staat nog open. Kun je de betaling in orde maken? Alvast bedankt!",
-  },
-  {
-    id: "email_welcome",
-    name: "Email - Welkom Adverteerder",
-    type: "email",
-    content: "Beste {contactName},\n\nWelkom bij Elevizion! Je advertentie is nu live op {screenCount} schermen.\n\nMet vriendelijke groet,\nTeam Elevizion",
-  },
+const TEMPLATE_CATEGORIES = [
+  { value: "all", label: "Alle" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "email", label: "Email" },
+  { value: "contract", label: "Contracten" },
+  { value: "invoice", label: "Factuur/Offerte" },
+  { value: "internal", label: "Intern" },
 ];
 
 export default function Settings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [rules, setRules] = useState<AutomationRule[]>(defaultRules);
-  const [templates, setTemplates] = useState<Template[]>(defaultTemplates);
-  const [editingTemplate, setEditingTemplate] = useState<string | null>(null);
+  const [templateCategory, setTemplateCategory] = useState("all");
+  const [templateSearch, setTemplateSearch] = useState("");
+  const [editingTemplate, setEditingTemplate] = useState<DbTemplate | null>(null);
+  const [previewTemplate, setPreviewTemplate] = useState<DbTemplate | null>(null);
+  const [previewAdvertiserId, setPreviewAdvertiserId] = useState("");
+  const [previewScreenId, setPreviewScreenId] = useState("");
+  const [previewResult, setPreviewResult] = useState<{ subject: string; body: string } | null>(null);
+  const [showVersions, setShowVersions] = useState<string | null>(null);
+  const [isNewTemplateOpen, setIsNewTemplateOpen] = useState(false);
+  const [newTemplate, setNewTemplate] = useState({ name: "", category: "whatsapp", subject: "", body: "" });
 
   const { data: users = [] } = useQuery<UserRole[]>({
     queryKey: ["/api/users"],
@@ -177,6 +214,102 @@ export default function Settings() {
     },
   });
 
+  const { data: templates = [], isLoading: templatesLoading } = useQuery<DbTemplate[]>({
+    queryKey: ["/api/templates", templateCategory],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/templates?category=${templateCategory}`);
+      return res.json();
+    },
+  });
+
+  const { data: advertisers = [] } = useQuery<Advertiser[]>({
+    queryKey: ["/api/advertisers"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/advertisers");
+      return res.json();
+    },
+  });
+
+  const { data: screens = [] } = useQuery<Screen[]>({
+    queryKey: ["/api/screens"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/screens");
+      return res.json();
+    },
+  });
+
+  const { data: templateVersions = [] } = useQuery<TemplateVersion[]>({
+    queryKey: ["/api/templates", showVersions, "versions"],
+    queryFn: async () => {
+      if (!showVersions) return [];
+      const res = await apiRequest("GET", `/api/templates/${showVersions}/versions`);
+      return res.json();
+    },
+    enabled: !!showVersions,
+  });
+
+  const createTemplateMutation = useMutation({
+    mutationFn: async (data: typeof newTemplate) => {
+      const res = await apiRequest("POST", "/api/templates", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/templates"] });
+      setIsNewTemplateOpen(false);
+      setNewTemplate({ name: "", category: "whatsapp", subject: "", body: "" });
+      toast({ title: "Template aangemaakt" });
+    },
+    onError: () => {
+      toast({ title: "Fout bij aanmaken", variant: "destructive" });
+    },
+  });
+
+  const updateTemplateMutation = useMutation({
+    mutationFn: async ({ id, data }: { id: string; data: Partial<DbTemplate> }) => {
+      const res = await apiRequest("PATCH", `/api/templates/${id}`, data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/templates"] });
+      setEditingTemplate(null);
+      toast({ title: "Template bijgewerkt" });
+    },
+    onError: () => {
+      toast({ title: "Fout bij bijwerken", variant: "destructive" });
+    },
+  });
+
+  const deleteTemplateMutation = useMutation({
+    mutationFn: async (id: string) => {
+      await apiRequest("DELETE", `/api/templates/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/templates"] });
+      toast({ title: "Template verwijderd" });
+    },
+  });
+
+  const duplicateTemplateMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("POST", `/api/templates/${id}/duplicate`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/templates"] });
+      toast({ title: "Template gedupliceerd" });
+    },
+  });
+
+  const previewTemplateMutation = useMutation({
+    mutationFn: async ({ id, advertiserId, screenId }: { id: string; advertiserId?: string; screenId?: string }) => {
+      const res = await apiRequest("POST", `/api/templates/${id}/preview`, { advertiserId, screenId });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setPreviewResult(data);
+    },
+  });
+
   const toggleRule = (ruleId: string) => {
     setRules(rules.map(r => 
       r.id === ruleId ? { ...r, enabled: !r.enabled } : r
@@ -190,15 +323,30 @@ export default function Settings() {
     ));
   };
 
-  const updateTemplate = (templateId: string, content: string) => {
-    setTemplates(templates.map(t => 
-      t.id === templateId ? { ...t, content } : t
-    ));
-  };
-
   const copyTemplate = (content: string) => {
     navigator.clipboard.writeText(content);
     toast({ title: "Gekopieerd naar klembord" });
+  };
+
+  const filteredTemplates = templates.filter(t =>
+    t.name.toLowerCase().includes(templateSearch.toLowerCase()) ||
+    t.body.toLowerCase().includes(templateSearch.toLowerCase())
+  );
+
+  const getCategoryLabel = (category: string) => {
+    const cat = TEMPLATE_CATEGORIES.find(c => c.value === category);
+    return cat?.label || category;
+  };
+
+  const getCategoryBadge = (category: string) => {
+    const colors: Record<string, string> = {
+      whatsapp: "bg-green-100 text-green-800",
+      email: "bg-blue-100 text-blue-800",
+      contract: "bg-purple-100 text-purple-800",
+      invoice: "bg-amber-100 text-amber-800",
+      internal: "bg-gray-100 text-gray-800",
+    };
+    return <Badge className={colors[category] || "bg-gray-100"}>{getCategoryLabel(category)}</Badge>;
   };
 
   const saveSettings = () => {
@@ -397,64 +545,341 @@ export default function Settings() {
           </Card>
         </TabsContent>
 
-        <TabsContent value="templates" className="mt-6">
+        <TabsContent value="templates" className="mt-6 space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <MessageSquare className="h-5 w-5" />
-                Berichten Templates
-              </CardTitle>
-              <CardDescription>
-                Voorgedefinieerde WhatsApp en email berichten
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {templates.map((template) => (
-                <div key={template.id} className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <Badge variant="outline">
-                        {template.type === "whatsapp" ? "WhatsApp" : "Email"}
-                      </Badge>
-                      <span className="font-medium">{template.name}</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button 
-                        variant="ghost" 
-                        size="sm"
-                        onClick={() => copyTemplate(template.content)}
-                      >
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                      <Button 
-                        variant="ghost" 
-                        size="sm"
-                        onClick={() => setEditingTemplate(
-                          editingTemplate === template.id ? null : template.id
-                        )}
-                      >
-                        {editingTemplate === template.id ? "Klaar" : "Bewerk"}
-                      </Button>
-                    </div>
-                  </div>
-                  {editingTemplate === template.id ? (
-                    <Textarea
-                      value={template.content}
-                      onChange={(e) => updateTemplate(template.id, e.target.value)}
-                      rows={4}
-                    />
-                  ) : (
-                    <p className="text-sm text-muted-foreground bg-muted p-3 rounded">
-                      {template.content}
-                    </p>
-                  )}
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Variabelen: {"{screenId}"}, {"{locationName}"}, {"{contactName}"}, {"{invoiceNumber}"}, {"{amount}"}
-                  </p>
+              <div className="flex flex-col sm:flex-row justify-between gap-4">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="h-5 w-5" />
+                    Template Center
+                  </CardTitle>
+                  <CardDescription>
+                    Beheer alle berichten en document templates
+                  </CardDescription>
                 </div>
-              ))}
+                <Dialog open={isNewTemplateOpen} onOpenChange={setIsNewTemplateOpen}>
+                  <DialogTrigger asChild>
+                    <Button data-testid="button-new-template">
+                      <Plus className="h-4 w-4 mr-2" />
+                      Nieuwe Template
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent className="max-w-2xl">
+                    <DialogHeader>
+                      <DialogTitle>Nieuwe Template Aanmaken</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 py-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label>Naam</Label>
+                          <Input
+                            value={newTemplate.name}
+                            onChange={(e) => setNewTemplate({ ...newTemplate, name: e.target.value })}
+                            placeholder="Template naam..."
+                            data-testid="input-template-name"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Categorie</Label>
+                          <Select value={newTemplate.category} onValueChange={(v) => setNewTemplate({ ...newTemplate, category: v })}>
+                            <SelectTrigger data-testid="select-template-category">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {TEMPLATE_CATEGORIES.filter(c => c.value !== "all").map((cat) => (
+                                <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      {(newTemplate.category === "email" || newTemplate.category === "contract") && (
+                        <div className="space-y-2">
+                          <Label>Onderwerp</Label>
+                          <Input
+                            value={newTemplate.subject}
+                            onChange={(e) => setNewTemplate({ ...newTemplate, subject: e.target.value })}
+                            placeholder="Email onderwerp..."
+                          />
+                        </div>
+                      )}
+                      <div className="space-y-2">
+                        <Label>Inhoud</Label>
+                        <Textarea
+                          value={newTemplate.body}
+                          onChange={(e) => setNewTemplate({ ...newTemplate, body: e.target.value })}
+                          placeholder="Template inhoud... Gebruik {{variabele_naam}} voor placeholders"
+                          rows={8}
+                          data-testid="textarea-template-body"
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Beschikbare variabelen: {"{{advertiser_name}}"}, {"{{contact_name}}"}, {"{{phone}}"}, {"{{email}}"}, {"{{screen_id}}"}, {"{{location_name}}"}, {"{{price}}"}, {"{{start_date}}"}
+                      </p>
+                      <Button 
+                        className="w-full" 
+                        onClick={() => createTemplateMutation.mutate(newTemplate)}
+                        disabled={!newTemplate.name || !newTemplate.body || createTemplateMutation.isPending}
+                        data-testid="button-create-template"
+                      >
+                        Template Aanmaken
+                      </Button>
+                    </div>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-2 mb-4">
+                <div className="relative flex-1 min-w-[200px]">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Zoeken..."
+                    value={templateSearch}
+                    onChange={(e) => setTemplateSearch(e.target.value)}
+                    className="pl-9"
+                    data-testid="input-template-search"
+                  />
+                </div>
+                <div className="flex gap-1">
+                  {TEMPLATE_CATEGORIES.map((cat) => (
+                    <Button
+                      key={cat.value}
+                      variant={templateCategory === cat.value ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setTemplateCategory(cat.value)}
+                      data-testid={`filter-category-${cat.value}`}
+                    >
+                      {cat.label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {templatesLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-20 w-full" />
+                  <Skeleton className="h-20 w-full" />
+                </div>
+              ) : filteredTemplates.length === 0 ? (
+                <div className="text-center py-12 text-muted-foreground">
+                  <FileText className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                  <p>Geen templates gevonden</p>
+                  <p className="text-sm">Maak een nieuwe template aan om te beginnen</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {filteredTemplates.map((template) => (
+                    <div key={template.id} className="border rounded-lg p-4" data-testid={`template-${template.id}`}>
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2">
+                            {getCategoryBadge(template.category)}
+                            <span className="font-medium">{template.name}</span>
+                            {!template.isEnabled && (
+                              <Badge variant="secondary" className="text-xs">Uitgeschakeld</Badge>
+                            )}
+                            <span className="text-xs text-muted-foreground">v{template.version}</span>
+                          </div>
+                          {template.subject && (
+                            <p className="text-sm text-muted-foreground mb-1">
+                              <span className="font-medium">Onderwerp:</span> {template.subject}
+                            </p>
+                          )}
+                          <p className="text-sm bg-muted p-3 rounded whitespace-pre-wrap max-h-32 overflow-auto">
+                            {template.body}
+                          </p>
+                          {template.placeholders && template.placeholders.length > 0 && (
+                            <p className="text-xs text-muted-foreground mt-2">
+                              Variabelen: {template.placeholders.map(p => `{{${p}}}`).join(", ")}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex flex-col gap-1">
+                          <Button variant="ghost" size="icon" onClick={() => copyTemplate(template.body)} title="Kopiëren" data-testid={`button-copy-${template.id}`}>
+                            <Copy className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => { setPreviewTemplate(template); setPreviewResult(null); }} title="Preview" data-testid={`button-preview-${template.id}`}>
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => setEditingTemplate(template)} title="Bewerken" data-testid={`button-edit-${template.id}`}>
+                            <FileText className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => setShowVersions(template.id)} title="Versies" data-testid={`button-versions-${template.id}`}>
+                            <History className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => duplicateTemplateMutation.mutate(template.id)} title="Dupliceren">
+                            <Plus className="h-4 w-4" />
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            onClick={() => updateTemplateMutation.mutate({ id: template.id, data: { isEnabled: !template.isEnabled } })}
+                            title={template.isEnabled ? "Uitschakelen" : "Inschakelen"}
+                          >
+                            {template.isEnabled ? <ToggleRight className="h-4 w-4 text-green-600" /> : <ToggleLeft className="h-4 w-4" />}
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => deleteTemplateMutation.mutate(template.id)} title="Verwijderen" className="text-red-600 hover:text-red-700">
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
+
+          {/* Edit Template Dialog */}
+          <Dialog open={!!editingTemplate} onOpenChange={(open) => !open && setEditingTemplate(null)}>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Template Bewerken</DialogTitle>
+              </DialogHeader>
+              {editingTemplate && (
+                <div className="space-y-4 py-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Naam</Label>
+                      <Input
+                        value={editingTemplate.name}
+                        onChange={(e) => setEditingTemplate({ ...editingTemplate, name: e.target.value })}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Categorie</Label>
+                      <Select value={editingTemplate.category} onValueChange={(v) => setEditingTemplate({ ...editingTemplate, category: v })}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {TEMPLATE_CATEGORIES.filter(c => c.value !== "all").map((cat) => (
+                            <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  {(editingTemplate.category === "email" || editingTemplate.category === "contract") && (
+                    <div className="space-y-2">
+                      <Label>Onderwerp</Label>
+                      <Input
+                        value={editingTemplate.subject || ""}
+                        onChange={(e) => setEditingTemplate({ ...editingTemplate, subject: e.target.value })}
+                      />
+                    </div>
+                  )}
+                  <div className="space-y-2">
+                    <Label>Inhoud</Label>
+                    <Textarea
+                      value={editingTemplate.body}
+                      onChange={(e) => setEditingTemplate({ ...editingTemplate, body: e.target.value })}
+                      rows={10}
+                    />
+                  </div>
+                  <Button 
+                    className="w-full" 
+                    onClick={() => updateTemplateMutation.mutate({ id: editingTemplate.id, data: { name: editingTemplate.name, category: editingTemplate.category, subject: editingTemplate.subject, body: editingTemplate.body } })}
+                    disabled={updateTemplateMutation.isPending}
+                  >
+                    Opslaan
+                  </Button>
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          {/* Preview Template Dialog */}
+          <Dialog open={!!previewTemplate} onOpenChange={(open) => !open && setPreviewTemplate(null)}>
+            <DialogContent className="max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>Template Preview: {previewTemplate?.name}</DialogTitle>
+              </DialogHeader>
+              {previewTemplate && (
+                <div className="space-y-4 py-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Adverteerder (optioneel)</Label>
+                      <Select value={previewAdvertiserId} onValueChange={setPreviewAdvertiserId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecteer adverteerder..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Geen</SelectItem>
+                          {advertisers.map((a) => (
+                            <SelectItem key={a.id} value={a.id}>{a.companyName}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Scherm (optioneel)</Label>
+                      <Select value={previewScreenId} onValueChange={setPreviewScreenId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecteer scherm..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="">Geen</SelectItem>
+                          {screens.map((s) => (
+                            <SelectItem key={s.id} value={s.id}>{s.screenId || s.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <Button 
+                    onClick={() => previewTemplateMutation.mutate({ id: previewTemplate.id, advertiserId: previewAdvertiserId || undefined, screenId: previewScreenId || undefined })}
+                    disabled={previewTemplateMutation.isPending}
+                  >
+                    <Eye className="h-4 w-4 mr-2" />
+                    Preview Genereren
+                  </Button>
+                  {previewResult && (
+                    <div className="space-y-2 mt-4">
+                      {previewResult.subject && (
+                        <div>
+                          <Label>Onderwerp:</Label>
+                          <p className="bg-muted p-2 rounded text-sm">{previewResult.subject}</p>
+                        </div>
+                      )}
+                      <div>
+                        <Label>Inhoud:</Label>
+                        <p className="bg-muted p-3 rounded text-sm whitespace-pre-wrap">{previewResult.body}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </DialogContent>
+          </Dialog>
+
+          {/* Version History Dialog */}
+          <Dialog open={!!showVersions} onOpenChange={(open) => !open && setShowVersions(null)}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Versiegeschiedenis</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-3 py-4 max-h-96 overflow-auto">
+                {templateVersions.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-4">Geen eerdere versies beschikbaar</p>
+                ) : (
+                  templateVersions.map((v) => (
+                    <div key={v.id} className="border rounded p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <Badge variant="outline">Versie {v.version}</Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(v.createdAt).toLocaleString("nl-NL")}
+                        </span>
+                      </div>
+                      <p className="text-sm bg-muted p-2 rounded max-h-20 overflow-auto">{v.body}</p>
+                    </div>
+                  ))
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         <TabsContent value="users" className="mt-6">

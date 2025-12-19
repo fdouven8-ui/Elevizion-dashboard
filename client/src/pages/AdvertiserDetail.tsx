@@ -1,9 +1,12 @@
 import { useParams, Link } from "wouter";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import { 
   ArrowLeft, 
   Phone, 
@@ -17,10 +20,21 @@ import {
   Calendar,
   Copy,
   Check,
-  AlertCircle
+  AlertCircle,
+  FileText,
+  Send
 } from "lucide-react";
 import { useState } from "react";
 import type { Advertiser } from "@shared/schema";
+
+interface Template {
+  id: string;
+  name: string;
+  category: string;
+  subject?: string | null;
+  body: string;
+  isEnabled: boolean;
+}
 
 type EnrichedPlacement = {
   id: string;
@@ -40,7 +54,11 @@ type EnrichedPlacement = {
 
 export default function AdvertiserDetail() {
   const { id } = useParams<{ id: string }>();
+  const { toast } = useToast();
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [showTemplateDialog, setShowTemplateDialog] = useState<"whatsapp" | "email" | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
+  const [renderedMessage, setRenderedMessage] = useState<{ subject: string; body: string } | null>(null);
 
   const { data: advertiser, isLoading: advLoading } = useQuery<Advertiser>({
     queryKey: ["/api/advertisers", id],
@@ -61,10 +79,73 @@ export default function AdvertiserDetail() {
     enabled: !!id,
   });
 
+  const { data: whatsappTemplates = [] } = useQuery<Template[]>({
+    queryKey: ["/api/templates", "whatsapp"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/templates?category=whatsapp");
+      return res.json();
+    },
+  });
+
+  const { data: emailTemplates = [] } = useQuery<Template[]>({
+    queryKey: ["/api/templates", "email"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/templates?category=email");
+      return res.json();
+    },
+  });
+
+  const previewMutation = useMutation({
+    mutationFn: async (templateId: string) => {
+      const res = await apiRequest("POST", `/api/templates/${templateId}/preview`, { advertiserId: id });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setRenderedMessage(data);
+    },
+  });
+
   const copyToClipboard = async (text: string, field: string) => {
     await navigator.clipboard.writeText(text);
     setCopiedField(field);
     setTimeout(() => setCopiedField(null), 2000);
+  };
+
+  const handleTemplateSelect = (template: Template) => {
+    setSelectedTemplate(template);
+    previewMutation.mutate(template.id);
+  };
+
+  const openWhatsAppWithTemplate = () => {
+    if (advertiser?.phone && renderedMessage) {
+      const phone = advertiser.phone.replace(/\D/g, "");
+      const encodedMessage = encodeURIComponent(renderedMessage.body);
+      window.open(`https://wa.me/${phone}?text=${encodedMessage}`, "_blank");
+      setShowTemplateDialog(null);
+      setSelectedTemplate(null);
+      setRenderedMessage(null);
+    }
+  };
+
+  const openEmailWithTemplate = () => {
+    if (advertiser?.email && renderedMessage) {
+      const subject = encodeURIComponent(renderedMessage.subject || "");
+      const body = encodeURIComponent(renderedMessage.body);
+      window.open(`mailto:${advertiser.email}?subject=${subject}&body=${body}`, "_blank");
+      setShowTemplateDialog(null);
+      setSelectedTemplate(null);
+      setRenderedMessage(null);
+    }
+  };
+
+  const copyAndClose = () => {
+    if (renderedMessage) {
+      navigator.clipboard.writeText(renderedMessage.body);
+      toast({ title: "Gekopieerd naar klembord" });
+      setShowTemplateDialog(null);
+      setSelectedTemplate(null);
+      setRenderedMessage(null);
+    }
   };
 
   const openWhatsApp = () => {
@@ -147,11 +228,21 @@ export default function AdvertiserDetail() {
           <p className="text-muted-foreground">{advertiser.contactName}</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" onClick={openWhatsApp} disabled={!advertiser.phone} data-testid="button-whatsapp">
+          <Button 
+            variant="outline" 
+            onClick={() => { setShowTemplateDialog("whatsapp"); setSelectedTemplate(null); setRenderedMessage(null); }} 
+            disabled={!advertiser.phone} 
+            data-testid="button-whatsapp"
+          >
             <MessageCircle className="h-4 w-4 mr-2" />
             WhatsApp
           </Button>
-          <Button variant="outline" onClick={openEmail} disabled={!advertiser.email} data-testid="button-email">
+          <Button 
+            variant="outline" 
+            onClick={() => { setShowTemplateDialog("email"); setSelectedTemplate(null); setRenderedMessage(null); }} 
+            disabled={!advertiser.email} 
+            data-testid="button-email"
+          >
             <Mail className="h-4 w-4 mr-2" />
             Email
           </Button>
@@ -350,6 +441,106 @@ export default function AdvertiserDetail() {
           </div>
         </CardContent>
       </Card>
+
+      <Dialog open={!!showTemplateDialog} onOpenChange={(open) => !open && setShowTemplateDialog(null)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>
+              {showTemplateDialog === "whatsapp" ? "WhatsApp Template Kiezen" : "Email Template Kiezen"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {!selectedTemplate ? (
+              <div className="space-y-2">
+                {(showTemplateDialog === "whatsapp" ? whatsappTemplates : emailTemplates)
+                  .filter(t => t.isEnabled)
+                  .map((template) => (
+                    <div 
+                      key={template.id}
+                      className="border rounded-lg p-3 cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => handleTemplateSelect(template)}
+                      data-testid={`template-option-${template.id}`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <FileText className="h-4 w-4 text-muted-foreground" />
+                        <span className="font-medium">{template.name}</span>
+                      </div>
+                      <p className="text-sm text-muted-foreground line-clamp-2">{template.body}</p>
+                    </div>
+                  ))}
+                {(showTemplateDialog === "whatsapp" ? whatsappTemplates : emailTemplates).filter(t => t.isEnabled).length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <FileText className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                    <p>Geen templates beschikbaar</p>
+                    <p className="text-sm">Maak eerst een template aan in Instellingen → Templates</p>
+                  </div>
+                )}
+                <div className="pt-4 border-t">
+                  <Button 
+                    variant="outline" 
+                    className="w-full"
+                    onClick={showTemplateDialog === "whatsapp" ? openWhatsApp : openEmail}
+                  >
+                    Zonder template verzenden
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <FileText className="h-4 w-4" />
+                  <span>Template: {selectedTemplate.name}</span>
+                </div>
+                {renderedMessage ? (
+                  <>
+                    {renderedMessage.subject && (
+                      <div>
+                        <p className="text-sm font-medium mb-1">Onderwerp:</p>
+                        <p className="bg-muted p-2 rounded text-sm">{renderedMessage.subject}</p>
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-sm font-medium mb-1">Bericht:</p>
+                      <p className="bg-muted p-3 rounded text-sm whitespace-pre-wrap max-h-48 overflow-auto">
+                        {renderedMessage.body}
+                      </p>
+                    </div>
+                    <div className="flex gap-2 pt-2">
+                      {showTemplateDialog === "whatsapp" ? (
+                        <Button className="flex-1" onClick={openWhatsAppWithTemplate} data-testid="button-send-whatsapp">
+                          <Send className="h-4 w-4 mr-2" />
+                          Stuur via WhatsApp
+                        </Button>
+                      ) : (
+                        <Button className="flex-1" onClick={openEmailWithTemplate} data-testid="button-send-email">
+                          <Send className="h-4 w-4 mr-2" />
+                          Open in Email
+                        </Button>
+                      )}
+                      <Button variant="outline" onClick={copyAndClose} data-testid="button-copy-message">
+                        <Copy className="h-4 w-4 mr-2" />
+                        Kopiëren
+                      </Button>
+                    </div>
+                    <Button 
+                      variant="ghost" 
+                      className="w-full" 
+                      onClick={() => { setSelectedTemplate(null); setRenderedMessage(null); }}
+                    >
+                      Andere template kiezen
+                    </Button>
+                  </>
+                ) : (
+                  <div className="text-center py-4">
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
+                    <p className="text-sm text-muted-foreground mt-2">Bericht genereren...</p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
