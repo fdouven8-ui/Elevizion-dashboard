@@ -2,7 +2,7 @@ import { useAppData } from "@/hooks/use-app-data";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, MoreHorizontal, Monitor, AlertTriangle, CheckCircle, Clock, ExternalLink } from "lucide-react";
+import { Plus, Monitor, ExternalLink, Filter, X } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -12,22 +12,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
+import { useState, useMemo } from "react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useForm } from "react-hook-form";
-import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
-import type { Screen } from "@shared/schema";
+import { useLocation, Link } from "wouter";
+import { formatDistanceToNow } from "date-fns";
+import { nl } from "date-fns/locale";
 import {
   Select,
   SelectContent,
@@ -35,63 +29,94 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-
-interface Incident {
-  id: string;
-  incidentType: string;
-  severity: string;
-  screenId: string | null;
-  status: string;
-  title: string;
-  description?: string;
-  openedAt: string;
-  resolvedAt?: string;
-}
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 export default function Screens() {
-  const { screens, locations, addScreen, updateScreen } = useAppData();
-  const { toast } = useToast();
+  const { screens, locations, addScreen, placements } = useAppData();
+  const [location] = useLocation();
   const queryClient = useQueryClient();
-  const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
-  const { data: incidents = [], isLoading: incidentsLoading } = useQuery<Incident[]>({
-    queryKey: ["/api/incidents"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/incidents");
-      return res.json();
-    },
-  });
+  // Parse URL params for initial filter state
+  const urlParams = new URLSearchParams(location.split('?')[1] || '');
+  const initialStatus = urlParams.get('status');
 
-  const resolveIncidentMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const res = await apiRequest("PATCH", `/api/incidents/${id}`, { 
-        status: "resolved",
-        resolvedAt: new Date().toISOString()
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/incidents"] });
-      toast({ title: "Issue opgelost" });
-    },
-    onError: () => {
-      toast({ title: "Fout bij oplossen", variant: "destructive" });
-    },
-  });
+  // Filter state
+  const [statusFilter, setStatusFilter] = useState<string[]>(
+    initialStatus ? [initialStatus] : []
+  );
+  const [locationFilter, setLocationFilter] = useState<string>("");
+  const [minPlacements, setMinPlacements] = useState<string>("");
+  const [maxPlacements, setMaxPlacements] = useState<string>("");
+  const [lastSeenFilter, setLastSeenFilter] = useState<string>("");
+  const [locationPopoverOpen, setLocationPopoverOpen] = useState(false);
 
-  const openIncidents = incidents.filter(i => i.status === "open" || i.status === "acknowledged");
-  const getScreenId = (screenId: string | null) => {
-    if (!screenId) return "Onbekend";
-    const screen = screens.find(s => s.id === screenId);
-    return screen?.screenId || screen?.name || "Onbekend";
+  // Count active placements per screen
+  const getActivePlacementsCount = (screenId: string) => {
+    return placements.filter(p => 
+      p.screenId === screenId && p.isActive
+    ).length;
   };
 
-  const filteredScreens = screens.filter(scr => 
-    scr.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  // Filter logic
+  const filteredScreens = useMemo(() => {
+    return screens.filter(scr => {
+      // Status filter (multi-select)
+      if (statusFilter.length > 0 && !statusFilter.includes(scr.status)) {
+        return false;
+      }
+
+      // Location filter
+      if (locationFilter && scr.locationId !== locationFilter) {
+        return false;
+      }
+
+      // Active placements range
+      const placementCount = getActivePlacementsCount(scr.id);
+      if (minPlacements && placementCount < parseInt(minPlacements)) {
+        return false;
+      }
+      if (maxPlacements && placementCount > parseInt(maxPlacements)) {
+        return false;
+      }
+
+      // Last seen filter
+      if (lastSeenFilter && scr.lastSeenAt) {
+        const lastSeen = new Date(scr.lastSeenAt);
+        const now = new Date();
+        const hoursDiff = (now.getTime() - lastSeen.getTime()) / (1000 * 60 * 60);
+
+        switch (lastSeenFilter) {
+          case "today":
+            if (hoursDiff > 24) return false;
+            break;
+          case "1hour":
+            if (hoursDiff <= 1) return false;
+            break;
+          case "24hours":
+            if (hoursDiff <= 24) return false;
+            break;
+        }
+      }
+
+      return true;
+    });
+  }, [screens, statusFilter, locationFilter, minPlacements, maxPlacements, lastSeenFilter, placements]);
 
   const getLocationName = (id: string) => locations.find(l => l.id === id)?.name || "Onbekend";
+  const selectedLocationName = locationFilter ? getLocationName(locationFilter) : "";
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -109,16 +134,44 @@ export default function Screens() {
     }
   };
 
+  const formatLastSeen = (dateValue: Date | string | null) => {
+    if (!dateValue) return "-";
+    try {
+      const date = typeof dateValue === 'string' ? new Date(dateValue) : dateValue;
+      return formatDistanceToNow(date, { addSuffix: true, locale: nl });
+    } catch {
+      return "-";
+    }
+  };
+
+  const toggleStatusFilter = (status: string) => {
+    setStatusFilter(prev => 
+      prev.includes(status) 
+        ? prev.filter(s => s !== status)
+        : [...prev, status]
+    );
+  };
+
+  const clearFilters = () => {
+    setStatusFilter([]);
+    setLocationFilter("");
+    setMinPlacements("");
+    setMaxPlacements("");
+    setLastSeenFilter("");
+  };
+
+  const hasActiveFilters = statusFilter.length > 0 || locationFilter || minPlacements || maxPlacements || lastSeenFilter;
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight font-heading">Schermen</h1>
-          <p className="text-muted-foreground">Monitor en beheer uw digital signage displays.</p>
+          <h1 className="text-2xl font-bold tracking-tight" data-testid="page-title">Schermen</h1>
+          <p className="text-muted-foreground text-sm">Monitor en beheer je digital signage displays</p>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="shadow-sm">
+            <Button className="shadow-sm" data-testid="button-add-screen">
               <Plus className="mr-2 h-4 w-4" /> Scherm Toevoegen
             </Button>
           </DialogTrigger>
@@ -131,148 +184,203 @@ export default function Screens() {
         </Dialog>
       </div>
 
-      <div className="flex items-center py-4">
-        <div className="relative w-full max-w-sm">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input 
-            placeholder="Zoek schermen..." 
-            className="pl-8" 
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-          />
-        </div>
-      </div>
+      {/* Inline Filters */}
+      <Card>
+        <CardContent className="pt-4 pb-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Filter className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Filters</span>
+            {hasActiveFilters && (
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className="h-6 px-2 text-xs"
+                onClick={clearFilters}
+                data-testid="button-clear-filters"
+              >
+                <X className="h-3 w-3 mr-1" />
+                Wissen
+              </Button>
+            )}
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            {/* Status filter (multi-select) */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Status</Label>
+              <div className="flex gap-3">
+                <div className="flex items-center gap-1.5">
+                  <Checkbox 
+                    id="status-online"
+                    checked={statusFilter.includes("online")}
+                    onCheckedChange={() => toggleStatusFilter("online")}
+                    data-testid="filter-status-online"
+                  />
+                  <Label htmlFor="status-online" className="text-sm cursor-pointer">Online</Label>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Checkbox 
+                    id="status-offline"
+                    checked={statusFilter.includes("offline")}
+                    onCheckedChange={() => toggleStatusFilter("offline")}
+                    data-testid="filter-status-offline"
+                  />
+                  <Label htmlFor="status-offline" className="text-sm cursor-pointer">Offline</Label>
+                </div>
+              </div>
+            </div>
 
+            {/* Location filter (searchable dropdown) */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Locatie</Label>
+              <Popover open={locationPopoverOpen} onOpenChange={setLocationPopoverOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    className="w-full justify-between h-9 font-normal"
+                    data-testid="filter-location"
+                  >
+                    {selectedLocationName || "Alle locaties"}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[200px] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Zoek locatie..." />
+                    <CommandList>
+                      <CommandEmpty>Geen locatie gevonden</CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem 
+                          value="" 
+                          onSelect={() => {
+                            setLocationFilter("");
+                            setLocationPopoverOpen(false);
+                          }}
+                        >
+                          Alle locaties
+                        </CommandItem>
+                        {locations.map((loc) => (
+                          <CommandItem
+                            key={loc.id}
+                            value={loc.name}
+                            onSelect={() => {
+                              setLocationFilter(loc.id);
+                              setLocationPopoverOpen(false);
+                            }}
+                          >
+                            {loc.name}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </div>
+
+            {/* Active placements range */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Actieve plaatsingen</Label>
+              <div className="flex gap-2">
+                <Input 
+                  type="number" 
+                  placeholder="Min" 
+                  className="h-9 w-16"
+                  value={minPlacements}
+                  onChange={(e) => setMinPlacements(e.target.value)}
+                  data-testid="filter-min-placements"
+                />
+                <span className="text-muted-foreground self-center">-</span>
+                <Input 
+                  type="number" 
+                  placeholder="Max" 
+                  className="h-9 w-16"
+                  value={maxPlacements}
+                  onChange={(e) => setMaxPlacements(e.target.value)}
+                  data-testid="filter-max-placements"
+                />
+              </div>
+            </div>
+
+            {/* Last seen filter */}
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Laatst gezien</Label>
+              <Select value={lastSeenFilter} onValueChange={setLastSeenFilter}>
+                <SelectTrigger className="h-9" data-testid="filter-last-seen">
+                  <SelectValue placeholder="Alle" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">Alle</SelectItem>
+                  <SelectItem value="today">Vandaag</SelectItem>
+                  <SelectItem value="1hour">&gt; 1 uur geleden</SelectItem>
+                  <SelectItem value="24hours">&gt; 24 uur geleden</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Results count */}
+            <div className="flex items-end">
+              <Badge variant="secondary" className="h-9 px-3">
+                {filteredScreens.length} / {screens.length} schermen
+              </Badge>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Screens Table */}
       <div className="rounded-md border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Schermnaam</TableHead>
+              <TableHead>Screen ID</TableHead>
               <TableHead>Locatie</TableHead>
-              <TableHead>Yodeck ID</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="w-[50px]"></TableHead>
+              <TableHead>Laatst gezien</TableHead>
+              <TableHead className="text-center">Actieve plaatsingen</TableHead>
+              <TableHead className="w-[100px] text-right">Actie</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredScreens.map((scr) => (
-              <TableRow key={scr.id}>
-                <TableCell className="font-medium flex items-center gap-2">
-                  <Monitor className="h-4 w-4 text-muted-foreground" />
-                  {scr.name}
+              <TableRow key={scr.id} data-testid={`screen-row-${scr.id}`}>
+                <TableCell className="font-medium font-mono">
+                  <div className="flex items-center gap-2">
+                    <Monitor className="h-4 w-4 text-muted-foreground" />
+                    {scr.screenId || scr.name}
+                  </div>
                 </TableCell>
                 <TableCell>{getLocationName(scr.locationId)}</TableCell>
-                <TableCell className="font-mono text-xs">{scr.yodeckPlayerId || 'Niet Gekoppeld'}</TableCell>
                 <TableCell>
                   <Badge variant={getStatusColor(scr.status) as any}>
                     {getStatusLabel(scr.status)}
                   </Badge>
                 </TableCell>
-                <TableCell>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" className="h-8 w-8 p-0">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>Acties</DropdownMenuLabel>
-                      <DropdownMenuItem onClick={() => updateScreen(scr.id, { status: 'online' })}>Markeer als Online</DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => updateScreen(scr.id, { status: 'offline' })}>Markeer als Offline</DropdownMenuItem>
-                      <DropdownMenuItem>Details Bewerken</DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                <TableCell className="text-sm text-muted-foreground">
+                  {formatLastSeen(scr.lastSeenAt)}
+                </TableCell>
+                <TableCell className="text-center">
+                  <Badge variant="outline">{getActivePlacementsCount(scr.id)}</Badge>
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button variant="outline" size="sm" asChild data-testid={`button-open-${scr.id}`}>
+                    <Link href={`/screens/${scr.id}`}>
+                      Open
+                    </Link>
+                  </Button>
                 </TableCell>
               </TableRow>
             ))}
             {filteredScreens.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center">
-                  Geen schermen gevonden.
+                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                  Geen schermen gevonden
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="h-5 w-5 text-amber-600" />
-            Open Issues
-            {openIncidents.length > 0 && (
-              <Badge variant="destructive">{openIncidents.length}</Badge>
-            )}
-          </CardTitle>
-          <CardDescription>Problemen en storingen die aandacht nodig hebben</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {incidentsLoading ? (
-            <div className="space-y-3">
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-            </div>
-          ) : openIncidents.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <CheckCircle className="h-12 w-12 mx-auto mb-3 text-green-500" />
-              <p className="font-medium">Geen openstaande issues</p>
-              <p className="text-sm">Alle schermen werken naar behoren</p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {openIncidents.map((incident) => (
-                <div 
-                  key={incident.id}
-                  className={`p-4 rounded-lg border ${
-                    incident.severity === "high" 
-                      ? "border-red-300 bg-red-50" 
-                      : incident.severity === "medium"
-                      ? "border-amber-300 bg-amber-50"
-                      : "border-blue-300 bg-blue-50"
-                  }`}
-                  data-testid={`incident-${incident.id}`}
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex items-start gap-3">
-                      <AlertTriangle className={`h-5 w-5 mt-0.5 ${
-                        incident.severity === "high" ? "text-red-600" : "text-amber-600"
-                      }`} />
-                      <div>
-                        <p className="font-medium">{incident.title}</p>
-                        {incident.description && (
-                          <p className="text-sm text-muted-foreground">{incident.description}</p>
-                        )}
-                        <div className="flex items-center gap-2 mt-2">
-                          <Badge variant="outline" className="text-xs font-mono">
-                            {getScreenId(incident.screenId)}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground flex items-center gap-1">
-                            <Clock className="h-3 w-3" />
-                            {new Date(incident.openedAt).toLocaleString("nl-NL")}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex gap-2 shrink-0">
-                      <Button 
-                        size="sm" 
-                        variant="outline"
-                        onClick={() => resolveIncidentMutation.mutate(incident.id)}
-                        disabled={resolveIncidentMutation.isPending}
-                        data-testid={`button-resolve-${incident.id}`}
-                      >
-                        <CheckCircle className="h-4 w-4 mr-1" />
-                        Oplossen
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }

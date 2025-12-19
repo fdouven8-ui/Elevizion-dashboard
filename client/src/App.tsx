@@ -8,6 +8,7 @@ import Login from "@/pages/Login";
 import Home from "@/pages/Home";
 import Onboarding from "@/pages/Onboarding";
 import Screens from "@/pages/Screens";
+import ScreenDetail from "@/pages/ScreenDetail";
 import Advertisers from "@/pages/Advertisers";
 import AdvertiserDetail from "@/pages/AdvertiserDetail";
 import Placements from "@/pages/Placements";
@@ -22,6 +23,7 @@ function DashboardRouter() {
         <Route path="/onboarding" component={Onboarding} />
         <Route path="/onboarding/:wizard" component={Onboarding} />
         <Route path="/screens" component={Screens} />
+        <Route path="/screens/:id" component={ScreenDetail} />
         <Route path="/advertisers" component={Advertisers} />
         <Route path="/advertisers/:id" component={AdvertiserDetail} />
         <Route path="/placements" component={Placements} />

@@ -28,9 +28,7 @@ import {
   Upload,
   Zap,
   ChevronDown,
-  FileSignature,
-  ExternalLink,
-  TrendingUp
+  FileSignature
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -58,10 +56,6 @@ interface ActionItem {
   link: string;
 }
 
-interface OnlineTrend {
-  date: string;
-  percentage: number;
-}
 
 export default function Home() {
   const [, navigate] = useLocation();
@@ -102,22 +96,6 @@ export default function Home() {
     refetchInterval: 30000,
   });
 
-  const { data: onlineTrend = [] } = useQuery<OnlineTrend[]>({
-    queryKey: ["/api/control-room/online-trend"],
-    queryFn: async () => {
-      try {
-        const res = await apiRequest("GET", "/api/control-room/online-trend");
-        return res.json();
-      } catch {
-        // Mock data for trend
-        return Array.from({ length: 7 }, (_, i) => ({
-          date: new Date(Date.now() - (6 - i) * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-          percentage: 85 + Math.floor(Math.random() * 15),
-        }));
-      }
-    },
-    refetchInterval: 60000,
-  });
 
   const getTypeLabel = (type: string) => {
     switch (type) {
@@ -332,37 +310,6 @@ export default function Home() {
         </CardContent>
       </Card>
 
-      {/* Small Online Trend Graph */}
-      {onlineTrend.length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <TrendingUp className="h-4 w-4" />
-              Online % laatste 7 dagen
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pb-4">
-            <div className="flex items-end gap-1 h-16">
-              {onlineTrend.map((day, i) => (
-                <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                  <div 
-                    className="w-full bg-green-500 rounded-t transition-all"
-                    style={{ height: `${(day.percentage / 100) * 48}px` }}
-                    title={`${day.date}: ${day.percentage}%`}
-                  />
-                  <span className="text-[10px] text-muted-foreground">
-                    {new Date(day.date).toLocaleDateString('nl-NL', { weekday: 'short' }).charAt(0).toUpperCase()}
-                  </span>
-                </div>
-              ))}
-            </div>
-            <div className="flex justify-between text-xs text-muted-foreground mt-2">
-              <span>7 dagen geleden</span>
-              <span>Vandaag</span>
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }

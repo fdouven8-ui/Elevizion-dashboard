@@ -121,6 +121,11 @@ export const placementsApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  update: (id: string, data: Partial<Placement>) =>
+    fetchJson<Placement>(`/api/placements/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    }),
   delete: (id: string) =>
     fetch(`/api/placements/${id}`, { method: "DELETE" }),
 };
