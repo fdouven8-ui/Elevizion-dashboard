@@ -249,7 +249,9 @@ const INTEGRATION_INFO = {
     description: "Digital signage platform voor schermbeheer en content distributie",
     icon: Monitor,
     color: "text-blue-600",
-    requiredSecrets: ["YODECK_API_KEY"],
+    credentials: [
+      { key: "api_key", label: "API Key", placeholder: "Plak hier je Yodeck API key" },
+    ],
     hasSync: true,
   },
   moneybird: {
@@ -257,7 +259,10 @@ const INTEGRATION_INFO = {
     description: "Boekhouding en facturatie voor adverteerders en contracten",
     icon: Wallet,
     color: "text-green-600",
-    requiredSecrets: ["MONEYBIRD_ACCESS_TOKEN", "MONEYBIRD_ADMIN_ID"],
+    credentials: [
+      { key: "access_token", label: "Access Token", placeholder: "Plak hier je Moneybird access token" },
+      { key: "admin_id", label: "Administratie ID", placeholder: "Je Moneybird administratie ID" },
+    ],
     hasSync: true,
   },
   dropbox_sign: {
@@ -265,7 +270,9 @@ const INTEGRATION_INFO = {
     description: "Digitale handtekeningen voor contracten en mandaten",
     icon: FileText,
     color: "text-purple-600",
-    requiredSecrets: ["DROPBOX_SIGN_API_KEY"],
+    credentials: [
+      { key: "api_key", label: "API Key", placeholder: "Plak hier je Dropbox Sign API key" },
+    ],
     hasSync: false,
   },
 };
@@ -275,6 +282,9 @@ function IntegrationsTab() {
   const queryClient = useQueryClient();
   const [testingService, setTestingService] = useState<string | null>(null);
   const [syncingService, setSyncingService] = useState<string | null>(null);
+  const [savingService, setSavingService] = useState<string | null>(null);
+  const [credentialInputs, setCredentialInputs] = useState<Record<string, Record<string, string>>>({});
+  const [showInputs, setShowInputs] = useState<Record<string, boolean>>({});
 
   const { data: integrations = [], isLoading } = useQuery<IntegrationConfig[]>({
     queryKey: ["/api/integrations"],
@@ -294,6 +304,51 @@ function IntegrationsTab() {
     },
   });
 
+  const saveCredentialsMutation = useMutation({
+    mutationFn: async ({ service, credentials }: { service: string; credentials: Record<string, string> }) => {
+      setSavingService(service);
+      const res = await fetch(`/api/integrations/${service}/credentials`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ credentials }),
+      });
+      if (!res.ok) throw new Error("Opslaan mislukt");
+      return res.json();
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/secrets/status"] });
+      toast({ title: "Credentials opgeslagen", description: "API keys zijn veilig opgeslagen" });
+      setCredentialInputs(prev => ({ ...prev, [variables.service]: {} }));
+      setShowInputs(prev => ({ ...prev, [variables.service]: false }));
+      setSavingService(null);
+    },
+    onError: (error: any) => {
+      toast({ title: "Opslaan mislukt", description: error.message, variant: "destructive" });
+      setSavingService(null);
+    },
+  });
+
+  const deleteCredentialsMutation = useMutation({
+    mutationFn: async (service: string) => {
+      const res = await fetch(`/api/integrations/${service}/credentials`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Verwijderen mislukt");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations/secrets/status"] });
+      toast({ title: "Credentials verwijderd" });
+    },
+    onError: (error: any) => {
+      toast({ title: "Verwijderen mislukt", description: error.message, variant: "destructive" });
+    },
+  });
+
   const testMutation = useMutation({
     mutationFn: async (service: string) => {
       setTestingService(service);
@@ -304,7 +359,7 @@ function IntegrationsTab() {
       if (!res.ok) throw new Error("Test mislukt");
       return res.json();
     },
-    onSuccess: (data, service) => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/integrations"] });
       if (data.success) {
         toast({ title: "Verbinding geslaagd", description: data.message });
@@ -382,11 +437,37 @@ function IntegrationsTab() {
     }
   };
 
-  const checkSecretsConfigured = (service: string) => {
+  const checkCredentialsConfigured = (service: string) => {
     const info = INTEGRATION_INFO[service as keyof typeof INTEGRATION_INFO];
     if (!info || !secretsStatus) return false;
     const serviceSecrets = secretsStatus[service] || {};
-    return info.requiredSecrets.every((key) => serviceSecrets[key] === true);
+    return info.credentials.every((cred) => serviceSecrets[cred.key] === true);
+  };
+
+  const handleCredentialChange = (service: string, key: string, value: string) => {
+    setCredentialInputs(prev => ({
+      ...prev,
+      [service]: { ...prev[service], [key]: value },
+    }));
+  };
+
+  const handleSaveCredentials = (service: string) => {
+    const info = INTEGRATION_INFO[service as keyof typeof INTEGRATION_INFO];
+    const inputs = credentialInputs[service] || {};
+    const credentials: Record<string, string> = {};
+    
+    for (const cred of info.credentials) {
+      if (inputs[cred.key]) {
+        credentials[cred.key] = inputs[cred.key];
+      }
+    }
+    
+    if (Object.keys(credentials).length === 0) {
+      toast({ title: "Geen credentials ingevoerd", variant: "destructive" });
+      return;
+    }
+    
+    saveCredentialsMutation.mutate({ service, credentials });
   };
 
   if (isLoading) {
@@ -415,7 +496,7 @@ function IntegrationsTab() {
           Externe Integraties
         </CardTitle>
         <CardDescription>
-          Beheer API koppelingen met externe diensten. API keys worden veilig opgeslagen in environment variables.
+          Beheer API koppelingen met externe diensten. API keys worden veilig versleuteld opgeslagen.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -434,9 +515,12 @@ function IntegrationsTab() {
             settings: null,
           };
           const Icon = info.icon;
-          const secretsConfigured = checkSecretsConfigured(service);
+          const credentialsConfigured = checkCredentialsConfigured(service);
           const isTesting = testingService === service;
           const isSyncing = syncingService === service;
+          const isSaving = savingService === service;
+          const isShowingInputs = showInputs[service] || false;
+          const serviceSecrets = secretsStatus?.[service] || {};
 
           return (
             <div key={service} className="border rounded-lg p-5" data-testid={`integration-card-${service}`}>
@@ -455,23 +539,123 @@ function IntegrationsTab() {
                   <Switch
                     checked={config.isEnabled}
                     onCheckedChange={(checked) => toggleMutation.mutate({ service, isEnabled: checked })}
-                    disabled={!secretsConfigured}
+                    disabled={!credentialsConfigured}
                     data-testid={`toggle-${service}`}
                   />
                 </div>
               </div>
 
-              {!secretsConfigured && (
-                <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2">
-                  <AlertTriangle className="h-5 w-5 text-yellow-600 mt-0.5 flex-shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-yellow-800">API keys niet geconfigureerd</p>
-                    <p className="text-sm text-yellow-700">
-                      Voeg de volgende secrets toe via Replit Secrets: {info.requiredSecrets.join(", ")}
-                    </p>
-                  </div>
+              <div className="mb-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    <Key className="h-4 w-4" />
+                    API Credentials
+                  </p>
+                  {credentialsConfigured && !isShowingInputs && (
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowInputs(prev => ({ ...prev, [service]: true }))}
+                        data-testid={`replace-${service}`}
+                      >
+                        Vervang key
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-red-600 hover:text-red-700"
+                        onClick={() => deleteCredentialsMutation.mutate(service)}
+                        data-testid={`delete-${service}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  )}
                 </div>
-              )}
+
+                {!credentialsConfigured && !isShowingInputs ? (
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-sm text-blue-800 mb-3">
+                      Plak hier je API key om de koppeling te activeren.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowInputs(prev => ({ ...prev, [service]: true }))}
+                      data-testid={`setup-${service}`}
+                    >
+                      <Key className="h-4 w-4 mr-2" />
+                      API Key Instellen
+                    </Button>
+                  </div>
+                ) : credentialsConfigured && !isShowingInputs ? (
+                  <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                    <div className="space-y-2">
+                      {info.credentials.map((cred) => (
+                        <div key={cred.key} className="flex items-center justify-between text-sm">
+                          <span className="text-green-800">{cred.label}:</span>
+                          <span className="font-mono text-green-700">
+                            {serviceSecrets[cred.key] ? "••••••••••••" : "Niet ingesteld"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {isShowingInputs && (
+                  <div className="p-4 bg-muted/50 rounded-lg space-y-4">
+                    {info.credentials.map((cred) => (
+                      <div key={cred.key}>
+                        <Label htmlFor={`${service}-${cred.key}`} className="text-sm font-medium">
+                          {cred.label}
+                        </Label>
+                        <div className="mt-1 flex gap-2">
+                          <Input
+                            id={`${service}-${cred.key}`}
+                            type="password"
+                            placeholder={cred.placeholder}
+                            value={credentialInputs[service]?.[cred.key] || ""}
+                            onChange={(e) => handleCredentialChange(service, cred.key, e.target.value)}
+                            data-testid={`input-${service}-${cred.key}`}
+                          />
+                        </div>
+                        {serviceSecrets[cred.key] && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            Huidige waarde is ingesteld. Laat leeg om te behouden.
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                    <div className="flex gap-2 pt-2">
+                      <Button
+                        size="sm"
+                        onClick={() => handleSaveCredentials(service)}
+                        disabled={isSaving}
+                        data-testid={`save-${service}`}
+                      >
+                        {isSaving ? (
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                        ) : (
+                          <Save className="h-4 w-4 mr-2" />
+                        )}
+                        Opslaan
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setShowInputs(prev => ({ ...prev, [service]: false }));
+                          setCredentialInputs(prev => ({ ...prev, [service]: {} }));
+                        }}
+                      >
+                        Annuleren
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {config.status === "error" && config.lastTestError && (
                 <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
@@ -511,7 +695,7 @@ function IntegrationsTab() {
                   variant="outline"
                   size="sm"
                   onClick={() => testMutation.mutate(service)}
-                  disabled={!secretsConfigured || isTesting}
+                  disabled={!credentialsConfigured || isTesting}
                   data-testid={`test-${service}`}
                 >
                   {isTesting ? (
@@ -526,7 +710,7 @@ function IntegrationsTab() {
                     variant="outline"
                     size="sm"
                     onClick={() => syncMutation.mutate(service)}
-                    disabled={!secretsConfigured || isSyncing || config.status !== "connected"}
+                    disabled={!credentialsConfigured || isSyncing || config.status !== "connected"}
                     data-testid={`sync-${service}`}
                   >
                     {isSyncing ? (
@@ -557,19 +741,6 @@ function IntegrationsTab() {
             </div>
           );
         })}
-
-        <div className="p-4 bg-muted/50 rounded-lg">
-          <div className="flex items-start gap-2">
-            <Key className="h-5 w-5 text-muted-foreground mt-0.5" />
-            <div>
-              <p className="text-sm font-medium">API Keys beheren</p>
-              <p className="text-sm text-muted-foreground">
-                API keys worden veilig opgeslagen als Replit Secrets. Ga naar de "Secrets" tab in Replit om keys toe te voegen of te wijzigen.
-                Deze keys zijn niet zichtbaar in de code.
-              </p>
-            </div>
-          </div>
-        </div>
       </CardContent>
     </Card>
   );
