@@ -16,10 +16,20 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
 // Import and re-export auth schema (users and sessions tables)
-import { users as authUsers, sessions as authSessions, type User, type UpsertUser } from "./models/auth";
+import { 
+  users as authUsers, 
+  sessions as authSessions, 
+  PERMISSIONS, 
+  ROLE_PRESETS,
+  type User, 
+  type UpsertUser,
+  type Permission,
+  type RolePreset,
+} from "./models/auth";
 export const users = authUsers;
 export const sessions = authSessions;
-export type { User, UpsertUser };
+export { PERMISSIONS, ROLE_PRESETS };
+export type { User, UpsertUser, Permission, RolePreset };
 
 // ============================================================================
 // CORE ENTITIES

@@ -1,0 +1,63 @@
+Refactor authentication and user management to a simple admin-managed username + password system.
+Do NOT auto-create users on login. Users must be created by an admin inside Settings.
+
+1) Login method:
+- Login must be ONLY: username + password
+- Remove login via email magic links, SSO, or “auto-added after login”
+- Username must be unique and not an email requirement (email optional field)
+
+2) User creation & management (Settings > Gebruikers):
+Admin (role: Eigenaar) can:
+- Create a new user with:
+  - username (required, unique)
+  - display name (optional)
+  - password (required at creation OR “send temporary password”)
+  - status: active / disabled
+- Reset password (generate temporary password)
+- Force password change on next login (toggle)
+- Disable/enable user
+- Delete user (optional, or soft-delete)
+
+3) Permissions (simple checkboxes):
+Replace complex roles with a small set of permission presets + custom checkboxes.
+
+A) Presets (one click):
+- Eigenaar (full access)
+- Operatie (Screens + Placements)
+- Sales (Advertisers + Placements)
+- Finance (Finance read-only)
+- Read-only (view only)
+
+B) Custom permissions (checkboxes):
+- View Screens
+- Edit Screens
+- View Advertisers
+- Edit Advertisers
+- View Placements
+- Edit Placements
+- View Finance
+- Edit Settings (only owner by default)
+- Manage Users (only owner by default)
+
+Preset selection should auto-check the boxes, but admin can adjust manually.
+
+4) Access enforcement:
+- Enforce permissions server-side on every route/API.
+- Hide menu items the user does not have access to.
+- If a user navigates directly to a forbidden page, show “Geen toegang”.
+
+5) UX requirements:
+- User list must be easy to manage:
+  - table with username, name, role/preset, status, last login
+  - quick actions: reset password, disable, edit permissions
+- Keep it clean and fast; no over-engineering.
+
+6) Security:
+- Store passwords hashed (bcrypt or argon2)
+- Rate limit login attempts
+- Use secure sessions (httpOnly cookies)
+- Audit log: user created/disabled/password reset/permission change
+
+Goal:
+Classic business login and easy user administration:
+Admin creates accounts, assigns simple access, and manages everything from Settings.

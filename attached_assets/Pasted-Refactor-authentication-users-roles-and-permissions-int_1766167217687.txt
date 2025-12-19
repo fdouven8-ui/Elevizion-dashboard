@@ -1,0 +1,140 @@
+Refactor authentication, users, roles, and permissions into a clean, admin-managed system.
+This replaces all existing user/login logic.
+
+=====================
+1) LOGIN SYSTEEM
+=====================
+- Login method is ONLY:
+  - username + password
+- Remove:
+  - auto-user creation on login
+  - magic links
+  - email-only login
+  - SSO
+- Username must be unique.
+- Email is optional (for contact/reset only).
+
+=====================
+2) GEBRUIKERSBEHEER (Settings > Gebruikers)
+=====================
+ONLY Admin (Eigenaar) can manage users.
+
+Admin can:
+- Create user:
+  - username (required)
+  - display name (optional)
+  - password (temporary or manual)
+  - status: active / disabled
+- Reset password (generate temporary password)
+- Force password change on next login (toggle)
+- Disable / enable user
+- Delete user (soft-delete preferred)
+- Assign permissions via presets or checkboxes
+
+Users are NEVER auto-added.
+
+=====================
+3) PERMISSION STRUCTUUR
+=====================
+Use SIMPLE, explicit permissions (checkboxes).
+
+PERMISSION CATEGORIES:
+
+A) Core modules
+- View Home
+- View Screens
+- Edit Screens
+- View Advertisers
+- Edit Advertisers
+- View Placements
+- Edit Placements
+- View Finance
+
+B) Onboarding
+- View Onboarding
+- Onboard Advertisers
+- Onboard Screens / Locations
+
+C) Admin / System
+- Manage Templates
+- Manage Integrations
+- Manage Users
+- Edit System Settings
+
+=====================
+4) ROLE PRESETS (VERPLICHT)
+=====================
+Selecting a preset auto-checks permissions, but admin can adjust manually.
+
+PRESETS:
+
+A) Eigenaar
+- Full access to everything
+- Only role with:
+  - Manage Users
+  - Edit System Settings
+
+B) Operatie
+- View/Edit Screens
+- View/Edit Placements
+- Onboard Screens / Locations
+- View Advertisers
+- NO Finance
+- NO User management
+
+C) Sales
+- View/Edit Advertisers
+- View/Edit Placements
+- Onboard Advertisers
+- View Onboarding
+- NO Screens editing
+- NO Finance
+- NO User management
+
+D) Finance
+- View Finance ONLY
+- Read-only
+- No onboarding
+- No editing anywhere
+
+E) Read-only
+- View access to Home, Screens, Advertisers, Placements
+- No edits
+- No onboarding
+- No finance
+
+=====================
+5) NAVIGATIE & UI REGELS
+=====================
+- Sidebar menu items must be shown ONLY if user has permission.
+- Onboarding menu is visible ONLY if user has any onboarding permission.
+- Finance menu visible ONLY if user has View Finance.
+- Settings menu visible ONLY to Eigenaar.
+
+If user manually navigates to a forbidden route:
+→ Show “Geen toegang”.
+
+=====================
+6) SECURITY (VERPLICHT)
+=====================
+- Passwords hashed (bcrypt or argon2)
+- Rate-limit login attempts
+- Secure httpOnly sessions
+- Server-side permission enforcement (not frontend-only)
+- Audit log for:
+  - user created
+  - password reset
+  - permission change
+  - user disabled/enabled
+
+=====================
+GOAL
+=====================
+Classic business software behavior:
+- Admin fully controls users
+- Simple presets for speed
+- Checkboxes for flexibility
+- Sales can onboard advertisers
+- Operations handle screens
+- Finance only sees numbers
+- No magic, no auto users, no confusion
