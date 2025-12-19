@@ -1,8 +1,8 @@
 // Yodeck API Integration
 // IMPORTANT: API key is read ONLY from process.env.YODECK_API_KEY - never from frontend or local files
-// API docs: https://app.yodeck.com/api-docs/
-// Auth format: "Token <label>:<token_value>" - NOT Bearer token!
-const YODECK_BASE_URL = "https://app.yodeck.com/api";
+// API base: https://api.yodeck.com
+// Auth: Bearer <api_key>
+const YODECK_BASE_URL = "https://api.yodeck.com";
 
 export interface IntegrationCredentials {
   api_key?: string;
@@ -10,22 +10,13 @@ export interface IntegrationCredentials {
   admin_id?: string;
 }
 
-// Get the raw API key - keep the full value including any "yodeck:" prefix
-// because Yodeck uses format "Token label:token_value"
+// Get the API key, stripping any prefix like "yodeck:" if present
 function getYodeckApiKey(): string | undefined {
-  return process.env.YODECK_API_KEY;
-}
-
-// Build the Authorization header for Yodeck
-// If key is already in "label:token" format, use it directly
-// Otherwise, add a default label
-function buildYodeckAuthHeader(apiKey: string): string {
-  // If key already contains ":", it's in label:token format
-  if (apiKey.includes(":")) {
-    return `Token ${apiKey}`;
-  }
-  // Otherwise, use a default label
-  return `Token api:${apiKey}`;
+  const rawKey = process.env.YODECK_API_KEY;
+  if (!rawKey) return undefined;
+  // Strip common prefixes if present
+  if (rawKey.startsWith("yodeck:")) return rawKey.slice(7);
+  return rawKey;
 }
 
 // Check if Yodeck is properly configured
@@ -58,19 +49,15 @@ export async function testYodeckConnection(): Promise<{
     return { ok: false, message: "YODECK_API_KEY ontbreekt of is ongeldig", statusCode: 400 };
   }
 
-  // Build auth header - Yodeck uses "Token label:value" format, NOT Bearer
-  const authHeader = buildYodeckAuthHeader(apiKey);
-  console.log(`[YODECK TEST] Auth header format: Token ***`);
-
-  // Use /screens endpoint to list screens
-  const fullUrl = `${YODECK_BASE_URL}/screens`;
+  // Use /devices endpoint to list devices
+  const fullUrl = `${YODECK_BASE_URL}/devices`;
   console.log(`[YODECK TEST] requesting: ${fullUrl}`);
 
   try {
     const response = await fetch(fullUrl, {
       method: "GET",
       headers: {
-        "Authorization": authHeader,
+        "Authorization": `Bearer ${apiKey}`,
         "Accept": "application/json",
       },
     });
@@ -128,15 +115,14 @@ export async function syncYodeckScreens(): Promise<{ success: boolean; screens?:
     return { success: false, message: "YODECK_API_KEY ontbreekt" };
   }
 
-  const authHeader = buildYodeckAuthHeader(apiKey);
-  const url = `${YODECK_BASE_URL}/screens`;
+  const url = `${YODECK_BASE_URL}/devices`;
   console.log(`[Yodeck] Sync calling: GET ${url}`);
 
   try {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        "Authorization": authHeader,
+        "Authorization": `Bearer ${apiKey}`,
         "Accept": "application/json",
       },
     });
