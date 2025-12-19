@@ -120,6 +120,20 @@ interface SyncStatus {
   moneybird: { lastSync: string; status: string; itemsProcessed: number };
 }
 
+interface IntegrationConfig {
+  id: string | null;
+  service: string;
+  isEnabled: boolean;
+  status: "not_configured" | "connected" | "error";
+  lastTestedAt: string | null;
+  lastTestResult: string | null;
+  lastTestError: string | null;
+  lastSyncAt: string | null;
+  lastSyncItemsProcessed: number | null;
+  syncFrequency: string;
+  settings: Record<string, any> | null;
+}
+
 interface OverdueAdvertiser {
   id: string;
   companyName: string;
@@ -228,6 +242,338 @@ const PERMISSION_LABELS: Record<string, { label: string; category: string }> = {
   [PERMISSIONS.MANAGE_USERS]: { label: "Gebruikers beheren", category: "Admin" },
   [PERMISSIONS.EDIT_SYSTEM_SETTINGS]: { label: "Systeeminstellingen", category: "Admin" },
 };
+
+const INTEGRATION_INFO = {
+  yodeck: {
+    name: "Yodeck",
+    description: "Digital signage platform voor schermbeheer en content distributie",
+    icon: Monitor,
+    color: "text-blue-600",
+    requiredSecrets: ["YODECK_API_KEY"],
+    hasSync: true,
+  },
+  moneybird: {
+    name: "Moneybird",
+    description: "Boekhouding en facturatie voor adverteerders en contracten",
+    icon: Wallet,
+    color: "text-green-600",
+    requiredSecrets: ["MONEYBIRD_ACCESS_TOKEN", "MONEYBIRD_ADMIN_ID"],
+    hasSync: true,
+  },
+  dropbox_sign: {
+    name: "Dropbox Sign",
+    description: "Digitale handtekeningen voor contracten en mandaten",
+    icon: FileText,
+    color: "text-purple-600",
+    requiredSecrets: ["DROPBOX_SIGN_API_KEY"],
+    hasSync: false,
+  },
+};
+
+function IntegrationsTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [testingService, setTestingService] = useState<string | null>(null);
+  const [syncingService, setSyncingService] = useState<string | null>(null);
+
+  const { data: integrations = [], isLoading } = useQuery<IntegrationConfig[]>({
+    queryKey: ["/api/integrations"],
+    queryFn: async () => {
+      const res = await fetch("/api/integrations", { credentials: "include" });
+      if (!res.ok) throw new Error("Fout bij ophalen integraties");
+      return res.json();
+    },
+  });
+
+  const { data: secretsStatus } = useQuery<Record<string, Record<string, boolean>>>({
+    queryKey: ["/api/integrations/secrets/status"],
+    queryFn: async () => {
+      const res = await fetch("/api/integrations/secrets/status", { credentials: "include" });
+      if (!res.ok) throw new Error("Fout bij ophalen secrets status");
+      return res.json();
+    },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: async (service: string) => {
+      setTestingService(service);
+      const res = await fetch(`/api/integrations/${service}/test`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Test mislukt");
+      return res.json();
+    },
+    onSuccess: (data, service) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations"] });
+      if (data.success) {
+        toast({ title: "Verbinding geslaagd", description: data.message });
+      } else {
+        toast({ title: "Verbinding mislukt", description: data.message, variant: "destructive" });
+      }
+      setTestingService(null);
+    },
+    onError: (error: any) => {
+      toast({ title: "Test mislukt", description: error.message, variant: "destructive" });
+      setTestingService(null);
+    },
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: async (service: string) => {
+      setSyncingService(service);
+      const res = await fetch(`/api/integrations/${service}/sync`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Sync mislukt");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations"] });
+      toast({ title: "Sync gestart", description: data.message });
+      setSyncingService(null);
+    },
+    onError: (error: any) => {
+      toast({ title: "Sync mislukt", description: error.message, variant: "destructive" });
+      setSyncingService(null);
+    },
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: async ({ service, isEnabled }: { service: string; isEnabled: boolean }) => {
+      const res = await fetch(`/api/integrations/${service}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ isEnabled }),
+      });
+      if (!res.ok) throw new Error("Update mislukt");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/integrations"] });
+    },
+  });
+
+  const getStatusBadge = (config: IntegrationConfig) => {
+    switch (config.status) {
+      case "connected":
+        return <Badge className="bg-green-100 text-green-800">Verbonden</Badge>;
+      case "error":
+        return <Badge variant="destructive">Fout</Badge>;
+      default:
+        return <Badge variant="secondary">Niet geconfigureerd</Badge>;
+    }
+  };
+
+  const formatDate = (dateStr: string | null) => {
+    if (!dateStr || dateStr === "-") return "-";
+    try {
+      return new Date(dateStr).toLocaleString("nl-NL", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
+  const checkSecretsConfigured = (service: string) => {
+    const info = INTEGRATION_INFO[service as keyof typeof INTEGRATION_INFO];
+    if (!info || !secretsStatus) return false;
+    const serviceSecrets = secretsStatus[service] || {};
+    return info.requiredSecrets.every((key) => serviceSecrets[key] === true);
+  };
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="h-4 w-72" />
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <Skeleton className="h-32 w-full" />
+            <Skeleton className="h-32 w-full" />
+            <Skeleton className="h-32 w-full" />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Link2 className="h-5 w-5" />
+          Externe Integraties
+        </CardTitle>
+        <CardDescription>
+          Beheer API koppelingen met externe diensten. API keys worden veilig opgeslagen in environment variables.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {Object.entries(INTEGRATION_INFO).map(([service, info]) => {
+          const config = integrations.find((c) => c.service === service) || {
+            id: null,
+            service,
+            isEnabled: false,
+            status: "not_configured" as const,
+            lastTestedAt: null,
+            lastTestResult: null,
+            lastTestError: null,
+            lastSyncAt: null,
+            lastSyncItemsProcessed: null,
+            syncFrequency: "15min",
+            settings: null,
+          };
+          const Icon = info.icon;
+          const secretsConfigured = checkSecretsConfigured(service);
+          const isTesting = testingService === service;
+          const isSyncing = syncingService === service;
+
+          return (
+            <div key={service} className="border rounded-lg p-5" data-testid={`integration-card-${service}`}>
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-lg bg-muted ${info.color}`}>
+                    <Icon className="h-6 w-6" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-lg">{info.name}</h3>
+                    <p className="text-sm text-muted-foreground">{info.description}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {getStatusBadge(config)}
+                  <Switch
+                    checked={config.isEnabled}
+                    onCheckedChange={(checked) => toggleMutation.mutate({ service, isEnabled: checked })}
+                    disabled={!secretsConfigured}
+                    data-testid={`toggle-${service}`}
+                  />
+                </div>
+              </div>
+
+              {!secretsConfigured && (
+                <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2">
+                  <AlertTriangle className="h-5 w-5 text-yellow-600 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-yellow-800">API keys niet geconfigureerd</p>
+                    <p className="text-sm text-yellow-700">
+                      Voeg de volgende secrets toe via Replit Secrets: {info.requiredSecrets.join(", ")}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {config.status === "error" && config.lastTestError && (
+                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
+                  <XCircle className="h-5 w-5 text-red-600 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-red-800">Laatste test mislukt</p>
+                    <p className="text-sm text-red-700">{config.lastTestError}</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4 text-sm">
+                <div>
+                  <p className="text-muted-foreground">Laatste test</p>
+                  <p className="font-medium">{formatDate(config.lastTestedAt)}</p>
+                </div>
+                {info.hasSync && (
+                  <>
+                    <div>
+                      <p className="text-muted-foreground">Laatste sync</p>
+                      <p className="font-medium">{formatDate(config.lastSyncAt)}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Items verwerkt</p>
+                      <p className="font-medium">{config.lastSyncItemsProcessed ?? "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Sync frequentie</p>
+                      <p className="font-medium">{config.syncFrequency || "15min"}</p>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => testMutation.mutate(service)}
+                  disabled={!secretsConfigured || isTesting}
+                  data-testid={`test-${service}`}
+                >
+                  {isTesting ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Zap className="h-4 w-4 mr-2" />
+                  )}
+                  Test Verbinding
+                </Button>
+                {info.hasSync && config.isEnabled && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => syncMutation.mutate(service)}
+                    disabled={!secretsConfigured || isSyncing || config.status !== "connected"}
+                    data-testid={`sync-${service}`}
+                  >
+                    {isSyncing ? (
+                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                    )}
+                    Sync Nu
+                  </Button>
+                )}
+                <Button variant="ghost" size="sm" asChild>
+                  <a
+                    href={
+                      service === "yodeck"
+                        ? "https://app.yodeck.com"
+                        : service === "moneybird"
+                        ? "https://moneybird.com"
+                        : "https://app.hellosign.com"
+                    }
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Open {info.name}
+                  </a>
+                </Button>
+              </div>
+            </div>
+          );
+        })}
+
+        <div className="p-4 bg-muted/50 rounded-lg">
+          <div className="flex items-start gap-2">
+            <Key className="h-5 w-5 text-muted-foreground mt-0.5" />
+            <div>
+              <p className="text-sm font-medium">API Keys beheren</p>
+              <p className="text-sm text-muted-foreground">
+                API keys worden veilig opgeslagen als Replit Secrets. Ga naar de "Secrets" tab in Replit om keys toe te voegen of te wijzigen.
+                Deze keys zijn niet zichtbaar in de code.
+              </p>
+            </div>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function UsersManagementTab({ users, queryClient, toast }: { users: UserRole[]; queryClient: any; toast: any }) {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -1577,81 +1923,7 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="integrations" className="mt-6">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Link2 className="h-5 w-5" />
-                Integraties
-              </CardTitle>
-              <CardDescription>
-                API koppelingen en sync status
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <Monitor className="h-5 w-5" />
-                      <span className="font-medium">Yodeck</span>
-                    </div>
-                    {syncStatus?.yodeck?.status === "success" ? (
-                      <CheckCircle className="h-5 w-5 text-green-600" />
-                    ) : (
-                      <XCircle className="h-5 w-5 text-red-600" />
-                    )}
-                  </div>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Laatste sync</span>
-                      <span>{syncStatus?.yodeck?.lastSync || "-"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Items verwerkt</span>
-                      <span>{syncStatus?.yodeck?.itemsProcessed || 0}</span>
-                    </div>
-                  </div>
-                  <Button variant="outline" className="w-full mt-4" size="sm">
-                    <RefreshCw className="h-4 w-4 mr-2" /> Sync Nu
-                  </Button>
-                </div>
-
-                <div className="border rounded-lg p-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <Wallet className="h-5 w-5" />
-                      <span className="font-medium">Moneybird</span>
-                    </div>
-                    {syncStatus?.moneybird?.status === "success" ? (
-                      <CheckCircle className="h-5 w-5 text-green-600" />
-                    ) : (
-                      <XCircle className="h-5 w-5 text-muted-foreground" />
-                    )}
-                  </div>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Laatste sync</span>
-                      <span>{syncStatus?.moneybird?.lastSync || "-"}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Items verwerkt</span>
-                      <span>{syncStatus?.moneybird?.itemsProcessed || 0}</span>
-                    </div>
-                  </div>
-                  <Button variant="outline" className="w-full mt-4" size="sm">
-                    <RefreshCw className="h-4 w-4 mr-2" /> Sync Nu
-                  </Button>
-                </div>
-              </div>
-
-              <div className="p-4 bg-muted/50 rounded-lg">
-                <p className="text-sm text-muted-foreground">
-                  <strong>Tip:</strong> API keys worden beheerd via environment variables. 
-                  Polling gebeurt elke 5-10 minuten. UI leest uit database, niet live API.
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+          <IntegrationsTab />
         </TabsContent>
 
         <TabsContent value="finance" className="mt-6">

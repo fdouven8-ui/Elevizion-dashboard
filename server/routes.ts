@@ -5,6 +5,7 @@
 
 import type { Express } from "express";
 import { type Server } from "http";
+import { z } from "zod";
 import { storage } from "./storage";
 import {
   insertAdvertiserSchema,
@@ -47,7 +48,7 @@ import {
   calculateExpirationDate,
   formatClientInfo,
 } from "./contract-signing";
-import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { setupAuth, registerAuthRoutes, isAuthenticated, requirePermission } from "./replit_integrations/auth";
 
 export async function registerRoutes(
   httpServer: Server,
@@ -3017,12 +3018,13 @@ export async function registerRoutes(
   // INTEGRATION CONFIGURATION
   // ============================================================================
 
-  app.get("/api/integrations", async (_req, res) => {
+  const VALID_SERVICES = ["yodeck", "moneybird", "dropbox_sign"];
+
+  app.get("/api/integrations", requirePermission("manage_integrations"), async (req, res) => {
     try {
       const configs = await storage.getIntegrationConfigs();
-      const services = ["yodeck", "moneybird", "dropbox_sign"];
       
-      const result = services.map(service => {
+      const result = VALID_SERVICES.map(service => {
         const config = configs.find(c => c.service === service);
         return config || {
           id: null,
@@ -3045,9 +3047,13 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/integrations/:service", async (req, res) => {
+  app.get("/api/integrations/:service", requirePermission("manage_integrations"), async (req, res) => {
     try {
       const { service } = req.params;
+      if (!VALID_SERVICES.includes(service)) {
+        return res.status(400).json({ message: "Ongeldige service" });
+      }
+
       const config = await storage.getIntegrationConfig(service);
       
       if (!config) {
@@ -3065,10 +3071,28 @@ export async function registerRoutes(
     }
   });
 
-  app.put("/api/integrations/:service", async (req, res) => {
+  const integrationUpdateSchema = z.object({
+    isEnabled: z.boolean().optional(),
+    syncFrequency: z.enum(["5min", "15min", "30min", "1hour", "manual"]).optional(),
+    settings: z.record(z.unknown()).optional().nullable(),
+  });
+
+  app.put("/api/integrations/:service", requirePermission("manage_integrations"), async (req, res) => {
     try {
       const { service } = req.params;
-      const { isEnabled, syncFrequency, settings } = req.body;
+      if (!VALID_SERVICES.includes(service)) {
+        return res.status(400).json({ message: "Ongeldige service" });
+      }
+
+      const parsed = integrationUpdateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ 
+          message: "Ongeldige invoer", 
+          errors: parsed.error.errors 
+        });
+      }
+
+      const { isEnabled, syncFrequency, settings } = parsed.data;
       
       const config = await storage.upsertIntegrationConfig(service, {
         isEnabled,
@@ -3082,9 +3106,13 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/integrations/:service/test", async (req, res) => {
+  app.post("/api/integrations/:service/test", requirePermission("manage_integrations"), async (req, res) => {
     try {
       const { service } = req.params;
+      if (!VALID_SERVICES.includes(service)) {
+        return res.status(400).json({ message: "Ongeldige service" });
+      }
+
       let testResult = { success: false, message: "Test niet beschikbaar" };
       
       if (service === "yodeck") {
@@ -3161,9 +3189,20 @@ export async function registerRoutes(
     }
   });
 
-  app.post("/api/integrations/:service/sync", async (req, res) => {
+  app.post("/api/integrations/:service/sync", requirePermission("manage_integrations"), async (req, res) => {
     try {
       const { service } = req.params;
+      if (!VALID_SERVICES.includes(service)) {
+        return res.status(400).json({ message: "Ongeldige service" });
+      }
+
+      const config = await storage.getIntegrationConfig(service);
+      if (!config?.isEnabled) {
+        return res.status(400).json({ message: "Integratie is niet ingeschakeld" });
+      }
+      if (config.status !== "connected") {
+        return res.status(400).json({ message: "Integratie is niet verbonden. Test eerst de verbinding." });
+      }
       
       await storage.upsertIntegrationConfig(service, {
         lastSyncAt: new Date(),
@@ -3176,7 +3215,7 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/integrations/secrets/status", async (_req, res) => {
+  app.get("/api/integrations/secrets/status", requirePermission("manage_integrations"), async (req, res) => {
     try {
       res.json({
         yodeck: {
