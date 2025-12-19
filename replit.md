@@ -132,6 +132,27 @@ All permission changes are logged to `audit_logs` table:
 
 ## Recent Changes
 
+### December 2025 - Template Center
+- Added comprehensive Template Center in Settings → Templates tab
+  - Category-based organization: WhatsApp, Email, Contract, Invoice, Internal
+  - Template versioning: keeps last 5 versions with restore capability
+  - Automatic placeholder extraction using `{{placeholder}}` syntax
+  - Preview rendering with live data substitution
+  - Enable/disable templates, duplicate, and version history
+- Database tables: `templates`, `templateVersions`
+  - Tracks createdBy, version numbers, category, subject/body, enabled status
+  - Stores extracted placeholders for documentation
+- Template integration on Advertiser Detail page
+  - WhatsApp/Email buttons open template selection dialogs
+  - Preview renders template with advertiser context (name, contact, email, phone)
+  - One-click send via WhatsApp/Email or copy to clipboard
+  - "Zonder template verzenden" fallback for direct messaging
+- API endpoints: 
+  - CRUD: GET/POST/PUT/DELETE `/api/templates`
+  - Preview: POST `/api/templates/:id/preview` with advertiserId/screenId context
+  - Version management: GET `/api/templates/:id/versions`, POST `/api/templates/:id/restore`
+  - Duplicate: POST `/api/templates/:id/duplicate`
+
 ### December 2025 - Cold Walk-in Onboarding Wizard
 - Added complete multi-step wizard for rapid field onboarding at `/acquisitie/new`
   - Three onboarding types: Location Partner, Advertiser, or Both (dual-purpose deals)
