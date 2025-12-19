@@ -1,8 +1,9 @@
 // Yodeck API Integration
 // IMPORTANT: API key is read ONLY from process.env.YODECK_API_KEY - never from frontend or local files
-// Base URL: https://app.yodeck.com/api
-// Auth: Token <api_key>
-const YODECK_BASE_URL = "https://app.yodeck.com/api";
+// Base URL: https://app.yodeck.com/api/v3
+// Endpoint for screens: /monitors/ (trailing slash required)
+// Auth: Token <label>:<token_value> - keep the full secret unchanged
+const YODECK_BASE_URL = "https://app.yodeck.com/api/v3";
 
 export interface IntegrationCredentials {
   api_key?: string;
@@ -10,9 +11,14 @@ export interface IntegrationCredentials {
   admin_id?: string;
 }
 
-// Get the raw API key
+// Get the raw API key - keep it unchanged (includes label:token format)
 function getYodeckApiKey(): string | undefined {
   return process.env.YODECK_API_KEY;
+}
+
+// Validate API key format - should be "label:token" format
+function isValidYodeckApiKey(key: string): boolean {
+  return key.length > 10 && key.includes(":");
 }
 
 // Check if Yodeck is properly configured
@@ -45,8 +51,14 @@ export async function testYodeckConnection(): Promise<{
     return { ok: false, message: "YODECK_API_KEY ontbreekt of is ongeldig", statusCode: 400 };
   }
 
-  // Use /screens endpoint to list screens (per official docs)
-  const fullUrl = `${YODECK_BASE_URL}/screens`;
+  // Validate API key format
+  if (!isValidYodeckApiKey(apiKey)) {
+    console.log(`[YODECK TEST] Invalid API key format - must be label:token format with length > 10`);
+    return { ok: false, message: "Invalid API key format - must be label:token format" };
+  }
+
+  // Use /monitors/ endpoint to list screens (trailing slash required)
+  const fullUrl = `${YODECK_BASE_URL}/monitors/`;
   console.log(`[YODECK TEST] requesting: ${fullUrl}`);
 
   try {
@@ -111,7 +123,7 @@ export async function syncYodeckScreens(): Promise<{ success: boolean; screens?:
     return { success: false, message: "YODECK_API_KEY ontbreekt" };
   }
 
-  const url = `${YODECK_BASE_URL}/screens`;
+  const url = `${YODECK_BASE_URL}/monitors/`;
   console.log(`[Yodeck] Sync calling: GET ${url}`);
 
   try {
