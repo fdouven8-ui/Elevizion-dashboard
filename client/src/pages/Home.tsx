@@ -20,7 +20,10 @@ import {
   Loader2,
   AlertCircle,
   Calendar,
-  CreditCard
+  CreditCard,
+  Plus,
+  Upload,
+  Zap
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -234,14 +237,63 @@ export default function Home() {
         </Card>
       </div>
 
+      <Card className="bg-gradient-to-r from-primary/5 to-primary/10 border-primary/20">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="h-5 w-5 text-primary" />
+            Quick Actions
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <Link href="/onboarding/screen">
+              <Button className="w-full h-14 text-left justify-start gap-3" variant="outline" data-testid="button-quick-new-screen">
+                <Plus className="h-5 w-5" />
+                <div>
+                  <div className="font-medium">Nieuw Scherm</div>
+                  <div className="text-xs text-muted-foreground">+ Screen toevoegen</div>
+                </div>
+              </Button>
+            </Link>
+            <Link href="/onboarding/advertiser">
+              <Button className="w-full h-14 text-left justify-start gap-3" variant="outline" data-testid="button-quick-new-advertiser">
+                <Users className="h-5 w-5" />
+                <div>
+                  <div className="font-medium">Nieuwe Adverteerder</div>
+                  <div className="text-xs text-muted-foreground">+ Klant toevoegen</div>
+                </div>
+              </Button>
+            </Link>
+            <Link href="/onboarding/placement">
+              <Button className="w-full h-14 text-left justify-start gap-3" variant="outline" data-testid="button-quick-upload">
+                <Upload className="h-5 w-5" />
+                <div>
+                  <div className="font-medium">Upload Creative</div>
+                  <div className="text-xs text-muted-foreground">+ Nieuwe advertentie</div>
+                </div>
+              </Button>
+            </Link>
+            <Link href="/onboarding/placement">
+              <Button className="w-full h-14 text-left justify-start gap-3" variant="default" data-testid="button-quick-place-ad">
+                <Target className="h-5 w-5" />
+                <div>
+                  <div className="font-medium">Plaats Ad</div>
+                  <div className="text-xs text-muted-foreground">Meest gebruikte flow</div>
+                </div>
+              </Button>
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertCircle className="h-5 w-5 text-red-600" />
-              Alerts
+              FIX NOW
             </CardTitle>
-            <CardDescription>Automatisch gegenereerde waarschuwingen - hoogste prioriteit eerst</CardDescription>
+            <CardDescription>Hoogste prioriteit acties - maximaal 5 items</CardDescription>
           </CardHeader>
           <CardContent>
             {alertsLoading ? (

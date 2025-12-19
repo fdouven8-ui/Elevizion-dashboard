@@ -1,7 +1,8 @@
 import { useAppData } from "@/hooks/use-app-data";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, MoreHorizontal, Monitor } from "lucide-react";
+import { Plus, Search, MoreHorizontal, Monitor, AlertTriangle, CheckCircle, Clock, ExternalLink } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -11,6 +12,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +25,8 @@ import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
+import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 import type { Screen } from "@shared/schema";
 import {
   Select,
@@ -31,10 +36,56 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+interface Incident {
+  id: string;
+  incidentType: string;
+  severity: string;
+  screenId: string | null;
+  status: string;
+  title: string;
+  description?: string;
+  openedAt: string;
+  resolvedAt?: string;
+}
+
 export default function Screens() {
   const { screens, locations, addScreen, updateScreen } = useAppData();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  const { data: incidents = [], isLoading: incidentsLoading } = useQuery<Incident[]>({
+    queryKey: ["/api/incidents"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/incidents");
+      return res.json();
+    },
+  });
+
+  const resolveIncidentMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("PATCH", `/api/incidents/${id}`, { 
+        status: "resolved",
+        resolvedAt: new Date().toISOString()
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/incidents"] });
+      toast({ title: "Issue opgelost" });
+    },
+    onError: () => {
+      toast({ title: "Fout bij oplossen", variant: "destructive" });
+    },
+  });
+
+  const openIncidents = incidents.filter(i => i.status === "open" || i.status === "acknowledged");
+  const getScreenId = (screenId: string | null) => {
+    if (!screenId) return "Onbekend";
+    const screen = screens.find(s => s.id === screenId);
+    return screen?.screenId || screen?.name || "Onbekend";
+  };
 
   const filteredScreens = screens.filter(scr => 
     scr.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -144,6 +195,84 @@ export default function Screens() {
           </TableBody>
         </Table>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
+            Open Issues
+            {openIncidents.length > 0 && (
+              <Badge variant="destructive">{openIncidents.length}</Badge>
+            )}
+          </CardTitle>
+          <CardDescription>Problemen en storingen die aandacht nodig hebben</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {incidentsLoading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : openIncidents.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <CheckCircle className="h-12 w-12 mx-auto mb-3 text-green-500" />
+              <p className="font-medium">Geen openstaande issues</p>
+              <p className="text-sm">Alle schermen werken naar behoren</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {openIncidents.map((incident) => (
+                <div 
+                  key={incident.id}
+                  className={`p-4 rounded-lg border ${
+                    incident.severity === "high" 
+                      ? "border-red-300 bg-red-50" 
+                      : incident.severity === "medium"
+                      ? "border-amber-300 bg-amber-50"
+                      : "border-blue-300 bg-blue-50"
+                  }`}
+                  data-testid={`incident-${incident.id}`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className={`h-5 w-5 mt-0.5 ${
+                        incident.severity === "high" ? "text-red-600" : "text-amber-600"
+                      }`} />
+                      <div>
+                        <p className="font-medium">{incident.title}</p>
+                        {incident.description && (
+                          <p className="text-sm text-muted-foreground">{incident.description}</p>
+                        )}
+                        <div className="flex items-center gap-2 mt-2">
+                          <Badge variant="outline" className="text-xs font-mono">
+                            {getScreenId(incident.screenId)}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {new Date(incident.openedAt).toLocaleString("nl-NL")}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <Button 
+                        size="sm" 
+                        variant="outline"
+                        onClick={() => resolveIncidentMutation.mutate(incident.id)}
+                        disabled={resolveIncidentMutation.isPending}
+                        data-testid={`button-resolve-${incident.id}`}
+                      >
+                        <CheckCircle className="h-4 w-4 mr-1" />
+                        Oplossen
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -72,6 +72,41 @@ export async function registerRoutes(
     res.json(advertiser);
   });
 
+  app.get("/api/advertisers/:id/placements", async (req, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) return res.status(404).json({ message: "Advertiser not found" });
+      
+      const contracts = await storage.getContracts();
+      const advertiserContracts = contracts.filter(c => c.advertiserId === req.params.id);
+      const contractIds = advertiserContracts.map(c => c.id);
+      
+      const allPlacements = await storage.getPlacements();
+      const advertiserPlacements = allPlacements.filter(p => contractIds.includes(p.contractId));
+      
+      const screens = await storage.getScreens();
+      const locations = await storage.getLocations();
+      
+      const enrichedPlacements = advertiserPlacements.map(p => {
+        const screen = screens.find(s => s.id === p.screenId);
+        const location = screen ? locations.find(l => l.id === screen.locationId) : null;
+        const contract = advertiserContracts.find(c => c.id === p.contractId);
+        return {
+          ...p,
+          screenId_display: screen?.screenId || "Onbekend",
+          screenName: screen?.name || "Onbekend scherm",
+          screenStatus: screen?.status || "unknown",
+          locationName: location?.name || "Onbekende locatie",
+          contractName: contract?.name || "Onbekend contract",
+        };
+      });
+      
+      res.json(enrichedPlacements);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/advertisers", async (req, res) => {
     try {
       const data = insertAdvertiserSchema.parse(req.body);
@@ -2630,7 +2665,7 @@ export async function registerRoutes(
                (severityOrder[b.severity as keyof typeof severityOrder] || 2);
       });
       
-      res.json(alerts.slice(0, 20));
+      res.json(alerts.slice(0, 5));
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

@@ -1,7 +1,8 @@
 import { useAppData } from "@/hooks/use-app-data";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, MoreHorizontal, CreditCard, Check, X } from "lucide-react";
+import { Plus, Search, MoreHorizontal, CreditCard, Check, X, Eye } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -29,6 +30,7 @@ import type { Advertiser } from "@shared/schema";
 
 export default function Advertisers() {
   const { advertisers, addAdvertiser, updateAdvertiser } = useAppData();
+  const [, navigate] = useLocation();
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingAdvertiser, setEditingAdvertiser] = useState<Advertiser | null>(null);
@@ -93,7 +95,12 @@ export default function Advertisers() {
           </TableHeader>
           <TableBody>
             {filteredAdvertisers.map((adv) => (
-              <TableRow key={adv.id} data-testid={`row-advertiser-${adv.id}`}>
+              <TableRow 
+                key={adv.id} 
+                data-testid={`row-advertiser-${adv.id}`}
+                className="cursor-pointer hover:bg-muted/50"
+                onClick={() => navigate(`/advertisers/${adv.id}`)}
+              >
                 <TableCell className="font-medium">{adv.companyName}</TableCell>
                 <TableCell>
                   <div className="flex flex-col">
@@ -129,7 +136,7 @@ export default function Advertisers() {
                     {adv.status === 'active' ? 'Actief' : adv.status === 'paused' ? 'Gepauzeerd' : adv.status}
                   </Badge>
                 </TableCell>
-                <TableCell>
+                <TableCell onClick={(e) => e.stopPropagation()}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button variant="ghost" className="h-8 w-8 p-0" data-testid={`button-menu-${adv.id}`}>
@@ -138,6 +145,10 @@ export default function Advertisers() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuLabel>Acties</DropdownMenuLabel>
+                      <DropdownMenuItem onClick={() => navigate(`/advertisers/${adv.id}`)}>
+                        <Eye className="mr-2 h-4 w-4" />
+                        Bekijk details
+                      </DropdownMenuItem>
                       <DropdownMenuItem onClick={() => handleEditSepa(adv)}>
                         <CreditCard className="mr-2 h-4 w-4" />
                         Incasso instellen

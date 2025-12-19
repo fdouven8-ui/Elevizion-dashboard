@@ -1,0 +1,206 @@
+You are modifying an existing Replit codebase of the Elevizion dashboard.
+Do NOT rebuild a generic SaaS. This dashboard is an internal control room for ONE network: Elevizion.
+Goal: minimum manual work, maximum operational overview, fast onboarding, scalable to 100+ screens and 2000+ placements.
+
+KEEP (do not remove):
+- Yodeck integration concept (screen device status online/offline + last seen)
+- Moneybird integration concept (invoice/payment status paid/open/overdue)
+- Automations (toggle-based rules)
+- Clean modern UI with charts (professional but simple)
+- Internal database as the source of truth (UI reads from DB; background sync updates DB)
+
+REMOVE / SIMPLIFY:
+- Any multi-company / generic SaaS structure
+- Any unnecessary modules that do not directly help daily operations or onboarding
+- Any deep/complex admin layers
+- Keep navigation minimal and action-first
+
+NAVIGATION (replace sidebar, max 6 items):
+1) Home (Control Room)
+2) Onboarding
+3) Screens
+4) Placements (Ads on Screens)
+5) Advertisers
+6) Settings (includes Automations + Templates + Users + Integrations + Finance tab)
+
+CORE RULE / UNIQUE KEY:
+SCREEN_ID like EVZ-001 is mandatory and used everywhere.
+Yodeck device name or tag must include SCREEN_ID.
+Moneybird records should be linkable (moneybird_contact_id on advertiser, and optional screen_id note for host locations).
+All matching uses SCREEN_ID.
+
+DATA MODEL (must exist or migrate to):
+- Users (email, hashed_password, role: Owner/Ops/Sales/Finance, enabled)
+- Locations (host business: name, address, contact, phone/email, revenue_share_percent optional)
+- Screens (screen_id, location_id, yodeck_device_id, online_status, last_seen, groups optional)
+- Advertisers (advertiser_id, name, phone, email, notes, status active/hold/stopped, moneybird_contact_id optional)
+- Creatives (advertiser_id, file_url, type image/video/html, duration_seconds, approval_status pending/approved, created_at)
+- Placements (creative_id, target: screen_id or screen_group, start_date, end_date, status active/hold/paused, price_per_month optional)
+- Issues (screen_id, type, severity, status open/inprogress/resolved, assignee_user_id, notes, timestamps)
+- AuditLog (user_id, action, entity_type, entity_id, timestamp)
+- SyncLog (service yodeck/moneybird, last_success, last_error)
+
+HOME (CONTROL ROOM) — action-first, ops-first:
+Top tiles:
+- Screens Online / Total
+- Offline Screens (count)
+- Empty Inventory Screens (<20 placements) (count)
+- Pending Creatives (count)
+- Open Issues (count)
+- Payment Risk (overdue advertisers count) (small, not primary)
+
+Below sections (NO unnecessary clutter):
+A) FIX NOW (max 5 items, highest impact first)
+- Offline screens > threshold
+- Screens with empty inventory (very low placements)
+- Pending creatives awaiting approval
+- Placements ending soon
+Each item must have one-click actions:
+- Open Screen / Open Advertiser / Open Placements (filtered)
+- Open Yodeck (for screen issues)
+- Create Issue / Mark Resolved
+- Copy WhatsApp/Email template (prefilled)
+
+B) QUICK ACTIONS (big buttons, always visible)
+- + New Screen
+- + New Advertiser
+- + Upload Creative
+- + Place Ad
+
+C) Ops graphs (simple but meaningful):
+- Offline incidents last 7 days
+- Online % trend
+- Empty inventory trend
+Finance charts are moved to Settings > Finance.
+
+ONBOARDING (wizard-based, minimal friction):
+1) New Screen Wizard:
+- Create/select Location
+- Generate screen_id (EVZ-###)
+- Link/select Yodeck device OR paste yodeck_device_id
+- Validate online/offline + last_seen
+- Finish with shortcut: “Add placements now”
+
+2) New Advertiser Wizard:
+- Create advertiser (name, phone, email, notes)
+- Link Moneybird contact (search/select) OR “link later”
+- Finish with shortcut: “Upload creative”
+
+3) Upload Creative + Place Ad Wizard (most-used):
+- Upload creative file (image/video/html), set duration
+- Approval step (pending -> approve)
+- Select screens or groups
+- Set start/end, status active
+- Finish: show summary “running on EVZ-001, EVZ-004…”
+
+SCREENS PAGE (operations view):
+- Table with search + filters: online/offline, empty inventory, group, location
+- Columns: screen_id, location, status, last_seen, active placements count, empty slots count
+- Row actions:
+  - Open screen detail
+  - Open in Yodeck
+  - Create issue
+  - Add placement shortcut
+
+PLACEMENTS PAGE (single source of truth):
+- Must answer instantly: “where does what run?”
+- Provide two main filters:
+  - Filter by ScreenID
+  - Filter by Advertiser
+- Table shows: advertiser, creative, target screen/group, start/end, status, (optional price)
+- Bulk actions:
+  - pause/resume/hold
+  - assign to screen group
+  - change date range
+- Validation warnings:
+  - missing creative, expired, screen missing, duplicates/conflicts
+
+ADVERTISERS MODULE (FULL IMPLEMENTATION, phone-call friendly):
+Advertisers Page:
+- Prominent global search bar (search by name, phone, email, advertiser_id)
+- Lightweight table:
+  - Name
+  - Status (Active/Hold/Stopped)
+  - Payment indicator (Paid/Open/Overdue) small badge, not dominant
+  - Active placements count
+  - Pending creatives count
+- Clicking a row opens Advertiser Detail page designed for support calls:
+
+Advertiser Detail Page must include (in this order):
+1) Header:
+   - Advertiser name + Status
+   - Quick actions: WhatsApp, Email, Pause all, Resume all
+2) Contact block:
+   - Phone, email, notes
+   - Moneybird link status (linked / not linked)
+3) “Where are my ads running?” block (MOST IMPORTANT):
+   - List of placements grouped by screen:
+     - ScreenID + Location name
+     - Active/hold status
+     - Start/end dates
+     - Creative name/preview
+   - One button: “Open all placements (filtered)”
+4) Creatives block:
+   - Thumbnails list with status approved/pending
+   - Buttons: Approve, Replace, Upload new creative
+5) Payment block (secondary):
+   - Payment status badge from Moneybird (paid/open/overdue)
+   - Days overdue (if applicable)
+   - Button: “Copy payment reminder message”
+This page must allow the owner to answer in <10 seconds:
+- who the advertiser is
+- contact details
+- exactly where their ads are running
+
+SETTINGS (simple admin, not bloated):
+Tabs:
+- Automations (toggles + thresholds)
+- Templates (WhatsApp/email templates editable with placeholders)
+- Users (create/disable users, assign role)
+- Integrations (API keys via env, sync status health)
+- Finance (secondary): list overdue/open + export CSV + basic chart
+
+AUTOMATIONS (toggle-based, ops-first; payment rules optional):
+Ops rules (ON by default):
+- Screen offline > 60 min => create Issue
+- Screen offline > 4 hours => escalate alert to Owner in FIX NOW
+- Empty inventory (<20) => create alert + checklist item
+- Placement ending within 14 days => alert
+
+Payment rules (OFF by default):
+- Overdue > 14 days => set placements to HOLD automatically
+All automation actions must create AuditLog entries.
+
+INTEGRATIONS (Replit-friendly):
+- Do not call APIs on every page load.
+- Implement background sync jobs:
+  - Yodeck polling every 5-10 minutes => update screen status in DB
+  - Moneybird webhook preferred; otherwise periodic sync => update invoice/payment status
+- Add a small “Sync health” indicator in Settings and Home (tiny):
+  - last Yodeck sync time + error state
+  - last Moneybird sync time + error state
+If sync fails, UI must still work with last known data and show warning.
+
+SECURITY & RELIABILITY (must implement):
+- Hashed passwords (bcrypt/argon2)
+- Secure sessions (httpOnly cookies)
+- Server-side authorization per role on all endpoints
+- Input validation + avoid XSS/SQLi/IDOR
+- Rate limit login
+- Audit log for sensitive actions: onboarding create, placement changes, holds/pauses, settings edits
+- Graceful error handling (no crashes)
+
+DOCUMENTATION (must include):
+- In-app Help page: onboarding steps, placements explained, alerts meaning, troubleshooting
+- Repo README: setup, env vars, how sync jobs work in Replit, common fixes
+
+IMPLEMENTATION ORDER:
+1) Simplify sidebar/navigation + update Home to action-first + quick actions
+2) Implement Advertisers module exactly as specified (search + detail with “where ads run”)
+3) Implement Onboarding wizards
+4) Implement Placements filters + bulk actions
+5) Implement Screen ops table + issues
+6) Integrations sync jobs + sync health
+7) Security hardening + audit logs + docs
+
+Deliver a clean Elevizion control room that feels like an autopilot, not generic software.
