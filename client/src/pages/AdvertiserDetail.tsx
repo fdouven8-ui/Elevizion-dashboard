@@ -347,6 +347,13 @@ export default function AdvertiserDetail() {
             <CardTitle className="text-lg">Contactgegevens</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Contact Person */}
+            <div>
+              <p className="text-sm font-medium text-muted-foreground mb-1">Contactpersoon</p>
+              <p className="text-sm font-medium">{advertiser.contactName}</p>
+            </div>
+
+            {/* Phone */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Phone className="h-4 w-4 text-muted-foreground" />
@@ -364,6 +371,8 @@ export default function AdvertiserDetail() {
                 </Button>
               )}
             </div>
+
+            {/* Email */}
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Mail className="h-4 w-4 text-muted-foreground" />
@@ -381,7 +390,44 @@ export default function AdvertiserDetail() {
             </div>
             
             <Separator />
+
+            {/* Address Section */}
+            <div>
+              <p className="text-sm font-medium text-muted-foreground mb-2">Adres</p>
+              <div className="flex items-start gap-2">
+                <MapPin className="h-4 w-4 text-muted-foreground mt-0.5" />
+                <div className="text-sm">
+                  {advertiser.street || advertiser.address ? (
+                    <>
+                      <p>{advertiser.street || advertiser.address}</p>
+                      {(advertiser.zipcode || advertiser.city) && (
+                        <p>{[advertiser.zipcode, advertiser.city].filter(Boolean).join(" ")}</p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-muted-foreground">Geen adres</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* VAT & KVK */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-1">BTW-nummer</p>
+                <p className="text-sm font-mono">{advertiser.vatNumber || "-"}</p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-1">KVK-nummer</p>
+                <p className="text-sm font-mono">{advertiser.kvkNumber || "-"}</p>
+              </div>
+            </div>
             
+            <Separator />
+            
+            {/* Moneybird Status */}
             <div>
               <p className="text-sm font-medium text-muted-foreground mb-1">Moneybird</p>
               {advertiser.moneybirdContactId ? (
@@ -394,18 +440,20 @@ export default function AdvertiserDetail() {
               )}
             </div>
 
+            {/* Notes */}
             {advertiser.notes && (
               <>
                 <Separator />
                 <div>
                   <p className="text-sm font-medium text-muted-foreground mb-1">Notities</p>
-                  <p className="text-sm">{advertiser.notes}</p>
+                  <p className="text-sm bg-muted/50 rounded p-2">{advertiser.notes}</p>
                 </div>
               </>
             )}
 
             <Separator />
 
+            {/* SEPA Incasso */}
             <div>
               <p className="text-sm font-medium text-muted-foreground mb-1">SEPA Incasso</p>
               {advertiser.sepaMandate && advertiser.iban ? (

@@ -36,7 +36,11 @@ export const advertisers = pgTable("advertisers", {
   email: text("email").notNull(),
   phone: text("phone"),
   vatNumber: text("vat_number"),
+  kvkNumber: text("kvk_number"), // KvK nummer (Kamer van Koophandel)
   address: text("address"),
+  street: text("street"),
+  zipcode: text("zipcode"),
+  city: text("city"),
   // SEPA Automatisch Incasso velden
   iban: text("iban"), // IBAN rekeningnummer voor incasso
   ibanAccountHolder: text("iban_account_holder"), // Tenaamstelling rekening
