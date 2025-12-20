@@ -65,6 +65,7 @@ export default function Integrations() {
   const [syncingYodeck, setSyncingYodeck] = useState(false);
   const [runningSyncYodeck, setRunningSyncYodeck] = useState(false);
   const [syncRunResult, setSyncRunResult] = useState<any>(null);
+  const [showGetFallback, setShowGetFallback] = useState(false);
   const [yodeckTestResult, setYodeckTestResult] = useState<YodeckTestResult | null>(null);
 
   const { data: status, isLoading } = useQuery({
@@ -139,9 +140,10 @@ export default function Integrations() {
   };
 
   const handleRunYodeckSync = async () => {
-    console.log("[UI] clicked yodeck sync");
+    console.log("[UI] clicked yodeck sync (POST)");
     setRunningSyncYodeck(true);
     setSyncRunResult(null);
+    setShowGetFallback(false);
     try {
       const response = await fetch("/api/sync/yodeck/run", { 
         method: "POST", 
@@ -157,13 +159,20 @@ export default function Integrations() {
         queryClient.invalidateQueries({ queryKey: ["control-room-stats"] });
       } else {
         toast({ title: "Sync Mislukt", description: result.message, variant: "destructive" });
+        setShowGetFallback(true);
       }
     } catch (error: any) {
       console.error("[UI] sync error:", error);
       setSyncRunResult({ ok: false, message: error.message, error: String(error) });
-      toast({ title: "Fout", description: "Sync mislukt", variant: "destructive" });
+      toast({ title: "Fout", description: "Sync mislukt - gebruik GET fallback link", variant: "destructive" });
+      setShowGetFallback(true);
     }
     setRunningSyncYodeck(false);
+  };
+
+  const handleOpenGetFallback = () => {
+    console.log("[UI] opening GET fallback");
+    window.open("/api/sync/yodeck/run", "_blank");
   };
 
   if (isLoading) {
@@ -255,9 +264,22 @@ export default function Integrations() {
                 data-testid="button-run-yodeck-sync"
               >
                 {runningSyncYodeck && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Run Yodeck Sync
+                Run Yodeck Sync (POST)
+              </Button>
+              <Button 
+                variant="outline"
+                onClick={handleOpenGetFallback}
+                style={{ pointerEvents: "auto" }}
+                data-testid="button-get-fallback"
+              >
+                Open Yodeck Sync (GET fallback)
               </Button>
             </div>
+            {showGetFallback && (
+              <div className="p-2 bg-yellow-50 border border-yellow-200 rounded text-sm">
+                POST mislukt. <a href="/api/sync/yodeck/run" target="_blank" className="underline text-blue-600">Klik hier voor GET fallback</a>
+              </div>
+            )}
             {syncRunResult && (
               <div className={`p-3 rounded-md text-sm ${syncRunResult.ok ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
                 <pre className="whitespace-pre-wrap text-xs">{JSON.stringify(syncRunResult, null, 2)}</pre>
