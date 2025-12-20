@@ -1,7 +1,7 @@
 // Yodeck API Integration
 // Base URL: https://app.yodeck.com/api/v2
 // Endpoint: /screens
-// Auth: Bearer <API_KEY>
+// Auth: Token <API_KEY>
 // API key is stored in integrations table as encryptedCredentials
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 
@@ -120,7 +120,7 @@ export async function testYodeckConnection(): Promise<{
     const response = await fetch(fullUrl, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Token ${apiKey}`,
         "Accept": "application/json",
       },
     });
@@ -214,7 +214,7 @@ export async function syncYodeckScreens(): Promise<{
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        "Authorization": `Bearer ${apiKey}`,
+        "Authorization": `Token ${apiKey}`,
         "Accept": "application/json",
       },
     });

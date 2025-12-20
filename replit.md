@@ -97,7 +97,7 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 - **Yodeck API**: Digital signage player management and screen synchronization.
   - Base URL: `https://app.yodeck.com/api/v2`
   - Endpoint: `/screens`
-  - Authentication: `Authorization: Bearer <API_KEY>`
+  - Authentication: `Authorization: Token <API_KEY>`
   - API Key storage: Encrypted in integrations table (`encryptedCredentials`), decrypted at runtime
   - Response format: `{ results: [...], count: N }` with screen objects containing `id`, `uuid`, `name`, `workspace`, `state.online`, `state.last_seen`
   - EVZ-### Mapping: Extracts SCREEN_ID from `basic.tags` or `name` field using regex `/EVZ-\d{3}/`

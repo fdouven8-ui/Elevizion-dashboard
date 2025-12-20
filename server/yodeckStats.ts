@@ -109,8 +109,8 @@ async function getYodeckCredentials(): Promise<YodeckCredentials | null> {
 async function yodeckApiRequest(endpoint: string, credentials: YodeckCredentials): Promise<any> {
   const response = await fetch(`${YODECK_BASE_URL}${endpoint}`, {
     headers: {
-      "Authorization": `Bearer ${credentials.api_key}`,
-      "Content-Type": "application/json",
+      "Authorization": `Token ${credentials.api_key}`,
+      "Accept": "application/json",
     },
   });
 
