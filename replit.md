@@ -95,8 +95,8 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 
 ### External Service Integrations
 - **Yodeck API**: Digital signage player management and screen synchronization.
-  - Base URL: `https://app.yodeck.com/api/v3`
-  - Endpoint: `/monitors/` (trailing slash required to avoid 301 redirect)
+  - Base URL: `https://api.yodeck.com/v3`
+  - Endpoint: `/monitors`
   - Authentication: `Authorization: Token <label>:<token>` (full secret unchanged)
   - API Key format: `label:token` (e.g., `elevizion:abc123def`)
   - Response format: `{ results: [...], count: N }` with monitor objects containing `id`, `uuid`, `name`, `workspace`, `state.online`, `state.last_seen`
