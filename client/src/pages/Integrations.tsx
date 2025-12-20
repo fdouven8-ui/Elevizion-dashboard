@@ -52,12 +52,19 @@ async function syncYodeck() {
   return res.json();
 }
 
+async function runYodeckSync() {
+  const res = await fetch("/api/sync/yodeck/run", { method: "POST", credentials: "include" });
+  return res.json();
+}
+
 export default function Integrations() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [testingYodeck, setTestingYodeck] = useState(false);
   const [testingMoneybird, setTestingMoneybird] = useState(false);
   const [syncingYodeck, setSyncingYodeck] = useState(false);
+  const [runningSyncYodeck, setRunningSyncYodeck] = useState(false);
+  const [syncRunResult, setSyncRunResult] = useState<any>(null);
   const [yodeckTestResult, setYodeckTestResult] = useState<YodeckTestResult | null>(null);
 
   const { data: status, isLoading } = useQuery({
@@ -131,6 +138,26 @@ export default function Integrations() {
     setSyncingYodeck(false);
   };
 
+  const handleRunYodeckSync = async () => {
+    setRunningSyncYodeck(true);
+    setSyncRunResult(null);
+    try {
+      const result = await runYodeckSync();
+      setSyncRunResult(result);
+      if (result.ok) {
+        toast({ title: "Sync Voltooid", description: `Verwerkt: ${result.processed} schermen` });
+        queryClient.invalidateQueries({ queryKey: ["screens"] });
+        queryClient.invalidateQueries({ queryKey: ["control-room-stats"] });
+      } else {
+        toast({ title: "Sync Mislukt", description: result.message, variant: "destructive" });
+      }
+    } catch (error: any) {
+      setSyncRunResult({ ok: false, message: error.message });
+      toast({ title: "Fout", description: "Sync mislukt", variant: "destructive" });
+    }
+    setRunningSyncYodeck(false);
+  };
+
   if (isLoading) {
     return <div className="p-6">Laden...</div>;
   }
@@ -191,7 +218,7 @@ export default function Integrations() {
                 </div>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <Button 
                 variant="outline" 
                 onClick={handleTestYodeck}
@@ -213,7 +240,21 @@ export default function Integrations() {
                 )}
                 Sync Nu
               </Button>
+              <Button 
+                variant="secondary"
+                onClick={handleRunYodeckSync}
+                disabled={runningSyncYodeck}
+                data-testid="button-run-yodeck-sync"
+              >
+                {runningSyncYodeck && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                Run Yodeck Sync
+              </Button>
             </div>
+            {syncRunResult && (
+              <div className={`p-3 rounded-md text-sm ${syncRunResult.ok ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
+                <pre className="whitespace-pre-wrap text-xs">{JSON.stringify(syncRunResult, null, 2)}</pre>
+              </div>
+            )}
           </CardContent>
         </Card>
 
