@@ -109,8 +109,11 @@ export const screens = pgTable("screens", {
   locationId: varchar("location_id").notNull().references(() => locations.id),
   groupId: varchar("group_id").references(() => screenGroups.id),
   name: text("name").notNull(),
-  yodeckPlayerId: text("yodeck_player_id"), // Linked Yodeck player ID
+  yodeckPlayerId: text("yodeck_player_id"), // Linked Yodeck player ID (numeric ID as string)
   yodeckPlayerName: text("yodeck_player_name"),
+  yodeckUuid: text("yodeck_uuid").unique(), // Yodeck UUID for upsert matching
+  yodeckWorkspaceName: text("yodeck_workspace_name"),
+  yodeckScreenshotUrl: text("yodeck_screenshot_url"),
   resolution: text("resolution"), // e.g., "1920x1080"
   orientation: text("orientation").default("landscape"), // landscape, portrait
   status: text("status").notNull().default("unknown"), // online, offline, unknown
