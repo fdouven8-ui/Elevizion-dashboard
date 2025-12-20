@@ -139,10 +139,17 @@ export default function Integrations() {
   };
 
   const handleRunYodeckSync = async () => {
+    console.log("[UI] clicked yodeck sync");
     setRunningSyncYodeck(true);
     setSyncRunResult(null);
     try {
-      const result = await runYodeckSync();
+      const response = await fetch("/api/sync/yodeck/run", { 
+        method: "POST", 
+        credentials: "include",
+        headers: { "Content-Type": "application/json" }
+      });
+      const result = await response.json();
+      console.log("[UI] sync response:", result);
       setSyncRunResult(result);
       if (result.ok) {
         toast({ title: "Sync Voltooid", description: `Verwerkt: ${result.processed} schermen` });
@@ -152,7 +159,8 @@ export default function Integrations() {
         toast({ title: "Sync Mislukt", description: result.message, variant: "destructive" });
       }
     } catch (error: any) {
-      setSyncRunResult({ ok: false, message: error.message });
+      console.error("[UI] sync error:", error);
+      setSyncRunResult({ ok: false, message: error.message, error: String(error) });
       toast({ title: "Fout", description: "Sync mislukt", variant: "destructive" });
     }
     setRunningSyncYodeck(false);
@@ -241,9 +249,9 @@ export default function Integrations() {
                 Sync Nu
               </Button>
               <Button 
-                variant="secondary"
+                variant="default"
                 onClick={handleRunYodeckSync}
-                disabled={runningSyncYodeck}
+                style={{ pointerEvents: "auto", position: "relative", zIndex: 10 }}
                 data-testid="button-run-yodeck-sync"
               >
                 {runningSyncYodeck && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
