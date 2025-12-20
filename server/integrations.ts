@@ -191,10 +191,7 @@ export async function syncYodeckScreens(): Promise<{
   count?: number;
   mapped?: number;
   unmapped?: number;
-  requestedUrl?: string;
-  statusCode?: number;
-  contentType?: string;
-  bodyPreview?: string;
+  updated?: number;
 }> {
   const apiKey = await getYodeckApiKey();
   const configured = await isYodeckConfigured();
@@ -207,86 +204,105 @@ export async function syncYodeckScreens(): Promise<{
     return { success: false, message: "Missing Yodeck API key" };
   }
 
-  const url = `${YODECK_BASE_URL}/screens`;
-  console.log(`[Yodeck] Sync calling: GET ${url}`);
-
+  const allScreens: YodeckScreen[] = [];
+  let nextUrl: string | null = `${YODECK_BASE_URL}/screens`;
+  
   try {
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Authorization": `Token ${apiKey}`,
-        "Accept": "application/json",
-      },
-    });
+    // Fetch all pages
+    while (nextUrl) {
+      console.log(`[Yodeck] Sync calling: GET ${nextUrl}`);
+      
+      const response: Response = await fetch(nextUrl, {
+        method: "GET",
+        headers: {
+          "Authorization": `Token ${apiKey}`,
+          "Accept": "application/json",
+        },
+      });
 
-    const statusCode = response.status;
-    const contentType = response.headers.get("content-type") || "";
-    const bodyText = await response.text();
-    const bodyPreview = bodyText.substring(0, 200);
-    
-    console.log(`[Yodeck] Sync response status: ${statusCode}, content-type: ${contentType}`);
-    console.log(`[Yodeck] Sync body (first 200 chars): ${bodyPreview}`);
-
-    // Check if we got non-JSON response
-    if (!contentType.includes("application/json")) {
-      console.log(`[Yodeck] Sync failed - non-JSON response: ${contentType}`);
-      return { 
-        success: false, 
-        message: `Yodeck returned non-JSON response (${contentType || "unknown"})`,
-        requestedUrl: url,
-        statusCode: 502,
-        contentType,
-        bodyPreview 
-      };
-    }
-
-    if (response.ok) {
-      try {
-        const data = JSON.parse(bodyText);
-        // API returns { results: [...], count: N } or array
-        const rawScreens: YodeckScreen[] = data.results || (Array.isArray(data) ? data : []);
-        
-        // Process screens with EVZ-### mapping
-        const processedScreens: ProcessedYodeckScreen[] = rawScreens.map(screen => {
-          const screenId = extractScreenIdFromYodeck(screen);
-          return {
-            yodeck_screen_id: screen.id,
-            yodeck_uuid: screen.uuid,
-            yodeck_name: screen.name,
-            screen_id: screenId,
-            workspace_name: screen.workspace?.name || null,
-            workspace_id: screen.workspace?.id || null,
-            screenshot_url: screen.screenshot_url || null,
-            online: screen.state?.online || false,
-            last_seen: screen.state?.last_seen || null,
-            working_hours_config: screen.working_hours_config || null,
-            is_mapped: screenId !== null,
-          };
-        });
-        
-        const mapped = processedScreens.filter(s => s.is_mapped).length;
-        const unmapped = processedScreens.filter(s => !s.is_mapped).length;
-        
-        console.log(`[Yodeck] Sync success - ${processedScreens.length} screens (${mapped} mapped, ${unmapped} unmapped)`);
-        return { 
-          success: true, 
-          screens: processedScreens,
-          count: processedScreens.length,
-          mapped,
-          unmapped,
-          requestedUrl: url,
-          statusCode
-        };
-      } catch (parseError) {
-        console.log(`[Yodeck] Sync failed - JSON parse error`);
-        return { success: false, message: "Invalid JSON response from Yodeck", statusCode: 502, requestedUrl: url, bodyPreview };
+      const contentType = response.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) {
+        console.log(`[Yodeck] Sync failed - non-JSON response: ${contentType}`);
+        return { success: false, message: `Yodeck returned non-JSON response` };
       }
-    } else {
-      console.log(`[Yodeck] Sync failed - status ${statusCode}`);
-      return { success: false, message: `Schermen ophalen mislukt: ${statusCode}`, statusCode: 502, requestedUrl: url, contentType, bodyPreview };
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log(`[Yodeck] Sync failed - status ${response.status}: ${errorText.substring(0, 200)}`);
+        return { success: false, message: `API error: ${response.status}` };
+      }
+
+      const data: { results?: YodeckScreen[]; next?: string | null } = await response.json();
+      const pageScreens: YodeckScreen[] = data.results || [];
+      allScreens.push(...pageScreens);
+      
+      console.log(`[Yodeck] Fetched ${pageScreens.length} screens (total: ${allScreens.length})`);
+      nextUrl = data.next || null;
     }
+
+    // Process and upsert screens
+    const processedScreens: ProcessedYodeckScreen[] = [];
+    let updatedCount = 0;
+    
+    for (const screen of allScreens) {
+      const screenId = extractScreenIdFromYodeck(screen);
+      const processed: ProcessedYodeckScreen = {
+        yodeck_screen_id: screen.id,
+        yodeck_uuid: screen.uuid,
+        yodeck_name: screen.name,
+        screen_id: screenId,
+        workspace_name: screen.workspace?.name || null,
+        workspace_id: screen.workspace?.id || null,
+        screenshot_url: screen.screenshot_url || null,
+        online: screen.state?.online || false,
+        last_seen: screen.state?.last_seen || null,
+        working_hours_config: screen.working_hours_config || null,
+        is_mapped: screenId !== null,
+      };
+      processedScreens.push(processed);
+
+      // Upsert to database if screen has UUID
+      if (screen.uuid) {
+        const existing = await storage.getScreenByYodeckUuid(screen.uuid);
+        if (existing) {
+          await storage.updateScreenByYodeckUuid(screen.uuid, {
+            yodeckPlayerId: String(screen.id),
+            yodeckPlayerName: screen.name,
+            yodeckWorkspaceName: screen.workspace?.name || null,
+            yodeckScreenshotUrl: screen.screenshot_url || null,
+            status: screen.state?.online ? "online" : "offline",
+            lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
+          });
+          updatedCount++;
+        }
+      }
+    }
+
+    // Update integration sync status
+    await storage.updateIntegrationConfig("yodeck", {
+      lastSyncAt: new Date(),
+      lastSyncItemsProcessed: processedScreens.length,
+      status: "connected",
+    });
+    
+    const mapped = processedScreens.filter(s => s.is_mapped).length;
+    const unmapped = processedScreens.filter(s => !s.is_mapped).length;
+    
+    console.log(`[Yodeck] Sync complete - ${processedScreens.length} screens (${mapped} mapped, ${unmapped} unmapped, ${updatedCount} updated in DB)`);
+    return { 
+      success: true, 
+      screens: processedScreens,
+      count: processedScreens.length,
+      mapped,
+      unmapped,
+      updated: updatedCount,
+    };
   } catch (error: any) {
     console.log(`[Yodeck] Sync failed - error: ${error.message}`);
+    await storage.updateIntegrationConfig("yodeck", {
+      status: "error",
+      lastTestError: error.message,
+    });
     return { success: false, message: error.message };
   }
 }

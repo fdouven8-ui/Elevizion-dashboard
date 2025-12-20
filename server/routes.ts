@@ -2906,6 +2906,30 @@ export async function registerRoutes(
   });
 
   // ============================================================================
+  // YODECK SYNC ENDPOINT
+  // ============================================================================
+
+  app.post("/api/sync/yodeck/run", requirePermission("manage_integrations"), async (_req, res) => {
+    try {
+      const result = await syncYodeckScreens();
+      if (result.success) {
+        res.json({ 
+          success: true, 
+          message: `Sync voltooid: ${result.count} schermen opgehaald, ${result.updated} bijgewerkt`,
+          count: result.count,
+          mapped: result.mapped,
+          unmapped: result.unmapped,
+          updated: result.updated,
+        });
+      } else {
+        res.status(400).json({ success: false, message: result.message });
+      }
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // ============================================================================
   // CONTROL ROOM (OPS-FIRST DASHBOARD)
   // ============================================================================
 
@@ -3374,6 +3398,25 @@ export async function registerRoutes(
         return res.status(400).json({ message: "Integratie is niet verbonden. Test eerst de verbinding." });
       }
       
+      // Actually run the sync for Yodeck
+      if (service === "yodeck") {
+        const result = await syncYodeckScreens();
+        if (result.success) {
+          res.json({ 
+            success: true, 
+            message: `Sync voltooid: ${result.count} schermen opgehaald, ${result.updated} bijgewerkt`,
+            count: result.count,
+            mapped: result.mapped,
+            unmapped: result.unmapped,
+            updated: result.updated,
+          });
+        } else {
+          res.status(400).json({ success: false, message: result.message });
+        }
+        return;
+      }
+      
+      // Placeholder for other services
       await storage.upsertIntegrationConfig(service, {
         lastSyncAt: new Date(),
         lastSyncItemsProcessed: 0,

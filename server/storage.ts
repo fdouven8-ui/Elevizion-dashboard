@@ -70,8 +70,11 @@ export interface IStorage {
   getScreens(): Promise<Screen[]>;
   getScreensByLocation(locationId: string): Promise<Screen[]>;
   getScreen(id: string): Promise<Screen | undefined>;
+  getScreenByYodeckUuid(yodeckUuid: string): Promise<Screen | undefined>;
+  getScreenStats(): Promise<{ total: number; online: number; offline: number }>;
   createScreen(data: InsertScreen): Promise<Screen>;
   updateScreen(id: string, data: Partial<Screen>): Promise<Screen | undefined>;
+  updateScreenByYodeckUuid(yodeckUuid: string, data: Partial<Screen>): Promise<Screen | undefined>;
   deleteScreen(id: string): Promise<boolean>;
 
   // Package Plans
@@ -382,6 +385,27 @@ export class DatabaseStorage implements IStorage {
   async deleteScreen(id: string): Promise<boolean> {
     await db.delete(schema.screens).where(eq(schema.screens.id, id));
     return true;
+  }
+
+  async getScreenByYodeckUuid(yodeckUuid: string): Promise<Screen | undefined> {
+    const [screen] = await db.select().from(schema.screens).where(eq(schema.screens.yodeckUuid, yodeckUuid));
+    return screen;
+  }
+
+  async getScreenStats(): Promise<{ total: number; online: number; offline: number }> {
+    const screens = await db.select().from(schema.screens).where(eq(schema.screens.isActive, true));
+    const total = screens.length;
+    const online = screens.filter(s => s.status === "online").length;
+    const offline = screens.filter(s => s.status === "offline").length;
+    return { total, online, offline };
+  }
+
+  async updateScreenByYodeckUuid(yodeckUuid: string, data: Partial<Screen>): Promise<Screen | undefined> {
+    const [screen] = await db.update(schema.screens)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.screens.yodeckUuid, yodeckUuid))
+      .returning();
+    return screen;
   }
 
   // ============================================================================
