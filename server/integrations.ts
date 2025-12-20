@@ -1,9 +1,9 @@
 // Yodeck API Integration
 // IMPORTANT: API key is read ONLY from process.env.YODECK_API_KEY - never from frontend or local files
-// Base URL: https://api.yodeck.com/v3
-// Endpoint for screens: /monitors
-// Auth: Token <label>:<token_value> - keep the full secret unchanged
-const YODECK_BASE_URL = "https://api.yodeck.com/v3";
+// Base URL: https://app.yodeck.com/api/v2
+// Endpoint: /screens
+// Auth: Bearer <API_KEY>
+const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 
 export interface IntegrationCredentials {
   api_key?: string;
@@ -94,15 +94,15 @@ export async function testYodeckConnection(): Promise<{
     return { ok: false, message: "Invalid API key format - must be label:token format" };
   }
 
-  // Use /monitors endpoint to list screens
-  const fullUrl = `${YODECK_BASE_URL}/monitors`;
+  // Use /screens endpoint to list screens
+  const fullUrl = `${YODECK_BASE_URL}/screens`;
   console.log(`[YODECK TEST] requesting: ${fullUrl}`);
 
   try {
     const response = await fetch(fullUrl, {
       method: "GET",
       headers: {
-        "Authorization": `Token ${apiKey}`,
+        "Authorization": `Bearer ${apiKey}`,
         "Accept": "application/json",
       },
     });
@@ -188,14 +188,14 @@ export async function syncYodeckScreens(): Promise<{
     return { success: false, message: "YODECK_API_KEY ontbreekt" };
   }
 
-  const url = `${YODECK_BASE_URL}/monitors`;
+  const url = `${YODECK_BASE_URL}/screens`;
   console.log(`[Yodeck] Sync calling: GET ${url}`);
 
   try {
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        "Authorization": `Token ${apiKey}`,
+        "Authorization": `Bearer ${apiKey}`,
         "Accept": "application/json",
       },
     });
