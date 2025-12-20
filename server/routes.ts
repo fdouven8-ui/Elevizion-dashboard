@@ -1132,6 +1132,56 @@ export async function registerRoutes(
   });
   
   console.log("[routes] Yodeck routes registered: GET /api/integrations/yodeck/config-status, POST /api/integrations/yodeck/test");
+  console.log("[routes] Sync routes registered: POST /api/sync/yodeck/run");
+
+  // Yodeck sync run - minimal implementation calling Yodeck API
+  app.post("/api/sync/yodeck/run", async (_req, res) => {
+    console.log("[YODECK SYNC RUN] handler hit");
+    try {
+      // Get API key from integration record (decrypted)
+      const config = await storage.getIntegrationConfig("yodeck");
+      if (!config?.isEnabled) {
+        return res.status(400).json({ ok: false, message: "Yodeck integratie is niet ingeschakeld" });
+      }
+      
+      const encryptedCreds = await storage.getIntegrationEncryptedCredentials("yodeck");
+      if (!encryptedCreds) {
+        return res.status(400).json({ ok: false, message: "Geen Yodeck credentials geconfigureerd" });
+      }
+      
+      const { decryptCredentials } = await import("./crypto");
+      const creds = decryptCredentials(encryptedCreds);
+      const apiKey = creds.api_key || creds.apiKey || creds.token;
+      
+      if (!apiKey) {
+        return res.status(400).json({ ok: false, message: "Geen API key gevonden in credentials" });
+      }
+      
+      // Call Yodeck API
+      const response = await fetch("https://app.yodeck.com/api/v2/screens", {
+        method: "GET",
+        headers: {
+          "Accept": "application/json",
+          "Authorization": `Token ${apiKey}`,
+        },
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.log(`[YODECK SYNC RUN] API error ${response.status}: ${errorText.substring(0, 200)}`);
+        return res.status(response.status).json({ ok: false, message: `Yodeck API error: ${response.status}` });
+      }
+      
+      const data = await response.json();
+      const processed = data.count || (data.results?.length || 0);
+      
+      console.log(`[YODECK SYNC RUN] success, processed=${processed}`);
+      res.json({ ok: true, processed });
+    } catch (error: any) {
+      console.error("[YODECK SYNC RUN] error:", error.message);
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
 
   // Yodeck test connection - uses ONLY process.env.YODECK_API_KEY
   app.post("/api/integrations/yodeck/test", async (_req, res) => {
