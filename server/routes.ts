@@ -1138,7 +1138,7 @@ export async function registerRoutes(
     console.log("[YODECK TEST] handler hit");
     try {
       const result = await testYodeckConnection();
-      console.log(`[YODECK TEST] result: ok=${result.ok}, deviceCount=${result.deviceCount || 0}`);
+      console.log(`[YODECK TEST] result: ok=${result.ok}, count=${(result as any).count || 0}`);
       
       // If Yodeck returned non-JSON or non-2xx, return 502 Bad Gateway
       if (!result.ok) {
@@ -1158,7 +1158,8 @@ export async function registerRoutes(
         ok: true,
         success: true,
         message: result.message,
-        deviceCount: result.deviceCount,
+        count: (result as any).count,
+        sampleFields: (result as any).sampleFields,
         status: result.statusCode,
         requestedUrl: result.requestedUrl,
       });
@@ -1178,22 +1179,112 @@ export async function registerRoutes(
     res.json(result);
   });
 
-  // Yodeck sync - uses ONLY process.env.YODECK_API_KEY
+  // Yodeck sync - uses ONLY process.env.YODECK_API_KEY (legacy endpoint)
   app.post("/api/integrations/yodeck/sync", async (_req, res) => {
     const result = await syncYodeckScreens();
     if (result.success && result.screens) {
+      // Update existing screens with Yodeck data
+      const existingScreens = await storage.getScreens();
+      let updated = 0;
       for (const yodeckScreen of result.screens) {
-        const existingScreens = await storage.getScreens();
-        const match = existingScreens.find(s => s.yodeckPlayerId === yodeckScreen.id);
+        // Match by yodeckPlayerId OR by EVZ screen ID
+        const match = existingScreens.find(s => 
+          s.yodeckPlayerId === String(yodeckScreen.yodeck_screen_id) ||
+          (yodeckScreen.screen_id && s.screenId === yodeckScreen.screen_id)
+        );
         if (match) {
           await storage.updateScreen(match.id, {
             status: yodeckScreen.online ? "online" : "offline",
-            lastSeenAt: new Date(),
+            lastSeenAt: yodeckScreen.last_seen ? new Date(yodeckScreen.last_seen) : new Date(),
+            yodeckPlayerId: String(yodeckScreen.yodeck_screen_id),
+            yodeckPlayerName: yodeckScreen.yodeck_name,
           });
+          updated++;
         }
       }
+      // Store the synced screens in integration config
+      await storage.upsertIntegrationConfig("yodeck", {
+        lastSyncAt: new Date(),
+        lastSyncItemsProcessed: result.screens.length,
+        status: "active",
+      });
+      res.json({
+        ...result,
+        synced: updated,
+        message: `${result.screens.length} schermen opgehaald, ${updated} bijgewerkt`,
+      });
+    } else {
+      // Handle non-JSON/error responses with 502
+      if (!result.success && result.statusCode === 502) {
+        return res.status(502).json(result);
+      }
+      res.json(result);
     }
-    res.json(result);
+  });
+
+  // Yodeck sync-screens - new endpoint per spec
+  app.post("/api/integrations/yodeck/sync-screens", async (_req, res) => {
+    const result = await syncYodeckScreens();
+    if (!result.success) {
+      const httpStatus = result.statusCode === 502 ? 502 : 400;
+      return res.status(httpStatus).json(result);
+    }
+    if (result.screens) {
+      // Update existing screens with Yodeck data
+      const existingScreens = await storage.getScreens();
+      let updated = 0;
+      for (const yodeckScreen of result.screens) {
+        const match = existingScreens.find(s => 
+          s.yodeckPlayerId === String(yodeckScreen.yodeck_screen_id) ||
+          (yodeckScreen.screen_id && s.screenId === yodeckScreen.screen_id)
+        );
+        if (match) {
+          await storage.updateScreen(match.id, {
+            status: yodeckScreen.online ? "online" : "offline",
+            lastSeenAt: yodeckScreen.last_seen ? new Date(yodeckScreen.last_seen) : new Date(),
+            yodeckPlayerId: String(yodeckScreen.yodeck_screen_id),
+            yodeckPlayerName: yodeckScreen.yodeck_name,
+          });
+          updated++;
+        }
+      }
+      await storage.upsertIntegrationConfig("yodeck", {
+        lastSyncAt: new Date(),
+        lastSyncItemsProcessed: result.screens.length,
+        status: "active",
+      });
+      res.json({
+        success: true,
+        count: result.count,
+        mapped: result.mapped,
+        unmapped: result.unmapped,
+        synced: updated,
+        message: `${result.count} schermen gesynchroniseerd`,
+      });
+    }
+  });
+
+  // GET /api/yodeck/screens - returns cached/last-synced screen list
+  app.get("/api/yodeck/screens", isAuthenticated, async (_req, res) => {
+    try {
+      // Get screens with Yodeck data
+      const screens = await storage.getScreens();
+      const yodeckScreens = screens
+        .filter(s => s.yodeckPlayerId)
+        .map(s => ({
+          id: s.id,
+          screenId: s.screenId,
+          yodeckPlayerId: s.yodeckPlayerId,
+          yodeckPlayerName: s.yodeckPlayerName,
+          name: s.name,
+          status: s.status,
+          lastSeenAt: s.lastSeenAt,
+          locationId: s.locationId,
+        }));
+      res.json(yodeckScreens);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
   });
 
   // ============================================================================

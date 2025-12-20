@@ -1,0 +1,68 @@
+Implement Yodeck API integration using the "screens" resource (based on the provided Yodeck screen JSON sample).
+
+1) Base URL and endpoints
+- Use Yodeck API v2 endpoints.
+- Implement these server routes:
+  - POST /api/integrations/yodeck/test
+    -> calls Yodeck "list screens" endpoint and expects JSON array.
+    -> success returns { ok:true, count:<number>, sampleFields:["id","uuid","name","workspace.name","state.online"] }
+  - POST /api/integrations/yodeck/sync-screens
+    -> pulls list of screens and upserts into our DB table screens_external (or existing screens table if appropriate)
+  - GET /api/yodeck/screens (admin only)
+    -> returns cached/last-synced screen list from DB for UI.
+
+2) Authentication header
+- Read token from process.env.YODECK_API_KEY.
+- It must already be in the format "<label>:<token_value>" (e.g. "elevizion:XXXX").
+- Send request header exactly:
+  Authorization: `Token ${process.env.YODECK_API_KEY}`
+- Also send:
+  Accept: application/json
+
+3) JSON validation + errors
+- If response content-type is not application/json, treat as error and return 502 with:
+  { message, requestedUrl, status, contentType, bodyPreview }
+- Only return HTTP 200 from our API when Yodeck returns valid JSON.
+
+4) Mapping to Elevizion Screen IDs
+- We must map Yodeck screen to our SCREEN_ID format (EVZ-###).
+- Preferred mapping order:
+  A) If screen.basic.tags contains a tag matching /^EVZ-\d{3}$/ -> use that as SCREEN_ID
+  B) Else if screen.name contains "EVZ-###" -> parse it
+  C) Else store SCREEN_ID as null and mark as "unmapped" in UI.
+- Store Yodeck identifiers:
+  - yodeck_screen_id (numeric id)
+  - yodeck_uuid
+  - workspace name/id
+  - screenshot_url
+  - state.online, state.last_seen
+  - working_hours_config (optional JSON)
+- Do NOT store huge network config fields unless needed.
+
+5) UI (Settings > Integraties > Yodeck)
+- Add buttons:
+  - Test verbinding
+  - Sync schermen
+- After Test: show count + basic info
+- After Sync: show “X screens synced” and update lastSync time.
+
+6) UI (Schermen page)
+- Add columns:
+  - SCREEN_ID (mapped)
+  - Yodeck name
+  - Workspace (location)
+  - Online status
+  - Last seen
+- Filters:
+  - by place/workspace name
+  - by online/offline
+  - by SCREEN_ID
+
+7) Keep it simple
+- Focus only on screens list + status first.
+- Stats/playback endpoints come later.
+
+Acceptance criteria:
+- POST /api/integrations/yodeck/test returns 200 and JSON with count (no HTML).
+- Sync imports screens and the UI can filter by location/workspace.
+- Mapping finds EVZ-### from tags or name.

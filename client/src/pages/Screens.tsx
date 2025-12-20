@@ -364,6 +364,7 @@ export default function Screens() {
           <TableHeader>
             <TableRow>
               <TableHead>Screen ID</TableHead>
+              <TableHead>Yodeck Naam</TableHead>
               <TableHead>Plaats</TableHead>
               <TableHead>Locatie/Bedrijf</TableHead>
               <TableHead>Status</TableHead>
@@ -379,6 +380,9 @@ export default function Screens() {
                     <Monitor className="h-4 w-4 text-muted-foreground" />
                     {scr.screenId || scr.name}
                   </div>
+                </TableCell>
+                <TableCell className="text-muted-foreground text-sm">
+                  {scr.yodeckPlayerName || "-"}
                 </TableCell>
                 <TableCell>{getLocationCity(scr.locationId)}</TableCell>
                 <TableCell>{getLocationName(scr.locationId)}</TableCell>
@@ -401,7 +405,7 @@ export default function Screens() {
             ))}
             {filteredScreens.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
                   Geen schermen gevonden
                 </TableCell>
               </TableRow>

@@ -19,8 +19,12 @@ interface YodeckTestResult {
   ok: boolean;
   success: boolean;
   message: string;
-  deviceCount?: number;
+  count?: number;
+  sampleFields?: string[];
   statusCode?: number;
+  requestedUrl?: string;
+  contentType?: string;
+  bodyPreview?: string;
 }
 
 async function fetchIntegrationStatus(): Promise<IntegrationStatus> {
@@ -78,7 +82,7 @@ export default function Integrations() {
       if (result.ok || result.success) {
         toast({
           title: "Verbonden met Yodeck",
-          description: `${result.deviceCount ?? 0} schermen gevonden`,
+          description: `${result.count ?? 0} schermen gevonden`,
         });
       } else {
         toast({
@@ -165,9 +169,14 @@ export default function Integrations() {
                   {yodeckTestResult && (
                     <div className={`p-3 rounded-md ${yodeckTestResult.ok ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
                       {yodeckTestResult.ok ? (
-                        <p className="text-green-700">Verbonden met Yodeck - {yodeckTestResult.deviceCount ?? 0} schermen</p>
+                        <p className="text-green-700">Verbonden met Yodeck - {yodeckTestResult.count ?? 0} schermen</p>
                       ) : (
-                        <p className="text-red-700">{yodeckTestResult.message} {yodeckTestResult.statusCode ? `(status ${yodeckTestResult.statusCode})` : ""}</p>
+                        <div className="space-y-1">
+                          <p className="text-red-700">{yodeckTestResult.message} {yodeckTestResult.statusCode ? `(status ${yodeckTestResult.statusCode})` : ""}</p>
+                          {yodeckTestResult.requestedUrl && (
+                            <p className="text-xs text-red-500">URL: {yodeckTestResult.requestedUrl}</p>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}

@@ -95,6 +95,13 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 
 ### External Service Integrations
 - **Yodeck API**: Digital signage player management and screen synchronization.
+  - Base URL: `https://app.yodeck.com/api/v3`
+  - Endpoint: `/monitors/` (trailing slash required to avoid 301 redirect)
+  - Authentication: `Authorization: Token <label>:<token>` (full secret unchanged)
+  - API Key format: `label:token` (e.g., `elevizion:abc123def`)
+  - Response format: `{ results: [...], count: N }` with monitor objects containing `id`, `uuid`, `name`, `workspace`, `state.online`, `state.last_seen`
+  - EVZ-### Mapping: Extracts SCREEN_ID from `basic.tags` or `name` field using regex `/EVZ-\d{3}/`
+  - Required secret: `YODECK_API_KEY` (must be in label:token format, >10 chars)
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests (requires API key configuration).
 
