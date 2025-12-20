@@ -20,7 +20,7 @@ export interface YodeckScreen {
   uuid: string;
   name: string;
   workspace?: { id: number; name: string };
-  basic?: { tags?: string[] };
+  basic?: { tags?: string[]; description?: string };
   state?: {
     online?: boolean;
     last_seen?: string;
@@ -265,6 +265,7 @@ export async function syncYodeckScreens(): Promise<{
       if (screen.uuid) {
         const existing = await storage.getScreenByYodeckUuid(screen.uuid);
         if (existing) {
+          // Update existing screen
           await storage.updateScreenByYodeckUuid(screen.uuid, {
             yodeckPlayerId: String(screen.id),
             yodeckPlayerName: screen.name,
@@ -272,6 +273,23 @@ export async function syncYodeckScreens(): Promise<{
             yodeckScreenshotUrl: screen.screenshot_url || null,
             status: screen.state?.online ? "online" : "offline",
             lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
+          });
+          updatedCount++;
+        } else {
+          // Create new screen from Yodeck data
+          const newScreenId = screenId || `YDK-${screen.id}`;
+          await storage.createScreen({
+            screenId: newScreenId,
+            name: screen.name || `Yodeck Screen ${screen.id}`,
+            locationId: "", // Will be linked later
+            yodeckPlayerId: String(screen.id),
+            yodeckPlayerName: screen.name,
+            yodeckUuid: screen.uuid,
+            yodeckWorkspaceName: screen.workspace?.name || null,
+            yodeckScreenshotUrl: screen.screenshot_url || null,
+            status: screen.state?.online ? "online" : "offline",
+            lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
+            isActive: true,
           });
           updatedCount++;
         }

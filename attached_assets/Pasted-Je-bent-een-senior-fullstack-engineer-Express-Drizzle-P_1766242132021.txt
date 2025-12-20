@@ -1,0 +1,59 @@
+Je bent een senior fullstack engineer (Express + Drizzle + Postgres).
+
+STATUS
+Yodeck test werkt: POST /api/integrations/yodeck/test geeft ok=true en count=2 via:
+GET https://app.yodeck.com/api/v2/screens
+headers: Accept: application/json, Authorization: Token <api_key>
+
+PROBLEEM
+Dashboard blijft 0:
+GET /api/screens geeft []
+GET /api/control-room/stats geeft {"screensOnline":0,"screensTotal":0,"screensOffline":0,...}
+Omdat er nog geen sync bestaat die Yodeck screens in onze DB zet.
+
+DOEL
+Implementeer Yodeck Screens Sync + update control-room stats om uit DB te tellen.
+
+WAT JE MOET MAKEN
+1) Nieuwe endpoint:
+POST /api/sync/yodeck/run
+- Alleen toegankelijk voor ingelogde admin/eigenaar (gebruik bestaande auth middleware).
+- Roept server-side functie syncYodeckScreens() aan.
+- Return: { ok:true, processed:<n> }
+
+2) syncYodeckScreens() moet:
+- Yodeck integration record uit DB halen (service="yodeck", isEnabled=true)
+- decrypt credentials en pak api key uit creds.api_key || creds.apiKey || creds.token
+- request doen naar /screens en paginatie volgen via "next" totdat null
+- alle "results" verzamelen
+- Upsert elke screen in onze lokale screens tabel:
+  minimaal opslaan:
+    - yodeckId (number)
+    - yodeckUuid (string)
+    - name (string)
+    - description (string)
+    - workspaceName (string, uit workspace.name als aanwezig)
+    - screenshotUrl (string)
+    - isOnline (boolean, uit state.online)
+    - lastSeen (datetime/string, uit state.last_seen)
+    - updatedAt
+- Upsert key: yodeckUuid (fallback yodeckId als uuid ontbreekt)
+
+3) Update integratie sync status velden (in integrations tabel):
+- lastSyncAt = now
+- lastSyncItemsProcessed = aantal upserts
+- status = "ok" bij succes, "error" bij fail + lastTestError/lastSyncError als die velden bestaan
+
+4) Update GET /api/control-room/stats:
+- screensTotal = COUNT(screens)
+- screensOnline = COUNT where isOnline=true
+- screensOffline = screensTotal - screensOnline
+
+BELANGRIJK
+- Houd code consistent met bestaande projectstructuur (routes/services/db schema).
+- Voeg alleen wat nodig is.
+- Als screens tabel nog geen kolommen heeft: maak Drizzle schema update + migratie.
+- Geen UI aanpassingen nodig.
+
+OUTPUT
+Geef alleen de gewijzigde bestanden (en migratie indien nodig).
