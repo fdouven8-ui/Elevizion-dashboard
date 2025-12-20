@@ -98,10 +98,9 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
   - Base URL: `https://app.yodeck.com/api/v2`
   - Endpoint: `/screens`
   - Authentication: `Authorization: Bearer <API_KEY>`
-  - API Key format: `label:token` (e.g., `elevizion:abc123def`)
-  - Response format: `{ results: [...], count: N }` with monitor objects containing `id`, `uuid`, `name`, `workspace`, `state.online`, `state.last_seen`
+  - API Key storage: Encrypted in integrations table (`encryptedCredentials`), decrypted at runtime
+  - Response format: `{ results: [...], count: N }` with screen objects containing `id`, `uuid`, `name`, `workspace`, `state.online`, `state.last_seen`
   - EVZ-### Mapping: Extracts SCREEN_ID from `basic.tags` or `name` field using regex `/EVZ-\d{3}/`
-  - Required secret: `YODECK_API_KEY` (must be in label:token format, >10 chars)
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests (requires API key configuration).
 

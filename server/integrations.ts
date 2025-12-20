@@ -1,9 +1,12 @@
 // Yodeck API Integration
-// IMPORTANT: API key is read ONLY from process.env.YODECK_API_KEY - never from frontend or local files
 // Base URL: https://app.yodeck.com/api/v2
 // Endpoint: /screens
 // Auth: Bearer <API_KEY>
+// API key is stored in integrations table as encryptedCredentials
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
+
+import { storage } from "./storage";
+import { decryptCredentials } from "./crypto";
 
 export interface IntegrationCredentials {
   api_key?: string;
@@ -26,14 +29,31 @@ export interface YodeckScreen {
   working_hours_config?: any;
 }
 
-// Get the raw API key - keep it unchanged (includes label:token format)
-function getYodeckApiKey(): string | undefined {
-  return process.env.YODECK_API_KEY;
+// Get the API key from integrations table (decrypted) - never from env
+async function getYodeckApiKey(): Promise<string | null> {
+  try {
+    const config = await storage.getIntegrationConfig("yodeck");
+    if (!config?.encryptedCredentials) {
+      console.log("[YODECK] No encryptedCredentials in DB");
+      return null;
+    }
+    const credentials = decryptCredentials(config.encryptedCredentials);
+    return credentials.api_key || null;
+  } catch (error) {
+    console.error("[YODECK] Failed to get API key from DB:", error);
+    return null;
+  }
 }
 
-// Validate API key format - should be "label:token" format
+// Validate API key - must be at least 10 chars
 function isValidYodeckApiKey(key: string): boolean {
-  return key.length > 10 && key.includes(":");
+  return key.length >= 10;
+}
+
+// Mask API key for logging (first 4 chars + length)
+function maskApiKeyForLog(key: string): string {
+  if (!key || key.length < 4) return "(empty)";
+  return `${key.substring(0, 4)}...(len=${key.length})`;
 }
 
 // Extract EVZ-### screen ID from Yodeck screen data
@@ -58,40 +78,38 @@ export function extractScreenIdFromYodeck(screen: YodeckScreen): string | null {
   return null; // Unmapped
 }
 
-// Check if Yodeck is properly configured
-export function isYodeckConfigured(): boolean {
-  const apiKey = getYodeckApiKey();
-  return !!apiKey && apiKey.length > 10;
+// Check if Yodeck is properly configured (async)
+export async function isYodeckConfigured(): Promise<boolean> {
+  const apiKey = await getYodeckApiKey();
+  return !!apiKey && apiKey.length >= 10;
 }
 
 // Get Yodeck config status (safe for API response)
-export function getYodeckConfigStatus(): { configured: boolean } {
-  return { configured: isYodeckConfigured() };
+export async function getYodeckConfigStatus(): Promise<{ configured: boolean }> {
+  return { configured: await isYodeckConfigured() };
 }
 
 export async function testYodeckConnection(): Promise<{ 
   ok: boolean; 
+  success?: boolean;
   message: string; 
-  deviceCount?: number;
+  count?: number;
   statusCode?: number;
   requestedUrl?: string;
   contentType?: string;
   bodyPreview?: string;
 }> {
-  const apiKey = getYodeckApiKey();
+  const apiKey = await getYodeckApiKey();
+  const configured = await isYodeckConfigured();
   
-  console.log(`[YODECK TEST] configured: ${isYodeckConfigured()}`);
+  console.log(`[YODECK TEST] configured: ${configured}`);
   console.log(`[YODECK TEST] YODECK_BASE_URL = "${YODECK_BASE_URL}"`);
+  console.log(`[YODECK TEST] apiKey = ${maskApiKeyForLog(apiKey || "")}`);
   
-  if (!apiKey || apiKey.length <= 10) {
-    console.log("[YODECK TEST] FAIL - YODECK_API_KEY missing or too short");
-    return { ok: false, message: "YODECK_API_KEY ontbreekt of is ongeldig", statusCode: 400 };
-  }
-
-  // Validate API key format
-  if (!isValidYodeckApiKey(apiKey)) {
-    console.log(`[YODECK TEST] Invalid API key format - must be label:token format with length > 10`);
-    return { ok: false, message: "Invalid API key format - must be label:token format" };
+  // Hard check: API key must exist and be at least 10 chars
+  if (!apiKey || apiKey.length < 10) {
+    console.log("[YODECK TEST] FAIL - Missing Yodeck API key or too short");
+    return { ok: false, success: false, message: "Missing Yodeck API key", statusCode: 400 };
   }
 
   // Use /screens endpoint to list screens
@@ -135,16 +153,15 @@ export async function testYodeckConnection(): Promise<{
         // API returns { results: [...], count: N } or array
         const screenList = data.results || (Array.isArray(data) ? data : []);
         const count = data.count ?? screenList.length;
-        const sampleFields = ["id", "uuid", "name", "workspace.name", "state.online"];
         console.log(`[YODECK TEST] SUCCESS - ${count} screens found`);
-        return { ok: true, message: "Verbonden met Yodeck", count, sampleFields, statusCode, requestedUrl: fullUrl };
+        return { ok: true, success: true, message: "Verbonden met Yodeck", count, statusCode, requestedUrl: fullUrl };
       } catch (parseError) {
         console.log(`[YODECK TEST] FAIL - JSON parse error`);
-        return { ok: false, message: "Invalid JSON response from Yodeck", statusCode: 502, requestedUrl: fullUrl, bodyPreview };
+        return { ok: false, success: false, message: "Invalid JSON response from Yodeck", statusCode: 502, requestedUrl: fullUrl, bodyPreview };
       }
     } else {
       console.log(`[YODECK TEST] FAIL - status ${statusCode}`);
-      return { ok: false, message: `API Fout: ${statusCode}`, statusCode: 502, requestedUrl: fullUrl, contentType, bodyPreview };
+      return { ok: false, success: false, message: `API Fout: ${statusCode} - ${bodyPreview}`, statusCode, requestedUrl: fullUrl, contentType, bodyPreview };
     }
   } catch (error: any) {
     console.log(`[YODECK TEST] FAIL - network error: ${error.message}`);
@@ -179,13 +196,15 @@ export async function syncYodeckScreens(): Promise<{
   contentType?: string;
   bodyPreview?: string;
 }> {
-  const apiKey = getYodeckApiKey();
+  const apiKey = await getYodeckApiKey();
+  const configured = await isYodeckConfigured();
   
-  console.log(`[Yodeck] Sync screens - configured: ${isYodeckConfigured()}`);
+  console.log(`[Yodeck] Sync screens - configured: ${configured}`);
+  console.log(`[Yodeck] Sync apiKey = ${maskApiKeyForLog(apiKey || "")}`);
   
-  if (!apiKey || apiKey.length <= 10) {
-    console.log("[Yodeck] Sync failed - YODECK_API_KEY missing");
-    return { success: false, message: "YODECK_API_KEY ontbreekt" };
+  if (!apiKey || apiKey.length < 10) {
+    console.log("[Yodeck] Sync failed - Missing Yodeck API key");
+    return { success: false, message: "Missing Yodeck API key" };
   }
 
   const url = `${YODECK_BASE_URL}/screens`;
