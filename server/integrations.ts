@@ -240,6 +240,24 @@ export async function syncYodeckScreens(): Promise<{
       nextUrl = data.next || null;
     }
 
+    // Get or create a default location for new screens
+    let defaultLocationId: string;
+    const locations = await storage.getLocations();
+    if (locations.length > 0) {
+      defaultLocationId = locations[0].id;
+    } else {
+      // Create a default location
+      const defaultLocation = await storage.createLocation({
+        name: "Default (Yodeck Import)",
+        address: "Onbekend",
+        contactName: "Niet ingesteld",
+        email: "noreply@example.com",
+        status: "active",
+      });
+      defaultLocationId = defaultLocation.id;
+    }
+    console.log("[Yodeck] Using defaultLocationId", defaultLocationId);
+
     // Process and upsert screens
     const processedScreens: ProcessedYodeckScreen[] = [];
     let updatedCount = 0;
@@ -281,7 +299,7 @@ export async function syncYodeckScreens(): Promise<{
           await storage.createScreen({
             screenId: newScreenId,
             name: screen.name || `Yodeck Screen ${screen.id}`,
-            locationId: "", // Will be linked later
+            locationId: defaultLocationId,
             yodeckPlayerId: String(screen.id),
             yodeckPlayerName: screen.name,
             yodeckUuid: screen.uuid,
