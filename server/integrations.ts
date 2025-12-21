@@ -8,6 +8,28 @@ const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 import { storage } from "./storage";
 import { decryptCredentials } from "./crypto";
 
+// Helper: Get or create default location for screen imports
+// Returns the ID of the first location or creates a minimal "Default" location
+async function getOrCreateDefaultLocationId(): Promise<string> {
+  const locations = await storage.getLocations();
+  if (locations.length > 0) {
+    const id = locations[0].id;
+    console.log("[DB] defaultLocationId", id);
+    return id;
+  }
+  
+  // Create minimal default location
+  const defaultLocation = await storage.createLocation({
+    name: "Default",
+    address: "Onbekend",
+    contactName: "Niet ingesteld",
+    email: "noreply@example.com",
+    status: "active",
+  });
+  console.log("[DB] defaultLocationId (created)", defaultLocation.id);
+  return defaultLocation.id;
+}
+
 export interface IntegrationCredentials {
   api_key?: string;
   access_token?: string;
@@ -240,31 +262,11 @@ export async function syncYodeckScreens(): Promise<{
       nextUrl = data.next || null;
     }
 
-    // Get or create a default location for new screens
-    let defaultLocationId: string;
-    const locations = await storage.getLocations();
-    if (locations.length > 0) {
-      defaultLocationId = locations[0].id;
-    } else {
-      // Create a default location
-      const defaultLocation = await storage.createLocation({
-        name: "Default (Yodeck Import)",
-        address: "Onbekend",
-        contactName: "Niet ingesteld",
-        email: "noreply@example.com",
-        status: "active",
-      });
-      defaultLocationId = defaultLocation.id;
-    }
-    console.log("[Yodeck] Using defaultLocationId", defaultLocationId);
-
-    // Process and upsert screens
+    // Process screens and prepare for upsert
     const processedScreens: ProcessedYodeckScreen[] = [];
-    let updatedCount = 0;
-    
     for (const screen of allScreens) {
       const screenId = extractScreenIdFromYodeck(screen);
-      const processed: ProcessedYodeckScreen = {
+      processedScreens.push({
         yodeck_screen_id: screen.id,
         yodeck_uuid: screen.uuid,
         yodeck_name: screen.name,
@@ -276,14 +278,22 @@ export async function syncYodeckScreens(): Promise<{
         last_seen: screen.state?.last_seen || null,
         working_hours_config: screen.working_hours_config || null,
         is_mapped: screenId !== null,
-      };
-      processedScreens.push(processed);
+      });
+    }
 
-      // Upsert to database if screen has UUID
-      if (screen.uuid) {
+    // Upsert screens to database with retry for Neon 57P01 errors
+    const upsertScreensToDb = async (): Promise<number> => {
+      const defaultLocationId = await getOrCreateDefaultLocationId();
+      let updatedCount = 0;
+      
+      for (const screen of allScreens) {
+        if (!screen.uuid) continue;
+        
+        const screenId = extractScreenIdFromYodeck(screen);
         const existing = await storage.getScreenByYodeckUuid(screen.uuid);
+        
         if (existing) {
-          // Update existing screen
+          // Update existing screen (also update locationId if missing)
           await storage.updateScreenByYodeckUuid(screen.uuid, {
             yodeckPlayerId: String(screen.id),
             yodeckPlayerName: screen.name,
@@ -291,10 +301,11 @@ export async function syncYodeckScreens(): Promise<{
             yodeckScreenshotUrl: screen.screenshot_url || null,
             status: screen.state?.online ? "online" : "offline",
             lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
+            locationId: existing.locationId || defaultLocationId,
           });
           updatedCount++;
         } else {
-          // Create new screen from Yodeck data
+          // Create new screen
           const newScreenId = screenId || `YDK-${screen.id}`;
           await storage.createScreen({
             screenId: newScreenId,
@@ -311,6 +322,29 @@ export async function syncYodeckScreens(): Promise<{
           });
           updatedCount++;
         }
+      }
+      return updatedCount;
+    };
+
+    // Execute upsert with retry for Neon connection terminated errors
+    let updatedCount = 0;
+    try {
+      updatedCount = await upsertScreensToDb();
+    } catch (dbError: any) {
+      if (dbError.code === "57P01") {
+        console.log("[DB] connection terminated, retrying once");
+        try {
+          updatedCount = await upsertScreensToDb();
+        } catch (retryError: any) {
+          console.log(`[DB] retry failed: ${retryError.message}`);
+          await storage.updateIntegrationConfig("yodeck", {
+            status: "error",
+            lastTestError: `DB error after retry: ${retryError.message}`,
+          });
+          return { success: false, message: `Database error: ${retryError.message}` };
+        }
+      } else {
+        throw dbError; // Re-throw non-57P01 errors
       }
     }
 
