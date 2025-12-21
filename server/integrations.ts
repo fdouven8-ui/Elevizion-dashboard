@@ -176,6 +176,14 @@ export async function testYodeckConnection(): Promise<{
         const screenList = data.results || (Array.isArray(data) ? data : []);
         const count = data.count ?? screenList.length;
         console.log(`[YODECK TEST] SUCCESS - ${count} screens found`);
+        
+        // Clear errors and update status on successful test
+        await storage.updateIntegrationConfig("yodeck", {
+          status: "connected",
+          lastTestError: null,
+          lastTestResult: { success: true, count, testedAt: new Date().toISOString() },
+        });
+        
         return { ok: true, success: true, message: "Verbonden met Yodeck", count, statusCode, requestedUrl: fullUrl };
       } catch (parseError) {
         console.log(`[YODECK TEST] FAIL - JSON parse error`);
@@ -348,11 +356,13 @@ export async function syncYodeckScreens(): Promise<{
       }
     }
 
-    // Update integration sync status
+    // Update integration sync status - clear errors on success
     await storage.updateIntegrationConfig("yodeck", {
       lastSyncAt: new Date(),
       lastSyncItemsProcessed: processedScreens.length,
       status: "connected",
+      lastTestError: null,
+      lastTestResult: { success: true, syncedAt: new Date().toISOString() },
     });
     
     const mapped = processedScreens.filter(s => s.is_mapped).length;
