@@ -166,15 +166,19 @@ const getCachedAllPlayers = memoizee(
   }
 );
 
-function generateMockUptimeTimeline(
+// Generate uptime timeline based on DB status (no more random values)
+// Uses current status for all data points since we don't have historical status data
+function generateUptimeTimeline(
   startDate: string, 
   endDate: string, 
   granularity: "hour" | "day" | "week",
-  currentStatus: "online" | "offline"
+  currentStatus: "online" | "offline",
+  lastSeenAt: Date | null
 ): UptimeDataPoint[] {
   const timeline: UptimeDataPoint[] = [];
   const start = new Date(startDate);
   const end = new Date(endDate);
+  const now = new Date();
   
   const intervalMs = granularity === "hour" ? 60 * 60 * 1000 
     : granularity === "day" ? 24 * 60 * 60 * 1000 
@@ -182,17 +186,30 @@ function generateMockUptimeTimeline(
 
   let current = new Date(start);
   while (current <= end) {
-    const status = Math.random() > 0.1 ? "online" : "offline";
+    // Determine status for this point based on lastSeenAt and current status
+    let pointStatus: "online" | "offline" = currentStatus;
+    
+    if (lastSeenAt) {
+      // If this point is after lastSeenAt and screen is offline, mark as offline
+      // If this point is before or at lastSeenAt, assume it was online
+      if (current > lastSeenAt && currentStatus === "offline") {
+        pointStatus = "offline";
+      } else if (current <= lastSeenAt || currentStatus === "online") {
+        pointStatus = "online";
+      }
+    }
+    
+    // Future points use current status
+    if (current > now) {
+      pointStatus = currentStatus;
+    }
+    
     timeline.push({
       timestamp: current.toISOString(),
-      status: timeline.length === 0 && currentStatus === "offline" ? "offline" : status,
+      status: pointStatus,
       duration: intervalMs,
     });
     current = new Date(current.getTime() + intervalMs);
-  }
-
-  if (timeline.length > 0) {
-    timeline[timeline.length - 1].status = currentStatus;
   }
 
   return timeline;
@@ -283,14 +300,17 @@ export async function getScreenStats(screenId: string, filter: StatsFilter): Pro
     playerStatus = await getCachedPlayerStatus(screen.yodeckPlayerId);
   }
 
-  const currentStatus: "online" | "offline" = playerStatus?.status === "online" ? "online" : "offline";
-  const lastSeen = playerStatus?.lastCheckedIn || screen.lastSeenAt;
+  // Use DB status as primary source, fallback to Yodeck player status
+  const currentStatus: "online" | "offline" = screen.status === "online" || playerStatus?.status === "online" ? "online" : "offline";
+  const lastSeen = screen.lastSeenAt || playerStatus?.lastCheckedIn;
+  const lastSeenDate = lastSeen ? new Date(lastSeen) : null;
 
-  const timeline = generateMockUptimeTimeline(
+  const timeline = generateUptimeTimeline(
     filter.dateRange.startDate,
     filter.dateRange.endDate,
     filter.granularity,
-    currentStatus
+    currentStatus,
+    lastSeenDate
   );
 
   const placements = await storage.getPlacementsByScreen(screenId);
