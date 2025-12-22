@@ -1,0 +1,1119 @@
+Retrieve Media List
+This endpoint retrieves a comprehensive list of media resources. You can apply optional filters to refine your search based on specific criteria such as workspace, folder, name, type, and tags.
+RATE LIMITING LEVEL:
+STANDARD
+AUTHORIZATIONS:
+APIKeyAuthentication
+QUERY PARAMETERS
+qstring
+Example: q=dummy title
+A search query to find resources by name or other attributes. This parameter allows partial matches, enabling more flexible searches.
+workspaceinteger
+Example: workspace=123
+The unique ID of the workspace to filter resources. This helps in organizing and retrieving resources associated with a specific workspace.
+parent_folderinteger
+Example: parent_folder=124
+The unique ID of the folder to filter resources. Use this to narrow down your search within a specific folder.
+idsArray ofintegers
+Example: ids=47,82,99
+Filter by specific media IDs. Provide a comma-separated list of numeric IDs in a single ids parameter. Repeating ids multiple times is not supported.
+Examples: Single: ids=47 Multiple: ids=47,82,99
+tagsArray ofstrings
+Example: tags=tag1,tag2
+Filter media by tags. Provide one or more tag strings. When multiple tags are supplied, only media that contain ANY of the specified tags are returned.
+Examples: Single tag: tags=tag1 Multiple tags: tags=tag1,tag2
+exclude_tagsArray ofstrings
+Example: exclude_tags=archived,deprecated
+Exclude media that contain ANY of the specified tags. Provide a comma-separated list of tag strings in a single exclude_tags parameter. A media item will be returned only if none of these tags are present on it.
+Examples: Single tag: exclude_tags=archived Multiple tags: exclude_tags=archived,deprecated
+media_typestring
+Example: media_type=image
+Filter media by its type. Acceptable values include image, video, audio, document, webpage. This helps in retrieving only the specific type of media you are interested in.
+limitinteger>= 1
+Default: 10
+Example: limit=10
+The maximum number of items to return. This parameter helps in controlling the size of the result set.
+offsetinteger>= 0
+Example: offset=0
+The number of items to skip before starting to collect the result set. Useful for pagination.
+orderingArray ofstrings
+Items Enum: "last_modified" "name"
+Example: ordering=name&ordering=last_modified
+Specifies the order in which to sort the media. Accepts an array of fields, with the option to append a - for descending order (e.g., -last_modified). Default is ascending order.
+
+https://app.yodeck.com/api/v2/media
+{
+  "count": 431,
+  "next": "https://app.yodeck.com/api/v2/media/?limit=100&offset=200",
+  "previous": "https://app.yodeck.com/api/v2/media/?limit=100&offset=0",
+  "results": [
+    {
+      "id": 123,
+      "name": "name_example",
+      "media_origin": {
+        "type": "image",
+        "source": "local",
+        "format": null
+      },
+      "description": "a short description",
+      "default_duration": 20,
+      "tags": [
+        "Europe",
+        "Athens"
+      ],
+      "file_extension": "mp4",
+      "created_at": "2024-03-27T13:31:31Z",
+      "last_modified": "2024-05-10T11:21:21Z",
+      "last_uploaded": "2024-03-27T13:31:54Z",
+      "status": "initialized",
+      "thumbnail_url": "https://app.yodeck.com/media/625e13e910c444f93df/85770a292def4bbf601ac6d/1/resized.jpg",
+      "availability_schedule": {
+        "enable": true,
+        "available_after": "2024-05-20T12:38:00Z",
+        "available_before": "2024-06-21T12:38:00Z",
+        "availability_slots": [
+          {
+            "start": "10:00:00",
+            "end": "12:00:00",
+            "days_of_week": "0101011"
+          }
+        ]
+      },
+      "arguments": {
+        "download_from_url": "https://app.yodeck.com/123Fdj1432"
+      },
+      "workspace": {
+        "id": 42,
+        "name": "Reception"
+      },
+      "parent_folder": {
+        "id": 12,
+        "name": "Catalog Folder"
+      }
+    }
+  ],
+  "get_upload_url": "https://app.yodeck.com/api/v2/media/{id}/upload"
+}
+
+Create a Media Resource
+https://app.yodeck.com/api/v2/media
+{
+  "name": "name_example",
+  "media_origin": {
+    "type": "image",
+    "source": "local",
+    "format": null
+  },
+  "description": "a short description",
+  "default_duration": 20,
+  "tags": [
+    "Europe",
+    "Athens"
+  ],
+  "availability_schedule": {
+    "enable": true,
+    "available_after": "2024-05-20T12:38:00Z",
+    "available_before": "2024-06-21T12:38:00Z",
+    "availability_slots": [
+      {
+        "start": "10:00:00",
+        "end": "12:00:00",
+        "days_of_week": "0101011"
+      }
+    ]
+  },
+  "arguments": {
+    "download_from_url": "https://app.yodeck.com/123Fdj1432"
+  },
+  "workspace": 123,
+  "parent_folder": 123
+}
+
+Retrieve Media by ID
+https://app.yodeck.com/api/v2/media/{id}
+{
+  "id": 123,
+  "name": "name_example",
+  "media_origin": {
+    "type": "image",
+    "source": "local",
+    "format": null
+  },
+  "description": "a short description",
+  "default_duration": 20,
+  "tags": [
+    "Europe",
+    "Athens"
+  ],
+  "file_extension": "mp4",
+  "created_at": "2024-03-27T13:31:31Z",
+  "last_modified": "2024-05-10T11:21:21Z",
+  "last_uploaded": "2024-03-27T13:31:54Z",
+  "status": "initialized",
+  "thumbnail_url": "https://app.yodeck.com/media/625e13e910c444f93df/85770a292def4bbf601ac6d/1/resized.jpg",
+  "availability_schedule": {
+    "enable": true,
+    "available_after": "2024-05-20T12:38:00Z",
+    "available_before": "2024-06-21T12:38:00Z",
+    "availability_slots": [
+      {
+        "start": "10:00:00",
+        "end": "12:00:00",
+        "days_of_week": "0101011"
+      }
+    ]
+  },
+  "arguments": {
+    "download_from_url": "https://app.yodeck.com/123Fdj1432"
+  },
+  "workspace": {
+    "id": 42,
+    "name": "Reception"
+  },
+  "parent_folder": {
+    "id": 12,
+    "name": "Catalog Folder"
+  }
+}
+
+Update Media by ID
+https://app.yodeck.com/api/v2/media/{id}
+{
+  "name": "name_example",
+  "media_origin": {
+    "type": "image",
+    "source": "local",
+    "format": null
+  },
+  "description": "a short description",
+  "default_duration": 20,
+  "tags": [
+    "Europe",
+    "Athens"
+  ],
+  "availability_schedule": {
+    "enable": true,
+    "available_after": "2024-05-20T12:38:00Z",
+    "available_before": "2024-06-21T12:38:00Z",
+    "availability_slots": [
+      {
+        "start": "10:00:00",
+        "end": "12:00:00",
+        "days_of_week": "0101011"
+      }
+    ]
+  },
+  "arguments": {
+    "download_from_url": "https://app.yodeck.com/123Fdj1432"
+  },
+  "workspace": 123,
+  "parent_folder": 123
+}
+
+Patch Media by ID
+https://app.yodeck.com/api/v2/media/{id}
+{
+  "name": "name_example",
+  "media_origin": {
+    "type": "image",
+    "source": "local",
+    "format": null
+  },
+  "description": "a short description",
+  "default_duration": 20,
+  "tags": [
+    "Europe",
+    "Athens"
+  ],
+  "availability_schedule": {
+    "enable": true,
+    "available_after": "2024-05-20T12:38:00Z",
+    "available_before": "2024-06-21T12:38:00Z",
+    "availability_slots": [
+      {
+        "start": "10:00:00",
+        "end": "12:00:00",
+        "days_of_week": "0101011"
+      }
+    ]
+  },
+  "arguments": {
+    "download_from_url": "https://app.yodeck.com/123Fdj1432"
+  },
+  "workspace": 123,
+  "parent_folder": 123
+}
+
+Delete Media By ID
+https://app.yodeck.com/api/v2/media/{id}
+{
+  "error": {
+    "code": "err_1001",
+    "message": "Invalid request input",
+    "details": {
+      "reason": "Invalid input"
+    },
+    "timestamp": "2024-09-11T14:07:27Z"
+  }
+}
+
+Retrieve upload URL for Media
+https://app.yodeck.com/api/v2/media/{id}/upload
+{
+  "upload_url": "https://dsbackend.s3.amazonaws.com/media/uploads/asfd1243/sadf1234/1/original?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVSH2IAFB6LVWZYND%2F20241015%2Feu-west-1%2Fs3%2Faws4_request&X-Amz-Date=20241015T202601Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=dc6fc40384dec793bb32f9a75e0fc33778f6e09c5e4f3291022c72d837f7e87c"
+}
+
+Complete Media upload
+https://app.yodeck.com/api/v2/media/{id}/upload/complete
+Request samples
+{
+  "upload_url": "https://dsbackend.s3.amazonaws.com/media/uploads/asfd1243/sadf1234/1/original?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAVSH2IAFB6LVWZYND%2F20241015%2Feu-west-1%2Fs3%2Faws4_request&X-Amz-Date=20241015T202601Z&X-Amz-Expires=600&X-Amz-SignedHeaders=host&X-Amz-Signature=dc6fc40384dec793bb32f9a75e0fc33778f6e09c5e4f3291022c72d837f7e87c"
+}
+Response samples
+{
+  "details": "Upload completed"
+}
+Retrieve the status of the uploaded media file
+https://app.yodeck.com/api/v2/media/{id}/status
+{
+  "status": "encoding"
+}
+Create Multiple Media Resources
+https://app.yodeck.com/api/v2/media/bulk
+Request samples
+{
+  "objects": [
+    {
+      "name": "name_example",
+      "media_origin": {
+        "type": "image",
+        "source": "local",
+        "format": null
+      },
+      "description": "a short description",
+      "default_duration": 20,
+      "tags": [
+        "Europe",
+        "Athens"
+      ],
+      "availability_schedule": {
+        "enable": true,
+        "available_after": "2024-05-20T12:38:00Z",
+        "available_before": "2024-06-21T12:38:00Z",
+        "availability_slots": [
+          {
+            "start": "10:00:00",
+            "end": "12:00:00",
+            "days_of_week": "0101011"
+          }
+        ]
+      },
+      "arguments": {
+        "download_from_url": "https://app.yodeck.com/123Fdj1432"
+      },
+      "workspace": 123,
+      "parent_folder": 123
+    }
+  ]
+}
+Response samples
+{
+  "objects": [
+    {
+      "id": 123,
+      "name": "name_example",
+      "media_origin": {
+        "type": "image",
+        "source": "local",
+        "format": null
+      },
+      "description": "a short description",
+      "default_duration": 20,
+      "tags": [
+        "Europe",
+        "Athens"
+      ],
+      "file_extension": "mp4",
+      "created_at": "2024-03-27T13:31:31Z",
+      "last_modified": "2024-05-10T11:21:21Z",
+      "last_uploaded": "2024-03-27T13:31:54Z",
+      "status": "initialized",
+      "thumbnail_url": "https://app.yodeck.com/media/625e13e910c444f93df/85770a292def4bbf601ac6d/1/resized.jpg",
+      "availability_schedule": {
+        "enable": true,
+        "available_after": "2024-05-20T12:38:00Z",
+        "available_before": "2024-06-21T12:38:00Z",
+        "availability_slots": [
+          {
+            "start": "10:00:00",
+            "end": "12:00:00",
+            "days_of_week": "0101011"
+          }
+        ]
+      },
+      "arguments": {
+        "download_from_url": "https://app.yodeck.com/123Fdj1432"
+      },
+      "workspace": {
+        "id": 42,
+        "name": "Reception"
+      },
+      "parent_folder": {
+        "id": 12,
+        "name": "Catalog Folder"
+      },
+      "get_upload_url": "https://app.yodeck.com/api/v2/media/{id}/upload"
+    }
+  ],
+  "failed": [
+    {
+      "id": null,
+      "reason": "Invalid request input",
+      "details": {
+        "field_name": "name",
+        "field_value": null,
+        "reason": "name is required when creating a media."
+      }
+    }
+  ]
+}
+Update and/or Delete Multiple Media Resources
+https://app.yodeck.com/api/v2/media/bulk
+Request samples
+{
+  "objects": [
+    {
+      "id": 123,
+      "name": "name_example",
+      "media_origin": {
+        "type": "image",
+        "source": "local",
+        "format": null
+      },
+      "description": "a short description",
+      "default_duration": 20,
+      "tags": [
+        "Europe",
+        "Athens"
+      ],
+      "availability_schedule": {
+        "enable": true,
+        "available_after": "2024-05-20T12:38:00Z",
+        "available_before": "2024-06-21T12:38:00Z",
+        "availability_slots": [
+          {
+            "start": "10:00:00",
+            "end": "12:00:00",
+            "days_of_week": "0101011"
+          }
+        ]
+      },
+      "arguments": {
+        "download_from_url": "https://app.yodeck.com/123Fdj1432"
+      },
+      "workspace": 123,
+      "parent_folder": 123
+    }
+  ],
+  "delete_objects": [
+    {
+      "id": 1
+    }
+  ]
+}
+Response samples
+{
+  "objects": [
+    {
+      "id": 123,
+      "name": "name_example",
+      "media_origin": {
+        "type": "image",
+        "source": "local",
+        "format": null
+      },
+      "description": "a short description",
+      "default_duration": 20,
+      "tags": [
+        "Europe",
+        "Athens"
+      ],
+      "file_extension": "mp4",
+      "created_at": "2024-03-27T13:31:31Z",
+      "last_modified": "2024-05-10T11:21:21Z",
+      "last_uploaded": "2024-03-27T13:31:54Z",
+      "status": "initialized",
+      "thumbnail_url": "https://app.yodeck.com/media/625e13e910c444f93df/85770a292def4bbf601ac6d/1/resized.jpg",
+      "availability_schedule": {
+        "enable": true,
+        "available_after": "2024-05-20T12:38:00Z",
+        "available_before": "2024-06-21T12:38:00Z",
+        "availability_slots": [
+          {
+            "start": "10:00:00",
+            "end": "12:00:00",
+            "days_of_week": "0101011"
+          }
+        ]
+      },
+      "arguments": {
+        "download_from_url": "https://app.yodeck.com/123Fdj1432"
+      },
+      "workspace": {
+        "id": 42,
+        "name": "Reception"
+      },
+      "parent_folder": {
+        "id": 12,
+        "name": "Catalog Folder"
+      },
+      "get_upload_url": "https://app.yodeck.com/api/v2/media/{id}/upload"
+    }
+  ],
+  "delete_objects": [
+    {
+      "id": 1
+    }
+  ],
+  "failed": [
+    {
+      "id": 44487,
+      "reason": "No Media matches the given query."
+    }
+  ]
+}
+Retrieve Playlist List
+https://app.yodeck.com/api/v2/playlists
+{
+  "count": 431,
+  "next": "https://app.yodeck.com/api/v2/playlists/?limit=100&offset=200",
+  "previous": "https://app.yodeck.com/api/v2/playlists/?limit=100&offset=0",
+  "results": [
+    {
+      "id": 123,
+      "name": "name_example",
+      "description": "This is a playlist that you can dance to.",
+      "workspace": {
+        "id": 42,
+        "name": "Reception"
+      },
+      "created_at": "2024-03-27T13:31:31Z",
+      "last_modified": "2024-05-10T11:21:21Z",
+      "thumbnail_url": "https://app.yodeck.com/media/625e13e910c444f93df/85770a292def4bbf601ac6d/1/resized.jpg",
+      "items": [
+        {
+          "id": 1,
+          "priority": 1,
+          "duration": 30,
+          "name": "my_media",
+          "type": "media"
+        }
+      ],
+      "transition_options": {
+        "add_image_transition": true,
+        "image_transition_name": "randomsquares",
+        "image_transition_speed": "custom",
+        "image_transition_duration": 4,
+        "add_gaps": true
+      },
+      "playback_options": {
+        "synced_playback": true,
+        "random_playback": true
+      }
+    }
+  ]
+}`
+Create a Playlist
+https://app.yodeck.com/api/v2/playlists
+{
+  "name": "name_example",
+  "description": "This is a playlist that you can dance to.",
+  "workspace": {
+    "name": "Reception"
+  },
+  "items": [
+    {
+      "id": 1,
+      "priority": 1,
+      "duration": 30,
+      "type": "media"
+    }
+  ],
+  "transition_options": {
+    "add_image_transition": true,
+    "image_transition_name": "randomsquares",
+    "image_transition_speed": "custom",
+    "image_transition_duration": 4,
+    "add_gaps": true
+  },
+  "playback_options": {
+    "synced_playback": true,
+    "random_playback": true
+  }
+}
+Retrieve playlist by ID
+https://app.yodeck.com/api/v2/playlists/{id}
+{
+  "id": 123,
+  "name": "name_example",
+  "description": "This is a playlist that you can dance to.",
+  "workspace": {
+    "id": 42,
+    "name": "Reception"
+  },
+  "created_at": "2024-03-27T13:31:31Z",
+  "last_modified": "2024-05-10T11:21:21Z",
+  "thumbnail_url": "https://app.yodeck.com/media/625e13e910c444f93df/85770a292def4bbf601ac6d/1/resized.jpg",
+  "items": [
+    {
+      "id": 1,
+      "priority": 1,
+      "duration": 30,
+      "name": "my_media",
+      "type": "media"
+    }
+  ],
+  "transition_options": {
+    "add_image_transition": true,
+    "image_transition_name": "randomsquares",
+    "image_transition_speed": "custom",
+    "image_transition_duration": 4,
+    "add_gaps": true
+  },
+  "playback_options": {
+    "synced_playback": true,
+    "random_playback": true
+  }
+}
+
+Update playlist by ID
+https://app.yodeck.com/api/v2/playlists/{id}
+
+{
+  "name": "name_example",
+  "description": "This is a playlist that you can dance to.",
+  "workspace": {
+    "name": "Reception"
+  },
+  "items": [
+    {
+      "id": 1,
+      "priority": 1,
+      "duration": 30,
+      "type": "media"
+    }
+  ],
+  "transition_options": {
+    "add_image_transition": true,
+    "image_transition_name": "randomsquares",
+    "image_transition_speed": "custom",
+    "image_transition_duration": 4,
+    "add_gaps": true
+  },
+  "playback_options": {
+    "synced_playback": true,
+    "random_playback": true
+  }
+}
+
+Patch playlist by ID
+https://app.yodeck.com/api/v2/playlists/{id}
+{
+  "name": "name_example",
+  "description": "This is a playlist that you can dance to.",
+  "workspace": {
+    "name": "Reception"
+  },
+  "items": [
+    {
+      "id": 1,
+      "priority": 1,
+      "duration": 30,
+      "type": "media"
+    }
+  ],
+  "transition_options": {
+    "add_image_transition": true,
+    "image_transition_name": "randomsquares",
+    "image_transition_speed": "custom",
+    "image_transition_duration": 4,
+    "add_gaps": true
+  },
+  "playback_options": {
+    "synced_playback": true,
+    "random_playback": true
+  }
+}
+Delete Playlist By ID
+https://app.yodeck.com/api/v2/playlists/{id}
+{
+  "error": {
+    "code": "err_1001",
+    "message": "Invalid request input",
+    "details": {
+      "reason": "Invalid input"
+    },
+    "timestamp": "2024-09-11T14:07:27Z"
+  }
+}Retrieve Tagbased Playlist List
+https://app.yodeck.com/api/v2/tagbased-playlists
+{
+  "count": 431,
+  "next": "https://app.yodeck.com/api/v2/screens/tags/?limit=100&offset=200",
+  "previous": "https://app.yodeck.com/api/v2/screens/tags/?limit=100&offset=0",
+  "results": [
+    {
+      "id": 123,
+      "name": "name_example",
+      "description": "This is a playlist that you can dance to.",
+      "workspace": {
+        "id": 42,
+        "name": "Reception"
+      },
+      "created_at": "2024-03-27T13:31:31Z",
+      "last_modified": "2024-05-10T11:21:21Z",
+      "add_gaps": true,
+      "shuffle_content": false,
+      "transition_options": {
+        "add_image_transition": true,
+        "image_transition_name": "randomsquares",
+        "image_transition_speed": "custom",
+        "image_transition_duration": 4,
+        "add_gaps": true
+      },
+      "tagbased": {
+        "tags": [
+          {
+            "id": 123,
+            "name": "may-july-collection"
+          }
+        ],
+        "workspaces": [
+          456
+        ],
+        "includes": [
+          [
+            789
+          ]
+        ],
+        "excludes": [
+          [
+            789
+          ]
+        ],
+        "content_to_filter": "only_media"
+      }
+    }
+  ]
+}
+Retrieve tagbased playlist by ID
+https://app.yodeck.com/api/v2/tagbased-playlists/{id}
+{
+  "id": 123,
+  "name": "name_example",
+  "description": "This is a playlist that you can dance to.",
+  "workspace": {
+    "id": 42,
+    "name": "Reception"
+  },
+  "created_at": "2024-03-27T13:31:31Z",
+  "last_modified": "2024-05-10T11:21:21Z",
+  "add_gaps": true,
+  "shuffle_content": false,
+  "transition_options": {
+    "add_image_transition": true,
+    "image_transition_name": "randomsquares",
+    "image_transition_speed": "custom",
+    "image_transition_duration": 4,
+    "add_gaps": true
+  },
+  "tagbased": {
+    "tags": [
+      {
+        "id": 123,
+        "name": "may-july-collection"
+      }
+    ],
+    "workspaces": [
+      456
+    ],
+    "includes": [
+      [
+        789
+      ]
+    ],
+    "excludes": [
+      [
+        789
+      ]
+    ],
+    "content_to_filter": "only_media"
+  }
+}
+Update tagbased playlist by ID
+https://app.yodeck.com/api/v2/tagbased-playlists/{id}
+{
+  "name": "name_example",
+  "description": "This is a playlist that you can dance to.",
+  "workspace": {
+    "name": "Reception"
+  },
+  "add_gaps": true,
+  "shuffle_content": false,
+  "transition_options": {
+    "add_image_transition": true,
+    "image_transition_name": "randomsquares",
+    "image_transition_speed": "custom",
+    "image_transition_duration": 4,
+    "add_gaps": true
+  },
+  "tagbased": {
+    "workspaces": [
+      456
+    ],
+    "includes": [
+      [
+        789
+      ]
+    ],
+    "excludes": [
+      [
+        789
+      ]
+    ],
+    "content_to_filter": "only_media"
+  }
+}
+Patch tagbased playlist by ID
+https://app.yodeck.com/api/v2/tagbased-playlists/{id}
+{
+  "name": "name_example",
+  "description": "This is a playlist that you can dance to.",
+  "workspace": {
+    "name": "Reception"
+  },
+  "add_gaps": true,
+  "shuffle_content": false,
+  "transition_options": {
+    "add_image_transition": true,
+    "image_transition_name": "randomsquares",
+    "image_transition_speed": "custom",
+    "image_transition_duration": 4,
+    "add_gaps": true
+  },
+  "tagbased": {
+    "workspaces": [
+      456
+    ],
+    "includes": [
+      [
+        789
+      ]
+    ],
+    "excludes": [
+      [
+        789
+      ]
+    ],
+    "content_to_filter": "only_media"
+  }
+}
+Delete Playlist By ID
+https://app.yodeck.com/api/v2/tagbased-playlists/{id}
+{
+  "error": {
+    "code": "err_1001",
+    "message": "Invalid request input",
+    "details": {
+      "reason": "Invalid input"
+    },
+    "timestamp": "2024-09-11T14:07:27Z"
+  }
+}
+Retrieve Layout List
+https://app.yodeck.com/api/v2/layouts
+{
+  "count": 431,
+  "next": "https://app.yodeck.com/api/v2/layouts/?limit=100&offset=200",
+  "previous": "https://app.yodeck.com/api/v2/layouts/?limit=100&offset=0",
+  "results": [
+    {
+      "id": 13,
+      "name": "Daily Menu",
+      "workspace": {
+        "id": 42,
+        "name": "Reception"
+      },
+      "resolution_width": 1920,
+      "resolution_height": 1080,
+      "created_at": "2024-05-28T08:32:28.624588",
+      "last_modified": "2024-11-28T08:32:28.624588",
+      "parent_folder": {
+        "id": 7,
+        "name": "Folder 4"
+      },
+      "regions": [
+        {
+          "id": 433,
+          "width": 336,
+          "height": 189,
+          "top": 783,
+          "left": 1488,
+          "zindex": 8,
+          "duration": -2,
+          "fit": "crop",
+          "enable_transparency": false,
+          "res_width": 1920,
+          "res_height": 1080,
+          "order": 1,
+          "is_muted": false,
+          "content_data": {},
+          "hidden": false,
+          "rotation": 0,
+          "flip": "False",
+          "content_width": 336,
+          "content_height": 189,
+          "content_top": 783,
+          "content_left": 1488,
+          "maintain_aspect_ratio": 1,
+          "lock": "none",
+          "item": {
+            "type": "playlist",
+            "id": 162
+          }
+        }
+      ],
+      "background_audio": {
+        "id": 473,
+        "item": {
+          "type": "widget",
+          "id": 166
+        }
+      }
+    }
+  ]
+}Create Layout
+https://app.yodeck.com/api/v2/layouts
+{
+  "name": "Daily Menu",
+  "workspace": {
+    "name": "Reception"
+  },
+  "resolution_width": 1920,
+  "resolution_height": 1080,
+  "parent_folder": {
+    "id": 7,
+    "name": "Folder 4"
+  },
+  "regions": [
+    {
+      "id": 433,
+      "width": 336,
+      "height": 189,
+      "top": 783,
+      "left": 1488,
+      "zindex": 8,
+      "duration": -2,
+      "fit": "crop",
+      "enable_transparency": false,
+      "res_width": 1920,
+      "res_height": 1080,
+      "order": 1,
+      "is_muted": false,
+      "content_data": {},
+      "hidden": false,
+      "rotation": 0,
+      "flip": "False",
+      "content_width": 336,
+      "content_height": 189,
+      "content_top": 783,
+      "content_left": 1488,
+      "maintain_aspect_ratio": 1,
+      "lock": "none",
+      "item": {
+        "type": "playlist",
+        "id": 162
+      }
+    }
+  ],
+  "background_audio": {
+    "id": 473,
+    "item": {
+      "type": "widget",
+      "id": 166
+    }
+  }
+}
+Retrieve Layout by ID
+https://app.yodeck.com/api/v2/layouts/{id}
+{
+  "id": 13,
+  "name": "Daily Menu",
+  "workspace": {
+    "id": 42,
+    "name": "Reception"
+  },
+  "resolution_width": 1920,
+  "resolution_height": 1080,
+  "created_at": "2024-05-28T08:32:28.624588",
+  "last_modified": "2024-11-28T08:32:28.624588",
+  "parent_folder": {
+    "id": 7,
+    "name": "Folder 4"
+  },
+  "regions": [
+    {
+      "id": 433,
+      "width": 336,
+      "height": 189,
+      "top": 783,
+      "left": 1488,
+      "zindex": 8,
+      "duration": -2,
+      "fit": "crop",
+      "enable_transparency": false,
+      "res_width": 1920,
+      "res_height": 1080,
+      "order": 1,
+      "is_muted": false,
+      "content_data": {},
+      "hidden": false,
+      "rotation": 0,
+      "flip": "False",
+      "content_width": 336,
+      "content_height": 189,
+      "content_top": 783,
+      "content_left": 1488,
+      "maintain_aspect_ratio": 1,
+      "lock": "none",
+      "item": {
+        "type": "playlist",
+        "id": 162
+      }
+    }
+  ],
+  "background_audio": {
+    "id": 473,
+    "item": {
+      "type": "widget",
+      "id": 166
+    }
+  }
+}
+Delete Layout By ID
+https://app.yodeck.com/api/v2/layouts/{id}
+{
+  "error": {
+    "code": "err_1001",
+    "message": "Invalid request input",
+    "details": {
+      "reason": "Invalid input"
+    },
+    "timestamp": "2024-09-11T14:07:27Z"
+  }
+}
+
+Update Layout by ID
+https://app.yodeck.com/api/v2/layouts/{id}
+{
+  "name": "Daily Menu",
+  "workspace": {
+    "name": "Reception"
+  },
+  "resolution_width": 1920,
+  "resolution_height": 1080,
+  "parent_folder": {
+    "id": 7,
+    "name": "Folder 4"
+  },
+  "regions": [
+    {
+      "id": 433,
+      "width": 336,
+      "height": 189,
+      "top": 783,
+      "left": 1488,
+      "zindex": 8,
+      "duration": -2,
+      "fit": "crop",
+      "enable_transparency": false,
+      "res_width": 1920,
+      "res_height": 1080,
+      "order": 1,
+      "is_muted": false,
+      "content_data": {},
+      "hidden": false,
+      "rotation": 0,
+      "flip": "False",
+      "content_width": 336,
+      "content_height": 189,
+      "content_top": 783,
+      "content_left": 1488,
+      "maintain_aspect_ratio": 1,
+      "lock": "none",
+      "item": {
+        "type": "playlist",
+        "id": 162
+      }
+    }
+  ],
+  "background_audio": {
+    "id": 473,
+    "item": {
+      "type": "widget",
+      "id": 166
+    }
+  }
+}
+Patch layout by ID
+https://app.yodeck.com/api/v2/layouts/{id}
+{
+  "name": "Daily Menu",
+  "workspace": {
+    "name": "Reception"
+  },
+  "resolution_width": 1920,
+  "resolution_height": 1080,
+  "parent_folder": {
+    "id": 7,
+    "name": "Folder 4"
+  },
+  "regions": [
+    {
+      "id": 433,
+      "width": 336,
+      "height": 189,
+      "top": 783,
+      "left": 1488,
+      "zindex": 8,
+      "duration": -2,
+      "fit": "crop",
+      "enable_transparency": false,
+      "res_width": 1920,
+      "res_height": 1080,
+      "order": 1,
+      "is_muted": false,
+      "content_data": {},
+      "hidden": false,
+      "rotation": 0,
+      "flip": "False",
+      "content_width": 336,
+      "content_height": 189,
+      "content_top": 783,
+      "content_left": 1488,
+      "maintain_aspect_ratio": 1,
+      "lock": "none",
+      "item": {
+        "type": "playlist",
+        "id": 162
+      }
+    }
+  ],
+  "background_audio": {
+    "id": 473,
+    "item": {
+      "type": "widget",
+      "id": 166
+    }
+  }
+}
