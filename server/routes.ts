@@ -3078,22 +3078,7 @@ export async function registerRoutes(
       const screensOnline = screens.filter(s => s.status === "online").length;
       const screensOffline = screens.filter(s => s.status === "offline").length;
       const screensTotal = screens.length;
-      
-      // Yodeck content tracking using yodeckContentStatus enum
-      // Status values: unknown, empty, has_content, likely_has_content, error
       const onlineScreens = screens.filter(s => s.status === "online");
-      const screensWithContent = onlineScreens.filter(s => 
-        s.yodeckContentStatus === "has_content" || s.yodeckContentStatus === "likely_has_content"
-      ).length;
-      const screensEmpty = onlineScreens.filter(s => 
-        s.yodeckContentStatus === "empty"
-      ).length;
-      const contentUnknown = onlineScreens.filter(s => 
-        !s.yodeckContentStatus || s.yodeckContentStatus === "unknown"
-      ).length;
-      const contentError = onlineScreens.filter(s => 
-        s.yodeckContentStatus === "error"
-      ).length;
       
       // Active placements: isActive AND current date within start/end range
       const isPlacementActive = (p: any) => {
@@ -3107,6 +3092,42 @@ export async function registerRoutes(
       
       const activePlacementsList = placements.filter(isPlacementActive);
       const activePlacements = activePlacementsList.length;
+      
+      // PLACEMENT-BASED STATS (Elevizion data, NOT Yodeck)
+      // Count active placements per screen
+      const screenPlacementCounts = new Map<string, number>();
+      activePlacementsList.forEach(p => {
+        const count = screenPlacementCounts.get(p.screenId) || 0;
+        screenPlacementCounts.set(p.screenId, count + 1);
+      });
+      
+      // Screens with/without active Elevizion placements
+      const screensWithPlacements = onlineScreens.filter(s => 
+        (screenPlacementCounts.get(s.id) || 0) > 0
+      ).length;
+      const screensWithoutPlacements = onlineScreens.filter(s => 
+        (screenPlacementCounts.get(s.id) || 0) === 0
+      ).length;
+      
+      // Screens with screenshot (online + has yodeckScreenshotUrl)
+      const screensWithScreenshot = onlineScreens.filter(s => 
+        s.yodeckScreenshotUrl && s.yodeckScreenshotUrl.length > 0
+      ).length;
+      
+      // Yodeck content tracking (SECONDARY - for unmanaged content detection)
+      // Status values: unknown, empty, has_content, likely_has_content, error
+      const screensWithYodeckContent = onlineScreens.filter(s => 
+        s.yodeckContentStatus === "has_content" || s.yodeckContentStatus === "likely_has_content"
+      ).length;
+      const screensYodeckEmpty = onlineScreens.filter(s => 
+        s.yodeckContentStatus === "empty"
+      ).length;
+      const contentUnknown = onlineScreens.filter(s => 
+        !s.yodeckContentLastFetchedAt
+      ).length;
+      const contentError = onlineScreens.filter(s => 
+        s.yodeckContentStatus === "error"
+      ).length;
       
       // Paying advertisers: advertisers with active/signed contract AND active placements
       const activeContracts = contracts.filter(c => 
@@ -3129,9 +3150,13 @@ export async function registerRoutes(
         screensOffline,
         activePlacements,
         payingAdvertisers,
-        // Yodeck content stats
-        screensWithContent,
-        screensEmpty,
+        // Placement-based stats (Elevizion data)
+        screensWithPlacements,
+        screensWithoutPlacements,
+        screensWithScreenshot,
+        // Yodeck content stats (secondary)
+        screensWithYodeckContent,
+        screensYodeckEmpty,
         contentUnknown,
         contentError,
       });
@@ -3279,27 +3304,29 @@ export async function registerRoutes(
   });
 
   // Action items for lightweight Action Overview (operational only, no financial/contract items)
+  // PRIORITY ORDER:
+  // 1. offline_screen (error) - Screen is offline
+  // 2. onboarding_hint (warning) - Online but no Elevizion placements
+  // 3. unmanaged_content (info) - Has screenshot/online but no managed placements
+  // 4. ok/active (success) - Has active placements (not shown in actions, these are good)
   app.get("/api/control-room/actions", async (_req, res) => {
     try {
       const screens = await storage.getScreens();
       const placements = await storage.getPlacements();
       const locations = await storage.getLocations();
+      const advertisers = await storage.getAdvertisers();
       const actions: any[] = [];
       const now = new Date();
       
-      // Helper: get recognizable screen name (priority: name -> yodeckPlayerName -> screenId)
+      // Helper: get recognizable screen name (priority: yodeckPlayerName -> name -> screenId)
+      // Per user request: use yodeckPlayerName primarily, avoid screenId in list
       const getScreenDisplayName = (screen: any) => 
-        screen.name || screen.yodeckPlayerName || screen.screenId || "Onbekend scherm";
+        screen.yodeckPlayerName || screen.name || screen.screenId || "Onbekend scherm";
       
-      // Helper: get location description with optional screenId
-      const getLocationDesc = (screen: any, includeScreenId: boolean = false) => {
+      // Helper: get location description (LocationName only, no screenId in description)
+      const getLocationDesc = (screen: any) => {
         const location = locations.find(l => l.id === screen.locationId);
-        const locationName = location?.name || "";
-        
-        if (includeScreenId && screen.screenId) {
-          return locationName ? `${locationName} • ${screen.screenId}` : screen.screenId;
-        }
-        return locationName;
+        return location?.name || "";
       };
       
       // Calculate truly active placements (isActive AND within date range)
@@ -3312,10 +3339,28 @@ export async function registerRoutes(
         return true;
       };
       
-      // Offline screens - only show offline action
+      // Build placement counts per screen (Elevizion data)
+      const screenPlacementCounts = new Map<string, number>();
+      const screenActiveAdvertisers = new Map<string, string[]>();
+      placements.filter(isPlacementActive).forEach(p => {
+        const count = screenPlacementCounts.get(p.screenId) || 0;
+        screenPlacementCounts.set(p.screenId, count + 1);
+        
+        // Track advertiser names for this screen
+        const advertiser = advertisers.find(a => a.id === p.advertiserId);
+        if (advertiser) {
+          const names = screenActiveAdvertisers.get(p.screenId) || [];
+          if (!names.includes(advertiser.companyName)) {
+            names.push(advertiser.companyName);
+            screenActiveAdvertisers.set(p.screenId, names);
+          }
+        }
+      });
+      
+      // PRIORITY 1: Offline screens (error severity)
       screens.forEach(screen => {
         if (screen.status === "offline") {
-          const locationDesc = getLocationDesc(screen, true); // LocationName • screenId
+          const locationDesc = getLocationDesc(screen);
           actions.push({
             id: `offline-${screen.id}`,
             type: "offline_screen",
@@ -3327,71 +3372,50 @@ export async function registerRoutes(
         }
       });
       
-      // Check online screens for content status (using yodeckContentStatus enum)
-      const onlineScreensToCheck = screens.filter(s => s.status === "online");
+      // Process online screens for placement-based actions
+      const onlineScreens = screens.filter(s => s.status === "online");
       
-      // Process online screens: check Yodeck content status from DB
-      // Status values: unknown, empty, has_content, likely_has_content, error
-      onlineScreensToCheck.forEach(screen => {
-        const locationDesc = getLocationDesc(screen, true); // LocationName • screenId
-        // Check for real Yodeck linking (UUID or numeric playerId, not dummy yd_player_XXX)
-        const hasRealYodeckLink = screen.yodeckUuid || 
-          (screen.yodeckPlayerId && !screen.yodeckPlayerId.startsWith("yd_player_"));
-        const contentStatus = screen.yodeckContentStatus;
+      onlineScreens.forEach(screen => {
+        const locationDesc = getLocationDesc(screen);
+        const placementCount = screenPlacementCounts.get(screen.id) || 0;
+        const advertiserNames = screenActiveAdvertisers.get(screen.id) || [];
+        const hasScreenshot = screen.yodeckScreenshotUrl && screen.yodeckScreenshotUrl.length > 0;
         const contentLastFetched = screen.yodeckContentLastFetchedAt;
-        const contentError = screen.yodeckContentError;
+        const contentStatus = screen.yodeckContentStatus;
         
-        if (!hasRealYodeckLink) {
-          // Screen not linked to Yodeck at all
-          actions.push({
-            id: `no-yodeck-${screen.id}`,
-            type: "no_yodeck",
-            itemName: getScreenDisplayName(screen),
-            description: locationDesc || "Geen locatie",
-            severity: "info",
-            link: `/screens/${screen.id}`,
-            statusText: "Niet gekoppeld aan Yodeck",
-          });
-        } else if (contentStatus === "error") {
-          // Content sync error - show warning with error message
-          actions.push({
-            id: `content-error-${screen.id}`,
-            type: "content_error",
-            itemName: getScreenDisplayName(screen),
-            description: locationDesc || "Geen locatie",
-            severity: "warning",
-            link: `/screens/${screen.id}`,
-            statusText: contentError || "Content sync fout",
-          });
-        } else if (!contentStatus || contentStatus === "unknown") {
-          // Content status unknown (never synced)
-          actions.push({
-            id: `content-unknown-${screen.id}`,
-            type: "content_unknown",
-            itemName: getScreenDisplayName(screen),
-            description: locationDesc || "Geen locatie",
-            severity: "info",
-            link: `/screens/${screen.id}`,
-            statusText: contentLastFetched 
-              ? "Content status onbekend" 
-              : "Content status onbekend (sync nodig)",
-          });
-        } else if (contentStatus === "empty") {
-          // Truly empty screen - Yodeck confirmed no content is assigned
-          actions.push({
-            id: `empty-${screen.id}`,
-            type: "empty_screen",
-            itemName: getScreenDisplayName(screen),
-            description: locationDesc || "Geen locatie",
-            severity: "warning",
-            link: `/screens/${screen.id}`,
-            statusText: "Geen content/schedule in Yodeck",
-          });
+        if (placementCount === 0) {
+          // PRIORITY 2: No Elevizion placements - onboarding hint
+          // Check if it's unmanaged content (has screenshot or Yodeck content but no Elevizion placements)
+          const hasYodeckContent = contentStatus === "has_content" || contentStatus === "likely_has_content";
+          
+          if (hasScreenshot || hasYodeckContent) {
+            // Screen is playing SOMETHING (screenshot/Yodeck content) but not managed by Elevizion
+            actions.push({
+              id: `unmanaged-${screen.id}`,
+              type: "unmanaged_content",
+              itemName: getScreenDisplayName(screen),
+              description: locationDesc || "Geen locatie",
+              severity: "info",
+              link: `/screens/${screen.id}`,
+              statusText: "Speelt content (niet vanuit Elevizion)",
+            });
+          } else {
+            // Screen has no placements and we can't confirm content
+            actions.push({
+              id: `onboarding-${screen.id}`,
+              type: "onboarding_hint",
+              itemName: getScreenDisplayName(screen),
+              description: locationDesc || "Geen locatie",
+              severity: "warning",
+              link: `/screens/${screen.id}`,
+              statusText: "Nog geen placements in Elevizion",
+            });
+          }
         }
-        // If contentStatus is has_content or likely_has_content, screen has content - no action needed
+        // If placementCount > 0, screen is OK - no action needed (these are actively managed)
       });
       
-      // Paused placements - only for online screens (offline screens just show offline action)
+      // Paused placements - only for online screens with active placements but some paused
       placements.filter(p => !p.isActive).forEach(placement => {
         const screen = screens.find(s => s.id === placement.screenId);
         // Skip if screen is offline - we already show offline_screen action

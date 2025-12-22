@@ -1,0 +1,65 @@
+DOEL: Fix “Geen content in Yodeck” + laat Control Room correct zien wat er op een scherm draait.
+Context:
+- Stack: Express + Drizzle + Postgres.
+- Screens worden gesynct uit Yodeck via GET https://app.yodeck.com/api/v2/screens.
+- In DB heeft Screen velden: yodeckScreenshotUrl, yodeckContentCount, yodeckContentSummary, yodeckContentLastFetchedAt.
+- Control Room toont acties: offline_screen / empty_screen / content_unknown. Nu wordt alles leeg omdat yodeckContentSummary.items=[].
+
+WAT MOET ER VERANDEREN (belangrijk):
+1) “Ads status” moet NIET uit Yodeck komen. Ads/placements zijn Elevizion data.
+   - Als een screen online is, maar geen placements in Elevizion heeft: toon actie type onboarding_hint met statusText: “Nog geen placements in Elevizion aangemaakt”.
+   - Als er wél placements zijn: toon actie type ok/active_content met statusText zoals “X actieve placements”.
+   - Maak hiervoor een query: count actieve placements per screen (en eventueel top 3 advertentie namen).
+
+2) “Yodeck content status” is secundair en mag ‘unmanaged’ zijn.
+   - Toon NIET “Geen content in Yodeck” puur omdat de API niets teruggeeft.
+   - Nieuwe logica:
+     a) Als yodeckContentLastFetchedAt == null: content_unknown (“sync nodig”)
+     b) Als yodeckScreenshotUrl bestaat en screen online is:
+        - toon status: “Yodeck content onbekend (screenshot beschikbaar)” OF “Unmanaged content (niet vanuit Elevizion)”
+     c) Alleen “Geen content in Yodeck” tonen als we 100% zeker weten dat Yodeck aangeeft dat schedule leeg is.
+
+3) Bouw een aparte ‘best-effort’ content fetch voor Yodeck:
+   - Voeg in Yodeck service een function toe: fetchScreenContentSummary(yodeckPlayerId or yodeckUuid)
+   - Probeer (met nette try/catch) een reeks mogelijke endpoints (documenteer in code) en log response keys:
+     - GET /api/v2/screens/{id}
+     - GET /api/v2/screens/{id}/playlists
+     - GET /api/v2/playlists
+     - GET /api/v2/schedules
+   - Voor elke call: als 404/401/empty → ga door naar volgende.
+   - Als je playlist/items vindt: maak een normalized summary:
+     {
+       items: [{type,name,id,count?}],
+       playlists: [{id,name}],
+       topItems: [string],
+       lastFetchedAt: ISO
+     }
+   - Sla op in Screen: yodeckContentSummary, yodeckContentCount (totaal items), yodeckContentLastFetchedAt.
+
+4) Update sync flow:
+   - In /api/integrations/yodeck/sync (of de bestaande auto-sync):
+     - sync screens (bestaat al)
+     - daarna: voor elke screen -> fetchScreenContentSummary() (best-effort) en update DB
+   - Zorg dat dit rate-limit vriendelijk is (max 2–4 requests per screen, parallel limit 2).
+
+5) Update Control Room endpoints:
+   - /api/control-room/stats moet uitbreiden met:
+     - screensWithPlacements
+     - screensWithoutPlacements
+     - screensWithScreenshot (online + screenshotUrl)
+     - contentUnknown (lastFetchedAt null)
+   - /api/control-room/actions:
+     - prioriteit: offline_screen (error)
+     - daarna: onboarding_hint (geen placements)
+     - daarna: content_unknown/unmanaged_content (geen placements maar wel screenshot / of content fetch faalt)
+     - daarna: ok/active (placements > 0)
+
+6) UX:
+   - In action itemName: gebruik yodeckPlayerName (bestaat al).
+   - In description: “Locatie • YDK-xxxx” is prima, maar screenId (EVZ-xxx) niet gebruiken in lijst.
+
+OPLEVERING:
+- Code compileert.
+- Geen “Geen content in Yodeck” meer als er wél screenshot/online status is.
+- “Ads” wordt correct gebaseerd op placements (Elevizion), niet op Yodeck.
+- Voeg duidelijke logs toe waarom content fetch leeg is (endpoint geprobeerd, statuscode).

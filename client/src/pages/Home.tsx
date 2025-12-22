@@ -21,14 +21,19 @@ interface ControlRoomStats {
   screensOffline: number;
   activePlacements: number;
   payingAdvertisers: number;
-  screensWithContent: number;
-  screensEmpty: number;
+  // Placement-based stats (Elevizion data)
+  screensWithPlacements: number;
+  screensWithoutPlacements: number;
+  screensWithScreenshot: number;
+  // Yodeck content stats (secondary)
+  screensWithYodeckContent: number;
+  screensYodeckEmpty: number;
   contentUnknown: number;
 }
 
 interface ActionItem {
   id: string;
-  type: "offline_screen" | "empty_screen" | "content_unknown" | "no_yodeck" | "paused_placement";
+  type: "offline_screen" | "onboarding_hint" | "unmanaged_content" | "paused_placement";
   itemName: string;
   description: string;
   severity: "error" | "warning" | "info";
@@ -116,9 +121,8 @@ export default function Home() {
   const getTypeIcon = (type: string) => {
     switch (type) {
       case "offline_screen": return WifiOff;
-      case "empty_screen": return Monitor;
-      case "content_unknown": return Monitor;
-      case "no_yodeck": return Monitor;
+      case "onboarding_hint": return Target;
+      case "unmanaged_content": return Monitor;
       case "paused_placement": return Pause;
       default: return Monitor;
     }
@@ -128,9 +132,8 @@ export default function Home() {
     if (statusText) return statusText;
     switch (type) {
       case "offline_screen": return "Offline";
-      case "empty_screen": return "Geen content in Yodeck";
-      case "content_unknown": return "Content status onbekend";
-      case "no_yodeck": return "Niet gekoppeld aan Yodeck";
+      case "onboarding_hint": return "Nog geen placements";
+      case "unmanaged_content": return "Speelt content (niet vanuit Elevizion)";
       case "paused_placement": return "Gepauzeerd";
       default: return type;
     }
