@@ -3096,7 +3096,6 @@ export async function registerRoutes(
     }
   });
 
-  // TODO: Remove this debug route after testing is complete
   // Discovery endpoint - probes multiple Yodeck endpoints to find content
   // GET /api/debug/yodeck/screen-content?playerId=591896
   // Returns: { tried:[{path,status,keys}], resolved:{count,playlists,topItems}, rawSample:..., playlistItems:... }
@@ -3113,6 +3112,69 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[YodeckDiscovery] Error:", error);
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // User-friendly debug endpoint for screen content (dev only)
+  // GET /api/integrations/yodeck/screen-content/:playerId
+  // Returns: sanitized content info with status, count, items, and debug info
+  app.get("/api/integrations/yodeck/screen-content/:playerId", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { playerId } = req.params;
+      console.log(`[YodeckDebug] Fetching content for playerId=${playerId}`);
+      
+      const { discoverScreenContent, debugYodeckScreen } = await import("./services/yodeckContent");
+      
+      // Get discovery result with probes (with safe defaults for error cases)
+      const discoveryResult = await discoverScreenContent(playerId);
+      
+      // Get raw debug info (with safe defaults)
+      let debugResult: any = { screenDetail: null };
+      try {
+        debugResult = await debugYodeckScreen(playerId);
+      } catch (debugError: any) {
+        console.log(`[YodeckDebug] Debug fetch failed: ${debugError.message}`);
+      }
+      
+      // Safe access with defaults for error/unknown cases
+      const resolved = discoveryResult?.resolved || {
+        status: "error",
+        statusReason: "Discovery failed",
+        count: 0,
+        playlists: [],
+        topItems: [],
+      };
+      const tried = discoveryResult?.tried || [];
+      
+      // Build sanitized response
+      const response = {
+        playerId,
+        timestamp: new Date().toISOString(),
+        status: resolved.status,
+        statusReason: resolved.statusReason,
+        contentCount: resolved.count,
+        playlists: resolved.playlists || [],
+        topItems: resolved.topItems || [],
+        playlistItems: discoveryResult?.playlistItems || [],
+        // Debug info (sanitized - no API keys)
+        debug: {
+          endpointsProbed: tried.map((t: any) => ({
+            endpoint: t.endpoint,
+            status: t.status,
+            hasContent: t.hasContent,
+            keys: t.keys,
+          })),
+          rawScreenContent: debugResult?.screenDetail?.screen_content || null,
+          screenState: debugResult?.screenDetail?.state || null,
+          screenName: debugResult?.screenDetail?.name || null,
+        },
+      };
+      
+      console.log(`[YodeckDebug] Result for ${playerId}: status=${response.status}, count=${response.contentCount}`);
+      res.json(response);
+    } catch (error: any) {
+      console.error("[YodeckDebug] Error:", error);
+      res.status(500).json({ error: error.message, playerId: req.params.playerId });
     }
   });
 
@@ -3367,8 +3429,13 @@ export async function registerRoutes(
       const placements = await storage.getPlacements();
       const locations = await storage.getLocations();
       const advertisers = await storage.getAdvertisers();
+      const contracts = await storage.getContracts();
       const actions: any[] = [];
       const now = new Date();
+      
+      // Build contract -> advertiser lookup
+      const contractAdvertiserMap = new Map<string, string>();
+      contracts.forEach(c => contractAdvertiserMap.set(c.id, c.advertiserId));
       
       // Helper: get recognizable screen name (priority: yodeckPlayerName -> name -> screenId)
       // Per user request: use yodeckPlayerName primarily, avoid screenId in list
@@ -3398,8 +3465,9 @@ export async function registerRoutes(
         const count = screenPlacementCounts.get(p.screenId) || 0;
         screenPlacementCounts.set(p.screenId, count + 1);
         
-        // Track advertiser names for this screen
-        const advertiser = advertisers.find(a => a.id === p.advertiserId);
+        // Track advertiser names for this screen (via contract -> advertiser)
+        const advertiserId = contractAdvertiserMap.get(p.contractId);
+        const advertiser = advertiserId ? advertisers.find(a => a.id === advertiserId) : null;
         if (advertiser) {
           const names = screenActiveAdvertisers.get(p.screenId) || [];
           if (!names.includes(advertiser.companyName)) {

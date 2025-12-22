@@ -1,0 +1,48 @@
+Je bent senior full-stack engineer voor het “Elevizion Dashboard” (Express + Drizzle + Postgres + React). We hebben een Yodeck integratie die nu wél screens inleest (naam/online/offline), maar NIET betrouwbaar de “screen content / ads die nu draaien”.
+
+Huidige probleem:
+- /api/sync/yodeck/run synced 2 screens, maar yodeckContentCount blijft 0 en yodeckContentSummary.items blijft leeg.
+- In de UI krijg ik “Geen content in Yodeck” of “Content status onbekend” terwijl het scherm wél iets afspeelt (“unmanaged_content: Speelt content (niet vanuit Elevizion)”).
+Doel:
+- Het dashboard moet kunnen tonen: “welke content/playlist/layout/schedule draait op dit scherm” (minimaal contentCount + topItems + playlist namen).
+- Als content NIET uit Elevizion placements komt, markeer als unmanaged_content (dat bestaat al), maar wél met bewijs: playlist/layout namen en/of items.
+
+Taken (doe dit stap voor stap, met logging en zonder gokken):
+1) Zoek in de bestaande code waar de Yodeck sync zit (routes: POST /api/sync/yodeck/run, en de Yodeck client die GET https://app.yodeck.com/api/v2/screens aanroept).
+2) Voeg een “Yodeck Content Fetch” toe per screen. Gebruik de yodeckPlayerId of yodeckUuid uit onze Screen records.
+   - Inspecteer de Yodeck API: ontdek via de API welke endpoints beschikbaar zijn om de toegewezen playlist/layout/schedule per screen op te halen.
+   - Als je het niet zeker weet: maak een interne debug functie (server-side) die in logs de response keys toont voor mogelijke endpoints (zonder secrets te loggen).
+   - Werk iteratief: probeer eerst een endpoint dat “assigned content / playlist / schedule” per screen teruggeeft. Als dat niet bestaat, zoek naar endpoints voor schedules, playlists, layouts, campaigns of screen playback.
+3) Sla het resultaat op in de databasevelden die al bestaan:
+   - yodeckContentStatus: "ok" | "empty" | "unknown" | "error"
+   - yodeckContentCount: number
+   - yodeckContentSummary: { items: [], topItems: [], playlists: [], lastFetchedAt: ISO }
+   - yodeckContentLastFetchedAt, yodeckContentError
+   Zorg dat “unknown” alleen gebruikt wordt als de API geen info kan geven; “empty” alleen als Yodeck expliciet zegt: geen items/geen playlist/geen schedule.
+4) Fallback (belangrijk, omdat screen wél iets speelt):
+   - Als de API geen contentlijst kan geven, gebruik dan de yodeckScreenshotUrl als tweede bron:
+     - Download de screenshot server-side, bepaal of het “non-empty content” is met een simpele heuristiek (bijv. image byte-size threshold of histogram/variance check).
+     - Als screenshot duidelijk non-empty is, zet yodeckContentStatus="ok" en contentCount=1 (unknown item) en zet in summary.topItems een placeholder zoals {type:"screenshot_detected", label:"Speelt content (via screenshot)"}.
+     - Sla yodeckScreenshotLastOkAt en yodeckScreenshotByteSize op (velden bestaan al).
+5) Update Control Room actions logic:
+   - Toon “Geen content in Yodeck” alleen als yodeckContentStatus="empty".
+   - Toon “Content status onbekend” alleen als yodeckContentStatus="unknown".
+   - Toon “Speelt content (niet vanuit Elevizion)” als yodeckContentStatus="ok" maar activePlacements==0 (dus unmanaged).
+   - Laat “screensWithYodeckContent / screensYodeckEmpty / contentUnknown / contentError” correct tellen.
+6) Voeg één endpoint toe voor debug (alleen in dev), bv:
+   - GET /api/integrations/yodeck/screen-content/:playerId
+   Dit moet teruggeven wat jij uit Yodeck haalt (gesanitized) zodat we kunnen zien wat er binnenkomt.
+7) Let op:
+   - Log nooit de volledige api_key, alleen “NxU4…(len=64)” zoals nu.
+   - Maak het robuust: timeouts, retries (1), en per-screen errors mogen de hele sync niet crashen.
+   - Voeg duidelijke console logs toe: welke endpoint(s) gebruikt, counts, en waarom status empty/unknown/ok/error is.
+
+Acceptance criteria:
+- In /api/screens zie ik per screen een realistische yodeckContentStatus en yodeckContentSummary (playlist/items of minimaal screenshot_detected).
+- Control Room toont niet meer fout “Geen content” terwijl het scherm zichtbaar content speelt.
+- Voor screens met echte Yodeck playlists/layouts/schedules: yodeckContentCount > 0 en summary.playlists/topItems gevuld.
+
+Begin nu met code changes en laat in je antwoord zien:
+- welke bestanden aangepast zijn,
+- welke endpoints gebruikt worden,
+- voorbeeld van een logregel en voorbeeld response van /api/screens (met content).
