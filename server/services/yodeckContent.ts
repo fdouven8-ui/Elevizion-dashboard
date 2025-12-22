@@ -505,6 +505,88 @@ function buildSummary(items: ContentItem[]): string {
 // Cache duration in milliseconds (10 minutes)
 const CONTENT_CACHE_DURATION_MS = 10 * 60 * 1000;
 
+// Minimum screenshot size to consider as "has content" (20KB)
+const SCREENSHOT_MIN_SIZE_BYTES = 20 * 1024;
+
+/**
+ * Screenshot fallback - check if screenshot URL is valid and large enough
+ * A screenshot > 20KB strongly suggests content is playing on the screen
+ * 
+ * Strategy:
+ * 1. HEAD request to get content-type and content-length
+ * 2. If HEAD doesn't give size, do partial GET request
+ * 3. Check content-type starts with "image/"
+ * 4. Check size > 20KB (arbitrary threshold for "real" content)
+ */
+async function checkScreenshotFallback(
+  screenshotUrl: string,
+  screenId: string
+): Promise<{ hasContent: boolean; byteSize: number | null; error?: string }> {
+  if (!screenshotUrl) {
+    return { hasContent: false, byteSize: null, error: "no_url" };
+  }
+
+  console.log(`[Yodeck] ${screenId}: Trying screenshot fallback: ${screenshotUrl.substring(0, 60)}...`);
+
+  try {
+    // Try HEAD request first (faster, no body download)
+    const headResponse = await fetch(screenshotUrl, {
+      method: "HEAD",
+      headers: {
+        "Accept": "image/*",
+      },
+    });
+
+    if (!headResponse.ok) {
+      console.log(`[Yodeck] ${screenId}: Screenshot HEAD failed with ${headResponse.status}`);
+      return { hasContent: false, byteSize: null, error: `http_${headResponse.status}` };
+    }
+
+    const contentType = headResponse.headers.get("content-type");
+    if (!contentType?.startsWith("image/")) {
+      console.log(`[Yodeck] ${screenId}: Screenshot is not an image: ${contentType}`);
+      return { hasContent: false, byteSize: null, error: "not_image" };
+    }
+
+    // Check content-length from HEAD response
+    const contentLength = headResponse.headers.get("content-length");
+    if (contentLength) {
+      const byteSize = parseInt(contentLength, 10);
+      const hasContent = byteSize >= SCREENSHOT_MIN_SIZE_BYTES;
+      console.log(`[Yodeck] ${screenId}: Screenshot size=${byteSize} bytes, hasContent=${hasContent}`);
+      return { hasContent, byteSize };
+    }
+
+    // If HEAD doesn't give size, do a partial GET to estimate
+    console.log(`[Yodeck] ${screenId}: No content-length in HEAD, trying partial GET...`);
+    const getResponse = await fetch(screenshotUrl, {
+      method: "GET",
+      headers: {
+        "Accept": "image/*",
+        "Range": "bytes=0-25000", // Get first 25KB to check
+      },
+    });
+
+    if (!getResponse.ok && getResponse.status !== 206) {
+      console.log(`[Yodeck] ${screenId}: Screenshot GET failed with ${getResponse.status}`);
+      return { hasContent: false, byteSize: null, error: `http_${getResponse.status}` };
+    }
+
+    // Read the response body to get actual size
+    const buffer = await getResponse.arrayBuffer();
+    const byteSize = buffer.byteLength;
+    
+    // If we got 25KB (our range limit), likely there's more content
+    const hasContent = byteSize >= SCREENSHOT_MIN_SIZE_BYTES;
+    console.log(`[Yodeck] ${screenId}: Screenshot partial size=${byteSize} bytes, hasContent=${hasContent}`);
+    
+    return { hasContent, byteSize };
+  } catch (error: any) {
+    console.log(`[Yodeck] ${screenId}: Screenshot fetch error: ${error.message}`);
+    return { hasContent: false, byteSize: null, error: error.message };
+  }
+}
+
 /**
  * Sync content for all screens in database
  * @param force - If true, skip cache and force refresh all screens
@@ -700,20 +782,63 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
       const items = contentResult.items;
       const contentCount = items.length;
       const summary = buildSummary(items);
-      const status: ContentStatus = contentCount > 0 ? "has_content" : "empty";
+      
+      // CRITICAL STATUS LOGIC:
+      // - "has_content" = We found content items
+      // - "empty" = API explicitly confirmed no content (confirmedEmpty=true)
+      // - "unknown" = We couldn't find content but API didn't confirm empty
+      let status: ContentStatus;
+      let screenshotFallbackUsed = false;
+      
+      if (contentCount > 0) {
+        status = "has_content";
+      } else if (contentResult.confirmedEmpty === true) {
+        // ONLY set "empty" if API explicitly confirmed no content
+        status = "empty";
+        console.log(`[Yodeck] ${screen.screenId}: CONFIRMED EMPTY by API`);
+      } else {
+        // We couldn't find content but API didn't confirm empty
+        // Try screenshot fallback before giving up
+        const screenshotUrl = screen.yodeckScreenshotUrl;
+        if (screenshotUrl) {
+          const screenshotResult = await checkScreenshotFallback(screenshotUrl, screen.screenId);
+          if (screenshotResult.hasContent) {
+            status = "has_content";
+            screenshotFallbackUsed = true;
+            console.log(`[Yodeck] ${screen.screenId}: Screenshot fallback SUCCESS - ${screenshotResult.byteSize} bytes`);
+            
+            // Update screenshot tracking fields
+            await storage.updateScreen(screen.id, {
+              yodeckScreenshotLastOkAt: new Date(),
+              yodeckScreenshotByteSize: screenshotResult.byteSize,
+            });
+          } else {
+            // Screenshot fallback also failed - stay unknown
+            status = "unknown";
+            console.log(`[Yodeck] ${screen.screenId}: Screenshot fallback failed - keeping as unknown`);
+          }
+        } else {
+          status = "unknown";
+          console.log(`[Yodeck] ${screen.screenId}: No content found, no screenshot URL - keeping as unknown`);
+        }
+      }
 
-      console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): ${contentCount} items (${summary})`);
+      console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): ${contentCount} items, status=${status}${screenshotFallbackUsed ? " (screenshot fallback)" : ""}`);
 
       // Save to DB
       const contentSummary: ContentSummary = {
-        items,
-        topItems: items.slice(0, 5).map(i => `${i.type}: ${i.name}`),
+        items: screenshotFallbackUsed && items.length === 0 
+          ? [{ type: "other" as const, name: "Screenshot OK (content detected via fallback)" }]
+          : items,
+        topItems: screenshotFallbackUsed && items.length === 0
+          ? ["Screenshot OK (fallback)"]
+          : items.slice(0, 5).map(i => `${i.type}: ${i.name}`),
         lastFetchedAt: new Date().toISOString(),
       };
 
       await storage.updateScreen(screen.id, {
-        yodeckContentStatus: status, // has_content or empty
-        yodeckContentCount: contentCount,
+        yodeckContentStatus: status,
+        yodeckContentCount: screenshotFallbackUsed ? 1 : contentCount,
         yodeckContentSummary: contentSummary,
         yodeckContentLastFetchedAt: new Date(),
         yodeckContentError: null, // Clear any previous error

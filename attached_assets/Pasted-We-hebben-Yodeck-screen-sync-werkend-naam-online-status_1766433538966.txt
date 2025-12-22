@@ -1,0 +1,82 @@
+We hebben Yodeck screen sync werkend (naam/online status klopt), maar “screen content” klopt niet: hij blijft op empty/unknown terwijl er wél playlists/widgets/ads draaien in Yodeck.
+
+DOEL
+1) Inlezen wat er op elk scherm staat vanuit Yodeck (minimaal: welke playlist(s)/schedule actief zijn + count en korte summary).
+2) Stop met “Geen content in Yodeck” als we het niet zeker weten. Gebruik statuses:
+   - has_content (we hebben playlists/items)
+   - empty (we hebben zeker dat er niets is toegewezen)
+   - unknown (we konden het niet bepalen)
+   - error (api fout)
+3) UI/Control Room moet daarop gebaseerd zijn.
+
+CONTEXT (huidig gedrag)
+- /api/v2/screens wordt opgehaald (2 screens).
+- In DB staat yodeckContentCount=0 en items=[].
+- Control-room action zegt “Geen content in Yodeck” of “Content status onbekend”.
+- Ik heb in Yodeck wél nieuws/weer/ads op het scherm staan.
+
+WAT JE NU MOET DOEN (code changes)
+A) Zoek in backend de Yodeck integratie/sync code waar content wordt bepaald (iets als yodeck.sync.ts / yodeckService / fetchScreenContent / updateScreenContent).
+   - Voeg tijdelijke debug logging toe om exact te zien welke endpoints worden aangeroepen en wat Yodeck teruggeeft (statuscode + keys van JSON, NIET de apiKey loggen).
+   - Log per screen: yodeckPlayerId, yodeckUuid, yodeck_name.
+
+B) Fix de content-fetch:
+   1) Gebruik /api/v2/screens ALLEEN voor basis (id, uuid, name, online, last_seen, screenshot_url).
+   2) Haal daarna per screen details op via een “detail endpoint” en/of “assigned content endpoints”.
+      - Probeer in deze volgorde, met nette fallback:
+        i. GET https://app.yodeck.com/api/v2/screens/{yodeck_screen_id}
+        ii. Als daarin geen playlist/schedule zit: zoek endpoints in codebase of Yodeck response links voor “playlists/schedule/assignments”.
+        iii. Probeer expliciet een endpoint dat “wat is toegewezen aan screen” teruggeeft (playlist assignment / schedule / layout).
+      - Als je niet meteen weet welk endpoint klopt: implementeer discovery:
+        * Inspect de JSON van screen detail: kijk naar velden als playlist, playlists, schedule, layout, campaign, assigned_* of relaties/urls.
+        * Als er urls in de response staan: volg die.
+      - Resultaat dat we nodig hebben:
+        * playlists[] (naam + id)
+        * items[] (minimaal: type + naam + id) óf een “topItems” lijst
+        * contentCount (totaal items of totaal assigned entries)
+        * lastFetchedAt (nu)
+   3) Mapping rules:
+      - Als playlists/items gevonden: status=has_content, count>0, summary vullen.
+      - Als we expliciet een leeg assignment terugkrijgen (echt bevestigd): status=empty.
+      - Als endpoints geen duidelijk antwoord geven maar geen error: status=unknown (NIET empty).
+      - Bij error: status=error en yodeckContentError vullen.
+
+C) Fallback (belangrijk)
+Als Yodeck API geen playlist/items wil geven (soms beperkt):
+   - Gebruik screenshot_url als secondary signal:
+     * HEAD of GET (stream) screenshot_url en check:
+       - HTTP 200
+       - content-type image/*
+       - byteSize > bijv. 20KB
+     * Als screenshot ok is: zet status=has_content (want er draait iets zichtbaar), maar zet contentSummary.items leeg en zet contentSummary.topItems=["Screenshot OK (fallback)"].
+     * Als screenshot faalt: status=unknown of error afhankelijk van fout.
+
+D) DB updates
+- Zorg dat Screen record velden correct gezet worden:
+  yodeckContentStatus, yodeckContentCount, yodeckContentSummary (items/topItems/playlists/lastFetchedAt), yodeckContentLastFetchedAt, yodeckContentError, yodeckScreenshotLastOkAt, yodeckScreenshotByteSize.
+- Zorg dat migrations/Drizzle schema overeenkomen met deze velden (maak migration als nodig).
+
+E) Control Room logic
+- “empty_screen” action mag alleen als yodeckContentStatus === "empty".
+- Als status unknown: action = content_unknown met statusText “Content status onbekend (sync nodig of API beperkt)”.
+- Als status error: action = content_error met korte fout.
+- Voeg bij has_content eventueel action niet tonen, of toon “OK: {count} items” als info.
+
+F) Sync trigger
+- Zorg dat content-fetch wordt gedraaid bij:
+  - handmatige sync endpoint (POST /api/integrations/yodeck/sync of /api/sync/yodeck/run)
+  - en/of de auto-sync elke 15 min
+- Zet rate limiting / concurrency: max 3 screens tegelijk om Yodeck niet te slopen.
+
+ACCEPTANCE TESTS (moet jij uitvoeren)
+1) Run sync. In logs zie ik per screen:
+   - screen detail endpoint calls
+   - content result + status
+2) In /api/screens moet voor het online scherm NIET meer status empty zijn als er echt content draait.
+3) Control-room actions: geen “Geen content in Yodeck” zolang we het niet 100% zeker weten.
+4) Screenshot fallback werkt: als playlists niet op te halen zijn, maar screenshot is 200 en >20KB => has_content.
+
+LEVER OP
+- Code changes + migrations
+- Korte uitleg in comments welke endpoints gebruikt worden en waarom
+- Laat in console output zien dat het online scherm contentStatus=has_content of op z’n minst unknown (niet empty) als Yodeck API niets prijsgeeft.
