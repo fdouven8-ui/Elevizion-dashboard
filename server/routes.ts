@@ -3049,6 +3049,19 @@ export async function registerRoutes(
     }
   });
 
+  // Debug endpoint to inspect raw Yodeck API responses for troubleshooting
+  app.get("/api/integrations/yodeck/debug/screen/:yodeckScreenId", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { yodeckScreenId } = req.params;
+      const { debugYodeckScreen } = await import("./services/yodeckContent");
+      const result = await debugYodeckScreen(yodeckScreenId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[YodeckDebug] Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ============================================================================
   // CONTROL ROOM (OPS-FIRST DASHBOARD)
   // ============================================================================

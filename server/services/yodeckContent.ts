@@ -3,49 +3,48 @@
  * Fetches and parses what content is currently assigned to Yodeck screens
  * 
  * Strategy: 
- * 1. First fetch screen list to get all screen IDs
- * 2. For each screen, fetch detail endpoint to get assigned content
- * 3. Try multiple strategies: UUID first, then numeric ID
- * 4. Use null for "unknown", 0 for "truly empty"
+ * 1. First fetch screen list to get all screen IDs (numeric ID + UUID)
+ * 2. For each screen, fetch detail endpoint using NUMERIC ID to get assigned content
+ * 3. Parse screen_content field for source_type/source_name
  * 
  * ============================================================================
- * DEV NOTES - Yodeck API Integration
+ * DEV NOTES - Yodeck API Integration (Updated Dec 2025)
  * ============================================================================
  * 
  * ENDPOINTS USED:
  * - GET /api/v2/screens - List all screens (returns: id, uuid, name, workspace, state)
- * - GET /api/v2/screens/{uuid} - Get screen details (REQUIRES UUID, not numeric ID)
+ * - GET /api/v2/screens/{id} - Get screen details (REQUIRES NUMERIC ID, not UUID!)
  * 
- * CRITICAL: The detail endpoint ONLY works with UUID, not the numeric screen ID!
- * Using numeric ID (e.g. 591896) returns 404. Always use the uuid field.
+ * CRITICAL: The detail endpoint ONLY works with NUMERIC ID (e.g. 591896).
+ * Using UUID returns 404! Always use the numeric id field from the list response.
  * 
  * IDENTIFIER MAPPING:
- * - yodeckPlayerId = numeric ID (e.g. "591896") - used for display/reference only
- * - yodeckUuid = UUID string (e.g. "abc123-def456...") - REQUIRED for API calls
+ * - yodeckPlayerId = numeric ID (e.g. "591896") - REQUIRED for detail API calls
+ * - yodeckUuid = UUID string (e.g. "abc123-def456...") - for reference only
  * 
  * CONTENT STRUCTURE IN RESPONSE:
- * Yodeck returns content in two possible locations:
- * 1. Top-level fields: playlist, playlists, media, schedule, layout, apps, widgets
- * 2. assigned_content object: { playlists[], items[], media[], schedules[], etc. }
+ * Yodeck returns content in screen_content object with format:
+ * {"source_type":"playlist","source_id":27644453,"source_name":"Test Playlist"}
  * 
- * We check BOTH locations to maximize content detection.
- * 
- * EXAMPLE RESPONSE MAPPING:
+ * EXAMPLE RESPONSE:
+ * GET /api/v2/screens/591896 returns:
  * {
  *   "id": 591896,
  *   "uuid": "abc123...",
  *   "name": "Test Screen",
- *   "assigned_content": {
- *     "playlists": [{ "id": 123, "name": "Main Playlist" }],
- *     "items": [{ "id": 456, "name": "Weather Widget", "type": "widget" }]
+ *   "screen_content": {
+ *     "source_type": "playlist",
+ *     "source_id": 27644453,
+ *     "source_name": "Main Playlist"
  *   }
  * }
- * => contentCount: 2, summary: "Playlist: Main Playlist • Widget: Weather Widget"
+ * => contentCount: 1, summary: "Playlist: Main Playlist"
  * 
- * NULL vs 0 SEMANTICS:
- * - null = unknown (API failed, never synced, or endpoint returned error)
- * - 0 = truly empty (API confirmed no content assigned)
- * - >0 = has content (count of items)
+ * CONTENT STATUS SEMANTICS:
+ * - "unknown" = API failed, never synced, or no Yodeck link
+ * - "empty" = API confirmed no content assigned (screen_content is null)
+ * - "has_content" = Content detected via API
+ * - "likely_has_content" = Screenshot suggests content (fallback)
  * ============================================================================
  */
 
@@ -170,7 +169,7 @@ async function fetchScreenAssignedContent(
   uuid: string | null,
   numericId: string | null,
   apiKey: string
-): Promise<{ items: ContentItem[]; raw?: any; error?: string }> {
+): Promise<{ items: ContentItem[]; raw?: any; error?: string; confirmedEmpty?: boolean }> {
   // IMPORTANT: Only use numeric ID - UUID endpoint returns 404
   if (!numericId) {
     console.log(`[Yodeck] No numeric ID for ${screenId} - cannot fetch content details`);
@@ -195,7 +194,34 @@ async function fetchScreenAssignedContent(
       console.log(`[Yodeck] screen_content: ${JSON.stringify(result.data.screen_content).substring(0, 150)}`);
     }
     
-    return { items, raw: result.data };
+    // Determine if screen is CONFIRMED empty
+    // Only set confirmedEmpty=true if API was successful AND screen_content is explicitly null/empty
+    const screenContent = result.data.screen_content as any;
+    const assignedContent = result.data.assigned_content;
+    const hasScreenContent = screenContent && (
+      screenContent.source_type || 
+      (screenContent.playlists?.length > 0) ||
+      (screenContent.media?.length > 0) ||
+      (screenContent.schedules?.length > 0)
+    );
+    const hasAssignedContent = assignedContent && (
+      (assignedContent.playlists?.length || 0) > 0 ||
+      (assignedContent.items?.length || 0) > 0 ||
+      (assignedContent.media?.length || 0) > 0
+    );
+    
+    // Screen is CONFIRMED empty only if:
+    // - API was successful
+    // - screen_content is null OR explicitly has no source_type
+    // - assigned_content is null/empty
+    // - We found no items through extraction
+    const confirmedEmpty = items.length === 0 && !hasScreenContent && !hasAssignedContent;
+    
+    if (items.length === 0) {
+      console.log(`[Yodeck] No items extracted for ${screenId}. confirmedEmpty=${confirmedEmpty}, hasScreenContent=${hasScreenContent}, hasAssignedContent=${hasAssignedContent}`);
+    }
+    
+    return { items, raw: result.data, confirmedEmpty };
   }
   
   if (result.status === 404) {
@@ -689,7 +715,23 @@ export async function fetchScreenContentSummary(screen: {
   const items = contentResult.items;
   const contentCount = items.length;
   const summary = buildSummary(items);
-  const status: ContentStatus = contentCount > 0 ? "has_content" : "empty";
+  
+  // Determine content status:
+  // - "has_content": We found content items
+  // - "empty": API confirmed NO content (confirmedEmpty=true)
+  // - "unknown": We couldn't extract content but API didn't confirm empty
+  let status: ContentStatus;
+  if (contentCount > 0) {
+    status = "has_content";
+  } else if (contentResult.confirmedEmpty) {
+    // Only set "empty" if API explicitly confirmed no content
+    status = "empty";
+    console.log(`[Yodeck] Screen ${screen.screenId} confirmed EMPTY by API`);
+  } else {
+    // We couldn't find content but API didn't confirm empty - stay unknown
+    status = "unknown";
+    console.log(`[Yodeck] Screen ${screen.screenId} content unclear - keeping as unknown`);
+  }
 
   const contentSummary: ContentSummary = {
     items,
@@ -701,6 +743,7 @@ export async function fetchScreenContentSummary(screen: {
     yodeckContentCount: contentCount,
     yodeckContentSummary: contentSummary,
     yodeckContentLastFetchedAt: new Date(),
+    yodeckContentStatus: status,
   });
 
   return {
@@ -710,5 +753,143 @@ export async function fetchScreenContentSummary(screen: {
     contentCount,
     summary,
     items,
+  };
+}
+
+/**
+ * Debug function to inspect raw Yodeck API responses for a specific screen
+ * Tries multiple endpoints and returns all attempts for debugging
+ */
+export async function debugYodeckScreen(yodeckScreenId: string): Promise<{
+  tried: Array<{ endpoint: string; url: string; status: number | string; success: boolean }>;
+  data: any;
+  error?: string;
+}> {
+  const apiKey = await getYodeckApiKey();
+  if (!apiKey) {
+    return { tried: [], data: null, error: "No Yodeck API key configured" };
+  }
+
+  const tried: Array<{ endpoint: string; url: string; status: number | string; success: boolean }> = [];
+  let successData: any = null;
+
+  // Try endpoint 1: GET /screens/{id} (numeric ID - the working method)
+  const endpoint1 = `/screens/${yodeckScreenId}`;
+  const url1 = `${YODECK_BASE_URL}${endpoint1}`;
+  console.log(`[YodeckDebug] Trying: GET ${url1}`);
+  
+  try {
+    const response1 = await fetch(url1, {
+      headers: {
+        "Authorization": `Token ${apiKey.substring(0, 4)}...`, // Don't log full key
+        "Accept": "application/json",
+      },
+    });
+    
+    // Actually make the request with full key
+    const realResponse1 = await fetch(url1, {
+      headers: {
+        "Authorization": `Token ${apiKey}`,
+        "Accept": "application/json",
+      },
+    });
+
+    const attempt1 = {
+      endpoint: "GET /screens/{id}",
+      url: url1,
+      status: realResponse1.status,
+      success: realResponse1.ok,
+    };
+    tried.push(attempt1);
+
+    if (realResponse1.ok) {
+      successData = await realResponse1.json();
+      console.log(`[YodeckDebug] Success on ${endpoint1}`);
+    } else {
+      console.log(`[YodeckDebug] Failed ${endpoint1}: ${realResponse1.status}`);
+    }
+  } catch (e: any) {
+    tried.push({
+      endpoint: "GET /screens/{id}",
+      url: url1,
+      status: e.message || "error",
+      success: false,
+    });
+  }
+
+  // If first attempt failed, try with trailing slash
+  if (!successData) {
+    const endpoint2 = `/screens/${yodeckScreenId}/`;
+    const url2 = `${YODECK_BASE_URL}${endpoint2}`;
+    console.log(`[YodeckDebug] Trying: GET ${url2}`);
+    
+    try {
+      const realResponse2 = await fetch(url2, {
+        headers: {
+          "Authorization": `Token ${apiKey}`,
+          "Accept": "application/json",
+        },
+      });
+
+      tried.push({
+        endpoint: "GET /screens/{id}/",
+        url: url2,
+        status: realResponse2.status,
+        success: realResponse2.ok,
+      });
+
+      if (realResponse2.ok) {
+        successData = await realResponse2.json();
+        console.log(`[YodeckDebug] Success on ${endpoint2}`);
+      }
+    } catch (e: any) {
+      tried.push({
+        endpoint: "GET /screens/{id}/",
+        url: url2,
+        status: e.message || "error",
+        success: false,
+      });
+    }
+  }
+
+  // Try players endpoint if screens failed
+  if (!successData) {
+    const endpoint3 = `/players/${yodeckScreenId}`;
+    const url3 = `${YODECK_BASE_URL}${endpoint3}`;
+    console.log(`[YodeckDebug] Trying: GET ${url3}`);
+    
+    try {
+      const realResponse3 = await fetch(url3, {
+        headers: {
+          "Authorization": `Token ${apiKey}`,
+          "Accept": "application/json",
+        },
+      });
+
+      tried.push({
+        endpoint: "GET /players/{id}",
+        url: url3,
+        status: realResponse3.status,
+        success: realResponse3.ok,
+      });
+
+      if (realResponse3.ok) {
+        successData = await realResponse3.json();
+        console.log(`[YodeckDebug] Success on ${endpoint3}`);
+      }
+    } catch (e: any) {
+      tried.push({
+        endpoint: "GET /players/{id}",
+        url: url3,
+        status: e.message || "error",
+        success: false,
+      });
+    }
+  }
+
+  return {
+    tried,
+    data: successData,
+    error: successData ? undefined : "All endpoints failed",
   };
 }

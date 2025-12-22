@@ -1,0 +1,68 @@
+Je werkt aan Elevizion Dashboard (Express backend + DB). Yodeck sync haalt nu alleen /api/v2/screens op en zet yodeckContentCount = 0, waardoor Control Room “Geen content in Yodeck” toont, terwijl er wél nieuws/weer/ads op het scherm draaien.
+
+DOEL
+1) Control Room actions: itemName moet altijd de Yodeck schermnaam tonen (yodeckPlayerName / yodeck_name). ScreenId (“YDK-…”) mag hooguit in description/subtitle staan.
+2) Content-detectie fixen: backend moet kunnen inlezen/afleiden wat er op een Yodeck scherm staat (playlist/media/widgets) OF op z’n minst betrouwbaar “heeft content / unknown” kunnen bepalen.
+3) “empty_screen” mag NIET getriggerd worden als we content niet zeker weten. Dan moet het “content_unknown” blijven met statusText “Nog niet ingelezen / sync nodig”.
+
+WAT ER NU MISGAAT (uit logs)
+- Sync: GET https://app.yodeck.com/api/v2/screens => we krijgen 2 screens, maar contentSummary items=[] en yodeckContentCount=0.
+- Daardoor: action empty_screen op online scherm (Test) met “Geen content in Yodeck”, maar gebruiker heeft wel degelijk content geplaatst.
+- Eerder was er ook: “Failed to fetch Yodeck player 591896: 404 Not Found” => waarschijnlijk verkeerde endpoint/id-type gebruikt.
+
+AANPAK (implementeren)
+A) Voeg een DEBUG endpoint toe om rauwe Yodeck responses te inspecteren:
+   - GET /api/integrations/yodeck/debug/screen/:yodeckScreenId
+   - Deze endpoint probeert in volgorde (met dezelfde API key):
+     1) GET https://app.yodeck.com/api/v2/screens/:id
+     2) GET https://app.yodeck.com/api/v2/screens/:id/ (als nodig, sommige APIs tolereren slash)
+     3) Als #1 404: probeer GET https://app.yodeck.com/api/v2/players/:id en/of /api/v2/players? (maar alleen als docs/response dat suggereert)
+   - Return JSON met:
+     { tried: [{url,status}], data: {…} } voor de eerste succesvolle response + errors/logs.
+   - BELANGRIJK: log geen volledige apiKey.
+
+B) Content extractie:
+   - Maak een function extractContentSummary(rawScreenJson, rawScreensListItem?) die probeert velden te vinden zoals:
+     playlist, playlists, schedule, campaign, layout, widgets, media, items, assets, current_* etc.
+   - Resultaat opslaan in DB:
+     screens.yodeckContentSummary = { items: [...], playlists: [...], topItems: [...], lastFetchedAt: ISO }
+     screens.yodeckContentCount = items.length (of fallback count)
+     screens.yodeckContentLastFetchedAt = lastFetchedAt
+   - Als er géén content-velden gevonden worden maar scherm is ONLINE en er is een screenshot_url:
+     zet yodeckContentSummary = { items: [], playlists: [], topItems: [], lastFetchedAt, note: "no-content-fields-found" }
+     en zet een extra boolean/flag: yodeckContentStatus = "unknown" (nieuw) OF hergebruik bestaande logica:
+       - contentUnknown als we het niet kunnen bewijzen.
+     Dus NIET automatisch “empty”.
+
+C) Sync flow aanpassen:
+   - Huidig: GET /api/v2/screens => upsert basisinfo.
+   - Nieuw:
+     - Upsert basisinfo uit list
+     - Voor elk screen (limit 10 of alle screens, maar met concurrency limit 2-3) doe:
+       GET /api/v2/screens/:id
+       -> extractContentSummary
+       -> update DB velden yodeckContentCount/summary/lastFetchedAt
+     - Als detail-call faalt (404/500): markeer content status “unknown” en sla lastFetchedAt wel op met note “fetch-failed”.
+
+D) Control Room actions/logica:
+   - empty_screen alleen als:
+     - screen.status == "online"
+     - AND yodeckContentLastFetchedAt != null
+     - AND contentStatus == "known_empty" (of yodeckContentCount === 0 EN we weten zeker dat dit “echt” leeg is)
+   - content_unknown als:
+     - online maar (lastFetchedAt null) OF contentStatus == "unknown"
+   - “Nog geen placements” (onboarding_hint) mag blijven, maar toon die pas nadat contentStatus bekend is (of naast content_unknown).
+
+E) UI/tekst:
+   - Actions itemName = screen.yodeckPlayerName (of name)
+   - description = `${locationName} • ${screenId}` of `${locationName} • YDK-...`
+   - statusText voor content_unknown: “Content status onbekend (sync nodig)” of “Kan content niet uitlezen uit Yodeck API”
+   - statusText voor empty_screen: “Bevestigd: geen content in Yodeck”
+
+ACCEPTATIECRITERIA
+1) Control Room toont bij actions altijd herkenbare namen: “Basil’s Barber Shop Maasbracht” en “Test”.
+2) Online scherm met zichtbare content wordt NIET meer als “Geen content in Yodeck” gemarkeerd zolang we content niet hard kunnen bevestigen.
+3) Met /api/integrations/yodeck/debug/screen/591896 kan ik zien welke endpoint wél content/playlist info teruggeeft.
+4) Na sync zie ik yodeckContentLastFetchedAt gevuld + contentStatus correct (unknown/known_empty/known_has_content).
+
+Lever de code changes in de bestaande structuur (services/integrations/yodeck*, routes, DB update). Voeg nette logs toe en concurrency limiting (p-limit of eigen queue).
