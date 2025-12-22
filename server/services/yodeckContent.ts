@@ -54,7 +54,7 @@ import { decryptCredentials } from "../crypto";
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const CONCURRENT_LIMIT = 3; // Max parallel requests to avoid rate limiting
 
-export type ContentStatus = "unknown" | "empty" | "has_content";
+export type ContentStatus = "unknown" | "empty" | "has_content" | "error";
 
 export interface ContentItem {
   type: "playlist" | "media" | "schedule" | "layout" | "app" | "webpage" | "other";
@@ -695,20 +695,31 @@ export async function fetchScreenContentSummary(screen: {
     apiKey
   );
 
-  if (contentResult.error === "all_strategies_failed") {
+  // Handle API errors - set status to "error" with error message
+  if (contentResult.error) {
+    const errorMessage = contentResult.error === "all_strategies_failed" 
+      ? "API calls failed" 
+      : contentResult.error === "not_found"
+      ? "Screen not found in Yodeck (404)"
+      : contentResult.error === "no_numeric_id"
+      ? "No numeric Yodeck ID available"
+      : `API error: ${contentResult.error}`;
+    
     await storage.updateScreen(screen.id, {
       yodeckContentCount: null,
       yodeckContentSummary: null,
       yodeckContentLastFetchedAt: new Date(),
+      yodeckContentStatus: "error",
+      yodeckContentError: errorMessage,
     });
     
     return {
       screenId: screen.screenId,
       yodeckName,
-      status: "unknown",
+      status: "error",
       contentCount: null,
       summary: null,
-      error: "api_failed",
+      error: contentResult.error,
     };
   }
 
@@ -744,6 +755,7 @@ export async function fetchScreenContentSummary(screen: {
     yodeckContentSummary: contentSummary,
     yodeckContentLastFetchedAt: new Date(),
     yodeckContentStatus: status,
+    yodeckContentError: null, // Clear any previous error
   });
 
   return {

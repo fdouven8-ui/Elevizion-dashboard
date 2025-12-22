@@ -1,0 +1,88 @@
+Je bent senior full-stack engineer voor het Elevizion Dashboard (Express + Drizzle + Postgres + React). 
+Doel: Yodeck content sync fixen zodat we correct kunnen bepalen wat er “op het scherm staat”, en Control Room actions moeten primair Yodeck naam tonen (niet screenId).
+
+CONTEXT:
+- We syncen Yodeck screens via GET https://app.yodeck.com/api/v2/screens.
+- In DB hebben we screens met velden zoals: yodeckPlayerId (string/number), yodeckUuid, yodeckPlayerName, yodeckScreenshotUrl.
+- UI toont nu “Geen content in Yodeck” maar er draait WEL content (news, weather, video/foto ads).
+- Eerder is er een error geweest: “Failed to fetch Yodeck player 591896: 404 Not Found”. Dit suggereert dat we een player endpoint aanroepen met een screen id of vice versa.
+
+TAKEN:
+1) IDENTIFICEER YODECK ID’S CORRECT
+   - Inspecteer de response van /api/v2/screens en log (server-side) alle relevante keys per screen (id, screen_id, player_id, device_id, uuid, playlist_id, schedule_id, tags, etc).
+   - Maak daarna een betrouwbare mapping in code:
+     - Bewaar in DB zowel:
+       a) yodeckScreenId (numeric)  <-- id waarmee je /screens/{id} kan opvragen
+       b) yodeckUuid (string)
+       c) yodeckName (display)
+     - Stop met gokken met “playerId” als dat niet 1-op-1 hetzelfde is als screen id.
+
+2) CONTENT SYNC IMPLEMENTEREN (Echte content, niet “0”)
+   - Voeg een server functie toe: fetchYodeckScreenContent(yodeckScreenId)
+   - Deze functie probeert in volgorde:
+     A) GET /api/v2/screens/{yodeckScreenId} en check velden die verwijzen naar playlist/schedule/content
+     B) Als er playlist_id is: haal playlist details op (bv /api/v2/playlists/{id} of relevante endpoint)
+     C) Als er schedule/rotation is: haal schedule/playlist items op via de juiste endpoints
+     D) Als Yodeck geen directe “wat speelt er nu” endpoint heeft:
+        - gebruik een “assigned content” benadering: assets/playlists gekoppeld aan screen.
+   - Maak dit robuust:
+     - Als endpoint 404 geeft, log duidelijk welke URL + welke id is gebruikt + welke id-type we dachten dat het was.
+     - Als endpoint 401/403: geef “credentials/config issue”.
+     - Als er wel playlist maar geen items: markeer “content assigned but empty playlist”.
+
+3) DB STRUCTUUR & OPSLAG
+   - Voeg (drizzle migration) velden toe aan screens:
+     - yodeckScreenId (integer, nullable)
+     - yodeckContentCount (integer default 0)
+     - yodeckContentSummary (jsonb nullable) met shape:
+       {
+         source: "yodeck",
+         playlists: [{id, name}],
+         items: [{type, name, id}],
+         topItems: [{type, name, count}],
+         lastFetchedAt: ISOstring
+       }
+     - yodeckContentLastFetchedAt (timestamp nullable)
+     - yodeckContentStatus (enum/string): "unknown" | "empty" | "has_content" | "error"
+     - yodeckContentError (text nullable)
+
+4) SYNC FLOW AANPASSEN
+   - Tijdens de bestaande Yodeck sync:
+     - Upsert screens (zoals nu)
+     - Daarna voor elke screen: content sync uitvoeren met rate-limit (bv 1-3 tegelijk) zodat we niet API-limit hitten.
+     - Update yodeckContentStatus correct:
+       - has_content als items/playlists > 0
+       - empty als echt niks gekoppeld is
+       - unknown als we geen endpoints konden bepalen
+       - error als call faalt
+   - Voeg een aparte endpoint toe:
+     POST /api/integrations/yodeck/sync-content
+     waarmee ik handmatig alleen content kan verversen.
+
+5) CONTROL ROOM / ACTIONS UI
+   - In /api/control-room/actions:
+     - itemName moet altijd yodeckPlayerName (oftewel de Yodeck screen naam) zijn.
+     - description mag bevatten: locationName • screenIdDisplay (YDK-xxxxx) maar NIET als primary label.
+   - Actie types:
+     - offline_screen: unchanged
+     - empty_screen: alleen als yodeckContentStatus == "empty"
+     - content_unknown: als status == "unknown" of lastFetchedAt null
+     - content_error: als status == "error" (toon korte error)
+   - Update /api/control-room/stats:
+     - screensWithContent = count(status=="has_content")
+     - screensEmpty = count(status=="empty")
+     - contentUnknown = count(status=="unknown")
+     - contentError = count(status=="error")
+
+6) DEBUG OUTPUT (SUPER BELANGRIJK)
+   - Voeg een tijdelijk debug endpoint toe:
+     GET /api/debug/yodeck/screen/{screenId}
+     die teruggeeft:
+       - welke yodeck ids we kennen
+       - welke endpoints we geprobeerd hebben
+       - ruwe keys van responses (gefilterd) zodat we kunnen zien waar playlist/content zit.
+   - Zorg dat API keys nooit gelogd worden.
+
+OPLEVERING:
+- Commit code changes, migrations, en update eventuele types/shared schemas.
+- Zorg dat de UI direct zichtbaar de content status toont (has/empty/unknown/error) en dat “Geen content in Yodeck” alleen komt als we echt zeker empty zijn.
