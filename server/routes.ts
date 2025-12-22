@@ -3065,12 +3065,17 @@ export async function registerRoutes(
       const screensTotal = screens.length;
       
       // Yodeck content tracking: screens with content vs empty vs unknown
+      // IMPORTANT: null = unknown, 0 = truly empty (confirmed by Yodeck), >0 = has content
       const onlineScreens = screens.filter(s => s.status === "online");
-      const screensWithContent = onlineScreens.filter(s => (s.yodeckContentCount || 0) > 0).length;
-      const screensEmpty = onlineScreens.filter(s => 
-        s.yodeckContentLastFetchedAt && (s.yodeckContentCount || 0) === 0
+      const screensWithContent = onlineScreens.filter(s => 
+        s.yodeckContentCount !== null && s.yodeckContentCount !== undefined && s.yodeckContentCount > 0
       ).length;
-      const contentUnknown = onlineScreens.filter(s => !s.yodeckContentLastFetchedAt).length;
+      const screensEmpty = onlineScreens.filter(s => 
+        s.yodeckContentCount === 0 // Only 0 means truly empty (Yodeck confirmed)
+      ).length;
+      const contentUnknown = onlineScreens.filter(s => 
+        s.yodeckContentCount === null || s.yodeckContentCount === undefined
+      ).length;
       
       // Active placements: isActive AND current date within start/end range
       const isPlacementActive = (p: any) => {
@@ -3307,10 +3312,11 @@ export async function registerRoutes(
       const onlineScreensToCheck = screens.filter(s => s.status === "online");
       
       // Process online screens: check Yodeck content count from DB
+      // IMPORTANT: null = unknown (never synced or API failed), 0 = truly empty (confirmed by Yodeck)
       onlineScreensToCheck.forEach(screen => {
         const locationDesc = getLocationDesc(screen, true); // LocationName • screenId
         const isLinkedToYodeck = screen.yodeckUuid || screen.yodeckPlayerId;
-        const yodeckContentCount = screen.yodeckContentCount || 0;
+        const yodeckContentCount = screen.yodeckContentCount; // Keep null as null!
         const contentLastFetched = screen.yodeckContentLastFetchedAt;
         
         if (!isLinkedToYodeck) {
@@ -3324,8 +3330,8 @@ export async function registerRoutes(
             link: `/screens/${screen.id}`,
             statusText: "Niet gekoppeld aan Yodeck",
           });
-        } else if (!contentLastFetched) {
-          // Content status unknown (never synced)
+        } else if (yodeckContentCount === null || yodeckContentCount === undefined) {
+          // Content status unknown (never synced OR API endpoint failed)
           actions.push({
             id: `content-unknown-${screen.id}`,
             type: "content_unknown",
@@ -3333,10 +3339,12 @@ export async function registerRoutes(
             description: locationDesc || "Geen locatie",
             severity: "info",
             link: `/screens/${screen.id}`,
-            statusText: "Content status onbekend (sync nodig)",
+            statusText: contentLastFetched 
+              ? "Content status onbekend (API endpoint faalt)" 
+              : "Content status onbekend (sync nodig)",
           });
         } else if (yodeckContentCount === 0) {
-          // Truly empty screen - no content assigned in Yodeck
+          // Truly empty screen - Yodeck confirmed no content is assigned
           actions.push({
             id: `empty-${screen.id}`,
             type: "empty_screen",

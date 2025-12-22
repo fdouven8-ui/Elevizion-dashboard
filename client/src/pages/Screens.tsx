@@ -368,6 +368,7 @@ export default function Screens() {
               <TableHead>Plaats</TableHead>
               <TableHead>Locatie/Bedrijf</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Content</TableHead>
               <TableHead className="text-center">Actieve plaatsingen</TableHead>
               <TableHead className="w-[100px] text-right">Actie</TableHead>
             </TableRow>
@@ -391,6 +392,23 @@ export default function Screens() {
                     {getStatusLabel(scr.status)}
                   </Badge>
                 </TableCell>
+                <TableCell className="text-sm max-w-[200px] truncate" title={
+                  scr.yodeckContentCount === null || scr.yodeckContentCount === undefined
+                    ? "Onbekend"
+                    : scr.yodeckContentCount === 0
+                    ? "Leeg"
+                    : (scr.yodeckContentSummary?.topItems?.join(" • ") || `${scr.yodeckContentCount} items`)
+                }>
+                  {scr.yodeckContentCount === null || scr.yodeckContentCount === undefined ? (
+                    <span className="text-muted-foreground">Onbekend</span>
+                  ) : scr.yodeckContentCount === 0 ? (
+                    <span className="text-orange-500">Leeg</span>
+                  ) : (
+                    <span className="text-green-600">
+                      {scr.yodeckContentSummary?.topItems?.slice(0, 2).join(" • ") || `${scr.yodeckContentCount} items`}
+                    </span>
+                  )}
+                </TableCell>
                 <TableCell className="text-center">
                   <Badge variant="outline">{getActivePlacementsCount(scr.id)}</Badge>
                 </TableCell>
@@ -405,7 +423,7 @@ export default function Screens() {
             ))}
             {filteredScreens.length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
                   Geen schermen gevonden
                 </TableCell>
               </TableRow>

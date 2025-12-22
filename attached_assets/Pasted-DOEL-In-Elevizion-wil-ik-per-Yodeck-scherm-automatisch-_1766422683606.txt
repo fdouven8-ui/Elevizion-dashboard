@@ -1,0 +1,80 @@
+DOEL
+In Elevizion wil ik per Yodeck-scherm automatisch kunnen zien WAT er op het scherm draait (playlist/layout/app/media). Nu staat yodeckContentCount=0 en in Control Room “Geen content in Yodeck”, terwijl ik wel nieuws/weer/ads heb toegevoegd.
+
+WAT ER NU MIS GAAT
+- We syncen alleen /api/v2/screens (basis info). Dat endpoint geeft geen “assigned content”.
+- Er wordt (of werd) een player endpoint aangeroepen dat 404 geeft (“Failed to fetch Yodeck player 591896: 404”). Waarschijnlijk gebruiken we het verkeerde ID of verkeerd endpoint.
+- Daardoor vullen we yodeckContentCount/yodeckContentSummary nooit correct.
+
+WAT JE MOET IMPLEMENTEREN (BACKEND)
+1) Voeg een “content fetch” stap toe aan de Yodeck sync:
+   - Voor elke screen die we ophalen, haal ook “assigned content / schedule” op uit Yodeck en sla dit op in DB velden:
+     - screens.yodeckContentCount (number)
+     - screens.yodeckContentSummary (string, korte human readable tekst)
+     - screens.yodeckContentLastFetchedAt (timestamp)
+   - Als content niet te bepalen is: zet yodeckContentCount = null (niet 0), en summary = null.
+     (0 betekent “echt leeg”, null betekent “onbekend”.)
+
+2) Maak de Yodeck content fetch ROBUUST:
+   - We hebben zowel yodeckScreenId (numeric zoals 591896) als yodeckUuid.
+   - Probeer meerdere strategieën / endpoints in volgorde en stop bij de eerste die werkt:
+     A) Screen details by UUID
+     B) Screen details by numeric ID
+     C) “screen schedule/assignments” endpoint (als beschikbaar)
+     D) Als niets werkt: markeer “unknown” i.p.v. “empty”.
+
+   Implementatie-eis:
+   - Bouw één functie `fetchScreenAssignedContent({screenId, uuid})` die:
+     - endpoints probeert (met duidelijke logging welke poging faalt)
+     - response normaliseert naar:
+       {
+         items: Array<{type: string; name: string; id?: string|number}>,
+         raw?: any
+       }
+
+   Let op:
+   - Als een endpoint 404 geeft: dat is geen fatal error; ga door naar de volgende strategie.
+   - Rate limiting: throttle (bijv. max 2-3 parallel requests), want straks heb ik 25+ screens.
+
+3) Hoe je de “summary” maakt:
+   - yodeckContentCount = items.length
+   - yodeckContentSummary = bijv. “Playlist: Kerst Ads + App: Weer + App: Nieuws” (max 80-120 chars)
+   - Als er >4 items zijn: “Playlist: X + 3 meer”
+   - Zorg dat “App/Media/Layout/Playlist/Webpage” als types herkenbaar zijn (gebruik wat de API teruggeeft; anders infer uit velden).
+
+4) Control Room acties + status moeten dit gebruiken:
+   - Als yodeckContentCount === 0  -> type: empty_screen, severity: warning, statusText: “Geen content in Yodeck”
+   - Als yodeckContentCount > 0    -> type: has_content (of geen actie), en toon statusText: yodeckContentSummary
+   - Als yodeckContentCount is null (unknown) -> type: content_unknown, severity: info, statusText: “Content status onbekend (sync nodig of API endpoint ontbreekt)”
+   - BELANGRIJK: “empty” mag nooit getoond worden als we het niet zeker weten.
+
+5) API endpoint(s) in Elevizion:
+   - Voeg een endpoint toe: POST /api/integrations/yodeck/sync-content
+     - Doet alleen content refresh (geen screen import).
+     - Return: { success, updated, unknown, empty, withContent }
+
+6) Logging/Debug:
+   - Bij elke screen log 1 regel:
+     “[Yodeck] Content for <name> (<id/uuid>): <count or unknown> (<summary or reason>)”
+   - Bij 404: log “404 not found for endpoint X using id Y, trying next strategy”.
+
+WAT JE MOET IMPLEMENTEREN (FRONTEND)
+7) Schermen lijst:
+   - Voeg 1 kolom “Content” toe:
+     - unknown -> “Onbekend”
+     - 0 -> “Leeg”
+     - >0 -> toon yodeckContentSummary
+   - In Control Room actions list:
+     - itemName = yodeckPlayerName (dit is al goed)
+     - description = locatie + klein “• YDK-xxxxx” (maar NIET als primaire naam)
+
+ACCEPTANCE CRITERIA
+- Voor het online scherm “Test” (YDK-591896) zie ik in Elevizion een non-zero contentCount OF “unknown”, maar nooit “Geen content” zolang er daadwerkelijk iets toegewezen is in Yodeck.
+- 404 op player endpoint breekt de sync niet meer.
+- “empty” wordt alleen getoond als Yodeck echt bevestigt dat er niets assigned is.
+
+Ga nu in de codebase op zoek naar:
+- yodeck sync job/service (waar /api/v2/screens wordt opgehaald)
+- control-room actions builder
+- Screen model/DB schema voor yodeckContent* velden
+en implementeer bovenstaande.
