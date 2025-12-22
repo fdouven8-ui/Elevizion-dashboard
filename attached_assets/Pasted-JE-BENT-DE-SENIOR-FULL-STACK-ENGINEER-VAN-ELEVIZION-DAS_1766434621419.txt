@@ -1,0 +1,68 @@
+JE BENT DE SENIOR FULL-STACK ENGINEER VAN “ELEVIZION DASHBOARD” (Express + Drizzle + Postgres). 
+Probleem: we syncen Yodeck screens goed (naam/online/offline/screenshot), maar “scherm content” blijft 0/unknown/empty terwijl er wél nieuws/weer/ads draaien in Yodeck. 
+Doel: per screen automatisch bepalen welke content op het scherm staat (minimaal: welke playlist(s) / schedule(s) / media items eraan gekoppeld zijn) en dit opslaan in DB zodat Control Room “Geen content” niet foutief toont.
+
+CONTEXT (huidig gedrag):
+- GET /api/screens toont yodeckContentStatus: unknown, yodeckContentCount: 0, yodeckContentSummary: {items:[], playlists:[]}
+- Control Room actions toont “Geen content in Yodeck” of “Content status onbekend”
+- We gebruiken al Yodeck API key en halen screens op via GET https://app.yodeck.com/api/v2/screens
+
+WAT JE MOET BOUWEN:
+1) Yodeck Content Fetcher (robust)
+- Voeg een nieuwe sync-stap toe: “fetch content mapping per screen”
+- Voor ELK screen (yodeckPlayerId / yodeck_screen_id) haal je extra data op om te bepalen welke content actief/gekoppeld is:
+  A) Probeer eerst screen-detail endpoint (als beschikbaar): GET /api/v2/screens/{yodeck_screen_id} en/of een endpoint dat playlist/schedule/media koppelingen bevat.
+  B) Als screen-detail niet genoeg geeft: haal lijsten op van playlists/schedules/deployments/publications en filter op dit screen_id.
+  C) Bouw dit defensief: detecteer automatisch welke velden aanwezig zijn (playlist_id, playlist, playlists, schedule, published_playlist, deployments, etc.) en normaliseer naar één intern format.
+- Resultaat per screen:
+  - yodeckContentStatus: 'ok' | 'empty' | 'unknown' | 'error'
+  - yodeckContentCount: aantal unieke “content items” (media + apps/widgets + playlist items)
+  - yodeckContentSummary (JSON):
+    {
+      "playlists":[{ "id": "...", "name":"...", "type":"..." }],
+      "items":[{ "id":"...", "name":"...", "kind":"video|image|app|widget|url|unknown" }],
+      "topItems":[...max 5...],
+      "lastFetchedAt":"ISO"
+    }
+  - yodeckContentLastFetchedAt
+  - yodeckContentError (string|null)
+
+2) DB / Drizzle updates
+- Voeg bovenstaande velden toe aan de screens tabel (of update bestaande als die er al zijn).
+- Zorg dat bestaande API responses (GET /api/screens, /api/screens/:id/stats) deze velden teruggeven.
+
+3) Control Room logica fixen
+- Bepaal content-status op basis van yodeckContentStatus + yodeckContentCount:
+  - ok & count>0 => “screensWithContent”
+  - empty => “screensEmpty”
+  - unknown => “contentUnknown”
+  - error => “contentError”
+- Update /api/control-room/stats zodat die counters kloppen.
+- Update /api/control-room/actions:
+  - Als status unknown: toon “Content status onbekend (sync nodig)” + knop/CTA (link) “Sync Yodeck content”
+  - Als status empty: toon “Geen content in Yodeck”
+  - Als status error: toon foutmelding verkort (geen secrets)
+
+4) Extra endpoint(s) om te testen
+- Voeg POST /api/sync/yodeck/content/run toe (of breid bestaande /api/sync/yodeck/run uit) om content-sync handmatig te triggeren.
+- Logging moet duidelijk zijn:
+  - welke endpoints geprobeerd zijn
+  - hoeveel playlists/items gevonden per screen
+  - bij failures: statuscode + korte body snippet
+
+5) UI/UX mini verbetering (niet groot maken)
+- In action-lijst en schermen-overzicht: toon primair yodeckPlayerName (naam), en eventueel klein “YDK-xxxxx” erachter.
+- ScreenId hoeft niet prominent.
+
+BELANGRIJK:
+- Geen breaking changes.
+- Geen API keys loggen.
+- Maak de code zó dat als Yodeck endpoints anders zijn, we via “feature-detectie” nog steeds iets kunnen afleiden (playlists/schedules/items).
+- Als je geen playlist/items kunt achterhalen, gebruik dan fallback:
+  - Check of screenshot_url bereikbaar is en HEAD/GET content-length > kleine threshold => markeer status 'ok' met item kind 'unknown' (naam: 'Yodeck playback detected') zodat het niet als “empty” wordt gezien.
+  - Alleen “empty” als je zeker weet dat er geen content gekoppeld is.
+
+OUTPUT DIE IK VAN JE WIL:
+- Pas de code aan en laat zien welke files je aangepast hebt.
+- Geef een korte test-instructie (welke endpoint call ik, wat verwacht ik).
+- Zorg dat na run: screen “Test” niet meer “Geen content” toont als er in Yodeck echt iets draait.
