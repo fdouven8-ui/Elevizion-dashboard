@@ -1,0 +1,62 @@
+Je bent de lead dev van mijn Elevizion Dashboard (Express + TS backend). Probleem: Yodeck sync haalt screens op via GET https://app.yodeck.com/api/v2/screens en zet yodeckContentCount=0 + “Geen content in Yodeck”, terwijl er wél nieuws/weer/ads op het scherm draaien. Ik wil dat je fixt dat we de daadwerkelijke “assigned / scheduled / playing” content per screen inlezen uit Yodeck en opslaan in de DB, zodat Control Room correct “screensWithContent / screensEmpty / contentUnknown” toont.
+
+CONTEXT (huidige data):
+- Screen records hebben o.a.: yodeckPlayerId, yodeckPlayerName, yodeckUuid, yodeckScreenshotUrl
+- DB velden bestaan al: yodeckContentCount, yodeckContentSummary (items/topItems/playlists/lastFetchedAt), yodeckContentLastFetchedAt
+- Control room gebruikt yodeckContentCount om empty_screen te tonen.
+
+DOEL:
+1) Implementeer een robuuste content-sync per screen:
+   - Voor elk screen: bepaal welke playlist/layout/schedule is toegewezen (assigned) en haal de onderliggende items op.
+   - Vul yodeckContentCount met het aantal “media items” dat daadwerkelijk in de loop kan draaien.
+   - Vul yodeckContentSummary met:
+     - playlists: lijst met toegewezen playlists/layouts (naam + id)
+     - topItems: top 5 item-namen (of titles) uit de loop
+     - items: desnoods alleen id + name/type (niet te groot)
+     - lastFetchedAt: ISO date
+2) Control Room mag alleen “Geen content in Yodeck” tonen als contentCount echt 0 is.
+3) Als Yodeck API geen endpoint toelaat of faalt: zet status “contentUnknown/contentError” (niet “empty”) en log error.
+
+BELANGRIJK:
+- Yodeck API docs zijn niet 100% duidelijk. Daarom moet je dit engineer-style aanpakken:
+  A) Voeg een “discovery” helper toe die meerdere endpoints probeert (in volgorde) om assigned content te vinden.
+  B) Log per geprobeerd endpoint de statuscode + kleine snippet van response keys, zodat we kunnen zien welke endpoint werkt.
+  C) Stop zodra je content hebt gevonden.
+
+TECHNISCHE AANPAK (moet je uitvoeren):
+- Voeg in backend een module: src/integrations/yodeck/content.ts met functies:
+  - yodeckRequest(path): fetch wrapper met apiKey header
+  - discoverScreenContent(playerId or screenId or uuid): probeert meerdere calls en normaliseert resultaat
+  - normalizeToSummary(raw): zet om naar {count, playlists, items, topItems}
+- In bestaande yodeck sync job:
+  - Na het updaten/aanmaken van elk screen record: roep discoverScreenContent aan
+  - Update DB: yodeckContentCount, yodeckContentSummary, yodeckContentLastFetchedAt
+  - Als het scherm offline is, mag je alsnog proberen content te halen (assigned content is onafhankelijk van online/offline).
+
+ENDPOINT DISCOVERY (probeer minimaal deze varianten, want Yodeck kan per account/plan verschillen):
+- GET /api/v2/screens/{yodeck_screen_id}
+- GET /api/v2/screens/{yodeck_screen_id}/details
+- GET /api/v2/screens/{yodeck_screen_id}/playlists
+- GET /api/v2/screens/{yodeck_screen_id}/schedule
+- GET /api/v2/screens/{yodeck_screen_id}/layout
+- GET /api/v2/screens/{yodeck_screen_id}/assigned
+- GET /api/v2/playlists (en filter op screen assignment velden)
+- GET /api/v2/layouts (en filter op screen assignment velden)
+- GET /api/v2/schedules (en filter)
+(Als een endpoint 404/403 geeft: ga door naar de volgende.)
+
+DEBUG ROUTE (super belangrijk):
+- Voeg een tijdelijke debug route toe:
+  GET /api/debug/yodeck/screen-content?playerId=591896
+  Response: { tried:[{path,status,keys}], resolved:{count,playlists,topItems}, rawSample:... }
+Zodat ik kan zien welke endpoint bij mij werkt.
+
+ACCEPTANCE CRITERIA:
+- Voor screen “Test” (YDK-591896) moet yodeckContentCount > 0 zodra er in Yodeck content draait.
+- Control Room actions mogen niet meer “Geen content in Yodeck” tonen als er content is.
+- Als je niks kunt vinden: statusText “Content status onbekend (API endpoint mismatch)” en NIET “Geen content”.
+
+Lever:
+- Code wijzigingen (TypeScript) + waar je het geplaatst hebt
+- Korte uitleg welke endpoint bij mij werkte (op basis van debug logs)
+- Zet debug route achter admin auth (zelfde als andere routes) en markeer als TODO: remove later.

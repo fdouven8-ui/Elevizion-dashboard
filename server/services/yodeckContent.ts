@@ -1008,3 +1008,225 @@ export async function debugYodeckScreen(yodeckScreenId: string): Promise<{
     error: successData ? undefined : "All endpoints failed",
   };
 }
+
+/**
+ * DISCOVERY FUNCTION - Probe multiple Yodeck endpoints to find content
+ * Tries various endpoint patterns and fetches playlist items if a playlist is assigned
+ * 
+ * This function is more thorough than the regular sync - used for debugging
+ * and to understand which endpoints work for a specific Yodeck account/plan.
+ */
+export async function discoverScreenContent(playerId: string): Promise<{
+  tried: Array<{ 
+    endpoint: string; 
+    status: number | string; 
+    keys?: string[]; 
+    hasContent?: boolean;
+    snippet?: any;
+  }>;
+  resolved: {
+    count: number;
+    playlists: Array<{ id: number; name: string }>;
+    topItems: string[];
+    status: "has_content" | "empty" | "unknown" | "error";
+    statusReason: string;
+  };
+  rawSample?: any;
+  playlistItems?: Array<{ id: number; name: string; type?: string }>;
+}> {
+  const apiKey = await getYodeckApiKey();
+  if (!apiKey) {
+    return {
+      tried: [],
+      resolved: {
+        count: 0,
+        playlists: [],
+        topItems: [],
+        status: "error",
+        statusReason: "No Yodeck API key configured",
+      },
+    };
+  }
+
+  const tried: Array<{ 
+    endpoint: string; 
+    status: number | string; 
+    keys?: string[]; 
+    hasContent?: boolean;
+    snippet?: any;
+  }> = [];
+  
+  let screenData: any = null;
+  let resolvedPlaylists: Array<{ id: number; name: string }> = [];
+  let playlistItems: Array<{ id: number; name: string; type?: string }> = [];
+  let statusReason = "";
+
+  // List of endpoints to try (in order of priority)
+  const endpointsToTry = [
+    { path: `/screens/${playerId}`, name: "GET /screens/{id}" },
+    { path: `/screens/${playerId}/`, name: "GET /screens/{id}/" },
+    { path: `/screens/${playerId}/details`, name: "GET /screens/{id}/details" },
+    { path: `/screens/${playerId}/playlists`, name: "GET /screens/{id}/playlists" },
+    { path: `/screens/${playerId}/schedule`, name: "GET /screens/{id}/schedule" },
+    { path: `/screens/${playerId}/assigned`, name: "GET /screens/{id}/assigned" },
+    { path: `/players/${playerId}`, name: "GET /players/{id}" },
+    { path: `/players/${playerId}/playlists`, name: "GET /players/{id}/playlists" },
+  ];
+
+  console.log(`[YodeckDiscovery] Starting discovery for playerId=${playerId}`);
+
+  for (const ep of endpointsToTry) {
+    if (screenData) break; // Stop once we have data
+    
+    const url = `${YODECK_BASE_URL}${ep.path}`;
+    console.log(`[YodeckDiscovery] Trying: ${ep.name}`);
+    
+    try {
+      const response = await fetch(url, {
+        headers: {
+          "Authorization": `Token ${apiKey}`,
+          "Accept": "application/json",
+        },
+      });
+
+      const attempt: typeof tried[0] = {
+        endpoint: ep.name,
+        status: response.status,
+      };
+
+      if (response.ok) {
+        const data = await response.json();
+        attempt.keys = Object.keys(data);
+        
+        // Check if this response has content info
+        const hasContent = !!(
+          data.screen_content || 
+          data.assigned_content || 
+          data.playlist || 
+          data.playlists?.length > 0 ||
+          data.schedule ||
+          data.layout ||
+          data.media ||
+          data.items?.length > 0
+        );
+        attempt.hasContent = hasContent;
+        
+        // Include a small snippet for debugging
+        if (data.screen_content) {
+          attempt.snippet = { screen_content: data.screen_content };
+        } else if (data.playlist) {
+          attempt.snippet = { playlist: data.playlist };
+        } else if (data.playlists) {
+          attempt.snippet = { playlists: data.playlists };
+        }
+
+        if (hasContent || ep.name === "GET /screens/{id}") {
+          screenData = data;
+          statusReason = `Found via ${ep.name}`;
+          console.log(`[YodeckDiscovery] SUCCESS on ${ep.name} - keys: [${attempt.keys.join(", ")}]`);
+        }
+      } else {
+        console.log(`[YodeckDiscovery] ${ep.name} returned ${response.status}`);
+      }
+
+      tried.push(attempt);
+    } catch (e: any) {
+      tried.push({
+        endpoint: ep.name,
+        status: `error: ${e.message}`,
+      });
+    }
+  }
+
+  // If we found screen data, extract content
+  if (screenData) {
+    const items = extractContentItems(screenData);
+    
+    // Extract playlists specifically
+    const sc = screenData.screen_content as any;
+    if (sc?.source_type === "playlist" && sc?.source_id) {
+      resolvedPlaylists.push({ id: sc.source_id, name: sc.source_name || `Playlist ${sc.source_id}` });
+      
+      // Try to fetch playlist items
+      console.log(`[YodeckDiscovery] Fetching playlist items for playlist ${sc.source_id}...`);
+      try {
+        const playlistResult = await fetch(`${YODECK_BASE_URL}/playlists/${sc.source_id}`, {
+          headers: {
+            "Authorization": `Token ${apiKey}`,
+            "Accept": "application/json",
+          },
+        });
+        
+        tried.push({
+          endpoint: `GET /playlists/${sc.source_id}`,
+          status: playlistResult.status,
+        });
+
+        if (playlistResult.ok) {
+          const playlistData = await playlistResult.json();
+          console.log(`[YodeckDiscovery] Playlist ${sc.source_id} keys: [${Object.keys(playlistData).join(", ")}]`);
+          
+          // Extract items from playlist
+          if (playlistData.items && Array.isArray(playlistData.items)) {
+            playlistItems = playlistData.items.map((item: any) => ({
+              id: item.id,
+              name: item.name || item.title || `Item ${item.id}`,
+              type: item.type || item.media_type || "unknown",
+            }));
+            console.log(`[YodeckDiscovery] Found ${playlistItems.length} items in playlist`);
+          } else if (playlistData.media && Array.isArray(playlistData.media)) {
+            playlistItems = playlistData.media.map((m: any) => ({
+              id: m.id,
+              name: m.name || m.filename || `Media ${m.id}`,
+              type: "media",
+            }));
+          }
+        }
+      } catch (e: any) {
+        console.log(`[YodeckDiscovery] Failed to fetch playlist: ${e.message}`);
+        tried.push({
+          endpoint: `GET /playlists/${sc.source_id}`,
+          status: `error: ${e.message}`,
+        });
+      }
+    }
+
+    // Build topItems from content
+    const topItems = items.slice(0, 5).map(i => `${i.type}: ${i.name}`);
+    
+    // Add playlist items to topItems if we have them
+    if (playlistItems.length > 0 && topItems.length < 5) {
+      const remaining = 5 - topItems.length;
+      for (let i = 0; i < Math.min(remaining, playlistItems.length); i++) {
+        topItems.push(`${playlistItems[i].type}: ${playlistItems[i].name}`);
+      }
+    }
+
+    const contentCount = items.length + playlistItems.length;
+
+    return {
+      tried,
+      resolved: {
+        count: contentCount,
+        playlists: resolvedPlaylists,
+        topItems,
+        status: contentCount > 0 ? "has_content" : "empty",
+        statusReason: statusReason || (contentCount > 0 ? "Content found" : "No content detected"),
+      },
+      rawSample: screenData,
+      playlistItems: playlistItems.length > 0 ? playlistItems : undefined,
+    };
+  }
+
+  // No data found at all
+  return {
+    tried,
+    resolved: {
+      count: 0,
+      playlists: [],
+      topItems: [],
+      status: "unknown",
+      statusReason: "All endpoints failed or returned no data",
+    },
+  };
+}

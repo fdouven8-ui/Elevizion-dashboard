@@ -3064,6 +3064,26 @@ export async function registerRoutes(
     }
   });
 
+  // TODO: Remove this debug route after testing is complete
+  // Discovery endpoint - probes multiple Yodeck endpoints to find content
+  // GET /api/debug/yodeck/screen-content?playerId=591896
+  // Returns: { tried:[{path,status,keys}], resolved:{count,playlists,topItems}, rawSample:..., playlistItems:... }
+  app.get("/api/debug/yodeck/screen-content", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const playerId = req.query.playerId as string;
+      if (!playerId) {
+        return res.status(400).json({ error: "playerId query parameter required" });
+      }
+      
+      const { discoverScreenContent } = await import("./services/yodeckContent");
+      const result = await discoverScreenContent(playerId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[YodeckDiscovery] Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ============================================================================
   // CONTROL ROOM (OPS-FIRST DASHBOARD)
   // ============================================================================
