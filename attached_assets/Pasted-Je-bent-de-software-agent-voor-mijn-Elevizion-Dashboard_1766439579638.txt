@@ -1,0 +1,50 @@
+Je bent de software agent voor mijn Elevizion Dashboard (Express + Drizzle/Postgres + React). Probleem: Yodeck sync leest alleen screens in via `GET https://app.yodeck.com/api/v2/screens` en zet dan `yodeckContentCount=0` en `yodeckContentSummary.items=[]`, terwijl op minstens 1 online scherm WEL content draait. In de UI krijg ik daardoor “Geen content in Yodeck” of “Content status onbekend”.
+
+Doel: fix de Yodeck integratie zodat we per screen kunnen inlezen “wat staat er op het scherm” (playlist / schedule / media / layout die op dit moment of in de actieve planning aan dat scherm hangt). Daarna moet de app correct tonen:
+- yodeckContentStatus: "has_content" | "empty" | "unknown" | "error"
+- yodeckContentCount: aantal items (of minimaal: aantal playlists + items)
+- yodeckContentSummary: { playlists: [...], items: [...], topItems: [...], lastFetchedAt }
+En Control Room moet dan “Speelt content (niet vanuit Elevizion)” kunnen onderbouwen met echte Yodeck content data.
+
+Aanpak (BELANGRIJK):
+1) Maak een nieuwe Yodeck client functie `fetchScreenContent(player)` die voor een screen (playerId/uuid) probeert de juiste Yodeck endpoints te vinden voor playlist/schedule/content:
+   - Probeer in volgorde (graceful fallback, geen crash):
+     a) GET /api/v2/screens/{playerId}
+     b) GET /api/v2/screens/{playerId}/content
+     c) GET /api/v2/screens/{playerId}/playlists
+     d) GET /api/v2/screens/{playerId}/schedule
+     e) GET /api/v2/players/{playerId}/... (als screens endpoints geen data geven)
+     f) Als playerId niet werkt, probeer yodeckUuid waar beschikbaar.
+   - Log 404/401/200 responses netjes en ga door naar de volgende kandidaat endpoint.
+   - Parse respons defensief: verzamel playlist namen/ids, media item namen/ids, layouts indien aanwezig.
+   - Als we iets vinden (minstens 1 playlist/layout/media): status = "has_content".
+   - Als expliciet leeg in response: status = "empty".
+   - Als alle endpoints 404/geen bruikbare data: status = "unknown".
+   - Bij echte errors (timeouts, 500): status = "error" + zet yodeckContentError.
+
+2) Update de bestaande sync (route: POST /api/sync/yodeck/run en/of auto sync) zodat na het ophalen van screens:
+   - Voor ELK screen: roep `fetchScreenContent` aan en sla resultaten op in DB velden:
+     `yodeckContentStatus`, `yodeckContentCount`, `yodeckContentSummary`, `yodeckContentLastFetchedAt`, `yodeckContentError`.
+   - Zorg dat dit niet super traag wordt: doe max concurrency (bijv. 3-5 tegelijk) of sequential met duidelijke logs.
+
+3) Voeg een debug endpoint toe om snel te zien wat Yodeck teruggeeft:
+   - GET /api/integrations/yodeck/debug-content?playerId=591896
+   - Retourneer: welke endpoints geprobeerd zijn + statuscodes + (ingekorte) payload keys.
+   Dit is essentieel omdat Yodeck API docs soms niet publiek zijn, dus we moeten ontdekken welke endpoint bij mijn account werkt.
+
+4) UI/Control Room:
+   - Als `yodeckContentStatus="has_content"` maar er zijn 0 placements in Elevizion voor dat scherm: toon action type `unmanaged_content` met statusText “Speelt content (niet vanuit Elevizion)” + eventueel “Playlists: X, Items: Y”.
+   - Als `yodeckContentStatus="empty"`: toon “Geen content in Yodeck”.
+   - Als unknown/error: toon “Content status onbekend” of “Content sync fout”.
+
+Context uit mijn logs:
+- Yodeck screens worden al opgehaald (2 screens).
+- `yodeckPlayerId` is bv 591896 en 591895.
+- `yodeckScreenshotUrl` bestaat.
+- Op dit moment is `yodeckContentCount=0` altijd, maar de UI detecteert soms wel “Speelt content (niet vanuit Elevizion)”.
+Dus content bestaat, maar we lezen het verkeerd in. Fix dat.
+
+Levering:
+- Pas code aan (backend: yodeck integration + sync + routes + DB writes).
+- Voeg duidelijke console logs toe: per screen endpoint attempts + gevonden playlists/items.
+- Zorg dat app build/start blijft werken.
