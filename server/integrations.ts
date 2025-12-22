@@ -298,12 +298,21 @@ export async function syncYodeckScreens(): Promise<{
         if (!screen.uuid) continue;
         
         const screenId = extractScreenIdFromYodeck(screen);
-        const existing = await storage.getScreenByYodeckUuid(screen.uuid);
+        
+        // Try to find existing screen by: 1) UUID, 2) EVZ screenId, 3) yodeckPlayerId
+        let existing = await storage.getScreenByYodeckUuid(screen.uuid);
+        if (!existing && screenId) {
+          existing = await storage.getScreenByScreenId(screenId);
+        }
+        if (!existing) {
+          existing = await storage.getScreenByYodeckPlayerId(String(screen.id));
+        }
         
         if (existing) {
-          // Update existing screen (also update locationId if missing)
-          await storage.updateScreenByYodeckUuid(screen.uuid, {
+          // Update existing screen - use id-based update since UUID might not be set yet
+          await storage.updateScreen(existing.id, {
             yodeckPlayerId: String(screen.id),
+            yodeckUuid: screen.uuid, // Backfill UUID for legacy screens
             yodeckPlayerName: screen.name,
             yodeckWorkspaceName: screen.workspace?.name || null,
             yodeckScreenshotUrl: screen.screenshot_url || null,
@@ -311,6 +320,7 @@ export async function syncYodeckScreens(): Promise<{
             lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
             locationId: existing.locationId || defaultLocationId,
           });
+          console.log(`[Yodeck] Updated screen ${screenId || screen.name} (backfilled UUID: ${screen.uuid})`);
           updatedCount++;
         } else {
           // Create new screen
@@ -328,6 +338,7 @@ export async function syncYodeckScreens(): Promise<{
             lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
             isActive: true,
           });
+          console.log(`[Yodeck] Created new screen ${newScreenId} with UUID: ${screen.uuid}`);
           updatedCount++;
         }
       }

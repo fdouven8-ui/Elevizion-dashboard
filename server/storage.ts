@@ -70,7 +70,9 @@ export interface IStorage {
   getScreens(): Promise<Screen[]>;
   getScreensByLocation(locationId: string): Promise<Screen[]>;
   getScreen(id: string): Promise<Screen | undefined>;
+  getScreenByScreenId(screenId: string): Promise<Screen | undefined>; // EVZ-### lookup
   getScreenByYodeckUuid(yodeckUuid: string): Promise<Screen | undefined>;
+  getScreenByYodeckPlayerId(playerId: string): Promise<Screen | undefined>;
   getScreenStats(): Promise<{ total: number; online: number; offline: number }>;
   createScreen(data: InsertScreen): Promise<Screen>;
   updateScreen(id: string, data: Partial<Screen>): Promise<Screen | undefined>;
@@ -389,6 +391,16 @@ export class DatabaseStorage implements IStorage {
 
   async getScreenByYodeckUuid(yodeckUuid: string): Promise<Screen | undefined> {
     const [screen] = await db.select().from(schema.screens).where(eq(schema.screens.yodeckUuid, yodeckUuid));
+    return screen;
+  }
+
+  async getScreenByScreenId(screenId: string): Promise<Screen | undefined> {
+    const [screen] = await db.select().from(schema.screens).where(eq(schema.screens.screenId, screenId));
+    return screen;
+  }
+
+  async getScreenByYodeckPlayerId(playerId: string): Promise<Screen | undefined> {
+    const [screen] = await db.select().from(schema.screens).where(eq(schema.screens.yodeckPlayerId, playerId));
     return screen;
   }
 
