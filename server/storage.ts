@@ -217,6 +217,7 @@ export interface IStorage {
   // Creatives
   getCreatives(): Promise<Creative[]>;
   getCreative(id: string): Promise<Creative | undefined>;
+  getCreativesWithHash(): Promise<Array<{ id: string; phash: string; advertiserId: string }>>;
   createCreative(data: InsertCreative): Promise<Creative>;
   updateCreative(id: string, data: Partial<InsertCreative>): Promise<Creative | undefined>;
   deleteCreative(id: string): Promise<boolean>;
@@ -1097,6 +1098,17 @@ export class DatabaseStorage implements IStorage {
   async getCreative(id: string): Promise<Creative | undefined> {
     const [creative] = await db.select().from(schema.creatives).where(eq(schema.creatives.id, id));
     return creative;
+  }
+
+  async getCreativesWithHash(): Promise<Array<{ id: string; phash: string; advertiserId: string }>> {
+    const creatives = await db.select({
+      id: schema.creatives.id,
+      phash: schema.creatives.phash,
+      advertiserId: schema.creatives.advertiserId
+    })
+    .from(schema.creatives)
+    .where(sql`${schema.creatives.phash} IS NOT NULL`);
+    return creatives as Array<{ id: string; phash: string; advertiserId: string }>;
   }
 
   async createCreative(data: InsertCreative): Promise<Creative> {

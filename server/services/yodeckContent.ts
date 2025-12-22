@@ -50,6 +50,7 @@
 
 import { storage } from "../storage";
 import { decryptCredentials } from "../crypto";
+import { computePHashFromUrl, ImageHashResult, isHashMatch, findBestCreativeMatch } from "../utils/phash";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const CONCURRENT_LIMIT = 3; // Max parallel requests to avoid rate limiting
@@ -508,6 +509,17 @@ const CONTENT_CACHE_DURATION_MS = 10 * 60 * 1000;
 // Minimum screenshot size to consider as "has content" (20KB)
 const SCREENSHOT_MIN_SIZE_BYTES = 20 * 1024;
 
+export interface ScreenshotAnalysisResult {
+  hasContent: boolean;
+  byteSize: number | null;
+  hash: string | null;
+  isEmptyOrBlank: boolean;
+  matchedCreativeId?: string;
+  matchedAdvertiserId?: string;
+  matchSimilarity?: number;
+  error?: string;
+}
+
 /**
  * Screenshot fallback - check if screenshot URL is valid and large enough
  * A screenshot > 20KB strongly suggests content is playing on the screen
@@ -584,6 +596,84 @@ async function checkScreenshotFallback(
   } catch (error: any) {
     console.log(`[Yodeck] ${screenId}: Screenshot fetch error: ${error.message}`);
     return { hasContent: false, byteSize: null, error: error.message };
+  }
+}
+
+/**
+ * Advanced screenshot analysis with perceptual hashing
+ * 1. Download screenshot and compute pHash
+ * 2. Check if blank/empty screen
+ * 3. Match against known creative hashes in database
+ * 
+ * Returns detailed analysis including matched creative if found
+ */
+export async function analyzeScreenshot(
+  screenshotUrl: string,
+  screenId: string
+): Promise<ScreenshotAnalysisResult> {
+  if (!screenshotUrl) {
+    return { hasContent: false, byteSize: null, hash: null, isEmptyOrBlank: false, error: "no_url" };
+  }
+
+  console.log(`[Yodeck] ${screenId}: Analyzing screenshot with pHash...`);
+
+  try {
+    // Compute pHash from screenshot
+    const hashResult = await computePHashFromUrl(screenshotUrl);
+    
+    if (!hashResult) {
+      console.log(`[Yodeck] ${screenId}: Failed to compute pHash`);
+      return { hasContent: false, byteSize: null, hash: null, isEmptyOrBlank: false, error: "hash_failed" };
+    }
+
+    console.log(`[Yodeck] ${screenId}: pHash computed: ${hashResult.hash.substring(0, 16)}... empty=${hashResult.isEmptyOrBlank}`);
+
+    // If the image appears blank/empty, return early
+    if (hashResult.isEmptyOrBlank) {
+      console.log(`[Yodeck] ${screenId}: Screenshot appears blank/empty`);
+      return { 
+        hasContent: false, 
+        byteSize: null, 
+        hash: hashResult.hash, 
+        isEmptyOrBlank: true 
+      };
+    }
+
+    // Try to match against known creative hashes
+    const creatives = await storage.getCreativesWithHash();
+    if (creatives.length > 0) {
+      const match = await findBestCreativeMatch(
+        hashResult.hash,
+        creatives.map(c => ({ id: c.id, hash: c.phash!, advertiserId: c.advertiserId })),
+        0.80 // 80% similarity threshold
+      );
+
+      if (match) {
+        console.log(`[Yodeck] ${screenId}: Matched creative ${match.creativeId} (${Math.round(match.similarity * 100)}% match)`);
+        return {
+          hasContent: true,
+          byteSize: null,
+          hash: hashResult.hash,
+          isEmptyOrBlank: false,
+          matchedCreativeId: match.creativeId,
+          matchedAdvertiserId: match.advertiserId,
+          matchSimilarity: match.similarity
+        };
+      }
+    }
+
+    // Has content but no matching creative (unmanaged content)
+    console.log(`[Yodeck] ${screenId}: Screenshot has content but no matching creative`);
+    return {
+      hasContent: true,
+      byteSize: null,
+      hash: hashResult.hash,
+      isEmptyOrBlank: false
+    };
+
+  } catch (error: any) {
+    console.log(`[Yodeck] ${screenId}: Screenshot analysis error: ${error.message}`);
+    return { hasContent: false, byteSize: null, hash: null, isEmptyOrBlank: false, error: error.message };
   }
 }
 
