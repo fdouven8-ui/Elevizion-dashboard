@@ -1189,22 +1189,8 @@ export async function registerRoutes(
     }
   };
 
-  // Yodeck sync run handler - shared between GET and POST
-  const yodeckSyncHandler = async (req: any, res: any) => {
-    console.log("[SYNC] yodeck run triggered", { method: req.method });
-    const result = await runYodeckSyncCore();
-    if (result.ok) {
-      res.json(result);
-    } else {
-      res.status(400).json(result);
-    }
-  };
-
-  // Yodeck sync run - GET fallback
-  app.get("/api/sync/yodeck/run", yodeckSyncHandler);
-  
-  // Yodeck sync run - POST
-  app.post("/api/sync/yodeck/run", yodeckSyncHandler);
+  // NOTE: Full Yodeck sync with DB upsert is registered later at POST /api/sync/yodeck/run
+  // The runYodeckSyncCore function is kept for status checking only
 
   // Legacy POST handler (keeping for reference)
   app.post("/api/sync/yodeck/run-legacy", async (_req, res) => {
