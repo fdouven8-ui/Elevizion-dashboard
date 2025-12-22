@@ -1,0 +1,54 @@
+Je bent de lead engineer van Elevizion Dashboard (Express + Drizzle + Postgres). We syncen Yodeck screens, maar content wordt altijd als leeg opgeslagen (yodeckContentCount=0 en yodeckContentSummary.items=[]), terwijl er wél content draait (nieuws/weer/video/foto).
+
+DOEL
+- Fix Yodeck content sync: per screen moeten we kunnen bepalen of er content is en een compacte samenvatting (top items / playlists / lastFetchedAt).
+- Control-room acties mogen pas “Geen content in Yodeck” tonen als we ZEKER weten dat er niets is. Als de API geen contentinfo geeft, toon “Content status onbekend (sync/endpoint ontbreekt)”.
+- We houden de huidige screen-naam weergave (yodeckPlayerName als itemName).
+
+AANPAK (verplicht)
+1) Zoek in de code waar Yodeck sync zit (routes: POST /api/sync/yodeck/run en/of /api/integrations/yodeck/sync, service/module voor Yodeck).
+2) Log de RAW response van GET https://app.yodeck.com/api/v2/screens voor 1 screen (alle velden) zodat we zien welke content-gerelateerde velden bestaan (playlists, schedule, media, layout, tags, assigned_*).
+3) Voeg daarna een tweede fetch-stap toe per screen:
+   - Probeer eerst een “detail” endpoint op basis van yodeck_screen_id of yodeck_uuid (screen detail/assigned/playlists/schedule). Gebruik defensieve probing:
+     a) probeer een kleine lijst van mogelijke endpoints (screen detail, screen playlists, screen schedule)
+     b) als een endpoint 404/401 geeft: log dit en ga door naar de volgende
+   - Als er wél een detail response is: parseer daaruit welke playlists/media aan het scherm hangen.
+   - Als we alleen de screenshot_url hebben en geen endpoint werkt: markeer contentStatus="unknown" i.p.v. empty.
+4) Database:
+   - Zorg dat Screen velden bestaan en gevuld worden:
+     - yodeckContentCount (int)
+     - yodeckContentSummary (json: { items:[], topItems:[], playlists:[], lastFetchedAt })
+     - yodeckContentLastFetchedAt (timestamp)
+     - yodeckContentStatus enum/string: "with_content" | "empty" | "unknown" | "error"
+     - yodeckContentError (nullable string) voor debug
+   - Als migratie nodig is, maak Drizzle migration.
+5) Control Room logica:
+   - In actions:
+     - "empty_screen" alleen wanneer yodeckContentStatus="empty"
+     - "content_unknown" wanneer status="unknown"
+     - "content_error" wanneer status="error"
+   - In stats:
+     - screensWithContent = count(status="with_content")
+     - screensEmpty = count(status="empty")
+     - contentUnknown = count(status="unknown")
+     - contentError = count(status="error")
+6) UX/tekst:
+   - empty: “Geen content in Yodeck”
+   - unknown: “Content status onbekend (Yodeck geeft geen details terug)”
+   - error: “Content sync fout: <korte reden>”
+7) Test:
+   - Run sync en laat in logs per screen zien:
+     - welke endpoints geprobeerd zijn
+     - welke werkte
+     - welke playlists/items gevonden zijn
+     - uiteindelijke status + count
+
+BELANGRIJK
+- Maak het robuust: geen hard crash als een endpoint ontbreekt.
+- Hou API-calls beperkt (cache per run; max 1–3 extra calls per screen).
+- Als je geen betrouwbare contentlijst kunt ophalen, kies "unknown" i.p.v. "empty".
+- Update ook de API response van GET /api/screens zodat de nieuwe content velden zichtbaar zijn.
+
+Lever op:
+- De gewijzigde bestanden + migratie
+- Korte uitleg in comments waarom we “unknown” gebruiken wanneer Yodeck geen contentdetail biedt.
