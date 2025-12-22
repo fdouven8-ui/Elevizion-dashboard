@@ -158,7 +158,12 @@ async function yodeckApiRequest<T>(endpoint: string, apiKey: string): Promise<{ 
 }
 
 /**
- * Fetch assigned content for a single screen using multiple strategies
+ * Fetch assigned content for a single screen
+ * 
+ * DEV NOTES - Yodeck API behavior:
+ * - Screen detail endpoint ONLY works with numeric ID (e.g., 591896)
+ * - UUID returns 404, so we skip it entirely to avoid unnecessary API calls
+ * - The response contains screen_content with source_type, source_id, source_name
  */
 async function fetchScreenAssignedContent(
   screenId: string,
@@ -166,66 +171,40 @@ async function fetchScreenAssignedContent(
   numericId: string | null,
   apiKey: string
 ): Promise<{ items: ContentItem[]; raw?: any; error?: string }> {
-  const strategies = [];
-  
-  // Strategy A: Screen details by UUID
-  if (uuid) {
-    strategies.push({ endpoint: `/screens/${uuid}`, identifier: uuid, type: "uuid" });
-  }
-  
-  // Strategy B: Screen details by numeric ID
-  if (numericId) {
-    strategies.push({ endpoint: `/screens/${numericId}`, identifier: numericId, type: "numericId" });
+  // IMPORTANT: Only use numeric ID - UUID endpoint returns 404
+  if (!numericId) {
+    console.log(`[Yodeck] No numeric ID for ${screenId} - cannot fetch content details`);
+    return { items: [], error: "no_numeric_id" };
   }
 
-  let firstSuccessLogged = false;
+  const endpoint = `/screens/${numericId}`;
+  console.log(`[Yodeck] Fetching content: GET ${YODECK_BASE_URL}${endpoint}`);
   
-  for (const strategy of strategies) {
-    console.log(`[Yodeck] Trying endpoint: GET ${YODECK_BASE_URL}${strategy.endpoint} (${strategy.type})`);
-    const result = await yodeckApiRequest<YodeckScreenDetail>(strategy.endpoint, apiKey);
+  const result = await yodeckApiRequest<YodeckScreenDetail>(endpoint, apiKey);
+  
+  if (result.ok && result.data) {
+    const items = extractContentItems(result.data);
     
-    if (result.ok && result.data) {
-      const items = extractContentItems(result.data);
-      
-      // Log first successful response for debugging (sanitized)
-      if (!firstSuccessLogged) {
-        firstSuccessLogged = true;
-        const rawKeys = Object.keys(result.data);
-        console.log(`[Yodeck] Screen detail response keys: ${rawKeys.join(", ")}`);
-        console.log(`[Yodeck] Content found for ${screenId}: ${items.length} items via ${strategy.type}`);
-        if (items.length > 0) {
-          console.log(`[Yodeck] Content items: ${items.map(i => `${i.type}:${i.name}`).slice(0, 3).join(", ")}${items.length > 3 ? "..." : ""}`);
-        }
-        // Log screen_content structure if present (this is what Yodeck actually uses)
-        if (result.data.screen_content) {
-          const scKeys = Object.keys(result.data.screen_content);
-          console.log(`[Yodeck] screen_content keys: ${scKeys.join(", ")}`);
-          console.log(`[Yodeck] screen_content value: ${JSON.stringify(result.data.screen_content).substring(0, 200)}`);
-        } else {
-          console.log(`[Yodeck] screen_content is null or missing`);
-        }
-        // Log assigned_content structure if present
-        if (result.data.assigned_content) {
-          const acKeys = Object.keys(result.data.assigned_content);
-          console.log(`[Yodeck] assigned_content keys: ${acKeys.join(", ")}`);
-        }
-      }
-      
-      return { items, raw: result.data };
+    // Log response for debugging
+    console.log(`[Yodeck] Content for ${screenId}: ${items.length} items`);
+    if (items.length > 0) {
+      console.log(`[Yodeck] Content items: ${items.map(i => `${i.type}:${i.name}`).slice(0, 3).join(", ")}${items.length > 3 ? "..." : ""}`);
+    }
+    // Log screen_content structure
+    if (result.data.screen_content) {
+      console.log(`[Yodeck] screen_content: ${JSON.stringify(result.data.screen_content).substring(0, 150)}`);
     }
     
-    if (result.status === 404) {
-      console.log(`[Yodeck] 404 for ${strategy.endpoint} (${strategy.type}), trying next...`);
-      continue;
-    }
-    
-    // Other error - log but continue trying
-    console.log(`[Yodeck] Error for ${strategy.endpoint}: ${result.error || result.status}, trying next...`);
+    return { items, raw: result.data };
   }
-
-  // All strategies failed
-  console.log(`[Yodeck] All strategies failed for ${screenId} - content status unknown`);
-  return { items: [], error: "all_strategies_failed" };
+  
+  if (result.status === 404) {
+    console.log(`[Yodeck] 404 for ${endpoint} - screen may have been deleted from Yodeck`);
+    return { items: [], error: "not_found" };
+  }
+  
+  console.log(`[Yodeck] Error for ${endpoint}: ${result.error || result.status}`);
+  return { items: [], error: result.error || `http_${result.status}` };
 }
 
 /**
@@ -546,8 +525,9 @@ export async function syncAllScreensContent(): Promise<{
       if (!yodeckScreen) {
         console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): unknown (no Yodeck match)`);
         
-        // Set to null (unknown) not 0
+        // Set to unknown (not in Yodeck)
         await storage.updateScreen(screen.id, {
+          yodeckContentStatus: "unknown",
           yodeckContentCount: null,
           yodeckContentSummary: null,
           yodeckContentLastFetchedAt: new Date(),
@@ -571,10 +551,11 @@ export async function syncAllScreensContent(): Promise<{
         apiKey
       );
 
-      if (contentResult.error === "all_strategies_failed") {
-        console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): unknown (API endpoints failed)`);
+      if (contentResult.error) {
+        console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): unknown (${contentResult.error})`);
         
         await storage.updateScreen(screen.id, {
+          yodeckContentStatus: "unknown",
           yodeckContentCount: null,
           yodeckContentSummary: null,
           yodeckContentLastFetchedAt: new Date(),
@@ -587,7 +568,7 @@ export async function syncAllScreensContent(): Promise<{
           status: "unknown",
           contentCount: null,
           summary: null,
-          error: "api_failed",
+          error: contentResult.error,
         };
       }
 
@@ -606,6 +587,7 @@ export async function syncAllScreensContent(): Promise<{
       };
 
       await storage.updateScreen(screen.id, {
+        yodeckContentStatus: status, // has_content or empty
         yodeckContentCount: contentCount,
         yodeckContentSummary: contentSummary,
         yodeckContentLastFetchedAt: new Date(),

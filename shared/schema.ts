@@ -115,10 +115,14 @@ export const screens = pgTable("screens", {
   yodeckWorkspaceName: text("yodeck_workspace_name"),
   yodeckScreenshotUrl: text("yodeck_screenshot_url"),
   // Yodeck content tracking - what's playing on the screen
-  // null = unknown (never synced), 0 = confirmed empty (Yodeck API returned nothing), >0 = has content
-  yodeckContentCount: integer("yodeck_content_count"), // Number of items/playlists assigned
+  // Content status enum: unknown (never synced), empty (API confirmed no content), has_content (verified), likely_has_content (heuristic)
+  yodeckContentStatus: text("yodeck_content_status").default("unknown"), // unknown, empty, has_content, likely_has_content
+  yodeckContentCount: integer("yodeck_content_count"), // Number of items/playlists assigned (0 = empty, >0 = has content)
   yodeckContentSummary: jsonb("yodeck_content_summary"), // { playlists:[], items:[], topItems:[], lastFetchedAt }
   yodeckContentLastFetchedAt: timestamp("yodeck_content_last_fetched_at"),
+  // Screenshot fallback for content detection
+  yodeckScreenshotLastOkAt: timestamp("yodeck_screenshot_last_ok_at"), // Last time screenshot was valid
+  yodeckScreenshotByteSize: integer("yodeck_screenshot_byte_size"), // Screenshot size (>5KB suggests content)
   resolution: text("resolution"), // e.g., "1920x1080"
   orientation: text("orientation").default("landscape"), // landscape, portrait
   status: text("status").notNull().default("unknown"), // online, offline, unknown

@@ -1,0 +1,88 @@
+JE BENT DE LEAD DEV VAN ELEVIZION DASHBOARD (Express + Drizzle/Postgres). Fix de Yodeck content-detectie.
+
+Context / huidige bugs
+- We syncen nu alleen: GET https://app.yodeck.com/api/v2/screens
+- In onze DB tonen screens: yodeckPlayerId (591896/591895), yodeckUuid, yodeckPlayerName, yodeckScreenshotUrl.
+- Control-room actions tonen nu netjes de Yodeck naam (goed), maar:
+  1) “Geen content in Yodeck” is fout: er draait wel degelijk content (weer, nieuws, ads video/foto) op het online scherm.
+  2) Eerder kregen we: “Failed to fetch Yodeck player 591896: 404 Not Found” → we gebruiken vermoedelijk het verkeerde endpoint of de verkeerde ID (playerId vs screenId).
+- We hebben velden in DB: yodeckContentCount, yodeckContentSummary, yodeckContentLastFetchedAt maar ze blijven 0/[].
+
+Doel
+1) Implement “content status” die klopt:
+   - Voor elk scherm bepalen of er content/schedule/playlist assigned is OF op z’n minst “er draait iets”.
+   - Control-room: “empty_screen” alleen als we betrouwbaar weten dat er geen content is.
+   - “content_unknown” als we het niet kunnen bepalen (bijv. API limitation).
+2) Fix 404 bug: stop met endpoints aanroepen die 404 geven door verkeerde resource/ID.
+3) Toon in de UI altijd de yodeckPlayerName als primaire identifier; screenId (YDK-xxxxx) mag alleen secundair in description.
+
+Aanpak (vereist)
+A) Voeg een debug/instrumentatie stap toe zodat we exact zien welke Yodeck endpoints wat teruggeven:
+   - Voeg in de Yodeck service een functie `debugFetchScreenDetails(yodeckScreenIdOrUuid)` die 1) het juiste ID gebruikt en 2) raw JSON logt (gestript van secrets).
+   - Voeg tijdelijk een interne route (alleen admin) toe: GET /api/debug/yodeck/screen/:yodeckScreenId (of uuid) die de raw response terugstuurt. (Zet achter feature flag / NODE_ENV !== 'production'.)
+
+B) Vind de juiste manier om “wat draait er op dit scherm” te bepalen:
+   - Gebruik NIET “player 591896” endpoint als die 404 geeft.
+   - Gebruik het object dat we al hebben uit /api/v2/screens:
+     - yodeck_screen_id (zoals 591896) en/of yodeck_uuid
+   - Zoek in Yodeck API (v2) welke endpoint(s) bestaan voor:
+     - screen details
+     - assigned playlist / schedule / content items
+     - player state (content status)
+   - Implementeer vervolgens `fetchScreenContentSummary(yodeck_screen_id, yodeck_uuid)`:
+     - Return minimaal:
+       - contentCount (number)
+       - playlists (array met namen/ids als beschikbaar)
+       - items/topItems (bv. media names/types) als beschikbaar
+       - lastFetchedAt
+     - Als API geen lijst van items geeft, bepaal contentCount via schedule/playlist assignments of “player state”.
+     - Als ook dat niet kan: markeer status “unknown” in plaats van “empty”.
+
+C) Fallback die altijd beter is dan fout “empty”
+Als Yodeck API niet toelaat om items te lezen:
+   - Gebruik screenshot_url als fallback signaal:
+     - Download de screenshot (HEAD of GET) en bepaal of het een geldige afbeelding is.
+     - Bewaar `yodeckScreenshotLastOkAt` en `yodeckScreenshotByteSize` (nieuwe kolommen).
+     - Als scherm online is én screenshot is recent/OK (byteSize > minimale drempel), zet contentStatus op “has_content” (of minstens “likely_has_content”) i.p.v. “empty”.
+   - Dit mag in contentSummary als: { heuristic: "screenshot_ok" }.
+
+D) Data model & endpoints
+- Update Drizzle schema + migrations:
+  - Voeg kolommen toe:
+    - yodeckContentStatus: enum('unknown','empty','has_content','likely_has_content')
+    - yodeckScreenshotLastOkAt: timestamp nullable
+    - yodeckScreenshotByteSize: int nullable
+- Update /api/screens response zodat deze velden mee komen.
+- Update /api/control-room/stats:
+  - screensWithContent = count(status in ('has_content','likely_has_content'))
+  - screensEmpty = count(status == 'empty')
+  - contentUnknown = count(status == 'unknown')
+- Update /api/control-room/actions logica:
+  - Voor online scherm:
+    - Als status empty -> empty_screen (warning) met statusText “Geen content/schedule gevonden in Yodeck”
+    - Als status unknown -> content_unknown (info) met statusText “Content status onbekend (sync nodig)”
+    - Als status has_content/likely -> géén empty/content_unknown action.
+  - ItemName = yodeckPlayerName (primair), description secundair: “LocatieNaam • YDK-xxxxx”.
+
+E) Sync flow
+- In de Yodeck sync job:
+  - Na het ophalen van /api/v2/screens:
+    - Voor elk scherm: roep fetchScreenContentSummary aan (met rate limiting / concurrency max 2-3).
+    - Update DB met yodeckContentStatus, yodeckContentCount, yodeckContentSummary, yodeckContentLastFetchedAt.
+  - Zorg dat failures (404 etc) niet de hele sync breken:
+    - Per screen try/catch, status -> unknown, log reason.
+
+Acceptatiecriteria
+- Voor scherm “Test” dat online is en zichtbaar content draait:
+  - Control-room mag NIET meer “Geen content in Yodeck” tonen.
+  - yodeckContentStatus is ‘has_content’ of ‘likely_has_content’ (niet empty).
+- Geen 404 errors meer door verkeerde “player” endpoint.
+- Actions lijst toont altijd “Basil’s Barber Shop Maasbracht” / “Test” als titel (yodeckPlayerName), niet screenId.
+- Voeg duidelijke logs toe tijdens sync: per screen welke endpoint gebruikt is + contentCount/status.
+
+Lever output
+- Code wijzigingen + migratie
+- Korte uitleg in comments: welke Yodeck endpoint(s) gebruikt zijn en waarom
+- Verwijder/disable debug route buiten dev mode
+
+GA NU IMPLEMENTEREN.
