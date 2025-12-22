@@ -136,8 +136,9 @@ async function fetchYodeckPlayers(credentials: YodeckCredentials): Promise<any[]
 async function fetchYodeckPlayerStatus(credentials: YodeckCredentials, playerId: string): Promise<any> {
   try {
     return await yodeckApiRequest(`/screens/${playerId}`, credentials);
-  } catch {
-    // Silently fail - not used by getScreenStats (DB is source of truth)
+  } catch (err: any) {
+    // Log as warning but don't fail - DB is source of truth for uptime/status
+    console.warn(`[Yodeck] Player ${playerId} fetch failed: ${err.message}`);
     return null;
   }
 }

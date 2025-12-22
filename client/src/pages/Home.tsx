@@ -25,11 +25,12 @@ interface ControlRoomStats {
 
 interface ActionItem {
   id: string;
-  type: "offline_screen" | "empty_screen" | "paused_placement";
+  type: "offline_screen" | "no_placements" | "paused_placement";
   itemName: string;
   description: string;
   severity: "error" | "warning" | "info";
   link: string;
+  statusText?: string;
 }
 
 export default function Home() {
@@ -112,16 +113,17 @@ export default function Home() {
   const getTypeIcon = (type: string) => {
     switch (type) {
       case "offline_screen": return WifiOff;
-      case "empty_screen": return Monitor;
+      case "no_placements": return Monitor;
       case "paused_placement": return Pause;
       default: return Monitor;
     }
   };
 
-  const getTypeLabel = (type: string) => {
+  const getTypeLabel = (type: string, statusText?: string) => {
+    if (statusText) return statusText;
     switch (type) {
       case "offline_screen": return "Offline";
-      case "empty_screen": return "Leeg";
+      case "no_placements": return "Geen placements ingesteld in Elevizion";
       case "paused_placement": return "Gepauzeerd";
       default: return type;
     }
@@ -221,7 +223,7 @@ export default function Home() {
                           <div className="flex items-center gap-2">
                             <span className="font-medium text-sm">{item.itemName}</span>
                             <Badge variant={getBadgeVariant(item.severity)} className="text-xs px-1.5 py-0">
-                              {getTypeLabel(item.type)}
+                              {getTypeLabel(item.type, item.statusText)}
                             </Badge>
                           </div>
                           <p className="text-xs text-muted-foreground">{item.description}</p>
