@@ -3242,6 +3242,10 @@ export async function registerRoutes(
       const locations = await storage.getLocations();
       const actions: any[] = [];
       
+      // Helper: get recognizable screen name (priority: name -> yodeckPlayerName -> screenId)
+      const getScreenDisplayName = (screen: any) => 
+        screen.name || screen.yodeckPlayerName || screen.screenId;
+      
       // Offline screens
       screens.forEach(screen => {
         if (screen.status === "offline") {
@@ -3249,8 +3253,8 @@ export async function registerRoutes(
           actions.push({
             id: `offline-${screen.id}`,
             type: "offline_screen",
-            itemName: screen.screenId,
-            description: location?.name || "Onbekende locatie",
+            itemName: getScreenDisplayName(screen),
+            description: `${screen.screenId}${location?.name ? ` • ${location.name}` : ""}`,
             severity: "error",
             link: `/screens/${screen.id}`,
           });
@@ -3267,8 +3271,8 @@ export async function registerRoutes(
           actions.push({
             id: `empty-${screen.id}`,
             type: "empty_screen",
-            itemName: screen.screenId,
-            description: location?.name || "Zonder actieve plaatsing",
+            itemName: getScreenDisplayName(screen),
+            description: `${screen.screenId}${location?.name ? ` • ${location.name}` : ""}`,
             severity: "info",
             link: `/screens/${screen.id}`,
           });
@@ -3278,11 +3282,12 @@ export async function registerRoutes(
       // Paused placements
       placements.filter(p => !p.isActive).forEach(placement => {
         const screen = screens.find(s => s.id === placement.screenId);
+        const displayName = screen ? getScreenDisplayName(screen) : "Onbekend scherm";
         actions.push({
           id: `paused-${placement.id}`,
           type: "paused_placement",
-          itemName: screen?.screenId || "Onbekend scherm",
-          description: "Plaatsing gepauzeerd",
+          itemName: displayName,
+          description: `${screen?.screenId || "?"} • Plaatsing gepauzeerd`,
           severity: "warning",
           link: `/placements/${placement.id}`,
         });
