@@ -25,7 +25,7 @@ interface ControlRoomStats {
 
 interface ActionItem {
   id: string;
-  type: "offline_screen" | "no_placements_configured" | "no_yodeck" | "paused_placement";
+  type: "offline_screen" | "empty_screen" | "content_unknown" | "no_yodeck" | "paused_placement";
   itemName: string;
   description: string;
   severity: "error" | "warning" | "info";
@@ -113,7 +113,8 @@ export default function Home() {
   const getTypeIcon = (type: string) => {
     switch (type) {
       case "offline_screen": return WifiOff;
-      case "no_placements_configured": return Monitor;
+      case "empty_screen": return Monitor;
+      case "content_unknown": return Monitor;
       case "no_yodeck": return Monitor;
       case "paused_placement": return Pause;
       default: return Monitor;
@@ -124,7 +125,8 @@ export default function Home() {
     if (statusText) return statusText;
     switch (type) {
       case "offline_screen": return "Offline";
-      case "no_placements_configured": return "Geen placements in Elevizion";
+      case "empty_screen": return "Geen content in Yodeck";
+      case "content_unknown": return "Content status onbekend";
       case "no_yodeck": return "Niet gekoppeld aan Yodeck";
       case "paused_placement": return "Gepauzeerd";
       default: return type;

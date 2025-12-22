@@ -114,6 +114,10 @@ export const screens = pgTable("screens", {
   yodeckUuid: text("yodeck_uuid").unique(), // Yodeck UUID for upsert matching
   yodeckWorkspaceName: text("yodeck_workspace_name"),
   yodeckScreenshotUrl: text("yodeck_screenshot_url"),
+  // Yodeck content tracking - what's playing on the screen
+  yodeckContentCount: integer("yodeck_content_count").default(0), // Number of items/playlists assigned
+  yodeckContentSummary: jsonb("yodeck_content_summary"), // { playlists:[], items:[], topItems:[], lastFetchedAt }
+  yodeckContentLastFetchedAt: timestamp("yodeck_content_last_fetched_at"),
   resolution: text("resolution"), // e.g., "1920x1080"
   orientation: text("orientation").default("landscape"), // landscape, portrait
   status: text("status").notNull().default("unknown"), // online, offline, unknown

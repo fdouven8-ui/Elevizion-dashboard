@@ -49,6 +49,58 @@ export interface YodeckScreen {
   };
   screenshot_url?: string;
   working_hours_config?: any;
+  // Content fields from Yodeck API v2
+  playlist?: { id: number; name: string } | null;
+  playlists?: Array<{ id: number; name: string }>;
+  media?: { id: number; name: string } | null;
+  schedule?: { id: number; name: string } | null;
+}
+
+// Extract content info from Yodeck screen data
+export function extractYodeckContentInfo(screen: YodeckScreen): {
+  contentCount: number;
+  contentSummary: {
+    playlists: Array<{ id: number; name: string }>;
+    items: string[];
+    topItems: string[];
+    lastFetchedAt: string;
+  };
+} {
+  const playlists: Array<{ id: number; name: string }> = [];
+  const items: string[] = [];
+  
+  // Check for assigned playlist(s)
+  if (screen.playlist) {
+    playlists.push(screen.playlist);
+    items.push(`Playlist: ${screen.playlist.name}`);
+  }
+  if (screen.playlists && screen.playlists.length > 0) {
+    playlists.push(...screen.playlists);
+    screen.playlists.forEach(p => items.push(`Playlist: ${p.name}`));
+  }
+  
+  // Check for direct media assignment
+  if (screen.media) {
+    items.push(`Media: ${screen.media.name}`);
+  }
+  
+  // Check for schedule
+  if (screen.schedule) {
+    items.push(`Schedule: ${screen.schedule.name}`);
+  }
+  
+  const contentCount = playlists.length + (screen.media ? 1 : 0) + (screen.schedule ? 1 : 0);
+  const topItems = items.slice(0, 5); // Max 5 items for display
+  
+  return {
+    contentCount,
+    contentSummary: {
+      playlists,
+      items,
+      topItems,
+      lastFetchedAt: new Date().toISOString(),
+    },
+  };
 }
 
 // Get the API key from integrations table (decrypted) - never from env
@@ -308,6 +360,9 @@ export async function syncYodeckScreens(): Promise<{
           existing = await storage.getScreenByYodeckPlayerId(String(screen.id));
         }
         
+        // Extract content info from Yodeck screen data
+        const contentInfo = extractYodeckContentInfo(screen);
+        
         if (existing) {
           // Update existing screen - use id-based update since UUID might not be set yet
           await storage.updateScreen(existing.id, {
@@ -319,8 +374,12 @@ export async function syncYodeckScreens(): Promise<{
             status: screen.state?.online ? "online" : "offline",
             lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
             locationId: existing.locationId || defaultLocationId,
+            // Content tracking
+            yodeckContentCount: contentInfo.contentCount,
+            yodeckContentSummary: contentInfo.contentSummary,
+            yodeckContentLastFetchedAt: new Date(),
           });
-          console.log(`[Yodeck] Updated screen ${screenId || screen.name} (backfilled UUID: ${screen.uuid})`);
+          console.log(`[Yodeck] Updated screen ${screenId || screen.name} (content: ${contentInfo.contentCount} items)`);
           updatedCount++;
         } else {
           // Create new screen
@@ -337,8 +396,12 @@ export async function syncYodeckScreens(): Promise<{
             status: screen.state?.online ? "online" : "offline",
             lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
             isActive: true,
+            // Content tracking
+            yodeckContentCount: contentInfo.contentCount,
+            yodeckContentSummary: contentInfo.contentSummary,
+            yodeckContentLastFetchedAt: new Date(),
           });
-          console.log(`[Yodeck] Created new screen ${newScreenId} with UUID: ${screen.uuid}`);
+          console.log(`[Yodeck] Created new screen ${newScreenId} (content: ${contentInfo.contentCount} items)`);
           updatedCount++;
         }
       }

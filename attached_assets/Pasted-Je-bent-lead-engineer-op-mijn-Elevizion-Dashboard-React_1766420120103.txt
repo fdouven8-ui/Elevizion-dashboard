@@ -1,0 +1,61 @@
+Je bent lead engineer op mijn Elevizion Dashboard (React + TS + Vite, Express + Drizzle + Postgres).
+Doel: de UI moet niet alleen “online/offline” zien, maar ook kunnen tonen wat er op een Yodeck-scherm draait (aantal items / playlist / schedule / screenshot), zodat “empty_screen” en stats kloppen.
+
+CONTEXT
+- We syncen Yodeck screens via GET https://app.yodeck.com/api/v2/screens en slaan op in DB.
+- In Control Room actions tonen we nu itemName + description. Ik wil primair de Yodeck naam (yodeckPlayerName) tonen, screenId alleen secundair.
+- Er is een bug: backend log:
+  “Failed to fetch Yodeck player 591896: Error: Yodeck API error: 404 - Not Found”
+  Waarschijnlijk gebruiken we een foute endpoint/identifier (playerId vs screenId/uuid) voor details.
+- Ik heb WEL content op het scherm gezet (weer, nieuws, ads), maar Elevizion toont nog 0 plays/0 placements en “empty_screen”.
+
+TAKEN
+
+1) UI/Actions tekst aanpassen
+- In Control Room actions:
+  - itemName = yodeckPlayerName (of name)
+  - description = "<LocationName> • <screenId>" (screenId is YDK-xxxxx)
+  - Verberg screenId als primaire label overal (gebruik het alleen in details/tooltip).
+
+2) Fix de 404 “fetch Yodeck player”
+- Zoek in backend de functie die details ophaalt (waarschijnlijk iets als fetchYodeckPlayer / getPlayer / getScreenStats).
+- Stop met /players/{591896} als dat niet bestaat.
+- Gebruik de juiste identifier:
+  - Als we yodeckPlayerId hebben: behandel dit als “screen id” van Yodeck (van /screens lijst) en haal details via een endpoint dat wél bestaat (bijv. /screens/{id} of /screens/{uuid}). 
+  - We hebben ook yodeckUuid per screen, gebruik die als fallback.
+- Voeg robuuste fallback toe:
+  - Als detail-call 404 geeft: niet crashen, maar ga door en zet details.available=false en log “not found” zonder de hele stats-call te breken.
+
+3) “Wat draait er op het scherm?” inlezen en opslaan
+Ik wil dat Elevizion kan tonen of een scherm in Yodeck “gevuld” is.
+Implementatie-eis:
+- Voeg een service toe die per screen:
+  - (A) ophaalt welke playlist/layout/schedule aan dat screen hangt (of een API die huidige playback/assigned content geeft)
+  - (B) bepaalt contentCount (aantal assets/items) en eventueel topItems (max 5 namen).
+- Sla dit op in DB in de screens tabel (nieuwe velden):
+  - yodeckContentCount int default 0
+  - yodeckContentSummary jsonb (bv { playlists:[], items:[], lastFetchedAt })
+  - yodeckContentLastFetchedAt timestamp
+- Update dit tijdens /api/integrations/yodeck/sync of als aparte job (bv /api/sync/yodeck/run).
+
+4) “empty_screen” logic corrigeren
+- Stop met “empty_screen” baseren op “geen placements in Elevizion”.
+- Gebruik:
+  - empty_screen = (screen is online) AND (yodeckContentCount == 0)  (of onbekend -> severity=info “content unknown”)
+- Als screen offline: dat blijft offline_screen.
+
+5) Dashboard stats uitbreiden (klein)
+- Voeg aan /api/control-room/stats toe:
+  - screensWithContent
+  - screensEmpty (online maar 0 content)
+- UI hoeft alleen 1 extra label te krijgen of in tooltip; geen grote redesign.
+
+BELANGRIJK
+- Maak geen huge refactor.
+- Voeg waar nodig kleine migration toe (Drizzle migration).
+- Voeg logging toe rond Yodeck calls (endpoint + identifier type: id/uuid) zodat we kunnen debuggen.
+- Schrijf het zo dat het ook werkt als Yodeck content-endpoint soms ontbreekt: dan “unknown” i.p.v. fout.
+
+OPLEVERING
+- PR-ready changes: backend + migration + kleine UI tweak.
+- Laat me zien: welke endpoint(s) je gebruikt voor content, welke identifiers, en een voorbeeld van yodeckContentSummary.
