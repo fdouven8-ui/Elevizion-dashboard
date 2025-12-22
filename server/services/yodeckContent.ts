@@ -7,6 +7,46 @@
  * 2. For each screen, fetch detail endpoint to get assigned content
  * 3. Try multiple strategies: UUID first, then numeric ID
  * 4. Use null for "unknown", 0 for "truly empty"
+ * 
+ * ============================================================================
+ * DEV NOTES - Yodeck API Integration
+ * ============================================================================
+ * 
+ * ENDPOINTS USED:
+ * - GET /api/v2/screens - List all screens (returns: id, uuid, name, workspace, state)
+ * - GET /api/v2/screens/{uuid} - Get screen details (REQUIRES UUID, not numeric ID)
+ * 
+ * CRITICAL: The detail endpoint ONLY works with UUID, not the numeric screen ID!
+ * Using numeric ID (e.g. 591896) returns 404. Always use the uuid field.
+ * 
+ * IDENTIFIER MAPPING:
+ * - yodeckPlayerId = numeric ID (e.g. "591896") - used for display/reference only
+ * - yodeckUuid = UUID string (e.g. "abc123-def456...") - REQUIRED for API calls
+ * 
+ * CONTENT STRUCTURE IN RESPONSE:
+ * Yodeck returns content in two possible locations:
+ * 1. Top-level fields: playlist, playlists, media, schedule, layout, apps, widgets
+ * 2. assigned_content object: { playlists[], items[], media[], schedules[], etc. }
+ * 
+ * We check BOTH locations to maximize content detection.
+ * 
+ * EXAMPLE RESPONSE MAPPING:
+ * {
+ *   "id": 591896,
+ *   "uuid": "abc123...",
+ *   "name": "Test Screen",
+ *   "assigned_content": {
+ *     "playlists": [{ "id": 123, "name": "Main Playlist" }],
+ *     "items": [{ "id": 456, "name": "Weather Widget", "type": "widget" }]
+ *   }
+ * }
+ * => contentCount: 2, summary: "Playlist: Main Playlist • Widget: Weather Widget"
+ * 
+ * NULL vs 0 SEMANTICS:
+ * - null = unknown (API failed, never synced, or endpoint returned error)
+ * - 0 = truly empty (API confirmed no content assigned)
+ * - >0 = has content (count of items)
+ * ============================================================================
  */
 
 import { storage } from "../storage";
