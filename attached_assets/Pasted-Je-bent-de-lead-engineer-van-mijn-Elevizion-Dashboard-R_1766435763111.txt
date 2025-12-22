@@ -1,0 +1,81 @@
+Je bent de lead engineer van mijn Elevizion Dashboard (React+TS+Vite + Express + Drizzle + Postgres).
+Probleem: Schermnamen syncen uit Yodeck werkt, maar “screen content / welke ads draaien” klopt niet. In Yodeck spelen er wel dingen, maar onze sync zet yodeckContentCount=0 en yodeckContentStatus blijft unknown/empty. Ik wil dat het systeem “inleest wat er op het scherm staat” en dat zichtbaar maakt in Control Room + Screen detail.
+
+BELANGRIJK: we hebben al per screen een yodeckScreenshotUrl (S3 url). Gebruik die om content te detecteren i.p.v. alleen Yodeck content_count.
+Doel: bepaal per screen:
+- Heeft het screen een geldige screenshot?
+- Is de screenshot “blank/empty” of speelt er content?
+- En het liefst: match de screenshot tegen onze creatives (ads) zodat we kunnen zeggen welke ad(creative) waarschijnlijk draait.
+
+IMPLEMENTATIEPLAN (doe dit nu):
+1) Database uitbreiden (Drizzle migration):
+   Voeg aan `screens` toe:
+   - yodeckScreenshotLastOkAt (timestamp, nullable)
+   - yodeckScreenshotByteSize (int, nullable)
+   - yodeckScreenshotHash (text, nullable)  // perceptual hash
+   - yodeckContentStatus (text, nullable)   // enum-like: 'managed' | 'unmanaged' | 'empty' | 'unknown' | 'error'
+   - yodeckContentSummary (jsonb, nullable) // bv { matches:[{creativeId, distance, confidence}], lastFetchedAt, method:'screenshot-phash' }
+   - yodeckContentLastFetchedAt (timestamp, nullable)
+   - yodeckContentError (text, nullable)
+
+2) Creatives hashing:
+   - In `creatives` table (of waar creatives staan) voeg velden toe:
+     - phash (text, nullable)
+     - phashUpdatedAt (timestamp, nullable)
+   - Maak een helper die voor elke image creative (png/jpg/webp) een pHash berekent en opslaat.
+   - Als creatives video’s zijn: pak (later) een thumbnail; nu mag je alleen images ondersteunen en video’s overslaan.
+
+3) pHash + matching:
+   - Voeg dependency toe: gebruik een Node library voor perceptual hashing:
+     voorkeur: `sharp` + `blockhash-core` of `imghash` (kies wat in Node het stabielst is).
+   - Maak util:
+     - downloadImageBuffer(url) via axios/fetch met timeout + size limit
+     - computePHash(buffer) -> string hash
+     - hammingDistance(hashA, hashB)
+   - Matching-regels:
+     - Als screenshot download faalt -> yodeckContentStatus='error', zet yodeckContentError.
+     - Als screenshot ok:
+        - Zet yodeckScreenshotLastOkAt, yodeckScreenshotByteSize, yodeckScreenshotHash.
+        - Bepaal “empty” heuristiek:
+           * als image bijna 1 kleur (lage entropy) OF filesize < bepaalde grens (bijv < 25KB) -> status 'empty'
+        - Anders:
+           * Zorg dat alle creatives een phash hebben (lazy: bereken on the fly als null).
+           * Match screenshotHash tegen creative.phash:
+               - sorteer op afstand (laagste eerst)
+               - neem top 3
+               - als beste distance <= drempel (bv 10 voor 64-bit hash) => status 'managed'
+               - anders status 'unmanaged'
+           * Sla in yodeckContentSummary op:
+               { method:'screenshot-phash', matches:[{creativeId, distance, confidence}], lastFetchedAt: now }
+
+4) Sync flow:
+   - In bestaande Yodeck sync (POST /api/sync/yodeck/run of auto-run):
+     - na het upserten van screens uit Yodeck, doe voor elk screen met yodeckScreenshotUrl:
+         - fetch screenshot + hash + match
+     - Zorg dat dit parallel met concurrency limit (bv 2-3 tegelijk) loopt om rate limits te vermijden.
+
+5) API & UI updates:
+   - /api/screens moet de nieuwe velden teruggeven (status, summary, lastFetchedAt).
+   - Control Room actions:
+     - Als status='unmanaged' -> action type 'unmanaged_content' met tekst: "Speelt content (niet vanuit Elevizion)" (bestaat al) maar nu gebaseerd op screenshot analyse.
+     - Als status='managed' -> geen unmanaged action; eventueel een info: "Content match: <creativeName>".
+     - Als status='empty' -> action type 'empty_screen' met "Geen content (screenshot lijkt leeg)".
+     - Als status='error' -> action type 'content_error' met error.
+   - Screen detail pagina:
+     - Toon “Detected content” blok met:
+        - status badge
+        - top matches (creative naam + confidence)
+        - timestamp lastFetchedAt
+        - mini thumbnail van screenshot (gebruik bestaande yodeckScreenshotUrl)
+
+6) Logging:
+   - Log per screen: screenshot bytes, status, beste match distance.
+   - Zet timeouts zodat de server niet hangt.
+
+7) Definition of done:
+   - Test screen (YDK-591896) krijgt NIET meer 'unknown' als er echt iets op het scherm staat.
+   - In Control Room zie ik voor Test: unmanaged_content (als het niet uit Elevizion komt) of managed (als het matcht).
+   - yodeckContentSummary heeft matches gevuld.
+
+Let op: We hoeven nu niet via Yodeck schedules/playlists te raden; we detecteren via screenshot omdat dat precies is “wat er op het scherm staat”.
+Voer alle code wijzigingen door (backend + DB + minimal UI) en zorg dat build/start blijft werken.

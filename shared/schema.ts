@@ -124,6 +124,7 @@ export const screens = pgTable("screens", {
   // Screenshot fallback for content detection
   yodeckScreenshotLastOkAt: timestamp("yodeck_screenshot_last_ok_at"), // Last time screenshot was valid
   yodeckScreenshotByteSize: integer("yodeck_screenshot_byte_size"), // Screenshot size (>5KB suggests content)
+  yodeckScreenshotHash: text("yodeck_screenshot_hash"), // Perceptual hash for content matching
   resolution: text("resolution"), // e.g., "1920x1080"
   orientation: text("orientation").default("landscape"), // landscape, portrait
   status: text("status").notNull().default("unknown"), // online, offline, unknown
@@ -593,6 +594,9 @@ export const creatives = pgTable("creatives", {
   status: text("status").notNull().default("draft"), // draft, pending_approval, approved, rejected, archived
   durationSeconds: integer("duration_seconds"), // For videos
   notes: text("notes"),
+  // Perceptual hash for screenshot matching
+  phash: text("phash"), // Perceptual hash of image creatives
+  phashUpdatedAt: timestamp("phash_updated_at"), // When phash was last computed
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
