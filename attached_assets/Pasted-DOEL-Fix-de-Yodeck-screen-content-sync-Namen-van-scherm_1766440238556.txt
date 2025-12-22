@@ -1,0 +1,75 @@
+DOEL
+Fix de Yodeck “screen content” sync. Namen van schermen kloppen al, maar Elevizion toont nu geen content/ads omdat we alleen GET /api/v2/screens ophalen. We moeten óók ophalen wat er op elke player/screen is toegewezen en/of wat er nu afspeelt (playlist/media/creatives), en dat opslaan in yodeckContentSummary + yodeckContentCount + yodeckContentStatus.
+
+HUIDIGE SITUATIE (symptomen)
+- Sync logt: “Updated screen X (content: 0 items)”
+- UI: “Geen content in Yodeck” of “Content status onbekend” of “Speelt content (niet vanuit Elevizion)”
+- In DB velden: yodeckContentSummary.items = [] en yodeckContentCount = 0 voor screens die in werkelijkheid wél content tonen.
+
+WAT JE MOET BOUWEN
+1) Breid de Yodeck sync uit:
+   - Blijf /api/v2/screens gebruiken om screens te upserten.
+   - Voeg per screen/player extra API calls toe om content te bepalen:
+     A) Welke playlist(s)/schedule(s) zijn aan deze player toegewezen?
+     B) Welke media/items zitten daarin?
+     C) (Als beschikbaar) wat is de “currently playing” / “playback status” / “active schedule” van deze player?
+   - Gebruik de Yodeck API docs (zoek in codebase waar de API base URL en headers staan; API key is al aanwezig).
+   - Implementeer het defensief: als endpoint niet bestaat of 403/404 geeft, fallback op een ander endpoint of markeer status = "unknown" met error tekst.
+
+2) Data model & opslag:
+   - Vul deze velden bij elke screen update:
+     - yodeckContentStatus: enum (unknown | empty | has_content | error)
+     - yodeckContentCount: integer (aantal items dat (waarschijnlijk) draait)
+     - yodeckContentSummary: JSON met:
+       {
+         "items": [ { "id", "name", "type", "source", "playlistId", "playlistName" } ],
+         "topItems": [zelfde maar max 5],
+         "playlists": [ { "id", "name" } ],
+         "lastFetchedAt": ISO
+       }
+     - yodeckContentLastFetchedAt: timestamp
+     - yodeckContentError: string/null (bijv. endpoint mismatch)
+   - “has_content” als we minstens 1 item/media/playlist vinden die aan de player hangt of actief is.
+   - “empty” als we expliciet kunnen vaststellen dat er géén playlist/content aan hangt.
+   - “unknown” als we dit niet kunnen bepalen (bijv. ontbrekende endpoint).
+   - “error” bij harde fouten (auth, rate limit, parsing).
+
+3) Control Room logic:
+   - Gebruik yodeckContentStatus + yodeckContentCount om acties te bepalen:
+     - empty_screen: status=empty
+     - content_unknown: status=unknown (met statusText “Content status onbekend (sync nodig)”)
+     - unmanaged_content: status=has_content maar Elevizion heeft 0 placements voor dit screen => “Speelt content (niet vanuit Elevizion)”
+   - Stats moeten kloppen:
+     - screensWithYodeckContent = count(status=has_content)
+     - screensYodeckEmpty = count(status=empty)
+     - contentUnknown = count(status=unknown)
+     - contentError = count(status=error)
+
+4) Debug endpoints / logging (BELANGRIJK)
+   - Voeg een endpoint toe (of breid bestaande uit) om per screen te zien welke Yodeck calls gedaan worden en wat terugkomt:
+     GET /api/screens/:id/yodeck-debug
+     Response: { attemptedEndpoints: [...], responsesSummary: {...}, resolvedContent: {...} }
+   - Log tijdens sync per screen:
+     - playerId/screenId
+     - welke endpoint(s) gebruikt
+     - gevonden playlists/items count
+
+TECHNISCHE RANDVOORWAARDEN
+- Gebruik bestaande fetch/http helper; respecteer timeouts.
+- Concurrency limiter: max 3–5 parallel calls zodat sync niet crasht.
+- Cache / throttle: als yodeckContentLastFetchedAt < 10 min geleden, sla content fetch over (maar screens basisinfo mag wel).
+- Code moet in TypeScript, matchen met huidige Express structuur.
+
+ACCEPTANCE CRITERIA (MOET JE TESTEN)
+- Na handmatige POST /api/sync/yodeck/run:
+  - Een screen dat in Yodeck content heeft toont yodeckContentCount > 0 en status=has_content.
+  - Control Room laat niet meer “Geen content in Yodeck” zien voor dat screen.
+  - Als Elevizion placements = 0 maar Yodeck content draait => “Speelt content (niet vanuit Elevizion)”.
+- /api/screens toont gevulde yodeckContentSummary (items/topItems/playlists/lastFetchedAt).
+
+VOER DIT UIT
+- Zoek waar de Yodeck sync nu alleen /api/v2/screens callt en “content: 0 items” zet.
+- Voeg de extra fetch stap toe met correcte endpoints volgens Yodeck docs.
+- Update DB mapping + UI status logic + stats.
+- Voeg /api/screens/:id/yodeck-debug toe.
+- Commit alle wijzigingen.

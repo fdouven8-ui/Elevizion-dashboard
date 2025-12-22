@@ -184,6 +184,93 @@ export async function registerRoutes(
     res.json(screen);
   });
 
+  // Debug endpoint for Yodeck content per screen
+  // GET /api/screens/:id/yodeck-debug
+  // Returns: attemptedEndpoints, responsesSummary, resolvedContent
+  app.get("/api/screens/:id/yodeck-debug", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const screen = await storage.getScreen(req.params.id);
+      if (!screen) return res.status(404).json({ message: "Screen not found" });
+      
+      const playerId = screen.yodeckPlayerId;
+      if (!playerId) {
+        return res.json({
+          screenId: screen.screenId,
+          error: "No yodeckPlayerId linked",
+          attemptedEndpoints: [],
+          responsesSummary: {},
+          resolvedContent: {
+            status: "unknown",
+            count: 0,
+            items: [],
+            playlists: [],
+          },
+        });
+      }
+      
+      console.log(`[YodeckDebug] Debug request for screen ${screen.screenId} (playerId=${playerId})`);
+      
+      const { discoverScreenContent, debugYodeckScreen } = await import("./services/yodeckContent");
+      
+      // Get discovery result with probes (with safe defaults)
+      const discoveryResult = await discoverScreenContent(playerId);
+      
+      // Get raw debug info (with safe defaults)
+      let debugResult: any = { screenDetail: null };
+      try {
+        debugResult = await debugYodeckScreen(playerId);
+      } catch (debugError: any) {
+        console.log(`[YodeckDebug] Debug fetch failed: ${debugError.message}`);
+      }
+      
+      // Safe access with defaults
+      const resolved = discoveryResult?.resolved || {
+        status: "error",
+        statusReason: "Discovery failed",
+        count: 0,
+        playlists: [],
+        topItems: [],
+      };
+      const tried = discoveryResult?.tried || [];
+      
+      res.json({
+        screenId: screen.screenId,
+        yodeckPlayerId: playerId,
+        yodeckPlayerName: screen.yodeckPlayerName,
+        attemptedEndpoints: tried.map((t: any) => ({
+          endpoint: t.endpoint,
+          status: t.status,
+          hasContent: t.hasContent,
+          keys: t.keys,
+        })),
+        responsesSummary: {
+          screenContent: debugResult?.screenDetail?.screen_content || null,
+          screenState: debugResult?.screenDetail?.state || null,
+          screenName: debugResult?.screenDetail?.name || null,
+        },
+        resolvedContent: {
+          status: resolved.status,
+          statusReason: resolved.statusReason,
+          count: resolved.count,
+          items: discoveryResult?.playlistItems || [],
+          playlists: resolved.playlists || [],
+          topItems: resolved.topItems || [],
+        },
+        // Current DB values for comparison
+        currentDbValues: {
+          yodeckContentStatus: screen.yodeckContentStatus,
+          yodeckContentCount: screen.yodeckContentCount,
+          yodeckContentSummary: screen.yodeckContentSummary,
+          yodeckContentLastFetchedAt: screen.yodeckContentLastFetchedAt,
+          yodeckContentError: screen.yodeckContentError,
+        },
+      });
+    } catch (error: any) {
+      console.error("[YodeckDebug] Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.post("/api/screens", async (req, res) => {
     try {
       const data = insertScreenSchema.parse(req.body);
