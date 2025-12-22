@@ -1,0 +1,40 @@
+Je bent mijn senior full-stack engineer. Fix 2 dingen: (A) Control Room action labels en (B) “empty screen” detectie.
+
+Context (huidig gedrag):
+- GET /api/control-room/actions geeft items zoals:
+  - { type:"offline_screen", itemName:"Basil's Barber Shop Maasbracht", description:"YDK-591895 • Default (Yodeck Import)" }
+  - { type:"empty_screen", itemName:"Test", description:"YDK-591896 • Default (Yodeck Import)" }
+- GET /api/control-room/stats laat activePlacements=0 zien.
+- In werkelijkheid draait er wél content op het online scherm (nieuws/weer/ads via Yodeck), maar de app blijft “empty_screen” tonen.
+- Screens in DB hebben fields: name, screenId ("YDK-..."), yodeckPlayerId, yodeckPlayerName, yodeckUuid, yodeckScreenshotUrl, locationId, status, lastSeenAt.
+
+A) Action list labels (UX):
+- In actions moet itemName altijd de herkenbare naam zijn:
+  voorkeur: screen.name (of yodeckPlayerName), fallback: screenId.
+- description mag locationName blijven, maar screenId alleen als secundaire info, bv:
+  description: "<LocationName> • <screenId>" of "<LocationName>" als je het cleaner wilt.
+- Zorg dat dit geldt voor offline_screen en empty_screen.
+
+B) Empty screen detectie (functioneel):
+- Stop met empty_screen baseren op activePlacements (dat is intern “placements” in ons systeem en staat nu nog leeg).
+- Maak “empty_screen” gebaseerd op echte Yodeck playback/assignment:
+  - Gebruik Yodeck API om per online screen te checken of er content is toegewezen.
+  - Gebruik yodeckPlayerId of yodeckUuid.
+  - Implementeer een helper in server: yodeckHasContent(playerId|uuid) -> boolean.
+  - Als Yodeck endpoint 404 geeft op player/591896 (gebeurt nu soms), gebruik fallback:
+    1) probeer via uuid endpoint (als beschikbaar),
+    2) of haal screen details opnieuw op via /api/v2/screens en match op id/uuid,
+    3) en behandel 404 niet als “empty”, maar als “unknown” (geen empty_screen actie; log warning).
+- Alleen empty_screen tonen wanneer:
+  screen.status == "online" AND yodeckHasContent == false.
+
+Implementatie eisen:
+- Zoek in backend waar routes staan: /api/control-room/actions en /api/control-room/stats.
+- Zoek waar actions gebouwd worden (controlRoomService / actions builder).
+- Voeg caching toe (bijv. 60s) voor yodeckHasContent per screen om rate-limits te vermijden.
+- Update logs zodat je ziet welke Yodeck call is gedaan en welke fallback is gebruikt.
+- Voeg unit-test of simpele integration test toe (mag minimal) voor action label formatting en empty_screen decision.
+- Let op: geen breaking changes in response shape van /api/control-room/actions (id/type/itemName/description/severity/link blijven).
+
+Levering:
+- Pas de code aan, laat me exact zien welke bestanden je gewijzigd hebt en geef diff/patch per bestand.

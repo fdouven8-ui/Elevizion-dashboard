@@ -143,39 +143,120 @@ async function fetchYodeckPlayerStatus(credentials: YodeckCredentials, playerId:
   }
 }
 
-// Internal function to check Yodeck content (called by cached wrapper)
-async function _checkYodeckScreenHasContent(yodeckUuid: string): Promise<{ 
+// Helper: check if Yodeck screen data has content assigned
+function hasYodeckContentAssigned(screenData: any): boolean {
+  // Yodeck API v2 content indicators:
+  // - basic.playlist: assigned playlist
+  // - playlists array: multiple playlists
+  // - playlist: legacy field
+  // - media: direct media assignment
+  const hasPlaylist = screenData?.basic?.playlist || 
+                     (screenData?.playlists && screenData.playlists.length > 0) ||
+                     screenData?.playlist;
+  const hasMedia = screenData?.media || screenData?.basic?.media;
+  return !!(hasPlaylist || hasMedia);
+}
+
+// Internal function to check Yodeck content with fallback strategies
+// Tries: 1) UUID endpoint, 2) playerId endpoint, 3) match in /screens list
+async function _checkYodeckScreenHasContentWithFallback(
+  yodeckUuid: string | null, 
+  yodeckPlayerId: string | null
+): Promise<{ 
   hasContent: boolean | null; 
   error?: string;
   apiWorked: boolean;
+  method?: string;
 }> {
   try {
     const credentials = await getYodeckCredentials();
     if (!credentials) {
+      console.log(`[Yodeck] No credentials configured`);
       return { hasContent: null, error: "no_credentials", apiWorked: false };
     }
     
-    const screenData = await yodeckApiRequest(`/screens/${yodeckUuid}`, credentials);
+    // Strategy 1: Try UUID endpoint (preferred)
+    if (yodeckUuid) {
+      try {
+        console.log(`[Yodeck] Checking content via UUID: ${yodeckUuid}`);
+        const screenData = await yodeckApiRequest(`/screens/${yodeckUuid}`, credentials);
+        console.log(`[Yodeck] UUID lookup success for ${yodeckUuid}`);
+        return { 
+          hasContent: hasYodeckContentAssigned(screenData), 
+          apiWorked: true,
+          method: "uuid"
+        };
+      } catch (err: any) {
+        console.log(`[Yodeck] UUID lookup failed for ${yodeckUuid}: ${err.message}, trying fallback...`);
+      }
+    }
     
-    // Check if screen has playlist or media assigned
-    const hasPlaylist = screenData?.basic?.playlist || 
-                       (screenData?.playlists && screenData.playlists.length > 0) ||
-                       screenData?.playlist;
+    // Strategy 2: Try playerId endpoint (numeric ID from YDK-xxx)
+    if (yodeckPlayerId) {
+      // Extract numeric part from YDK-591895 format
+      const numericId = yodeckPlayerId.replace(/^YDK-/, "");
+      try {
+        console.log(`[Yodeck] Checking content via playerId: ${numericId}`);
+        const screenData = await yodeckApiRequest(`/screens/${numericId}`, credentials);
+        console.log(`[Yodeck] PlayerId lookup success for ${numericId}`);
+        return { 
+          hasContent: hasYodeckContentAssigned(screenData), 
+          apiWorked: true,
+          method: "playerId"
+        };
+      } catch (err: any) {
+        console.log(`[Yodeck] PlayerId lookup failed for ${numericId}: ${err.message}, trying list fallback...`);
+      }
+    }
     
-    return { hasContent: !!hasPlaylist, apiWorked: true };
+    // Strategy 3: Fetch all screens and match
+    try {
+      console.log(`[Yodeck] Fetching all screens list as fallback...`);
+      const allScreens = await fetchYodeckPlayers(credentials);
+      
+      // Try to find matching screen by UUID or playerId
+      const matchingScreen = allScreens.find((s: any) => {
+        if (yodeckUuid && (s.uuid === yodeckUuid || s.id === yodeckUuid)) return true;
+        if (yodeckPlayerId) {
+          const numericId = yodeckPlayerId.replace(/^YDK-/, "");
+          if (String(s.id) === numericId) return true;
+        }
+        return false;
+      });
+      
+      if (matchingScreen) {
+        console.log(`[Yodeck] Found matching screen in list: ${matchingScreen.name || matchingScreen.id}`);
+        return { 
+          hasContent: hasYodeckContentAssigned(matchingScreen), 
+          apiWorked: true,
+          method: "list_match"
+        };
+      }
+      
+      // Screen not found in Yodeck at all - treat as unknown, not empty
+      console.log(`[Yodeck] Screen not found in Yodeck list (uuid=${yodeckUuid}, playerId=${yodeckPlayerId})`);
+      return { hasContent: null, error: "not_found_in_yodeck", apiWorked: true, method: "list_search" };
+    } catch (err: any) {
+      console.log(`[Yodeck] List fallback failed: ${err.message}`);
+    }
+    
+    // All strategies failed - return unknown
+    console.warn(`[Yodeck] All content check strategies failed for uuid=${yodeckUuid}, playerId=${yodeckPlayerId}`);
+    return { hasContent: null, error: "all_strategies_failed", apiWorked: false };
   } catch (err: any) {
-    console.log(`[Yodeck] Failed to check content for ${yodeckUuid}: ${err.message}`);
-    return { hasContent: null, error: "api_error", apiWorked: false };
+    console.log(`[Yodeck] Unexpected error checking content: ${err.message}`);
+    return { hasContent: null, error: "unexpected_error", apiWorked: false };
   }
 }
 
-// Cached version: checks Yodeck content status, cached for 2 minutes
+// Cached version: checks Yodeck content status, cached for 60 seconds
+// Cache key combines both identifiers
 export const checkYodeckScreenHasContent = memoizee(
-  _checkYodeckScreenHasContent,
+  _checkYodeckScreenHasContentWithFallback,
   {
-    maxAge: 2 * 60 * 1000, // 2 minute cache
+    maxAge: 60 * 1000, // 60 second cache
     promise: true,
-    normalizer: (args: [string]) => args[0],
+    normalizer: (args: [string | null, string | null]) => `${args[0] || ""}_${args[1] || ""}`,
   }
 );
 

@@ -3253,15 +3253,19 @@ export async function registerRoutes(
       const actions: any[] = [];
       const now = new Date();
       
-      // Helper: get recognizable screen name (priority: yodeckPlayerName -> name)
-      // Never show screenId (like YDK-xxxxx) as primary name
+      // Helper: get recognizable screen name (priority: name -> yodeckPlayerName -> screenId)
       const getScreenDisplayName = (screen: any) => 
-        screen.yodeckPlayerName || screen.name || "Onbekend scherm";
+        screen.name || screen.yodeckPlayerName || screen.screenId || "Onbekend scherm";
       
-      // Helper: get location description
-      const getLocationDesc = (screen: any) => {
+      // Helper: get location description with optional screenId
+      const getLocationDesc = (screen: any, includeScreenId: boolean = false) => {
         const location = locations.find(l => l.id === screen.locationId);
-        return location?.name || "";
+        const locationName = location?.name || "";
+        
+        if (includeScreenId && screen.screenId) {
+          return locationName ? `${locationName} • ${screen.screenId}` : screen.screenId;
+        }
+        return locationName;
       };
       
       // Calculate truly active placements (isActive AND within date range)
@@ -3277,12 +3281,12 @@ export async function registerRoutes(
       // Offline screens - only show offline action
       screens.forEach(screen => {
         if (screen.status === "offline") {
-          const locationName = getLocationDesc(screen);
+          const locationDesc = getLocationDesc(screen, true); // Include screenId in description
           actions.push({
             id: `offline-${screen.id}`,
             type: "offline_screen",
             itemName: getScreenDisplayName(screen),
-            description: locationName || "Geen locatie",
+            description: locationDesc || "Geen locatie",
             severity: "error",
             link: `/screens/${screen.id}`,
           });
@@ -3294,17 +3298,22 @@ export async function registerRoutes(
       const onlineScreensToCheck = screens.filter(s => s.status === "online");
       
       // Check Yodeck content status for each online screen (parallel)
+      // Uses fallback strategy: UUID -> playerId -> list match
       const yodeckContentChecks = await Promise.all(
         onlineScreensToCheck.map(async (screen) => {
-          if (!screen.yodeckUuid) {
-            // No Yodeck UUID - can't check, return unknown
-            return { screenId: screen.id, hasContent: null, reason: "no_uuid" };
+          // Need at least one Yodeck identifier to check
+          if (!screen.yodeckUuid && !screen.yodeckPlayerId) {
+            return { screenId: screen.id, hasContent: null, reason: "no_yodeck_id" };
           }
-          const result = await checkYodeckScreenHasContent(screen.yodeckUuid);
+          const result = await checkYodeckScreenHasContent(
+            screen.yodeckUuid || null, 
+            screen.yodeckPlayerId || null
+          );
           return { 
             screenId: screen.id, 
             hasContent: result.hasContent,
-            reason: result.hasContent === null ? "api_error" : null
+            reason: result.hasContent === null ? (result.error || "unknown") : null,
+            method: result.method
           };
         })
       );
@@ -3317,7 +3326,7 @@ export async function registerRoutes(
       // Process online screens: show empty_screen only if Yodeck is truly empty
       onlineScreensToCheck.forEach(screen => {
         const yodeckStatus = yodeckContentMap.get(screen.id);
-        const locationName = getLocationDesc(screen);
+        const locationDesc = getLocationDesc(screen, true); // Include screenId in description
         
         // Only show action if Yodeck is definitely empty (hasContent = false)
         if (yodeckStatus?.hasContent === false) {
@@ -3325,24 +3334,26 @@ export async function registerRoutes(
             id: `empty-${screen.id}`,
             type: "empty_screen",
             itemName: getScreenDisplayName(screen),
-            description: locationName || "Geen locatie",
+            description: locationDesc || "Geen locatie",
             severity: "warning",
             link: `/screens/${screen.id}`,
             statusText: "Geen content in Yodeck",
           });
         }
-        // If hasContent is null (unknown) and no Yodeck UUID, add info action
-        else if (yodeckStatus?.hasContent === null && yodeckStatus?.reason === "no_uuid") {
+        // If hasContent is null (unknown) and no Yodeck identifiers, add info action
+        else if (yodeckStatus?.hasContent === null && yodeckStatus?.reason === "no_yodeck_id") {
           actions.push({
             id: `no-yodeck-${screen.id}`,
             type: "no_yodeck",
             itemName: getScreenDisplayName(screen),
-            description: locationName || "Geen locatie",
+            description: locationDesc || "Geen locatie",
             severity: "info",
             link: `/screens/${screen.id}`,
             statusText: "Niet gekoppeld aan Yodeck",
           });
         }
+        // If API failed but we have identifiers, skip action (don't show empty if we can't verify)
+        // This prevents false "empty_screen" when Yodeck API is down
         // If Yodeck has content, no action needed (screen is running something)
       });
       
