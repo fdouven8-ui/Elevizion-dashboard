@@ -1,0 +1,38 @@
+Je werkt aan mijn Elevizion Dashboard (React + TS + Vite frontend, Express + Drizzle + Postgres backend). Ik heb Yodeck sync werkend (screens komen binnen), maar:
+
+1) In de Control Room “Actions” lijst moet NIET de interne screenId (zoals YDK-591896 of DB id) als hoofdnaam staan. De Yodeck naam is belangrijker.
+   - Action.itemName moet standaard de menselijke naam zijn:
+     - prefer: screen.yodeckPlayerName
+     - else: screen.name
+     - else: screen.screenId (fallback)
+   - In de description mag de technische ID wel klein terugkomen, bv:
+     “YDK-591896 • Default (Yodeck Import)”
+   - Pas dit toe op offline_screen en empty_screen (en andere screen-gerelateerde actions).
+
+2) “empty_screen” klopt niet met de realiteit:
+   - Op het online scherm staan al nieuws/weer/ads in Yodeck, maar mijn dashboard blijft “empty_screen” tonen.
+   - De oorzaak: ons systeem heeft (nog) geen placements/creatives gemodelleerd vanuit Yodeck, dus “geen placements” ≠ “scherm is leeg”.
+   - Fix: hernoem/adjust de logic zodat het niet ‘leeg’ noemt als het alleen “geen placements in ons systeem” is.
+     Optie A (snel & correct): verander empty_screen naar type “unmanaged_content” of “no_internal_placements”.
+       - Titel/description: “Geen placements in Elevizion” i.p.v. “Empty screen”.
+       - Severity blijft “info”.
+     Optie B (als je het kunt): bepaal via Yodeck API of er daadwerkelijk content draait (playlist/schedule/now playing) en toon dan pas “empty_screen”.
+       - Maar: momenteel zie ik errors “Failed to fetch Yodeck player 591896: 404”. Dus als die endpoint niet bestaat, gebruik die NIET.
+       - Als je geen betrouwbare ‘now playing’ kunt krijgen: kies Optie A.
+
+3) Fix de /api/screens/:id/stats endpoint:
+   - Hij logt soms “Yodeck API error: 404 Not Found” bij het ophalen van player info.
+   - Stop met een endpoint call die 404 geeft (waarschijnlijk verkeerde Yodeck endpoint voor “player 591896”).
+   - Maak stats robuust:
+     - uptime/timeline mag gebaseerd zijn op onze DB status/lastSeenAt (en evt. yodeck screens list data).
+     - Als extra Yodeck details niet beschikbaar zijn: return stats alsnog zonder error (graceful fallback).
+   - Zorg dat de API nooit faalt door die 404; maximaal een warning log.
+
+Acceptatiecriteria:
+- Control Room actions tonen als titel de Yodeck naam (bv “Basil’s Barber Shop Maasbracht” en “Test”).
+- Geen “empty_screen” melding meer puur omdat er geen placements in DB staan; het heet nu “Geen placements in Elevizion” (of unmanaged_content/no_internal_placements).
+- /api/screens/:id/stats geeft altijd 200 en geen stacktrace door Yodeck 404.
+
+Levering:
+- Geef de exacte files en diffs die je aanpast (backend + frontend), inclusief eventuele types (ActionType), mapping logic, en UI labels.
+- Voeg 1-2 kleine unit/route tests toe of minimaal een duidelijke manual test checklist.
