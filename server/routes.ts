@@ -2367,6 +2367,38 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/creatives/:id/compute-hash", async (req, res) => {
+    try {
+      const creative = await storage.getCreative(req.params.id);
+      if (!creative) return res.status(404).json({ message: "Creative niet gevonden" });
+      
+      const versions = await storage.getCreativeVersions(req.params.id);
+      if (versions.length === 0) return res.status(400).json({ message: "Creative heeft geen versies met bestanden" });
+      
+      const latestVersion = versions[0];
+      if (!latestVersion.fileUrl) return res.status(400).json({ message: "Nieuwste versie heeft geen file URL" });
+      
+      const { computePHashFromUrl } = await import("./utils/phash");
+      const hashResult = await computePHashFromUrl(latestVersion.fileUrl);
+      
+      if (!hashResult) return res.status(500).json({ message: "Hash berekening mislukt" });
+      
+      const updated = await storage.updateCreative(req.params.id, {
+        phash: hashResult.hash,
+        phashUpdatedAt: new Date(),
+      } as any);
+      
+      res.json({ 
+        success: true, 
+        hash: hashResult.hash,
+        isEmptyOrBlank: hashResult.isEmptyOrBlank,
+        creative: updated 
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/creatives/:id/approvals", async (req, res) => {
     try {
       const approvals = await storage.getCreativeApprovals(req.params.id);

@@ -891,17 +891,34 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
         // Try screenshot fallback before giving up
         const screenshotUrl = screen.yodeckScreenshotUrl;
         if (screenshotUrl) {
-          const screenshotResult = await checkScreenshotFallback(screenshotUrl, screen.screenId);
-          if (screenshotResult.hasContent) {
-            status = "has_content";
-            screenshotFallbackUsed = true;
-            console.log(`[Yodeck] ${screen.screenId}: Screenshot fallback SUCCESS - ${screenshotResult.byteSize} bytes`);
+          // Try advanced screenshot analysis with pHash
+          const analysisResult = await analyzeScreenshot(screenshotUrl, screen.screenId);
+          
+          if (analysisResult.isEmptyOrBlank) {
+            // Screenshot analysis confirms screen is blank/empty
+            status = "empty";
+            console.log(`[Yodeck] ${screen.screenId}: Screenshot analysis confirms BLANK/EMPTY screen`);
             
-            // Update screenshot tracking fields
             await storage.updateScreen(screen.id, {
               yodeckScreenshotLastOkAt: new Date(),
-              yodeckScreenshotByteSize: screenshotResult.byteSize,
+              yodeckScreenshotHash: analysisResult.hash,
             });
+          } else if (analysisResult.hasContent) {
+            status = "has_content";
+            screenshotFallbackUsed = true;
+            console.log(`[Yodeck] ${screen.screenId}: Screenshot analysis SUCCESS - hash=${analysisResult.hash?.substring(0, 16)}...`);
+            
+            // Update screenshot tracking fields with hash
+            await storage.updateScreen(screen.id, {
+              yodeckScreenshotLastOkAt: new Date(),
+              yodeckScreenshotByteSize: analysisResult.byteSize,
+              yodeckScreenshotHash: analysisResult.hash,
+            });
+            
+            // If matched a creative, log it (for future use in managed content detection)
+            if (analysisResult.matchedCreativeId) {
+              console.log(`[Yodeck] ${screen.screenId}: Matched creative ${analysisResult.matchedCreativeId} (${Math.round((analysisResult.matchSimilarity || 0) * 100)}%)`);
+            }
           } else {
             // Screenshot fallback also failed - stay unknown
             status = "unknown";
