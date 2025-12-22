@@ -3270,38 +3270,47 @@ export async function registerRoutes(
       for (const screen of screens) {
         if (screen.status !== "offline" && !screensWithPlacements.has(screen.id)) {
           const location = locations.find(l => l.id === screen.locationId);
+          const locationDesc = `${screen.screenId}${location?.name ? ` • ${location.name}` : ""}`;
+          const screenDisplayName = getScreenDisplayName(screen);
           
-          // Check Yodeck content if screen has yodeckUuid
-          let yodeckResult: { hasContent: boolean | null; apiWorked: boolean } = { hasContent: null, apiWorked: false };
+          // Always show "no_db_placements" when screen has no placements in our system
+          actions.push({
+            id: `no-placements-${screen.id}`,
+            type: "no_db_placements",
+            itemName: screenDisplayName,
+            description: `${locationDesc} • Geen campagnes gekoppeld (in Elevizion)`,
+            severity: "info",
+            link: `/screens/${screen.id}`,
+          });
           
+          // Also check Yodeck content if screen has yodeckUuid
           if (screen.yodeckUuid) {
-            yodeckResult = await checkYodeckScreenHasContent(screen.yodeckUuid);
-          }
-          
-          // Decide what action to show based on combined state
-          if (yodeckResult.apiWorked) {
-            // API worked - show empty only if BOTH: no DB placements AND no Yodeck content
-            if (yodeckResult.hasContent === false) {
+            const yodeckResult = await checkYodeckScreenHasContent(screen.yodeckUuid);
+            
+            if (yodeckResult.apiWorked) {
+              // Yodeck API worked - show warning only if truly empty in Yodeck
+              if (yodeckResult.hasContent === false) {
+                actions.push({
+                  id: `yodeck-empty-${screen.id}`,
+                  type: "yodeck_empty",
+                  itemName: screenDisplayName,
+                  description: `${locationDesc} • Echt leeg (Yodeck)`,
+                  severity: "warning",
+                  link: `/screens/${screen.id}`,
+                });
+              }
+              // If Yodeck has content, no additional warning needed
+            } else {
+              // Yodeck API failed - show unknown status
               actions.push({
-                id: `empty-${screen.id}`,
-                type: "empty_screen",
-                itemName: getScreenDisplayName(screen),
-                description: `${screen.screenId}${location?.name ? ` • ${location.name}` : ""} • Geen content`,
+                id: `playback-unknown-${screen.id}`,
+                type: "playback_unknown",
+                itemName: screenDisplayName,
+                description: `${locationDesc} • Playback onbekend (Yodeck API)`,
                 severity: "info",
                 link: `/screens/${screen.id}`,
               });
             }
-            // If Yodeck has content but we have no DB placements, don't show any warning
-          } else {
-            // API failed or no yodeckUuid - show info action about unknown status
-            actions.push({
-              id: `empty-${screen.id}`,
-              type: "empty_screen",
-              itemName: getScreenDisplayName(screen),
-              description: `${screen.screenId} • Playback onbekend (Yodeck API)`,
-              severity: "info",
-              link: `/screens/${screen.id}`,
-            });
           }
         }
       }
