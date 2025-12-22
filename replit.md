@@ -111,13 +111,13 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
     - `likely_has_content`: Screenshot indicates content (fallback)
     - `error`: API call failed (404, network error, etc.)
   - **Content Error Tracking**: `yodeckContentError` field stores error messages when sync fails
-  - Control-room uses status-based filtering with action types:
-    - `offline_screen`: Screen is offline (severity: error)
-    - `no_yodeck`: Screen not linked to Yodeck (severity: info)
-    - `content_unknown`: Content status unknown (severity: info)
-    - `content_error`: Content sync failed (severity: warning)
-    - `empty_screen`: Yodeck confirmed no content (severity: warning)
-  - Control-room actions show recognizable screen names as itemName, screenId in description
+  - **Control Room Action Priority** (Elevizion placement data is PRIMARY, Yodeck is SECONDARY):
+    1. `offline_screen` (error): Screen is offline
+    2. `onboarding_hint` (warning): Online but no Elevizion placements registered
+    3. `unmanaged_content` (info): Has screenshot or Yodeck content but not managed in Elevizion
+    4. `paused_placement` (warning): Placement exists but is paused
+    - Screens with active placements are considered OK and not shown in actions
+  - Control-room actions show yodeckPlayerName primarily (avoid screenId in action list)
   - Debug endpoint: `GET /api/integrations/yodeck/debug/screen/{id}` for raw API inspection
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests (requires API key configuration).
