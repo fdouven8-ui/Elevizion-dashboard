@@ -1,0 +1,60 @@
+We’re working on the Elevizion Dashboard (React + TS + Vite frontend, Express + Drizzle + Postgres backend). 
+Goal: make the Control Room “actions” list human-friendly and fix the “empty screen” signal so it matches reality.
+
+CONTEXT / CURRENT BEHAVIOR
+- In /api/control-room/actions we return items like:
+  { type:"offline_screen" itemName:"Basil's Barber Shop Maasbracht" description:"YDK-591895 • Default (Yodeck Import)" ... }
+  { type:"empty_screen"   itemName:"Test"                         description:"YDK-591896 • Default (Yodeck Import)" ... }
+- Frank (user) says SCREEN_ID (e.g., YDK-591896) is not useful in the action list. The Yodeck name is what matters.
+- Frank also says the online screen has content in Yodeck (news/weather/ads), but our dashboard still shows “empty screen”.
+- We currently sync only screens from Yodeck; we do NOT sync playlists/media/what’s playing. /api/creatives and /api/placements are empty, so “empty_screen” is based on our DB, not Yodeck.
+- There is also an error sometimes: “Failed to fetch Yodeck player 591896: Yodeck API error 404”. This should not break stats/actions.
+
+TASKS
+1) ACTION LIST DISPLAY (frontend +/or backend)
+   - In the Control Room actions list, show:
+     - Title: screen.name (or yodeckPlayerName) — human readable
+     - Subtitle: location name (e.g., “Default (Yodeck Import)”) and optionally city later
+   - Do NOT show screenId (YDK-xxxxx) anywhere in the action list UI by default.
+   - Keep screenId visible only inside the Screen details page, not in the Control Room list.
+
+   Implementation guidance:
+   - If backend currently builds description like “{screenId} • {locationName}”, change it to only “{locationName}”.
+   - Ensure itemName always uses yodeckPlayerName / screen.name when available.
+
+2) “EMPTY SCREEN” LOGIC (make it honest + useful)
+   Right now “empty” is misleading because we don’t sync what’s playing from Yodeck.
+   Change behavior to one of these (pick the best minimal-change option):
+
+   Option A (recommended minimal, honest):
+   - Rename the action type from empty_screen to “no_placements_configured” (or keep empty_screen but change text shown).
+   - Trigger it only when:
+       screen is ONLINE
+       AND there are 0 placements in our DB for that screen
+   - In the UI message, say clearly:
+       “Geen placements in Elevizion (Yodeck content wordt nog niet gesynchroniseerd).”
+   - Severity should be “info” not warning/error.
+
+   Option B (slightly smarter):
+   - Still use our placements-based check, BUT if we can confirm the screen is showing something via Yodeck screenshot freshness, suppress the “empty” action.
+   - Fetch screenshot metadata if available (if not, skip). Avoid heavy image processing.
+
+   Whichever option you choose:
+   - The dashboard should stop implying the screen is empty when Frank has content in Yodeck but we simply don’t track it yet.
+
+3) FIX / HARDEN YODECK PLAYER FETCH (404 issue)
+   - Wherever we call “fetch Yodeck player {id}” and it returns 404:
+     - Do not fail the whole stats/actions request.
+     - Log as warning and continue using the data we already have from GET /api/v2/screens (online/last_seen/screenshot_url).
+   - Add a safe fallback: if details endpoint 404s, return `available: true` and keep uptime based on lastSeen + db history.
+
+ACCEPTANCE CRITERIA
+- Control Room actions show readable screen names only (e.g., “Basil’s Barber Shop Maasbracht”, “Test”) and do NOT show “YDK-xxxxxx”.
+- Offline screen action still works and links to the screen.
+- The “empty” action no longer misleads: it either becomes “No placements configured” (info) OR it is suppressed when we can infer it’s showing content.
+- No unhandled errors when Yodeck details endpoint returns 404.
+
+Please implement with clean, minimal changes. Update both backend + frontend as needed.
+After changes, add 1-2 unit tests (or lightweight integration tests) for:
+- action formatting (no screenId in description)
+- empty/no_placements logic

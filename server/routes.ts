@@ -3281,7 +3281,7 @@ export async function registerRoutes(
       // Offline screens - only show offline action
       screens.forEach(screen => {
         if (screen.status === "offline") {
-          const locationDesc = getLocationDesc(screen, true); // Include screenId in description
+          const locationDesc = getLocationDesc(screen); // Only location name, no screenId
           actions.push({
             id: `offline-${screen.id}`,
             type: "offline_screen",
@@ -3305,7 +3305,7 @@ export async function registerRoutes(
       
       // Process online screens: show info when no internal placements
       onlineScreensToCheck.forEach(screen => {
-        const locationDesc = getLocationDesc(screen, true); // Include screenId in description
+        const locationDesc = getLocationDesc(screen); // Only location name, no screenId
         const hasInternalPlacements = screensWithActivePlacements.has(screen.id);
         
         // If screen has no placements in Elevizion, show info action
@@ -3315,15 +3315,15 @@ export async function registerRoutes(
           const isLinkedToYodeck = screen.yodeckUuid || screen.yodeckPlayerId;
           
           if (isLinkedToYodeck) {
-            // Screen is in Yodeck but no Elevizion placements - onboarding hint
+            // Screen is in Yodeck but no Elevizion placements - info only
             actions.push({
-              id: `onboarding-${screen.id}`,
-              type: "onboarding_hint",
+              id: `no-placements-${screen.id}`,
+              type: "no_placements_configured",
               itemName: getScreenDisplayName(screen),
               description: locationDesc || "Geen locatie",
               severity: "info",
               link: `/screens/${screen.id}`,
-              statusText: "Nog geen placements in Elevizion aangemaakt",
+              statusText: "Geen placements in Elevizion (Yodeck content wordt nog niet gesynchroniseerd)",
             });
           } else {
             // Screen not linked to Yodeck at all
