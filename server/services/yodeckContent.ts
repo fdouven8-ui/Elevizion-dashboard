@@ -101,6 +101,16 @@ interface YodeckScreenDetail {
   apps?: Array<{ id: number; name: string; type?: string }>;
   webpages?: Array<{ id: number; name: string; url?: string }>;
   widgets?: Array<{ id: number; name: string; type?: string }>;
+  // Yodeck API returns content in "screen_content" (observed) or "assigned_content" (documented)
+  screen_content?: {
+    playlists?: Array<{ id: number; name: string }>;
+    media?: Array<{ id: number; name: string; filename?: string }>;
+    schedules?: Array<{ id: number; name: string }>;
+    layouts?: Array<{ id: number; name: string }>;
+    apps?: Array<{ id: number; name: string; type?: string }>;
+    webpages?: Array<{ id: number; name: string; url?: string }>;
+    widgets?: Array<{ id: number; name: string; type?: string }>;
+  } | null;
   assigned_content?: {
     playlists?: Array<{ id: number; name: string }>;
     items?: Array<{ id: number; name: string; type?: string }>;
@@ -185,6 +195,14 @@ async function fetchScreenAssignedContent(
         console.log(`[Yodeck] Content found for ${screenId}: ${items.length} items via ${strategy.type}`);
         if (items.length > 0) {
           console.log(`[Yodeck] Content items: ${items.map(i => `${i.type}:${i.name}`).slice(0, 3).join(", ")}${items.length > 3 ? "..." : ""}`);
+        }
+        // Log screen_content structure if present (this is what Yodeck actually uses)
+        if (result.data.screen_content) {
+          const scKeys = Object.keys(result.data.screen_content);
+          console.log(`[Yodeck] screen_content keys: ${scKeys.join(", ")}`);
+          console.log(`[Yodeck] screen_content value: ${JSON.stringify(result.data.screen_content).substring(0, 200)}`);
+        } else {
+          console.log(`[Yodeck] screen_content is null or missing`);
         }
         // Log assigned_content structure if present
         if (result.data.assigned_content) {
@@ -335,6 +353,78 @@ function extractContentItems(screenData: YodeckScreenDetail): ContentItem[] {
     // Widgets array
     if (ac.widgets && Array.isArray(ac.widgets)) {
       for (const w of ac.widgets) {
+        addItem("app", w.name || w.type || `Widget ${w.id}`, w.id);
+      }
+    }
+  }
+
+  // === SCREEN_CONTENT OBJECT (observed Yodeck API structure) ===
+  // Format observed: {"source_type":"playlist","source_id":27644453,"source_name":"Test(auto-playlist-27644453-fit)"}
+  const sc = screenData.screen_content as any;
+  if (sc && typeof sc === "object") {
+    // Check for single source assignment (source_type, source_id, source_name format)
+    if (sc.source_type && sc.source_name) {
+      const sourceType = String(sc.source_type).toLowerCase();
+      const validTypes: Record<string, ContentItem["type"]> = {
+        playlist: "playlist",
+        media: "media",
+        schedule: "schedule",
+        layout: "layout",
+        app: "app",
+        webpage: "webpage",
+        widget: "app",
+      };
+      const contentType = validTypes[sourceType] || "other";
+      addItem(contentType, sc.source_name, sc.source_id);
+    }
+    
+    // Also check for arrays (in case Yodeck changes their API format)
+    // Playlists array
+    if (sc.playlists && Array.isArray(sc.playlists)) {
+      for (const p of sc.playlists) {
+        addItem("playlist", p.name || `Playlist ${p.id}`, p.id);
+      }
+    }
+    
+    // Media array
+    if (sc.media && Array.isArray(sc.media)) {
+      for (const m of sc.media) {
+        const mediaName = m.name || m.filename || `Media ${m.id}`;
+        addItem("media", mediaName, m.id);
+      }
+    }
+    
+    // Schedules array
+    if (sc.schedules && Array.isArray(sc.schedules)) {
+      for (const s of sc.schedules) {
+        addItem("schedule", s.name || `Schedule ${s.id}`, s.id);
+      }
+    }
+    
+    // Layouts array
+    if (sc.layouts && Array.isArray(sc.layouts)) {
+      for (const l of sc.layouts) {
+        addItem("layout", l.name || `Layout ${l.id}`, l.id);
+      }
+    }
+    
+    // Apps array
+    if (sc.apps && Array.isArray(sc.apps)) {
+      for (const app of sc.apps) {
+        addItem("app", app.name || app.type || `App ${app.id}`, app.id);
+      }
+    }
+    
+    // Webpages array
+    if (sc.webpages && Array.isArray(sc.webpages)) {
+      for (const wp of sc.webpages) {
+        addItem("webpage", wp.name || wp.url || `Webpage ${wp.id}`, wp.id);
+      }
+    }
+    
+    // Widgets array
+    if (sc.widgets && Array.isArray(sc.widgets)) {
+      for (const w of sc.widgets) {
         addItem("app", w.name || w.type || `Widget ${w.id}`, w.id);
       }
     }

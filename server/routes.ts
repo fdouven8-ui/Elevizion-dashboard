@@ -1287,46 +1287,46 @@ export async function registerRoutes(
     res.json(result);
   });
 
-  // Yodeck sync - uses ONLY process.env.YODECK_API_KEY (legacy endpoint)
+  // Yodeck sync - TWO-STEP: 1) sync screens, 2) fetch content details per screen
   app.post("/api/integrations/yodeck/sync", async (_req, res) => {
-    const result = await syncYodeckScreens();
-    if (result.success && result.screens) {
-      // Update existing screens with Yodeck data
-      const existingScreens = await storage.getScreens();
-      let updated = 0;
-      for (const yodeckScreen of result.screens) {
-        // Match by yodeckPlayerId OR by EVZ screen ID
-        const match = existingScreens.find(s => 
-          s.yodeckPlayerId === String(yodeckScreen.yodeck_screen_id) ||
-          (yodeckScreen.screen_id && s.screenId === yodeckScreen.screen_id)
-        );
-        if (match) {
-          await storage.updateScreen(match.id, {
-            status: yodeckScreen.online ? "online" : "offline",
-            lastSeenAt: yodeckScreen.last_seen ? new Date(yodeckScreen.last_seen) : new Date(),
-            yodeckPlayerId: String(yodeckScreen.yodeck_screen_id),
-            yodeckPlayerName: yodeckScreen.yodeck_name,
-          });
-          updated++;
+    try {
+      // Step 1: Sync screens (status, UUID, name)
+      console.log("[Yodeck Sync] Step 1: Syncing screens from Yodeck API...");
+      const result = await syncYodeckScreens();
+      
+      if (!result.success) {
+        if (result.statusCode === 502) {
+          return res.status(502).json(result);
         }
+        return res.status(400).json(result);
       }
-      // Store the synced screens in integration config
+      
+      // Step 2: Fetch content details per screen (requires separate API calls per screen)
+      console.log("[Yodeck Sync] Step 2: Fetching content details per screen...");
+      const { syncAllScreensContent } = await import("./services/yodeckContent");
+      const contentResult = await syncAllScreensContent();
+      
+      console.log(`[Yodeck Sync] Complete - Screens: ${result.count}, Content: ${contentResult.stats.withContent} with content, ${contentResult.stats.empty} empty, ${contentResult.stats.unknown} unknown`);
+      
+      // Update integration config
       await storage.upsertIntegrationConfig("yodeck", {
         lastSyncAt: new Date(),
-        lastSyncItemsProcessed: result.screens.length,
+        lastSyncItemsProcessed: result.count,
         status: "active",
       });
+      
       res.json({
-        ...result,
-        synced: updated,
-        message: `${result.screens.length} schermen opgehaald, ${updated} bijgewerkt`,
+        success: true,
+        count: result.count,
+        mapped: result.mapped,
+        unmapped: result.unmapped,
+        updated: result.updated,
+        content: contentResult.stats,
+        message: `Sync voltooid: ${result.count} schermen, ${contentResult.stats.withContent} met content, ${contentResult.stats.empty} leeg, ${contentResult.stats.unknown} onbekend`,
       });
-    } else {
-      // Handle non-JSON/error responses with 502
-      if (!result.success && result.statusCode === 502) {
-        return res.status(502).json(result);
-      }
-      res.json(result);
+    } catch (error: any) {
+      console.error("[Yodeck Sync] Error:", error.message);
+      res.status(500).json({ success: false, message: error.message });
     }
   });
 
