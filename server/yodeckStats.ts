@@ -2,7 +2,8 @@ import { storage } from "./storage";
 import { decryptCredentials } from "./crypto";
 import memoizee from "memoizee";
 
-const YODECK_BASE_URL = "https://app.yodeck.com/api/v1";
+// Use v2 API for screens endpoint
+const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 
 export interface YodeckCredentials {
   api_key: string;
@@ -124,8 +125,8 @@ async function yodeckApiRequest(endpoint: string, credentials: YodeckCredentials
 
 async function fetchYodeckPlayers(credentials: YodeckCredentials): Promise<any[]> {
   try {
-    const players = await yodeckApiRequest("/players", credentials);
-    return Array.isArray(players) ? players : players.data || [];
+    const players = await yodeckApiRequest("/screens", credentials);
+    return Array.isArray(players) ? players : players.results || [];
   } catch {
     // Silently fail - not used by getScreenStats
     return [];
@@ -134,10 +135,42 @@ async function fetchYodeckPlayers(credentials: YodeckCredentials): Promise<any[]
 
 async function fetchYodeckPlayerStatus(credentials: YodeckCredentials, playerId: string): Promise<any> {
   try {
-    return await yodeckApiRequest(`/players/${playerId}`, credentials);
+    return await yodeckApiRequest(`/screens/${playerId}`, credentials);
   } catch {
     // Silently fail - not used by getScreenStats (DB is source of truth)
     return null;
+  }
+}
+
+// Check if a Yodeck screen has content assigned (using UUID)
+// Returns: hasContent (true/false/null if unknown), error message if failed
+export async function checkYodeckScreenHasContent(yodeckUuid: string): Promise<{ 
+  hasContent: boolean | null; 
+  error?: string;
+  apiWorked: boolean;
+}> {
+  try {
+    const credentials = await getYodeckCredentials();
+    if (!credentials) {
+      // No credentials - can't check, return unknown
+      return { hasContent: null, error: "no_credentials", apiWorked: false };
+    }
+    
+    console.log(`[Yodeck] Checking content for screen UUID: ${yodeckUuid}`);
+    const screenData = await yodeckApiRequest(`/screens/${yodeckUuid}`, credentials);
+    console.log(`[Yodeck] Screen ${yodeckUuid} response received`);
+    
+    // Check if screen has playlist or media assigned
+    // Yodeck screens have 'basic.playlist' or 'playlists' array
+    const hasPlaylist = screenData?.basic?.playlist || 
+                       (screenData?.playlists && screenData.playlists.length > 0) ||
+                       screenData?.playlist;
+    
+    return { hasContent: !!hasPlaylist, apiWorked: true };
+  } catch (err: any) {
+    // API error - return unknown with error message
+    console.log(`[Yodeck] Failed to check content for ${yodeckUuid}: ${err.message}`);
+    return { hasContent: null, error: "api_error", apiWorked: false };
   }
 }
 
