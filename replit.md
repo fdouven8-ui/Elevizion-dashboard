@@ -126,6 +126,15 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
     - Screens with active placements are considered OK and not shown in actions
   - Control-room actions show yodeckPlayerName primarily (avoid screenId in action list)
   - Debug endpoint: `GET /api/integrations/yodeck/debug/screen/{id}` for raw API inspection
+  - **Content Inventory Module** (`/content-inventory`):
+    - Centralized YodeckClient (`server/services/yodeckClient.ts`): Retry logic, pagination, rate limiting (max 5 concurrent), TTL-based caching (10min default)
+    - Inventory service (`server/services/yodeckInventory.ts`): Supports all source types (playlist, layout, schedule, tagbased-playlist)
+    - Media index prefetch: Caches all media items for fast type lookups (video/image/audio/document/webpage/other)
+    - API endpoints:
+      - `GET /api/yodeck/inventory`: Load inventory (uses cache)
+      - `POST /api/yodeck/inventory/refresh`: Force clear cache and rebuild
+    - Frontend: Dual buttons (Laden/Vernieuwen), extended media type icons, top-10 preview per screen
+    - Permission: Requires `manage_integrations`
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests (requires API key configuration).
 

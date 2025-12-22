@@ -3289,6 +3289,24 @@ export async function registerRoutes(
     }
   });
 
+  // POST /api/yodeck/inventory/refresh - Force refresh (clears caches)
+  app.post("/api/yodeck/inventory/refresh", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const workspaceId = req.body.workspaceId ? parseInt(req.body.workspaceId) : undefined;
+      
+      console.log(`[YodeckInventory] Refresh requested, workspaceId=${workspaceId || "all"}`);
+      
+      const { refreshInventory } = await import("./services/yodeckInventory");
+      const result = await refreshInventory();
+      
+      console.log(`[YodeckInventory] Refresh completed: ${result.totals.screens} screens, ${result.totals.uniqueMediaAcrossAllScreens} unique media`);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[YodeckInventory] Refresh error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ============================================================================
   // CONTROL ROOM (OPS-FIRST DASHBOARD)
   // ============================================================================

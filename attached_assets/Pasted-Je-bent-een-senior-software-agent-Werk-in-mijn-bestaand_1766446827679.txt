@@ -1,0 +1,147 @@
+Je bent een senior software agent. Werk in mijn bestaande app (React + TypeScript + Vite frontend, Express backend). Doel: maak een Yodeck “Content Inventory” module die per scherm toont hoeveel media-items er effectief gekoppeld zijn (en totalen over alle schermen). Gebruik de Yodeck API v2.
+
+AUTH
+- Gebruik APIKeyAuthentication header EXACT:
+  Authorization: Token <label:value>
+- Zet token veilig in ENV: YODECK_TOKEN="label:xxxxxxxx" (zonder “Token ”), en bouw header als: `Authorization: Token ${process.env.YODECK_TOKEN}`.
+- Base URL: https://app.yodeck.com/api/v2
+
+DATA (wat ik wil zien)
+1) Per screen:
+   - screen id (uit list), name, workspace, tags
+   - huidige content bron: screen_content.source_type + screen_content.source_id + screen_content.source_name
+   - berekende metrics:
+     - total_media_items (aantal media assets dat uiteindelijk in de bron voorkomt)
+     - breakdown per type (image/video/audio/document/webpage als beschikbaar via media_origin.type)
+     - unieke media ids count (dedupe)
+     - optioneel: top 10 media namen/ids als preview
+2) Totaal (alle screens samen):
+   - sum van total_media_items per screen
+   - unieke media ids totaal (dedupe over alle screens)
+   - top playlists/layouts die het vaakst gebruikt worden
+
+BELANGRIJK: “Wat er op een scherm staat” betekent: resolve de bron van screen_content:
+- screen_content.source_type kan zijn: "playlist" of "layout" (en mogelijk andere).
+- Als playlist: haal playlist op en neem items waar type="media" (en type kan ook widget/layout etc; die moet je ondersteunen door door te resolven waar mogelijk).
+- Als layout: haal layout op, loop door regions[].item (type + id). Meest voorkomend: type="playlist". Resolve die playlists en tel media.
+- Als schedule: (als het scherm in jouw account schedules gebruikt via een bron; ik geef je schedule JSON voorbeeld). Ondersteun schedule resolven door events[].source.source_type + source_id. events kunnen "layout" of "playlist" zijn. Ook filler_content kan playlist zijn.
+
+ENDPOINTS DIE JE MOET GEBRUIKEN (met pagination)
+A) Screens
+- GET /screens?limit=100&offset=0 (paginate tot next=null)
+  - Per screen krijg je screen_content {source_id, source_type, source_name}, name, workspace, tags, etc.
+  - Ik heb ook een voorbeeld van /screens/{id} response:
+    https://app.yodeck.com/api/v2/screens/{id}
+
+B) Playlists
+- GET /playlists?limit=100&offset=0 (paginate)
+- GET /playlists/{id}
+Response voorbeeld:
+{
+  "id": 123,
+  "name": "...",
+  "items":[{"id":1,"priority":1,"duration":30,"name":"my_media","type":"media"}]
+}
+
+C) Tagbased playlists (ondersteunen als bron of als layout region item)
+- GET /tagbased-playlists?limit=100&offset=0 (paginate)
+- GET /tagbased-playlists/{id}
+Let op: tagbased playlists filteren op tags/workspaces/includes/excludes. Voor inventory:
+  - Als een screen of layout verwijst naar een tagbased-playlist id: tel media door media list op te halen met tags-filter en workspace(s).
+  - Vereenvoudiging is oké: neem “content_to_filter”: only_media → tel media results die matchen, dedupe op id.
+
+D) Layouts
+- GET /layouts?limit=100&offset=0 (paginate)
+- GET /layouts/{id}
+Response voorbeeld bevat regions[] met item {type:"playlist", id:162}.
+
+E) Schedules (optioneel maar graag doen)
+- GET /schedules?limit=100&offset=0 (paginate)
+- GET /schedules/{id}
+Resolve events[].source (layout/playlist) + filler_content (playlist).
+
+F) Media
+- GET /media?limit=100&offset=0 (paginate)
+- GET /media?workspace=ID&tags=tag1,tag2&limit=100&offset=0 (voor tagbased playlist resolve)
+- GET /media/{id} (alleen als nodig; liever vermijden)
+Media object voorbeeld heeft media_origin.type, tags, parent_folder, etc.
+
+RESOLVE LOGICA (heel concreet)
+Schrijf een resolver:
+resolveSourceToMediaIds(source_type, source_id, workspace_id?) -> { mediaIds:Set<number>, mediaByTypeCount:Record<string,number> }
+Regels:
+1) source_type === "playlist"
+   - GET /playlists/{id}
+   - loop items:
+     - if item.type === "media": mediaIds.add(item.id)
+     - else if item.type === "playlist": recurse resolveSourceToMediaIds("playlist", item.id)
+     - else if item.type === "layout": recurse resolveSourceToMediaIds("layout", item.id)
+     - else: ignore maar log “unhandled item.type”
+2) source_type === "layout"
+   - GET /layouts/{id}
+   - loop regions:
+     - region.item.type + id
+     - als type==="playlist": resolve playlist
+     - als type==="widget": ignore (of later uitbreiden)
+3) source_type === "schedule"
+   - GET /schedules/{id}
+   - loop events[]:
+     - event.source.source_type + source_id → resolve (layout/playlist)
+   - filler_content als source_type playlist → resolve
+4) source_type === "tagbased-playlist" (of "tagbased_playlist" afhankelijk van API; maak tolerant)
+   - GET /tagbased-playlists/{id}
+   - haal tags uit tagbased.tags[].name
+   - haal workspace ids uit tagbased.workspaces (of fallback screen workspace)
+   - voor elke workspace id:
+     - GET /media?workspace=<id>&tags=tag1,tag2&limit=100&offset=0 paginated
+     - voeg results[].id toe aan mediaIds
+   - (includes/excludes negeren mag in v1, maar bouw structuur zodat je later kunt uitbreiden)
+
+MEDIA TYPE BREAKDOWN
+- Als je media ids hebt: je hebt type nodig.
+- Optimal approach:
+  - Haal 1x de complete media lijst op (paginated) en cache in memory map: mediaId -> media_origin.type (en name).
+  - Dan kun je voor elk screen de breakdown maken zonder /media/{id} spam.
+- Zorg voor TTL cache (bv 10 min) en een “refresh” knop endpoint.
+
+ARCHITECTUUR
+Backend:
+- Maak yodeckClient.ts met:
+  - fetchJson(path, queryParams) met retries (429/backoff), en pagination helper listAll(endpoint, params).
+- Maak yodeckInventoryService.ts:
+  - getAllScreens()
+  - getAllMediaIndex() -> Map<number,{name,type,tags,workspaceId,parentFolderId}>
+  - resolveSourceToMediaIds() met caching per source key (type:id) TTL.
+  - computeInventory() -> returns:
+    {
+      generatedAt,
+      totals: { screensCount, totalMediaRefs, uniqueMediaCount, byType },
+      screens: Array<{ screenId, name, workspace, source, counts, sampleMedia:[] }>
+    }
+Routes:
+- GET /api/yodeck/inventory
+- POST /api/yodeck/inventory/refresh (flush caches)
+
+Frontend:
+- Nieuwe pagina “Inventory” of tab in Schermen:
+  - tabel met screens, source, total_media_items, unique_media_items, breakdown chips, last refresh
+  - totaalkaart bovenaan (totals)
+  - filters: workspace, search screen name, min media count
+  - knop “Refresh”
+  - laadstatus + error tonen.
+
+ROBUSTNESS / EDGE CASES
+- Als screen_content ontbreekt → counts=0, status “No content”
+- Als playlist/layout niet gevonden → log + toon “missing source”
+- Dedupe mediaIds altijd met Set.
+- Houd rekening met pagination (media/playlists/layouts/screens/schedules).
+- Rate limiting: bij 429 exponential backoff.
+- Minimal API calls:
+  - prefetch indexes (media index, playlists index, layouts index) waar handig, maar detail endpoints per referenced id is oké mits caching.
+
+ACCEPTANCE CRITERIA (moet werken)
+- Met een geldig YODECK_TOKEN kan ik /api/yodeck/inventory openen en krijg ik JSON met per screen counts + totals.
+- UI toont per screen hoeveel media er “achter” de bron zit.
+- Dedupe klopt (zelfde media in meerdere playlists telt 1x als unique maar wel optioneel 2x als total refs per screen; geef beide als je wil: totalRefs + uniqueCount).
+- Alles paginated, geen hard-coded limit=10.
+- Geen secrets in client; alleen server praat met Yodeck.

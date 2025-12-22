@@ -6,13 +6,13 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { RefreshCw, Monitor, Film, Image, Music, Package, ChevronRight, Loader2 } from "lucide-react";
+import { RefreshCw, Monitor, Film, Image, Music, Package, ChevronRight, Loader2, FileText, Globe } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
 interface MediaDetail {
   id: number;
   name: string;
-  type: "image" | "video" | "audio" | "other";
+  type: "image" | "video" | "audio" | "document" | "webpage" | "other";
   file_extension?: string;
   folder?: string;
   tags?: string[];
@@ -21,6 +21,7 @@ interface MediaDetail {
 interface ScreenInventory {
   screenId: number;
   name: string;
+  tags?: string[];
   workspaceId?: number;
   workspaceName?: string;
   screen_content: {
@@ -38,9 +39,11 @@ interface ScreenInventory {
     video: number;
     image: number;
     audio: number;
+    document: number;
+    webpage: number;
     other: number;
   };
-  media: MediaDetail[];
+  topMedia: MediaDetail[];
 }
 
 interface InventoryResult {
@@ -52,6 +55,7 @@ interface InventoryResult {
     totalMediaAllScreens: number;
     uniqueMediaAcrossAllScreens: number;
     topMediaByScreens: Array<{ mediaId: number; name: string; screenCount: number }>;
+    topSourcesByUsage: Array<{ sourceType: string; sourceName: string; screenCount: number }>;
   };
 }
 
@@ -70,6 +74,8 @@ function MediaTypeIcon({ type }: { type: string }) {
     case "video": return <Film className="h-4 w-4 text-purple-500" />;
     case "image": return <Image className="h-4 w-4 text-blue-500" />;
     case "audio": return <Music className="h-4 w-4 text-green-500" />;
+    case "document": return <FileText className="h-4 w-4 text-orange-500" />;
+    case "webpage": return <Globe className="h-4 w-4 text-cyan-500" />;
     default: return <Package className="h-4 w-4 text-gray-500" />;
   }
 }
@@ -79,7 +85,7 @@ export default function ContentInventory() {
   const queryClient = useQueryClient();
   const [selectedScreen, setSelectedScreen] = useState<ScreenInventory | null>(null);
   
-  const { data: inventory, isLoading, isFetching, refetch } = useQuery<InventoryResult>({
+  const { data: inventory, isLoading, isFetching } = useQuery<InventoryResult>({
     queryKey: ["/api/yodeck/inventory"],
     enabled: false,
     staleTime: 5 * 60 * 1000,
@@ -109,8 +115,33 @@ export default function ContentInventory() {
       });
     },
   });
+
+  const refreshMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/yodeck/inventory/refresh", { method: "POST" });
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.error || "Failed to refresh inventory");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(["/api/yodeck/inventory"], data);
+      toast({
+        title: "Inventaris vernieuwd",
+        description: `${data.totals.screens} schermen, ${data.totals.uniqueMediaAcrossAllScreens} unieke media items (caches gewist)`,
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Fout bij vernieuwen",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
   
-  const isLoadingData = isLoading || isFetching || syncMutation.isPending;
+  const isLoadingData = isLoading || isFetching || syncMutation.isPending || refreshMutation.isPending;
 
   return (
     <div className="space-y-6 p-6" data-testid="content-inventory-page">
@@ -121,18 +152,33 @@ export default function ContentInventory() {
             Bekijk welke media items op elk Yodeck scherm draaien
           </p>
         </div>
-        <Button 
-          onClick={() => syncMutation.mutate()} 
-          disabled={isLoadingData}
-          data-testid="button-sync-inventory"
-        >
-          {isLoadingData ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="mr-2 h-4 w-4" />
-          )}
-          Sync from Yodeck
-        </Button>
+        <div className="flex gap-2">
+          <Button 
+            onClick={() => syncMutation.mutate()} 
+            disabled={isLoadingData}
+            data-testid="button-sync-inventory"
+          >
+            {syncMutation.isPending ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Laden
+          </Button>
+          <Button 
+            variant="outline"
+            onClick={() => refreshMutation.mutate()} 
+            disabled={isLoadingData}
+            data-testid="button-refresh-inventory"
+          >
+            {refreshMutation.isPending ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="mr-2 h-4 w-4" />
+            )}
+            Vernieuwen
+          </Button>
+        </div>
       </div>
       
       {inventory && (
@@ -234,7 +280,7 @@ export default function ContentInventory() {
                       <TableCell className="text-right font-semibold">{screen.counts.uniqueMediaIds}</TableCell>
                       <TableCell className="text-right">{screen.counts.widgetItemsTotal}</TableCell>
                       <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-1">
+                        <div className="flex items-center justify-end gap-1 flex-wrap">
                           {screen.mediaBreakdown.video > 0 && (
                             <Badge variant="secondary" className="text-xs">
                               <Film className="mr-1 h-3 w-3" />{screen.mediaBreakdown.video}
@@ -248,6 +294,16 @@ export default function ContentInventory() {
                           {screen.mediaBreakdown.audio > 0 && (
                             <Badge variant="secondary" className="text-xs">
                               <Music className="mr-1 h-3 w-3" />{screen.mediaBreakdown.audio}
+                            </Badge>
+                          )}
+                          {screen.mediaBreakdown.document > 0 && (
+                            <Badge variant="secondary" className="text-xs">
+                              <FileText className="mr-1 h-3 w-3" />{screen.mediaBreakdown.document}
+                            </Badge>
+                          )}
+                          {screen.mediaBreakdown.webpage > 0 && (
+                            <Badge variant="secondary" className="text-xs">
+                              <Globe className="mr-1 h-3 w-3" />{screen.mediaBreakdown.webpage}
                             </Badge>
                           )}
                         </div>
@@ -270,11 +326,11 @@ export default function ContentInventory() {
             <Monitor className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">Geen inventaris geladen</h3>
             <p className="text-muted-foreground text-center mb-4">
-              Klik op "Sync from Yodeck" om de content inventaris op te halen
+              Klik op "Laden" om de content inventaris op te halen van Yodeck
             </p>
             <Button onClick={() => syncMutation.mutate()} data-testid="button-sync-empty">
               <RefreshCw className="mr-2 h-4 w-4" />
-              Sync from Yodeck
+              Laden
             </Button>
           </CardContent>
         </Card>
@@ -328,7 +384,7 @@ export default function ContentInventory() {
                   </div>
                 </div>
                 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   {selectedScreen.mediaBreakdown.video > 0 && (
                     <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-100">
                       <Film className="mr-1 h-3 w-3" /> {selectedScreen.mediaBreakdown.video} video
@@ -344,6 +400,16 @@ export default function ContentInventory() {
                       <Music className="mr-1 h-3 w-3" /> {selectedScreen.mediaBreakdown.audio} audio
                     </Badge>
                   )}
+                  {selectedScreen.mediaBreakdown.document > 0 && (
+                    <Badge className="bg-orange-100 text-orange-700 hover:bg-orange-100">
+                      <FileText className="mr-1 h-3 w-3" /> {selectedScreen.mediaBreakdown.document} document
+                    </Badge>
+                  )}
+                  {selectedScreen.mediaBreakdown.webpage > 0 && (
+                    <Badge className="bg-cyan-100 text-cyan-700 hover:bg-cyan-100">
+                      <Globe className="mr-1 h-3 w-3" /> {selectedScreen.mediaBreakdown.webpage} webpage
+                    </Badge>
+                  )}
                   {selectedScreen.mediaBreakdown.other > 0 && (
                     <Badge className="bg-gray-100 text-gray-700 hover:bg-gray-100">
                       <Package className="mr-1 h-3 w-3" /> {selectedScreen.mediaBreakdown.other} other
@@ -351,9 +417,9 @@ export default function ContentInventory() {
                   )}
                 </div>
                 
-                {selectedScreen.media.length > 0 && (
+                {selectedScreen.topMedia && selectedScreen.topMedia.length > 0 && (
                   <div>
-                    <h4 className="font-semibold mb-2">Media Items ({selectedScreen.media.length})</h4>
+                    <h4 className="font-semibold mb-2">Top 10 Media Items ({selectedScreen.topMedia.length})</h4>
                     <ScrollArea className="h-[200px] rounded-md border">
                       <Table>
                         <TableHeader>
@@ -365,7 +431,7 @@ export default function ContentInventory() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {selectedScreen.media.map((media) => (
+                          {selectedScreen.topMedia.map((media: MediaDetail) => (
                             <TableRow key={media.id}>
                               <TableCell>
                                 <MediaTypeIcon type={media.type} />
