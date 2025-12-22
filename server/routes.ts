@@ -3289,25 +3289,61 @@ export async function registerRoutes(
         }
       });
       
-      // Screens without active placements - only for ONLINE screens
-      const screensWithActivePlacements = new Set(
-        placements.filter(isPlacementActive).map(p => p.screenId)
+      // Check online screens for Yodeck content status
+      // Only show "empty_screen" if Yodeck itself has no content assigned
+      const onlineScreensToCheck = screens.filter(s => s.status === "online");
+      
+      // Check Yodeck content status for each online screen (parallel)
+      const yodeckContentChecks = await Promise.all(
+        onlineScreensToCheck.map(async (screen) => {
+          if (!screen.yodeckUuid) {
+            // No Yodeck UUID - can't check, return unknown
+            return { screenId: screen.id, hasContent: null, reason: "no_uuid" };
+          }
+          const result = await checkYodeckScreenHasContent(screen.yodeckUuid);
+          return { 
+            screenId: screen.id, 
+            hasContent: result.hasContent,
+            reason: result.hasContent === null ? "api_error" : null
+          };
+        })
       );
       
-      // Process online screens that have no active placements
-      screens.forEach(screen => {
-        if (screen.status === "online" && !screensWithActivePlacements.has(screen.id)) {
-          const locationName = getLocationDesc(screen);
+      // Build lookup map: screenId -> yodeck content status
+      const yodeckContentMap = new Map(
+        yodeckContentChecks.map(c => [c.screenId, c])
+      );
+      
+      // Process online screens: show empty_screen only if Yodeck is truly empty
+      onlineScreensToCheck.forEach(screen => {
+        const yodeckStatus = yodeckContentMap.get(screen.id);
+        const locationName = getLocationDesc(screen);
+        
+        // Only show action if Yodeck is definitely empty (hasContent = false)
+        if (yodeckStatus?.hasContent === false) {
           actions.push({
-            id: `no-placements-${screen.id}`,
-            type: "no_placements",
+            id: `empty-${screen.id}`,
+            type: "empty_screen",
+            itemName: getScreenDisplayName(screen),
+            description: locationName || "Geen locatie",
+            severity: "warning",
+            link: `/screens/${screen.id}`,
+            statusText: "Geen content in Yodeck",
+          });
+        }
+        // If hasContent is null (unknown) and no Yodeck UUID, add info action
+        else if (yodeckStatus?.hasContent === null && yodeckStatus?.reason === "no_uuid") {
+          actions.push({
+            id: `no-yodeck-${screen.id}`,
+            type: "no_yodeck",
             itemName: getScreenDisplayName(screen),
             description: locationName || "Geen locatie",
             severity: "info",
             link: `/screens/${screen.id}`,
-            statusText: "Geen placements ingesteld in Elevizion",
+            statusText: "Niet gekoppeld aan Yodeck",
           });
         }
+        // If Yodeck has content, no action needed (screen is running something)
       });
       
       // Paused placements - only for online screens (offline screens just show offline action)

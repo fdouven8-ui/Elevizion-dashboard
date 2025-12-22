@@ -143,9 +143,8 @@ async function fetchYodeckPlayerStatus(credentials: YodeckCredentials, playerId:
   }
 }
 
-// Check if a Yodeck screen has content assigned (using UUID)
-// Returns: hasContent (true/false/null if unknown), error message if failed
-export async function checkYodeckScreenHasContent(yodeckUuid: string): Promise<{ 
+// Internal function to check Yodeck content (called by cached wrapper)
+async function _checkYodeckScreenHasContent(yodeckUuid: string): Promise<{ 
   hasContent: boolean | null; 
   error?: string;
   apiWorked: boolean;
@@ -153,27 +152,32 @@ export async function checkYodeckScreenHasContent(yodeckUuid: string): Promise<{
   try {
     const credentials = await getYodeckCredentials();
     if (!credentials) {
-      // No credentials - can't check, return unknown
       return { hasContent: null, error: "no_credentials", apiWorked: false };
     }
     
-    console.log(`[Yodeck] Checking content for screen UUID: ${yodeckUuid}`);
     const screenData = await yodeckApiRequest(`/screens/${yodeckUuid}`, credentials);
-    console.log(`[Yodeck] Screen ${yodeckUuid} response received`);
     
     // Check if screen has playlist or media assigned
-    // Yodeck screens have 'basic.playlist' or 'playlists' array
     const hasPlaylist = screenData?.basic?.playlist || 
                        (screenData?.playlists && screenData.playlists.length > 0) ||
                        screenData?.playlist;
     
     return { hasContent: !!hasPlaylist, apiWorked: true };
   } catch (err: any) {
-    // API error - return unknown with error message
     console.log(`[Yodeck] Failed to check content for ${yodeckUuid}: ${err.message}`);
     return { hasContent: null, error: "api_error", apiWorked: false };
   }
 }
+
+// Cached version: checks Yodeck content status, cached for 2 minutes
+export const checkYodeckScreenHasContent = memoizee(
+  _checkYodeckScreenHasContent,
+  {
+    maxAge: 2 * 60 * 1000, // 2 minute cache
+    promise: true,
+    normalizer: (args: [string]) => args[0],
+  }
+);
 
 const getCachedPlayerStatus = memoizee(
   async (playerId: string): Promise<any> => {
