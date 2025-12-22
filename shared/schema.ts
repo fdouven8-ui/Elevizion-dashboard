@@ -115,7 +115,8 @@ export const screens = pgTable("screens", {
   yodeckWorkspaceName: text("yodeck_workspace_name"),
   yodeckScreenshotUrl: text("yodeck_screenshot_url"),
   // Yodeck content tracking - what's playing on the screen
-  yodeckContentCount: integer("yodeck_content_count").default(0), // Number of items/playlists assigned
+  // null = unknown (never synced), 0 = confirmed empty (Yodeck API returned nothing), >0 = has content
+  yodeckContentCount: integer("yodeck_content_count"), // Number of items/playlists assigned
   yodeckContentSummary: jsonb("yodeck_content_summary"), // { playlists:[], items:[], topItems:[], lastFetchedAt }
   yodeckContentLastFetchedAt: timestamp("yodeck_content_last_fetched_at"),
   resolution: text("resolution"), // e.g., "1920x1080"
