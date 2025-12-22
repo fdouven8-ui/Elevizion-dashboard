@@ -1,0 +1,76 @@
+JE BENT DE SOFTWARE-AGENT VOOR ELEVIZION DASHBOARD (Node/Express + Drizzle + Postgres + React).
+Doel: het dashboard moet kunnen “inlezen” wat er OP een Yodeck scherm draait (content/playlist/layout), en dat tonen in:
+- Screens detail
+- Control-room acties + KPI’s (screensWithContent / screensEmpty / contentUnknown)
+
+HUIDIGE PROBLEMEN (uit logs):
+- Yodeck sync haalt screens op via GET https://app.yodeck.com/api/v2/screens => OK
+- In DB staan yodeckPlayerId (591896 etc) en yodeckUuid.
+- Er komt “Failed to fetch Yodeck player 591896: 404 Not Found” => we gebruiken een fout endpoint (player vs screen) of verkeerde identifier.
+- yodeckContentCount blijft 0 en yodeckContentLastFetchedAt blijft null, terwijl er wél nieuws/weer/ads op het scherm staan.
+
+WAT JE MOET DOEN:
+1) FIX 404: STOP met “fetch Yodeck player {id}” als dat endpoint 404 geeft.
+   - Gebruik alleen endpoints die bestaan in deze codebase:
+     - /api/v2/screens (werkt)
+   - Ontdek het juiste detail-endpoint door:
+     - in code te zoeken waar “players” of “player” API wordt aangeroepen
+     - vervang door een screen-detail aanpak op basis van yodeck_uuid of yodeck_screen_id.
+   - Bouw fallback: als detail endpoint 404 geeft -> zet content status = unknown, maar zet NIET contentCount=0 en maak geen crash.
+
+2) IMPLEMENTEER “Yodeck Content Sync” (server):
+   - Maak een nieuwe service: server/services/yodeckContent.ts
+   - Voeg een functie toe: fetchScreenContentSummary(screen) die:
+     a) vraagt aan Yodeck “wat is de huidige/actieve content voor dit screen”
+        - prefer: screen uuid of screen id i.p.v. playerId
+     b) returned: { contentCount, summary, raw? } waarbij summary een korte string is zoals:
+        “Nieuws • Weer • 2x Video Ad • 1x Foto Ad” of “Playlist: X (5 items)”
+   - Als Yodeck geen directe “currently playing” geeft: haal de toegewezen playlist/layout/schedule op en tel items.
+   - Log 1x per sync welke endpoints je aanroept en welke keys je in response ziet (geen API key loggen).
+
+3) DATABASE:
+   - Voeg kolommen toe aan screens tabel (Drizzle migration):
+     - yodeckContentCount INT default null
+     - yodeckContentSummary TEXT default null
+     - yodeckContentStatus TEXT enum('unknown','empty','has_content') default 'unknown'
+     - yodeckContentLastFetchedAt TIMESTAMP null
+   - Let op: “unknown” is NIET hetzelfde als empty.
+
+4) SYNC FLOW:
+   - Na de bestaande Yodeck “screens sync” (die 2 screens ophaalt) moet je per screen óók content ophalen en de nieuwe velden updaten.
+   - Doe dit parallel met een limiet (bijv. p-limit=3) zodat het niet traag/crashy wordt.
+   - Als één screen faalt, ga door met de rest.
+
+5) CONTROL ROOM ACTIONS:
+   - Toon in acties NIET primair “YDK-xxxx”.
+   - itemName moet de yodeck naam zijn (screen.name / yodeckPlayerName).
+   - description mag: “Locatie • (optioneel) interne screenId”
+   - Voeg nieuwe actie types:
+     - content_unknown (info): “Content status onbekend (sync nodig / endpoint faalt)”
+     - empty_screen (info/warn): “Scherm is online maar geen content volgens Yodeck”
+     - has_content (optioneel, geen actie nodig) of verwerk in KPI
+   - Let op: “Nog geen placements in Elevizion” is een ANDERE actie dan “Yodeck content empty”.
+
+6) UI (React):
+   - Screen detail pagina: voeg een blok “Yodeck Content” met:
+     - status badge (unknown/empty/has_content)
+     - summary tekst
+     - last fetched timestamp
+   - Control Room KPIs: voeg toe:
+     - screensWithContent
+     - screensEmpty
+     - contentUnknown
+
+7) DEFINITIE “wat staat er op het scherm”:
+   - We willen minimaal: een betrouwbare indicatie of er content is + een korte samenvatting.
+   - Het hoeft nog niet frame-perfect “currently playing” te zijn, maar moet wél iets tonen als er playlists/layouts/widgets staan.
+
+8) TESTS / DEBUG:
+   - Voeg een endpoint toe: POST /api/integrations/yodeck/content-sync (manual run)
+   - Return per screen: { screenId, yodeckName, status, contentCount, summary }
+   - Zorg dat dit werkt zonder Moneybird.
+
+Lever op:
+- Code wijzigingen + migration + UI
+- Zonder breaking changes voor bestaande sync
+- Geen secrets in logs

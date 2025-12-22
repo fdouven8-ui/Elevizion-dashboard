@@ -21,6 +21,9 @@ interface ControlRoomStats {
   screensOffline: number;
   activePlacements: number;
   payingAdvertisers: number;
+  screensWithContent: number;
+  screensEmpty: number;
+  contentUnknown: number;
 }
 
 interface ActionItem {

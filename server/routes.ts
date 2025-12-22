@@ -3051,6 +3051,18 @@ export async function registerRoutes(
     }
   });
 
+  // Yodeck content sync - fetches what's playing on each screen
+  app.post("/api/integrations/yodeck/content-sync", async (_req, res) => {
+    try {
+      const { syncAllScreensContent } = await import("./services/yodeckContent");
+      const result = await syncAllScreensContent();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[YodeckContent] Sync error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
   // ============================================================================
   // CONTROL ROOM (OPS-FIRST DASHBOARD)
   // ============================================================================
@@ -3066,12 +3078,13 @@ export async function registerRoutes(
       const screensOffline = screens.filter(s => s.status === "offline").length;
       const screensTotal = screens.length;
       
-      // Yodeck content tracking: screens with content vs empty
+      // Yodeck content tracking: screens with content vs empty vs unknown
       const onlineScreens = screens.filter(s => s.status === "online");
       const screensWithContent = onlineScreens.filter(s => (s.yodeckContentCount || 0) > 0).length;
       const screensEmpty = onlineScreens.filter(s => 
         s.yodeckContentLastFetchedAt && (s.yodeckContentCount || 0) === 0
       ).length;
+      const contentUnknown = onlineScreens.filter(s => !s.yodeckContentLastFetchedAt).length;
       
       // Active placements: isActive AND current date within start/end range
       const isPlacementActive = (p: any) => {
@@ -3110,6 +3123,7 @@ export async function registerRoutes(
         // Yodeck content stats
         screensWithContent,
         screensEmpty,
+        contentUnknown,
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
