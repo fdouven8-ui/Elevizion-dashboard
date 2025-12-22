@@ -3315,11 +3315,13 @@ export async function registerRoutes(
       // Status values: unknown, empty, has_content, likely_has_content
       onlineScreensToCheck.forEach(screen => {
         const locationDesc = getLocationDesc(screen, true); // LocationName • screenId
-        const isLinkedToYodeck = screen.yodeckUuid || screen.yodeckPlayerId;
+        // Check for real Yodeck linking (UUID or numeric playerId, not dummy yd_player_XXX)
+        const hasRealYodeckLink = screen.yodeckUuid || 
+          (screen.yodeckPlayerId && !screen.yodeckPlayerId.startsWith("yd_player_"));
         const contentStatus = screen.yodeckContentStatus;
         const contentLastFetched = screen.yodeckContentLastFetchedAt;
         
-        if (!isLinkedToYodeck) {
+        if (!hasRealYodeckLink) {
           // Screen not linked to Yodeck at all
           actions.push({
             id: `no-yodeck-${screen.id}`,
