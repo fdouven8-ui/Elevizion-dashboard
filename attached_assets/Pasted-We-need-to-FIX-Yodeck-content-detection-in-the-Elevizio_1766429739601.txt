@@ -1,0 +1,50 @@
+We need to FIX Yodeck content detection in the Elevizion Dashboard.
+
+Current situation:
+- We sync screens via GET https://app.yodeck.com/api/v2/screens and store them in DB.
+- UI shows “Geen content in Yodeck” because yodeckContentCount stays 0 and yodeckContentSummary is empty, even though the screen is actually playing: news, weather, videos/photos.
+- Earlier we saw errors like: “Failed to fetch Yodeck player 591896: 404 Not Found”. This suggests we are calling the wrong Yodeck endpoint and/or using the wrong identifier. In our code we use yodeckPlayerId but Yodeck’s list endpoint returns screens; the id we store (591896) is a SCREEN id, not a “player” resource id.
+
+Goal:
+1) Implement a correct “screen content sync” for each Yodeck screen so we can detect what’s assigned/playing.
+2) Persist that to these fields in our screens table:
+   - yodeckContentCount (number)
+   - yodeckContentSummary (json: items[], topItems[], playlists[], lastFetchedAt)
+   - yodeckContentLastFetchedAt (timestamp)
+3) Control Room logic must use these fields:
+   - If contentCount === 0 -> empty_screen (warning) “Geen content in Yodeck”
+   - If contentCount > 0 -> screensWithContent++
+   - If unknown/unfetched -> content_unknown “sync nodig”
+4) Provide solid debug logging in the sync so we can see which Yodeck endpoints return useful data.
+
+Implementation requirements:
+A) Stop calling any /players/{id} endpoint. Replace with correct endpoints for screens.
+B) Add a Yodeck client function fetchScreenContent(yodeckScreenId, yodeckUuid?) that tries (in this order) and logs status codes + response keys:
+   1) GET /api/v2/screens/{id}  (details; often includes assigned layout/playlist info)
+   2) GET /api/v2/screens/{id}/schedule (if exists)
+   3) GET /api/v2/screens/{id}/playlists (if exists)
+   4) GET /api/v2/screens/{id}/media (if exists)
+   5) If Yodeck uses UUID endpoints, try the same with {uuid} too.
+   Use the first successful response that contains any of: playlist, layout, schedule, media, items.
+   If an endpoint returns 404, continue to next.
+C) From the successful response, map to a normalized summary:
+   - items: array of { type, name, id, duration?, source? }
+   - playlists: array of { name, id }
+   - topItems: the most frequent/important items (max 5)
+   - contentCount: total items (or total media elements) (fallback: if response has no items but has playlist/layout name, set contentCount = 1 and items=[{type:"layout_or_playlist", name:...}])
+   - lastFetchedAt: now ISO
+D) Update the existing Yodeck sync job so that after fetching the screen list, it loops screens and calls fetchScreenContent for each screen and updates DB fields.
+   - Make sure we don’t slow down too much: run with small concurrency (e.g. 3 at a time).
+E) Add a manual endpoint:
+   - POST /api/integrations/yodeck/sync-content (or extend existing /sync) to re-fetch content for all screens.
+F) Update UI texts (Dutch) accordingly:
+   - “Content status onbekend (sync nodig)” only when lastFetchedAt is null.
+   - “Geen content in Yodeck” only when lastFetchedAt exists AND contentCount === 0.
+   - If contentCount > 0 show small summary in Screens page: e.g. “Content: 7 items (Nieuws, Weer, Video…)”.
+
+Deliverables:
+- Code changes (backend + any db migration if needed; but fields seem already present).
+- Make sure logs clearly show which endpoint succeeded (and which failed with 404).
+- After fix, my online screen should no longer show “Geen content in Yodeck” if it actually has content assigned in Yodeck.
+
+IMPORTANT: Do not guess silently. If Yodeck endpoints differ, implement the multi-endpoint “probe” approach above and log the winning endpoint + response keys so we can confirm quickly.

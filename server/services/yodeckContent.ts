@@ -157,45 +157,71 @@ async function yodeckApiRequest<T>(endpoint: string, apiKey: string): Promise<{ 
 }
 
 /**
- * Fetch assigned content for a single screen
+ * Check if a string looks like a real Yodeck numeric ID (not a dummy placeholder)
+ */
+function isRealYodeckId(playerId: string | null): boolean {
+  if (!playerId) return false;
+  // Dummy IDs use patterns like "yd_player_001", real Yodeck IDs are pure numbers
+  return /^\d+$/.test(playerId);
+}
+
+/**
+ * Fetch assigned content for a single screen using multi-endpoint probe approach
  * 
  * DEV NOTES - Yodeck API behavior:
  * - Screen detail endpoint ONLY works with numeric ID (e.g., 591896)
  * - UUID returns 404, so we skip it entirely to avoid unnecessary API calls
  * - The response contains screen_content with source_type, source_id, source_name
+ * 
+ * PROBE ORDER (stops at first success with content):
+ * 1. GET /screens/{id} - Primary endpoint, contains screen_content
  */
 async function fetchScreenAssignedContent(
   screenId: string,
   uuid: string | null,
   numericId: string | null,
   apiKey: string
-): Promise<{ items: ContentItem[]; raw?: any; error?: string; confirmedEmpty?: boolean }> {
-  // IMPORTANT: Only use numeric ID - UUID endpoint returns 404
-  if (!numericId) {
-    console.log(`[Yodeck] No numeric ID for ${screenId} - cannot fetch content details`);
-    return { items: [], error: "no_numeric_id" };
+): Promise<{ items: ContentItem[]; raw?: any; error?: string; confirmedEmpty?: boolean; endpoint?: string }> {
+  // Check if this is a real Yodeck ID (not a dummy placeholder)
+  if (!numericId || !isRealYodeckId(numericId)) {
+    console.log(`[Yodeck] ${screenId}: Invalid or dummy ID "${numericId}" - skipping API call`);
+    return { items: [], error: "invalid_yodeck_id" };
   }
 
   const endpoint = `/screens/${numericId}`;
-  console.log(`[Yodeck] Fetching content: GET ${YODECK_BASE_URL}${endpoint}`);
+  console.log(`[Yodeck] ${screenId}: GET ${YODECK_BASE_URL}${endpoint}`);
   
   const result = await yodeckApiRequest<YodeckScreenDetail>(endpoint, apiKey);
   
   if (result.ok && result.data) {
+    // Log response keys for debugging
+    const responseKeys = Object.keys(result.data);
+    console.log(`[Yodeck] ${screenId}: SUCCESS - Response keys: [${responseKeys.join(", ")}]`);
+    
     const items = extractContentItems(result.data);
     
-    // Log response for debugging
-    console.log(`[Yodeck] Content for ${screenId}: ${items.length} items`);
+    // Log detailed content detection
     if (items.length > 0) {
-      console.log(`[Yodeck] Content items: ${items.map(i => `${i.type}:${i.name}`).slice(0, 3).join(", ")}${items.length > 3 ? "..." : ""}`);
+      console.log(`[Yodeck] ${screenId}: CONTENT DETECTED - ${items.length} item(s):`);
+      items.forEach((item, i) => {
+        console.log(`[Yodeck]   ${i + 1}. ${item.type}: "${item.name}" (id: ${item.id || "n/a"})`);
+      });
     }
-    // Log screen_content structure
-    if (result.data.screen_content) {
-      console.log(`[Yodeck] screen_content: ${JSON.stringify(result.data.screen_content).substring(0, 150)}`);
+    
+    // Log screen_content structure if present
+    const sc = result.data.screen_content as any;
+    if (sc) {
+      console.log(`[Yodeck] ${screenId}: screen_content = ${JSON.stringify(sc)}`);
+    } else {
+      console.log(`[Yodeck] ${screenId}: screen_content = null (no content assigned in Yodeck)`);
+    }
+    
+    // Log assigned_content if present
+    if (result.data.assigned_content) {
+      console.log(`[Yodeck] ${screenId}: assigned_content found with keys: [${Object.keys(result.data.assigned_content).join(", ")}]`);
     }
     
     // Determine if screen is CONFIRMED empty
-    // Only set confirmedEmpty=true if API was successful AND screen_content is explicitly null/empty
     const screenContent = result.data.screen_content as any;
     const assignedContent = result.data.assigned_content;
     const hasScreenContent = screenContent && (
@@ -210,26 +236,21 @@ async function fetchScreenAssignedContent(
       (assignedContent.media?.length || 0) > 0
     );
     
-    // Screen is CONFIRMED empty only if:
-    // - API was successful
-    // - screen_content is null OR explicitly has no source_type
-    // - assigned_content is null/empty
-    // - We found no items through extraction
     const confirmedEmpty = items.length === 0 && !hasScreenContent && !hasAssignedContent;
     
     if (items.length === 0) {
-      console.log(`[Yodeck] No items extracted for ${screenId}. confirmedEmpty=${confirmedEmpty}, hasScreenContent=${hasScreenContent}, hasAssignedContent=${hasAssignedContent}`);
+      console.log(`[Yodeck] ${screenId}: NO CONTENT - confirmedEmpty=${confirmedEmpty}`);
     }
     
-    return { items, raw: result.data, confirmedEmpty };
+    return { items, raw: result.data, confirmedEmpty, endpoint };
   }
   
   if (result.status === 404) {
-    console.log(`[Yodeck] 404 for ${endpoint} - screen may have been deleted from Yodeck`);
+    console.log(`[Yodeck] ${screenId}: 404 NOT FOUND - screen may have been deleted from Yodeck`);
     return { items: [], error: "not_found" };
   }
   
-  console.log(`[Yodeck] Error for ${endpoint}: ${result.error || result.status}`);
+  console.log(`[Yodeck] ${screenId}: ERROR ${result.status || "network"} - ${result.error || "unknown"}`);
   return { items: [], error: result.error || `http_${result.status}` };
 }
 
@@ -563,9 +584,33 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
         }
       }
       
-      // Check if screen exists in Yodeck
+      // First, check if screen has a valid Yodeck ID (not a dummy placeholder)
+      const hasRealYodeckId = isRealYodeckId(screen.yodeckPlayerId);
+      
+      if (!hasRealYodeckId && !screen.yodeckUuid) {
+        console.log(`[Yodeck] ${screen.screenId}: NOT LINKED - No valid Yodeck player ID or UUID`);
+        
+        // Set to unknown (not linked to Yodeck)
+        await storage.updateScreen(screen.id, {
+          yodeckContentStatus: "unknown",
+          yodeckContentCount: null,
+          yodeckContentSummary: null,
+          yodeckContentLastFetchedAt: new Date(),
+        });
+        
+        return {
+          screenId: screen.screenId,
+          yodeckName,
+          status: "unknown",
+          contentCount: null,
+          summary: null,
+          error: "not_linked_to_yodeck",
+        };
+      }
+
+      // Check if screen exists in Yodeck screen list
       let yodeckScreen: YodeckScreenListItem | undefined;
-      if (screen.yodeckPlayerId) {
+      if (hasRealYodeckId && screen.yodeckPlayerId) {
         yodeckScreen = yodeckById.get(screen.yodeckPlayerId);
       }
       if (!yodeckScreen && screen.yodeckUuid) {
@@ -573,7 +618,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
       }
 
       if (!yodeckScreen) {
-        console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): unknown (no Yodeck match)`);
+        console.log(`[Yodeck] ${screen.screenId}: NOT FOUND IN LIST - ID "${screen.yodeckPlayerId}" UUID "${screen.yodeckUuid}" not in Yodeck`);
         
         // Set to unknown (not in Yodeck)
         await storage.updateScreen(screen.id, {
@@ -602,14 +647,17 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
       );
 
       if (contentResult.error) {
-        // Real API errors should be marked as "error", not "unknown"
+        // Handle different error types appropriately
+        const isRealApiError = contentResult.error === "not_found" || 
+          contentResult.error.startsWith("http_");
+        
         const errorMessage = contentResult.error === "not_found"
           ? "Screen not found in Yodeck (404)"
-          : contentResult.error === "no_numeric_id"
-          ? "No numeric Yodeck ID available"
+          : contentResult.error === "invalid_yodeck_id"
+          ? "Invalid Yodeck player ID (not a numeric ID)"
           : `API error: ${contentResult.error}`;
         
-        console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): error (${contentResult.error})`);
+        console.log(`[Yodeck] ${screen.screenId}: ${isRealApiError ? "API ERROR" : "SKIPPED"} - ${contentResult.error}`);
         
         await storage.updateScreen(screen.id, {
           yodeckContentStatus: "error",
