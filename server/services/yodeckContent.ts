@@ -638,26 +638,45 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
         };
       }
 
+      // Determine the numeric ID to use for API call
+      // ALWAYS prefer the matched yodeckScreen.id (numeric) over screen.yodeckPlayerId (may be dummy)
+      const numericIdToUse = String(yodeckScreen.id);
+      
       // Fetch content details using multi-strategy approach
       const contentResult = await fetchScreenAssignedContent(
         screen.screenId,
         screen.yodeckUuid || yodeckScreen.uuid || null,
-        screen.yodeckPlayerId || String(yodeckScreen.id),
+        numericIdToUse,
         apiKey
       );
 
       if (contentResult.error) {
-        // Handle different error types appropriately
-        const isRealApiError = contentResult.error === "not_found" || 
-          contentResult.error.startsWith("http_");
+        // Local skip reasons should NOT be marked as "error"
+        if (contentResult.error === "invalid_yodeck_id") {
+          // This shouldn't happen now since we use yodeckScreen.id, but handle gracefully
+          console.log(`[Yodeck] ${screen.screenId}: SKIP - Invalid ID despite match`);
+          await storage.updateScreen(screen.id, {
+            yodeckContentStatus: "unknown",
+            yodeckContentCount: null,
+            yodeckContentSummary: null,
+            yodeckContentLastFetchedAt: new Date(),
+          });
+          return {
+            screenId: screen.screenId,
+            yodeckName: yodeckScreen.name || yodeckName,
+            yodeckId: String(yodeckScreen.id),
+            status: "unknown",
+            contentCount: null,
+            summary: null,
+            error: contentResult.error,
+          };
+        }
         
         const errorMessage = contentResult.error === "not_found"
           ? "Screen not found in Yodeck (404)"
-          : contentResult.error === "invalid_yodeck_id"
-          ? "Invalid Yodeck player ID (not a numeric ID)"
           : `API error: ${contentResult.error}`;
         
-        console.log(`[Yodeck] ${screen.screenId}: ${isRealApiError ? "API ERROR" : "SKIPPED"} - ${contentResult.error}`);
+        console.log(`[Yodeck] ${screen.screenId}: API ERROR - ${contentResult.error}`);
         
         await storage.updateScreen(screen.id, {
           yodeckContentStatus: "error",
