@@ -1,0 +1,73 @@
+Je moet de Yodeck sync uitbreiden zodat Elevizion minimaal het AANTAL verschillende ads/berichten (unieke media items) per scherm kan tonen.
+
+Huidige situatie:
+- We syncen screens via GET https://app.yodeck.com/api/v2/screens
+- In DB krijgen screens yodeckContentCount=0 en summary.items=[]
+- Control-room toont "Geen content" of "content unknown", terwijl het scherm WEL content afspeelt.
+- We willen: per screen tonen: "X verschillende items" (unieke ads/berichten). Als dat >0 is → status ok / unmanaged_content (als geen placements in Elevizion).
+
+Wat je nu moet bouwen:
+1) Voeg in de Yodeck sync een 2e stap toe: per scherm haal je de content op die aan dat scherm hangt (schedule/playlist/content).
+2) Omdat we niet zeker zijn welk endpoint jouw docs bevatten, implementeer je een "probe" functie die deze endpoints probeert (in deze volgorde) tot er eentje 200 teruggeeft:
+   - GET /api/v2/screens/{yodeckScreenId}/schedule
+   - GET /api/v2/screens/{yodeckScreenId}/content
+   - GET /api/v2/screens/{yodeckScreenId}/playlists
+   - GET /api/v2/screens/{yodeckPlayerId}/schedule
+   - GET /api/v2/screens/{yodeckPlayerId}/content
+   (baseUrl is https://app.yodeck.com)
+
+3) Belangrijk: sla ook het "id" veld van de screen op uit /api/v2/screens:
+   - voeg veld toe aan Screen model: yodeckScreenId (number | null)
+   - gebruik die yodeckScreenId als primary id voor schedule/content endpoints.
+   - yodeckPlayerId blijft bestaan.
+
+4) Parse response naar een simpele ContentSummary:
+   - mediaIds: number[] (alle media ids die in schedule/content/playlists voorkomen)
+   - playlists: number[] (playlist ids indien aanwezig)
+   - items: array met { id, name?, type?, duration? } (als beschikbaar)
+   - uniqueCount = aantal unieke mediaIds
+   - topItems: top 5 items op basis van frequency (als freq niet beschikbaar: gewoon eerste 5)
+   - status:
+     - "ok" als uniqueCount > 0
+     - "empty" als endpoint werkt maar er zijn 0 items
+     - "unknown" als geen endpoint werkt
+     - "error" als request faalt (5xx/4xx behalve 404 op probes)
+
+5) Verrijk items met media details:
+   - Voor elke unieke mediaId (max 50 per scherm per sync): GET /api/v2/media/{id}
+   - Gebruik dit om item.name te vullen (en eventueel type/file_extension/thumbnail_url)
+   - Let op rate limits: cache media lookups in-memory gedurende sync-run, en gebruik p-limit concurrency 5.
+
+6) Sla het resultaat op in DB velden die al bestaan / of voeg toe:
+   - yodeckContentStatus: 'ok'|'empty'|'unknown'|'error'
+   - yodeckContentCount: number (uniqueCount)
+   - yodeckContentSummary: json { items, topItems, playlists, lastFetchedAt }
+   - yodeckContentLastFetchedAt: timestamp
+   - yodeckContentError: string|null
+
+7) Update control-room stats en actions:
+   - screensWithYodeckContent: tel schermen met yodeckContentStatus='ok'
+   - screensYodeckEmpty: tel schermen met yodeckContentStatus='empty'
+   - contentUnknown: tel schermen met yodeckContentStatus='unknown'
+   - contentError: tel schermen met yodeckContentStatus='error'
+   - Voor een online screen met yodeckContentCount > 0 maar activePlacements=0 → action type unmanaged_content met statusText:
+     "Speelt content (niet vanuit Elevizion) • {yodeckContentCount} items"
+
+8) Update UI:
+   - In Schermen lijst en Screen detail: toon badge: "Yodeck items: {yodeckContentCount}" en status label (ok/empty/unknown/error).
+   - In Control Room action card: toon datzelfde.
+
+9) Logging:
+   - Log per screen: yodeckScreenId, yodeckPlayerId, gekozen endpoint, uniqueCount.
+   - Log ook als alle probes falen.
+
+10) Voeg een endpoint toe voor debug:
+   - GET /api/integrations/yodeck/screen-content/:screenId (screenId is interne DB id)
+   - Deze endpoint returned: { chosenEndpoint, rawSample: first 1kb, parsedSummary }
+
+Lever daarna:
+- De code wijzigingen (files + diff/patch)
+- Eventuele DB migration (Drizzle)
+- En test: run sync en toon console output met uniqueCount per screen.
+
+Dit is de prioriteit: we hoeven nog geen “welke ad draait waar” te matchen aan Elevizion placements, maar we moeten WEL kunnen zien dat er content op het scherm staat + hoeveel verschillende items.

@@ -74,10 +74,20 @@ export interface ScreenContentResult {
   error?: string;
 }
 
+export interface MediaItem {
+  id: number;
+  name: string;
+  type?: string;
+  duration?: number;
+  thumbnailUrl?: string;
+}
+
 export interface ContentSummary {
   items: ContentItem[];
   topItems: string[];
   lastFetchedAt: string;
+  mediaItems?: MediaItem[];
+  uniqueMediaCount?: number;
 }
 
 interface YodeckScreenListItem {
@@ -167,6 +177,128 @@ function isRealYodeckId(playerId: string | null): boolean {
 }
 
 /**
+ * Fetch playlist items from Yodeck API
+ * Returns array of media items within the playlist
+ */
+async function fetchPlaylistItems(playlistId: number, apiKey: string): Promise<MediaItem[]> {
+  const endpoint = `/playlists/${playlistId}`;
+  console.log(`[Yodeck] Fetching playlist ${playlistId}: GET ${YODECK_BASE_URL}${endpoint}`);
+  
+  const result = await yodeckApiRequest<any>(endpoint, apiKey);
+  
+  if (!result.ok || !result.data) {
+    console.log(`[Yodeck] Playlist ${playlistId}: Failed with status ${result.status || result.error}`);
+    return [];
+  }
+  
+  const data = result.data;
+  const mediaItems: MediaItem[] = [];
+  
+  console.log(`[Yodeck] Playlist ${playlistId} keys: [${Object.keys(data).join(", ")}]`);
+  
+  // Yodeck playlist response structure observed:
+  // - items: array of {id, name, type, duration, ...}
+  // - media: array of {id, name, filename, ...}
+  // - slots: array of {media: {id, name, ...}, duration, ...}
+  
+  // Method 1: items array (most common)
+  if (data.items && Array.isArray(data.items)) {
+    for (const item of data.items) {
+      // Each item might have embedded media reference
+      if (item.media) {
+        mediaItems.push({
+          id: item.media.id,
+          name: item.media.name || item.media.filename || `Media ${item.media.id}`,
+          type: item.media.type || item.media.file_extension || "unknown",
+          duration: item.duration || item.media.duration,
+        });
+      } else if (item.id) {
+        mediaItems.push({
+          id: item.id,
+          name: item.name || item.title || `Item ${item.id}`,
+          type: item.type || item.media_type || "unknown",
+          duration: item.duration,
+        });
+      }
+    }
+  }
+  
+  // Method 2: media array
+  if (data.media && Array.isArray(data.media)) {
+    for (const m of data.media) {
+      // Avoid duplicates
+      if (!mediaItems.some(existing => existing.id === m.id)) {
+        mediaItems.push({
+          id: m.id,
+          name: m.name || m.filename || `Media ${m.id}`,
+          type: m.type || m.file_extension || "media",
+          duration: m.duration,
+        });
+      }
+    }
+  }
+  
+  // Method 3: slots array (Yodeck format for some playlists)
+  if (data.slots && Array.isArray(data.slots)) {
+    for (const slot of data.slots) {
+      if (slot.media && !mediaItems.some(existing => existing.id === slot.media.id)) {
+        mediaItems.push({
+          id: slot.media.id,
+          name: slot.media.name || slot.media.filename || `Media ${slot.media.id}`,
+          type: slot.media.type || slot.media.file_extension || "media",
+          duration: slot.duration || slot.media.duration,
+        });
+      }
+    }
+  }
+  
+  console.log(`[Yodeck] Playlist ${playlistId}: Found ${mediaItems.length} media items`);
+  return mediaItems;
+}
+
+/**
+ * In-memory cache for media lookups during sync (prevents duplicate API calls)
+ */
+const mediaCache = new Map<number, MediaItem>();
+
+/**
+ * Fetch media details from Yodeck API (with caching)
+ */
+async function fetchMediaDetails(mediaId: number, apiKey: string): Promise<MediaItem | null> {
+  // Check cache first
+  if (mediaCache.has(mediaId)) {
+    return mediaCache.get(mediaId)!;
+  }
+  
+  const endpoint = `/media/${mediaId}`;
+  const result = await yodeckApiRequest<any>(endpoint, apiKey);
+  
+  if (!result.ok || !result.data) {
+    return null;
+  }
+  
+  const data = result.data;
+  const mediaItem: MediaItem = {
+    id: mediaId,
+    name: data.name || data.filename || `Media ${mediaId}`,
+    type: data.type || data.file_extension || "unknown",
+    duration: data.duration,
+    thumbnailUrl: data.thumbnail_url || data.thumbnail,
+  };
+  
+  // Cache for future use
+  mediaCache.set(mediaId, mediaItem);
+  return mediaItem;
+}
+
+/**
+ * Clear media cache (call at start of sync run)
+ */
+export function clearMediaCache() {
+  mediaCache.clear();
+}
+
+/**
  * Fetch assigned content for a single screen using multi-endpoint probe approach
  * 
  * DEV NOTES - Yodeck API behavior:
@@ -182,11 +314,11 @@ async function fetchScreenAssignedContent(
   uuid: string | null,
   numericId: string | null,
   apiKey: string
-): Promise<{ items: ContentItem[]; raw?: any; error?: string; confirmedEmpty?: boolean; endpoint?: string }> {
+): Promise<{ items: ContentItem[]; mediaItems: MediaItem[]; raw?: any; error?: string; confirmedEmpty?: boolean; endpoint?: string }> {
   // Check if this is a real Yodeck ID (not a dummy placeholder)
   if (!numericId || !isRealYodeckId(numericId)) {
     console.log(`[Yodeck] ${screenId}: Invalid or dummy ID "${numericId}" - skipping API call`);
-    return { items: [], error: "invalid_yodeck_id" };
+    return { items: [], mediaItems: [], error: "invalid_yodeck_id" };
   }
 
   const endpoint = `/screens/${numericId}`;
@@ -243,16 +375,45 @@ async function fetchScreenAssignedContent(
       console.log(`[Yodeck] ${screenId}: NO CONTENT - confirmedEmpty=${confirmedEmpty}`);
     }
     
-    return { items, raw: result.data, confirmedEmpty, endpoint };
+    // Fetch playlist items for all playlists found
+    const allMediaItems: MediaItem[] = [];
+    const playlistItems = items.filter(i => i.type === "playlist" && i.id);
+    
+    // Also check screen_content for playlist source
+    if (sc?.source_type === "playlist" && sc?.source_id) {
+      const playlistId = sc.source_id;
+      // Check if we already have this playlist
+      if (!playlistItems.some(p => p.id === playlistId)) {
+        playlistItems.push({ type: "playlist", name: sc.source_name || `Playlist ${playlistId}`, id: playlistId });
+      }
+    }
+    
+    for (const playlist of playlistItems) {
+      if (playlist.id && typeof playlist.id === "number") {
+        const mediaItems = await fetchPlaylistItems(playlist.id, apiKey);
+        for (const media of mediaItems) {
+          // Avoid duplicates
+          if (!allMediaItems.some(m => m.id === media.id)) {
+            allMediaItems.push(media);
+          }
+        }
+      }
+    }
+    
+    if (allMediaItems.length > 0) {
+      console.log(`[Yodeck] ${screenId}: TOTAL UNIQUE MEDIA ITEMS: ${allMediaItems.length}`);
+    }
+    
+    return { items, mediaItems: allMediaItems, raw: result.data, confirmedEmpty, endpoint };
   }
   
   if (result.status === 404) {
     console.log(`[Yodeck] ${screenId}: 404 NOT FOUND - screen may have been deleted from Yodeck`);
-    return { items: [], error: "not_found" };
+    return { items: [], mediaItems: [], error: "not_found" };
   }
   
   console.log(`[Yodeck] ${screenId}: ERROR ${result.status || "network"} - ${result.error || "unknown"}`);
-  return { items: [], error: result.error || `http_${result.status}` };
+  return { items: [], mediaItems: [], error: result.error || `http_${result.status}` };
 }
 
 /**
@@ -870,8 +1031,19 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
       }
 
       const items = contentResult.items;
-      const contentCount = items.length;
+      const mediaItems = contentResult.mediaItems;
+      // Use media items count if available, otherwise fall back to content items count
+      const uniqueMediaCount = mediaItems.length;
+      const contentCount = uniqueMediaCount > 0 ? uniqueMediaCount : items.length;
       const summary = buildSummary(items);
+      
+      // Log media items if found
+      if (mediaItems.length > 0) {
+        console.log(`[Yodeck] ${screen.screenId}: Found ${mediaItems.length} unique media items in playlists`);
+        mediaItems.slice(0, 5).forEach((m, i) => {
+          console.log(`[Yodeck]   ${i + 1}. ${m.type || "media"}: "${m.name}" (id: ${m.id})`);
+        });
+      }
       
       // CRITICAL STATUS LOGIC:
       // - "has_content" = We found content items
@@ -932,15 +1104,19 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
 
       console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): ${contentCount} items, status=${status}${screenshotFallbackUsed ? " (screenshot fallback)" : ""}`);
 
-      // Save to DB
+      // Save to DB - include media items for detailed content tracking
       const contentSummary: ContentSummary = {
         items: screenshotFallbackUsed && items.length === 0 
           ? [{ type: "other" as const, name: "Screenshot OK (content detected via fallback)" }]
           : items,
         topItems: screenshotFallbackUsed && items.length === 0
           ? ["Screenshot OK (fallback)"]
-          : items.slice(0, 5).map(i => `${i.type}: ${i.name}`),
+          : mediaItems.length > 0
+            ? mediaItems.slice(0, 5).map(m => `${m.type || "media"}: ${m.name}`)
+            : items.slice(0, 5).map(i => `${i.type}: ${i.name}`),
         lastFetchedAt: new Date().toISOString(),
+        mediaItems: mediaItems.length > 0 ? mediaItems : undefined,
+        uniqueMediaCount: mediaItems.length > 0 ? mediaItems.length : undefined,
       };
 
       await storage.updateScreen(screen.id, {
