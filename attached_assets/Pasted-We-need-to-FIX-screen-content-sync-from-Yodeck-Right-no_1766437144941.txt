@@ -1,0 +1,87 @@
+We need to FIX “screen content” sync from Yodeck. Right now we import screens fine (name/status/screenshotUrl) but `yodeckContentCount` stays 0 and `yodeckContentSummary.items` stays empty, while the screen is actually playing content.
+
+Goal:
+- For each Yodeck screen/player in our DB, fetch what content is assigned/scheduled in Yodeck and store a usable summary:
+  - yodeckContentStatus: "ok" | "empty" | "unknown" | "error"
+  - yodeckContentCount: number
+  - yodeckContentSummary: { playlists: [], items: [], topItems: [], lastFetchedAt }
+  - yodeckContentLastFetchedAt
+  - yodeckContentError (string if fails)
+
+Important:
+- We CANNOT rely on our own Placements yet (those are empty). This is purely: “what does Yodeck say is configured on that screen?”
+- If Yodeck does not have an endpoint for “currently playing now”, we still want “assigned content” (playlist/layout/media scheduled) so we can show “this screen has X items”.
+
+Implementation requirements:
+1) Find our existing Yodeck integration code where we call:
+   GET https://app.yodeck.com/api/v2/screens
+   and where we currently set content = 0 items.
+2) Extend the sync so AFTER screens are fetched, we ALSO fetch content info per screen/player.
+
+Do it in a robust way:
+- Add a small Yodeck API client helper with:
+  - baseUrl = https://app.yodeck.com/api/v2
+  - auth header using our stored apiKey (same as current)
+  - request wrapper with timeout + error handling + logging
+
+- Add a “probe” strategy to discover content endpoints safely:
+  For each screen, try these endpoints in order (stop when one yields structured content):
+  A) GET /screens/{yodeckPlayerId}
+  B) GET /screens/{yodeckPlayerId}/playlists
+  C) GET /screens/{yodeckPlayerId}/schedule
+  D) GET /players/{yodeckPlayerId}
+  E) GET /players/{yodeckPlayerId}/playlists
+  F) GET /players/{yodeckPlayerId}/schedule
+  G) GET /screens/{yodeckPlayerId}/media
+  H) GET /players/{yodeckPlayerId}/media
+
+Notes:
+- yodeckPlayerId in our DB is the numeric string like "591896".
+- Some endpoints may 404. That’s OK: catch and continue.
+- When you get a response, normalize it:
+  - If it contains playlists/layouts/media/items, extract “name/title/id/type” into `items[]`
+  - Also extract playlists[] separately if possible.
+  - Compute yodeckContentCount = items.length (or sum of playlist items if nested)
+  - topItems = first 5 distinct by name
+  - status:
+    - "ok" if count > 0
+    - "empty" if count == 0 but the endpoint was valid and returns empty lists
+    - "unknown" if no endpoint worked but player is online and has screenshot
+    - "error" if we got hard failures (5xx/timeout) consistently
+
+3) Add a DEBUG route so I can see raw Yodeck responses quickly:
+   GET /api/integrations/yodeck/debug-content/:playerId
+   This should try the same endpoints above and return:
+   {
+     tried: [{path, ok, statusCode}],
+     firstSuccess: {path, body} | null,
+     normalized: {status, count, summary}
+   }
+   Protect it behind owner permission or DEV only (env NODE_ENV !== "production").
+
+4) Update Control Room logic:
+- If yodeckContentStatus = ok => “Speelt Yodeck content (X items)”
+- If empty => “Geen content in Yodeck”
+- If unknown but screenshot exists and screen online => “Speelt content (onbekend / unmanaged)”
+- If error => show error message in actions (severity warning/error)
+
+5) DB:
+- Ensure the Screen model/table has fields we already output in /api/screens:
+  yodeckContentStatus, yodeckContentCount, yodeckContentSummary (json), yodeckContentLastFetchedAt, yodeckContentError
+- If missing, create a migration.
+
+6) Tests / verification:
+- Add logs during sync:
+  “[Yodeck] Content probe for {playerName}({playerId}) success={path} count={n}”
+- After sync, /api/screens should show non-zero content if Yodeck returns it.
+
+Deliverables:
+- Code changes + migration (if needed)
+- The new debug endpoint
+- Updated sync behavior
+- No UI redesign needed; just make the data accurate.
+
+Be careful with rate limits:
+- If we have many screens later, do limited concurrency (e.g. p-limit 3-5) for content calls.
+
+Commit the changes.
