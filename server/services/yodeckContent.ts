@@ -168,25 +168,45 @@ async function fetchScreenAssignedContent(
     strategies.push({ endpoint: `/screens/${numericId}`, identifier: numericId, type: "numericId" });
   }
 
+  let firstSuccessLogged = false;
+  
   for (const strategy of strategies) {
+    console.log(`[Yodeck] Trying endpoint: GET ${YODECK_BASE_URL}${strategy.endpoint} (${strategy.type})`);
     const result = await yodeckApiRequest<YodeckScreenDetail>(strategy.endpoint, apiKey);
     
     if (result.ok && result.data) {
-      console.log(`[Yodeck] Content for ${screenId} via ${strategy.type}: found`);
       const items = extractContentItems(result.data);
+      
+      // Log first successful response for debugging (sanitized)
+      if (!firstSuccessLogged) {
+        firstSuccessLogged = true;
+        const rawKeys = Object.keys(result.data);
+        console.log(`[Yodeck] Screen detail response keys: ${rawKeys.join(", ")}`);
+        console.log(`[Yodeck] Content found for ${screenId}: ${items.length} items via ${strategy.type}`);
+        if (items.length > 0) {
+          console.log(`[Yodeck] Content items: ${items.map(i => `${i.type}:${i.name}`).slice(0, 3).join(", ")}${items.length > 3 ? "..." : ""}`);
+        }
+        // Log assigned_content structure if present
+        if (result.data.assigned_content) {
+          const acKeys = Object.keys(result.data.assigned_content);
+          console.log(`[Yodeck] assigned_content keys: ${acKeys.join(", ")}`);
+        }
+      }
+      
       return { items, raw: result.data };
     }
     
     if (result.status === 404) {
-      console.log(`[Yodeck] 404 not found for ${strategy.endpoint} using ${strategy.type} ${strategy.identifier}, trying next strategy`);
+      console.log(`[Yodeck] 404 for ${strategy.endpoint} (${strategy.type}), trying next...`);
       continue;
     }
     
     // Other error - log but continue trying
-    console.log(`[Yodeck] Error for ${strategy.endpoint}: ${result.error}, trying next strategy`);
+    console.log(`[Yodeck] Error for ${strategy.endpoint}: ${result.error || result.status}, trying next...`);
   }
 
   // All strategies failed
+  console.log(`[Yodeck] All strategies failed for ${screenId} - content status unknown`);
   return { items: [], error: "all_strategies_failed" };
 }
 

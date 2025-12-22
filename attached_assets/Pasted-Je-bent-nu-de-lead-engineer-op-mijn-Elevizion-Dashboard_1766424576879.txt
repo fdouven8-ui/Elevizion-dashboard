@@ -1,0 +1,55 @@
+Je bent nu de lead engineer op mijn Elevizion Dashboard (React + TS + Express + Drizzle + Postgres). Yodeck sync werkt al voor online/offline en screen names, maar het systeem ziet NIET wat er op het scherm draait. Daardoor staat er “Geen content in Yodeck” terwijl het scherm wel nieuws/weer/ads toont.
+
+Doel:
+- Per screen moet de backend kunnen bepalen wat er op dit moment aan content/playlist/campaign is toegewezen in Yodeck.
+- Control Room moet dat tonen: “heeft content” + korte samenvatting (bv: “Nieuws • Weer • 3 Ads”) of content count.
+- Actielijst moet primair de yodeckPlayerName tonen (dat is herkenbaar) en screenId alleen secundair (in description).
+
+Huidige situatie (uit logs/DB):
+- GET https://app.yodeck.com/api/v2/screens geeft 2 screens.
+- In DB bestaan velden: yodeckContentCount, yodeckContentSummary, yodeckContentLastFetchedAt (of voeg ze toe als ze ontbreken).
+- Sync logt nu “Updated screen X (content: 0 items)” voor alles. Dat is fout, want er draait wél content.
+- Er was eerder ook: “Failed to fetch Yodeck player 591896: 404”. Dus we gebruiken mogelijk het verkeerde endpoint of verkeerde identifier.
+
+Wat je moet bouwen/fixen (zonder aannames, gebruik Yodeck API docs / api-docs in code en log wat je ziet):
+1) Vind via Yodeck API de juiste manier om per screen te achterhalen:
+   - Welke playlist/campaign/schedule aan het screen hangt
+   - Welke media/items daarin zitten (minimaal count + types/namen)
+   (Hint: ‘/api/v2/screens’ alleen is niet genoeg. Waarschijnlijk is er een endpoint voor assignments/schedule/playlists/campaigns per screen. Gebruik yodeck_screen_id (numeriek) of yodeck_uuid correct — test beide. Vermijd de 404 door niet “player” endpoint te gebruiken als dat niet bestaat.)
+
+2) Implementeer een nieuwe service-functie in backend, bv:
+   - yodeckClient.getScreenContentSummary(yodeckScreenId | yodeckUuid) -> { count, summaryText, items[] }
+   Laat dit robuust zijn:
+   - Als een endpoint 404 geeft: probeer alternatief (uuid vs id) en log dat duidelijk.
+   - Als API beperkt info geeft: haal playlists/campaigns eerst op en resolve daarna mapping.
+
+3) Update de Yodeck sync:
+   - Na het ophalen van screens: voor elk screen haal content summary op en update in DB:
+     - yodeckContentCount = count
+     - yodeckContentSummary = summaryText (max 120 chars)
+     - yodeckContentLastFetchedAt = now()
+   - Zorg dat dit niet extreem traag is: gebruik concurrency limit (bijv 3 tegelijk) + caching per sync-run.
+
+4) Update Control Room logic:
+   - “empty_screen / Geen content” mag alleen als:
+     - screen.status == online
+     - yodeckContentLastFetchedAt recent is (bijv < 24h) EN yodeckContentCount == 0
+   - “content_unknown” als content nog nooit gefetcht is of te oud is.
+   - Voeg KPI’s toe:
+     - screensWithContent = aantal screens met yodeckContentCount > 0
+     - screensEmpty = online screens met count==0
+     - contentUnknown = screens waar lastFetchedAt ontbreekt of te oud
+
+5) UI/tekst:
+   - Acties: itemName = yodeckPlayerName (zoals nu)
+   - description mag “Locatie • YDK-xxxxx” zijn.
+   - Voor content-status actie (warning/info): statusText moet yodeckContentSummary tonen als die bestaat, anders een duidelijke fallback.
+
+6) Voeg debug logging toe die ik kan gebruiken:
+   - Bij sync: log welke endpoints je aanroept en welke identifier je gebruikt (id/uuid).
+   - Log 1 voorbeeld response (gesanitized) om te bevestigen dat mapping klopt.
+   - Als Yodeck geen content-info kan leveren: zeg dat expliciet en geef alternatief voorstel (bijv: “use screen snapshot OCR” of “track our own placements only”), maar probeer eerst alles via API.
+
+Output:
+- Maak de code changes direct (backend + eventueel frontend types).
+- Geef me daarna kort: welke endpoints uiteindelijk zijn gebruikt + hoe ik kan testen dat content nu binnenkomt (welke route/knop).

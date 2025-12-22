@@ -3631,19 +3631,30 @@ export async function registerRoutes(
       
       // Actually run the sync for Yodeck
       if (service === "yodeck") {
+        // Step 1: Sync screens (status, UUID, name)
+        console.log("[Yodeck Sync] Step 1: Syncing screens from Yodeck API...");
         const result = await syncYodeckScreens();
-        if (result.success) {
-          res.json({ 
-            success: true, 
-            message: `Sync voltooid: ${result.count} schermen opgehaald, ${result.updated} bijgewerkt`,
-            count: result.count,
-            mapped: result.mapped,
-            unmapped: result.unmapped,
-            updated: result.updated,
-          });
-        } else {
+        if (!result.success) {
           res.status(400).json({ success: false, message: result.message });
+          return;
         }
+        
+        // Step 2: Fetch content details per screen (requires separate API calls)
+        console.log("[Yodeck Sync] Step 2: Fetching content details per screen...");
+        const { syncAllScreensContent } = await import("./services/yodeckContent");
+        const contentResult = await syncAllScreensContent();
+        
+        console.log(`[Yodeck Sync] Complete - Screens: ${result.count}, Content: ${contentResult.stats.withContent} with content, ${contentResult.stats.empty} empty, ${contentResult.stats.unknown} unknown`);
+        
+        res.json({ 
+          success: true, 
+          message: `Sync voltooid: ${result.count} schermen, ${contentResult.stats.withContent} met content, ${contentResult.stats.empty} leeg, ${contentResult.stats.unknown} onbekend`,
+          count: result.count,
+          mapped: result.mapped,
+          unmapped: result.unmapped,
+          updated: result.updated,
+          content: contentResult.stats,
+        });
         return;
       }
       

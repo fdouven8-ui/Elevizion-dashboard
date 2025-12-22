@@ -360,8 +360,9 @@ export async function syncYodeckScreens(): Promise<{
           existing = await storage.getScreenByYodeckPlayerId(String(screen.id));
         }
         
-        // Extract content info from Yodeck screen data
-        const contentInfo = extractYodeckContentInfo(screen);
+        // NOTE: Screen list response does NOT contain content info
+        // Content is fetched separately via syncAllScreensContent() which calls detail endpoints
+        // We set content to null here - it will be populated by the content sync step
         
         if (existing) {
           // Update existing screen - use id-based update since UUID might not be set yet
@@ -374,12 +375,9 @@ export async function syncYodeckScreens(): Promise<{
             status: screen.state?.online ? "online" : "offline",
             lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
             locationId: existing.locationId || defaultLocationId,
-            // Content tracking
-            yodeckContentCount: contentInfo.contentCount,
-            yodeckContentSummary: contentInfo.contentSummary,
-            yodeckContentLastFetchedAt: new Date(),
+            // Content is NOT in list response - keep existing or null
           });
-          console.log(`[Yodeck] Updated screen ${screenId || screen.name} (content: ${contentInfo.contentCount} items)`);
+          console.log(`[Yodeck] Updated screen ${screenId || screen.name} (UUID: ${screen.uuid})`);
           updatedCount++;
         } else {
           // Create new screen
@@ -396,12 +394,12 @@ export async function syncYodeckScreens(): Promise<{
             status: screen.state?.online ? "online" : "offline",
             lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
             isActive: true,
-            // Content tracking
-            yodeckContentCount: contentInfo.contentCount,
-            yodeckContentSummary: contentInfo.contentSummary,
-            yodeckContentLastFetchedAt: new Date(),
+            // Content is fetched separately - set to null (unknown) initially
+            yodeckContentCount: null,
+            yodeckContentSummary: null,
+            yodeckContentLastFetchedAt: null,
           });
-          console.log(`[Yodeck] Created new screen ${newScreenId} (content: ${contentInfo.contentCount} items)`);
+          console.log(`[Yodeck] Created new screen ${newScreenId} (UUID: ${screen.uuid})`);
           updatedCount++;
         }
       }
