@@ -100,8 +100,8 @@ async function getYodeckCredentials(): Promise<YodeckCredentials | null> {
 
     const credentials = decryptCredentials(config.encryptedCredentials);
     return credentials.api_key ? { api_key: credentials.api_key } : null;
-  } catch (error) {
-    console.error("Failed to get Yodeck credentials:", error);
+  } catch {
+    // Silently fail - credentials not required for DB-based stats
     return null;
   }
 }
@@ -126,8 +126,8 @@ async function fetchYodeckPlayers(credentials: YodeckCredentials): Promise<any[]
   try {
     const players = await yodeckApiRequest("/players", credentials);
     return Array.isArray(players) ? players : players.data || [];
-  } catch (error) {
-    console.error("Failed to fetch Yodeck players:", error);
+  } catch {
+    // Silently fail - not used by getScreenStats
     return [];
   }
 }
@@ -135,8 +135,8 @@ async function fetchYodeckPlayers(credentials: YodeckCredentials): Promise<any[]
 async function fetchYodeckPlayerStatus(credentials: YodeckCredentials, playerId: string): Promise<any> {
   try {
     return await yodeckApiRequest(`/players/${playerId}`, credentials);
-  } catch (error) {
-    console.error(`Failed to fetch Yodeck player ${playerId}:`, error);
+  } catch {
+    // Silently fail - not used by getScreenStats (DB is source of truth)
     return null;
   }
 }
@@ -166,59 +166,32 @@ const getCachedAllPlayers = memoizee(
   }
 );
 
-// Generate uptime timeline based on DB status (no more random values)
-// Uses current status for all data points since we don't have historical status data
+// Generate deterministic 8-day timeline based on DB status
+// All days have the same status as current DB status
 function generateUptimeTimeline(
-  startDate: string, 
-  endDate: string, 
-  granularity: "hour" | "day" | "week",
-  currentStatus: "online" | "offline",
-  lastSeenAt: Date | null
+  currentStatus: "online" | "offline"
 ): UptimeDataPoint[] {
   const timeline: UptimeDataPoint[] = [];
-  const start = new Date(startDate);
-  const end = new Date(endDate);
   const now = new Date();
+  const DAY_MS = 24 * 60 * 60 * 1000;
   
-  const intervalMs = granularity === "hour" ? 60 * 60 * 1000 
-    : granularity === "day" ? 24 * 60 * 60 * 1000 
-    : 7 * 24 * 60 * 60 * 1000;
-
-  let current = new Date(start);
-  while (current <= end) {
-    // Determine status for this point based on lastSeenAt and current status
-    let pointStatus: "online" | "offline" = currentStatus;
-    
-    if (lastSeenAt) {
-      // If this point is after lastSeenAt and screen is offline, mark as offline
-      // If this point is before or at lastSeenAt, assume it was online
-      if (current > lastSeenAt && currentStatus === "offline") {
-        pointStatus = "offline";
-      } else if (current <= lastSeenAt || currentStatus === "online") {
-        pointStatus = "online";
-      }
-    }
-    
-    // Future points use current status
-    if (current > now) {
-      pointStatus = currentStatus;
-    }
-    
+  // Generate 8 days ending today, all with current status
+  for (let i = 7; i >= 0; i--) {
+    const date = new Date(now.getTime() - i * DAY_MS);
+    date.setHours(0, 0, 0, 0);
     timeline.push({
-      timestamp: current.toISOString(),
-      status: pointStatus,
-      duration: intervalMs,
+      timestamp: date.toISOString(),
+      status: currentStatus,
+      duration: DAY_MS,
     });
-    current = new Date(current.getTime() + intervalMs);
   }
 
   return timeline;
 }
 
-function calculateUptimePercent(timeline: UptimeDataPoint[]): number {
-  if (timeline.length === 0) return 0;
-  const onlineCount = timeline.filter(t => t.status === "online").length;
-  return Math.round((onlineCount / timeline.length) * 100);
+// Simple uptime percent: 100 if online, 0 if offline
+function calculateUptimePercent(currentStatus: "online" | "offline"): number {
+  return currentStatus === "online" ? 100 : 0;
 }
 
 // Deterministic stats based on DB only - no random/mock data
@@ -249,16 +222,10 @@ export async function getScreenStats(screenId: string, filter: StatsFilter): Pro
 
   // Use DB status directly - this is the single source of truth
   const currentStatus: "online" | "offline" = screen.status === "online" ? "online" : "offline";
-  const lastSeenAt = screen.lastSeenAt ? new Date(screen.lastSeenAt) : null;
+  const lastSeenAt = screen.lastSeenAt ? new Date(screen.lastSeenAt).toISOString() : null;
 
-  // Generate deterministic timeline based on DB status
-  const timeline = generateUptimeTimeline(
-    filter.dateRange.startDate,
-    filter.dateRange.endDate,
-    filter.granularity,
-    currentStatus,
-    lastSeenAt
-  );
+  // Generate deterministic 8-day timeline based on DB status
+  const timeline = generateUptimeTimeline(currentStatus);
 
   // Get placements for this screen (deterministic, no random)
   const placements = await storage.getPlacementsByScreen(screenId);
@@ -278,8 +245,8 @@ export async function getScreenStats(screenId: string, filter: StatsFilter): Pro
     available: true,
     uptime: {
       current: currentStatus,
-      lastSeen: lastSeenAt ? lastSeenAt.toISOString() : null,
-      uptimePercent: calculateUptimePercent(timeline),
+      lastSeen: lastSeenAt,
+      uptimePercent: calculateUptimePercent(currentStatus),
       timeline,
     },
     playback: {
