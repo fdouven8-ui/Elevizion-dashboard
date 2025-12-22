@@ -3038,10 +3038,12 @@ export async function registerRoutes(
   });
 
   // Yodeck content sync - fetches what's playing on each screen
-  app.post("/api/integrations/yodeck/content-sync", async (_req, res) => {
+  // Query params: force=true to bypass 10-minute cache
+  app.post("/api/integrations/yodeck/content-sync", async (req, res) => {
     try {
+      const force = req.query.force === "true" || req.body?.force === true;
       const { syncAllScreensContent } = await import("./services/yodeckContent");
-      const result = await syncAllScreensContent();
+      const result = await syncAllScreensContent(force);
       res.json(result);
     } catch (error: any) {
       console.error("[YodeckContent] Sync error:", error);

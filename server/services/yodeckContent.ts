@@ -481,10 +481,14 @@ function buildSummary(items: ContentItem[]): string {
   return summary;
 }
 
+// Cache duration in milliseconds (10 minutes)
+const CONTENT_CACHE_DURATION_MS = 10 * 60 * 1000;
+
 /**
  * Sync content for all screens in database
+ * @param force - If true, skip cache and force refresh all screens
  */
-export async function syncAllScreensContent(): Promise<{
+export async function syncAllScreensContent(force: boolean = false): Promise<{
   success: boolean;
   results: ScreenContentResult[];
   stats: {
@@ -492,6 +496,8 @@ export async function syncAllScreensContent(): Promise<{
     withContent: number;
     empty: number;
     unknown: number;
+    error: number;
+    skipped: number;
   };
   yodeckScreenCount?: number;
 }> {
@@ -501,7 +507,7 @@ export async function syncAllScreensContent(): Promise<{
     return {
       success: false,
       results: [],
-      stats: { total: 0, withContent: 0, empty: 0, unknown: 0 },
+      stats: { total: 0, withContent: 0, empty: 0, unknown: 0, error: 0, skipped: 0 },
     };
   }
 
@@ -513,7 +519,7 @@ export async function syncAllScreensContent(): Promise<{
     return {
       success: false,
       results: [],
-      stats: { total: 0, withContent: 0, empty: 0, unknown: 0 },
+      stats: { total: 0, withContent: 0, empty: 0, unknown: 0, error: 0, skipped: 0 },
     };
   }
 
@@ -531,13 +537,31 @@ export async function syncAllScreensContent(): Promise<{
   // Get our screens from DB
   const dbScreens = await storage.getScreens();
   const results: ScreenContentResult[] = [];
+  const now = new Date();
 
   // Process screens in batches for rate limiting
   for (let i = 0; i < dbScreens.length; i += CONCURRENT_LIMIT) {
     const batch = dbScreens.slice(i, i + CONCURRENT_LIMIT);
     
-    const batchPromises = batch.map(async (screen): Promise<ScreenContentResult> => {
+    const batchPromises = batch.map(async (screen): Promise<ScreenContentResult & { skipped?: boolean }> => {
       const yodeckName = screen.yodeckPlayerName || screen.name || screen.screenId;
+      
+      // Check cache: skip if last fetched within cache duration (unless force=true)
+      if (!force && screen.yodeckContentLastFetchedAt) {
+        const lastFetched = new Date(screen.yodeckContentLastFetchedAt);
+        const ageMs = now.getTime() - lastFetched.getTime();
+        if (ageMs < CONTENT_CACHE_DURATION_MS) {
+          console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): cached (${Math.round(ageMs / 1000)}s ago)`);
+          return {
+            screenId: screen.screenId,
+            yodeckName,
+            status: (screen.yodeckContentStatus as ContentStatus) || "unknown",
+            contentCount: screen.yodeckContentCount,
+            summary: screen.yodeckContentSummary ? buildSummary((screen.yodeckContentSummary as ContentSummary).items || []) : null,
+            skipped: true,
+          };
+        }
+      }
       
       // Check if screen exists in Yodeck
       let yodeckScreen: YodeckScreenListItem | undefined;
@@ -643,15 +667,17 @@ export async function syncAllScreensContent(): Promise<{
     results.push(...batchResults);
   }
 
+  const skippedCount = results.filter((r: any) => r.skipped === true).length;
   const stats = {
     total: results.length,
     withContent: results.filter(r => r.status === "has_content").length,
     empty: results.filter(r => r.status === "empty").length,
     unknown: results.filter(r => r.status === "unknown").length,
     error: results.filter(r => r.status === "error").length,
+    skipped: skippedCount,
   };
 
-  console.log(`[YodeckContent] Sync complete: ${stats.total} screens`);
+  console.log(`[YodeckContent] Sync complete: ${stats.total} screens (${stats.skipped} cached)`);
   console.log(`[YodeckContent] Results: ${stats.withContent} with content, ${stats.empty} empty, ${stats.unknown} unknown, ${stats.error} errors`);
 
   return { 

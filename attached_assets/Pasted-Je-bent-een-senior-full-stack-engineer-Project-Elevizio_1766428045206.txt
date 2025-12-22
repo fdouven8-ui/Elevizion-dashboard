@@ -1,0 +1,78 @@
+Je bent een senior full-stack engineer. Project: Elevizion Dashboard (React+TS+Vite frontend, Express backend, Drizzle ORM + Postgres). We hebben al Yodeck API key en sync van screens werkt via GET https://app.yodeck.com/api/v2/screens.
+
+PROBLEEM
+- In Control Room staat bij een online screen: “Geen content in Yodeck”, terwijl er wél nieuws/weerswidget + ads (video/foto) draaien.
+- In DB staan velden zoals yodeckContentCount=0 en yodeckContentSummary.items=[].
+- We moeten betrouwbaar kunnen “inlezen” wat er op een Yodeck screen staat (of minimaal: welke playlist/layout/schedule eraan hangt + hoeveel items), zodat Control Room “content aanwezig” kan tonen.
+- Eerder zagen we ook fouten zoals “Failed to fetch Yodeck player 591896: 404”. Dat duidt op verkeerde endpoint (player vs screen).
+
+DOEL / ACCEPTANCE CRITERIA
+1) Voor elk screen in onze DB vullen we:
+   - screens.yodeckContentCount (int)
+   - screens.yodeckContentSummary (jsonb) minimaal met:
+     {
+       "playlists": [{ "id": "...", "name": "...", "type": "..."}],
+       "items": [{ "id": "...", "name": "...", "type": "image|video|app|url|rss|weather|other" }],
+       "topItems": [...max 5],
+       "lastFetchedAt": "ISO"
+     }
+   - screens.yodeckContentLastFetchedAt (timestamp)
+   Als content niet is op te halen: yodeckContentCount=null en summary=null, maar wel loggen waarom.
+
+2) Control Room:
+   - “content_unknown” als yodeckContentLastFetchedAt null
+   - “empty_screen” als yodeckContentCount === 0
+   - “has_content” (severity info/ok) als yodeckContentCount > 0 met statusText zoals “Content: 7 items (2 playlists)”
+   - Actie-lijst toont primair yodeckPlayerName (de herkenbare schermnaam). ScreenId (YDK-xxxxx) mag klein/secondary.
+
+3) Sync:
+   - Breid bestaande Yodeck sync uit (of maak een aparte POST /api/sync/yodeck/content/run) die voor alle screens de content ophaalt en opslaat.
+   - Run content sync ook in de bestaande auto-run flow (zoals /api/sync/status) maar met throttling zodat we niet elke page refresh hard de hele content opnieuw trekken.
+   - Voeg caching toe: als yodeckContentLastFetchedAt < 10 minuten geleden, skip tenzij force=true.
+
+BELANGRIJK: YODECK API ENDPOINTS KUNNEN ANDERS ZIJN
+Je mag NIET gokken en iets hardcoden dat mogelijk 404 geeft.
+Maak een “discovery/fallback” aanpak:
+- Bouw een YodeckClient (backend) met methodes:
+  - listScreens()
+  - getScreenDetails(screenId)
+  - getScreenAssignedPlaylistsOrLayout(screenId)
+  - getPlaylistItems(playlistId)
+  - getScreenScheduleOrCurrentlyPlaying(screenId) (als beschikbaar)
+- Voor elke methode: probeer een kleine set kandidaat endpoints (in volgorde), bijv:
+  - /screens/{id}
+  - /screens/{id}/playlists
+  - /screens/{id}/schedule
+  - /screens/{id}/layout
+  - /playlists?screen_id={id}
+  - /playlists/{id}/items
+  (Let op: dit zijn voorbeelden; jij moet via logging/response payloads bepalen wat echt werkt.)
+- Als een endpoint 404 geeft: probeer de volgende variant.
+- Log per screen (debug level) welke endpoints geprobeerd zijn + statuscode + (kort) shape van de response (keys), maar log NOOIT de volledige api key.
+
+IMPLEMENTATIE DETAILS
+- Gebruik bestaande auth header zoals nu voor Yodeck (waarschijnlijk Authorization: Token ... of X-Api-Key). Hergebruik de huidige implementatie.
+- Zorg dat “player” en “screen” niet door elkaar lopen: onze yodeckPlayerId is de screen id uit Yodeck (yodeck_screen_id). Stop met calls die “player” endpoints gebruiken als dat niet bestaat.
+- Normaliseer items:
+  - Maak een mapper die Yodeck payloads omzet naar onze item types (image/video/app/url/rss/weather/other).
+  - Als je alleen playlists kan vinden maar items niet: tel playlists als contentCount>0 en zet items=[] maar playlists gevuld (content is er dan wel).
+- DB: voeg migratie toe als velden ontbreken of types verkeerd zijn.
+- Voeg een kleine “diagnostics” endpoint toe (dev-only of admin-only) zoals:
+  GET /api/integrations/yodeck/debug/screen/:id
+  die laat zien: welke endpoints werkten + ruwe samenvatting (geen secrets).
+
+TESTPLAN
+- Voeg een simpele test/command toe die 1 screen synced en in logs laat zien:
+  - gevonden playlist/layout
+  - gevonden items count
+  - opgeslagen yodeckContentCount > 0 als er content is
+- Controleer Control Room stats: screensWithContent en screensEmpty kloppen.
+
+LEVERING
+- Pas backend + DB + Control Room UI aan zodat dit end-to-end werkt.
+- Lever duidelijke commit-achtige uitleg in output: welke files aangepast, welke endpoints uiteindelijk blijken te werken, en hoe ik het force kan runnen.
+
+Start nu met:
+1) Inspecteer bestaande code waar Yodeck sync zit en waar yodeckContentCount nu op 0 uitkomt.
+2) Implementeer discovery/fallback client.
+3) Update sync + DB + UI zoals hierboven.
