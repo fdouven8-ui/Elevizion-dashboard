@@ -104,6 +104,12 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
   - **Content Detection**: The `screen_content` field uses format `{"source_type":"playlist","source_id":27644453,"source_name":"Test Playlist"}`. Parse `source_type` and `source_name` to detect what's playing.
   - EVZ-### Mapping: Extracts SCREEN_ID from `basic.tags` or `name` field using regex `/EVZ-\d{3}/`
   - Content sync service: `server/services/yodeckContent.ts` handles fetching and parsing content details
+  - **Content Status Enum**: `yodeckContentStatus` tracks content state per screen:
+    - `unknown`: Never synced or API failed
+    - `empty`: Yodeck confirmed no content assigned
+    - `has_content`: Content detected (playlist/layout/media)
+    - `likely_has_content`: Screenshot indicates content (fallback)
+  - Control-room uses status-based filtering instead of count-based logic
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests (requires API key configuration).
 
