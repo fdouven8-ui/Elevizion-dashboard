@@ -844,14 +844,23 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
         yodeckContentError: null, // Clear any previous error
       });
 
+      // Return consistent data for both API items and screenshot fallback
+      const finalContentCount = screenshotFallbackUsed ? 1 : contentCount;
+      const finalSummary = screenshotFallbackUsed && items.length === 0 
+        ? "Screenshot OK (fallback)" 
+        : summary;
+      const finalItems = screenshotFallbackUsed && items.length === 0
+        ? [{ type: "other" as const, name: "Screenshot OK (content detected via fallback)" }]
+        : items;
+
       return {
         screenId: screen.screenId,
         yodeckName: yodeckScreen.name || yodeckName,
         yodeckId: String(yodeckScreen.id),
         status,
-        contentCount,
-        summary,
-        items,
+        contentCount: finalContentCount,
+        summary: finalSummary,
+        items: finalItems,
       };
     });
 
