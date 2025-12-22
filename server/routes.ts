@@ -3266,6 +3266,30 @@ export async function registerRoutes(
   });
 
   // ============================================================================
+  // YODECK CONTENT INVENTORY (Full content hierarchy resolution)
+  // ============================================================================
+  
+  // GET /api/yodeck/inventory - Build complete content inventory
+  // Resolves all screens → playlists/layouts/schedules → media items
+  // Query params: workspaceId (optional)
+  app.get("/api/yodeck/inventory", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const workspaceId = req.query.workspaceId ? parseInt(req.query.workspaceId as string) : undefined;
+      
+      console.log(`[YodeckInventory] Starting inventory request, workspaceId=${workspaceId || "all"}`);
+      
+      const { buildContentInventory } = await import("./services/yodeckInventory");
+      const result = await buildContentInventory(workspaceId);
+      
+      console.log(`[YodeckInventory] Completed: ${result.totals.screens} screens, ${result.totals.uniqueMediaAcrossAllScreens} unique media`);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[YodeckInventory] Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
   // CONTROL ROOM (OPS-FIRST DASHBOARD)
   // ============================================================================
 

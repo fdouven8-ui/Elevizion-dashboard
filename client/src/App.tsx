@@ -15,6 +15,7 @@ import Placements from "@/pages/Placements";
 import PlacementDetail from "@/pages/PlacementDetail";
 import Finance from "@/pages/Finance";
 import Settings from "@/pages/Settings";
+import ContentInventory from "@/pages/ContentInventory";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -32,6 +33,7 @@ function DashboardRouter() {
         <Route path="/placements/:id" component={PlacementDetail} />
         <Route path="/finance" component={Finance} />
         <Route path="/settings" component={Settings} />
+        <Route path="/content-inventory" component={ContentInventory} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>

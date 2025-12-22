@@ -1,0 +1,180 @@
+Je bent een senior full-stack engineer. Bouw in mijn bestaande app (React + TS + Vite frontend, Express + TS backend) een Yodeck “Content Inventory” module die:
+
+DOEL
+1) Alle screens uit Yodeck ophaalt.
+2) Per screen bepaalt welke content eraan gekoppeld is (screen_content: source_type + source_id).
+3) Die content volledig resolve’t naar de onderliggende media items.
+4) Rapporteert:
+   - Per scherm: aantal playlist items (totaal), aantal media-items, breakdown per type (image/video/widget/etc waar mogelijk)
+   - In totaal: totaal aantal items over alle screens, en uniek aantal media IDs
+   - Optioneel: lijst “Top media” die op meeste screens voorkomen
+
+BELANGRIJK: Gebruik exact deze Yodeck API v2 basis:
+Base URL: https://app.yodeck.com/api/v2
+Auth header: Authorization: Token <label>:<token> (label is vrij, token komt uit ENV)
+Zet token in backend env als YODECK_TOKEN en label in YODECK_LABEL.
+
+JSON STRUCTUREN (moet je in je mapping gebruiken)
+SCREEN endpoint: GET /screens/{id} geeft o.a.
+{
+  "screen_content": {
+    "source_id": 45,
+    "source_name": "...",
+    "source_type": "playlist" | "layout" | "schedule"
+  },
+  "name": "...",
+  "workspace": { "id": 42, "name": "Reception" },
+  ...
+}
+
+PLAYLIST endpoint: GET /playlists/{id} geeft o.a.
+{
+  "id": 123,
+  "items": [
+    { "id": 1, "priority": 1, "duration": 30, "name": "my_media", "type": "media" | "widget" | "layout" | "playlist" }
+  ]
+}
+
+LAYOUT endpoint: GET /layouts/{id} geeft o.a.
+{
+  "id": 13,
+  "regions": [
+    {
+      "item": { "type": "playlist" | "widget" | "media" | "layout", "id": 162 },
+      "duration": -2,
+      ...
+    }
+  ],
+  "background_audio": { "item": { "type": "widget", "id": 166 } }
+}
+
+SCHEDULE endpoint: GET /schedules/{id} geeft o.a.
+{
+  "id": 42,
+  "events": [
+    {
+      "source": { "source_type": "layout" | "playlist", "source_id": 7, "source_name": "..." }
+    }
+  ],
+  "filler_content": { "source_type": "playlist", "source_id": 45, "source_name": "..." }
+}
+
+MEDIA endpoint: GET /media/{id} geeft o.a.
+{
+  "id": 123,
+  "media_origin": { "type": "image" | "video" | "audio" | ... , "source": "local" | "url", "format": null },
+  "file_extension": "mp4",
+  "tags": [...],
+  "workspace": { "id": 42, "name": "Reception" },
+  "parent_folder": { "id": 12, "name": "Catalog Folder" }
+}
+
+WAT JE MOET BOUWEN
+
+A) Backend (Express + TypeScript)
+1) Maak een Yodeck client met:
+   - baseURL https://app.yodeck.com/api/v2
+   - Authorization header “Token ${YODECK_LABEL}:${YODECK_TOKEN}”
+   - nette error handling + retries (max 2) + timeout (10s)
+
+2) Maak resolvers die content “flatten” naar media IDs:
+   - resolveScreenContent(source_type, source_id)
+     - als playlist: resolvePlaylistToMedia(source_id)
+     - als layout: resolveLayoutToMedia(source_id)
+     - als schedule: resolveScheduleToMedia(source_id)
+
+   - resolvePlaylistToMedia(playlistId)
+     - GET /playlists/{id}
+     - loop playlist.items
+       - als item.type == "media": voeg mediaId toe (item.id is NIET per se mediaId → check: gebruik de juiste id die Yodeck teruggeeft voor media item; als onduidelijk: haal playlist details en inspecteer fields; implementeer defensief)
+       - als item.type == "playlist": recurse resolvePlaylistToMedia(item.id)
+       - als item.type == "layout": resolveLayoutToMedia(item.id)
+       - als item.type == "widget": tel als widget item (geen media fetch nodig)
+     - return: { mediaIds: number[], widgetCount, nestedCounts, totalItems }
+
+   - resolveLayoutToMedia(layoutId)
+     - GET /layouts/{id}
+     - loop regions[].item
+       - als playlist: resolvePlaylistToMedia(item.id)
+       - als media: voeg mediaId toe
+       - als widget: tel widget
+       - als layout: recurse
+     - neem background_audio.item ook mee als widget (of resolve als het media blijkt)
+
+   - resolveScheduleToMedia(scheduleId)
+     - GET /schedules/{id}
+     - loop events[].source
+       - source_type layout → resolveLayoutToMedia(source_id)
+       - source_type playlist → resolvePlaylistToMedia(source_id)
+     - neem filler_content mee (meestal playlist)
+
+3) Maak een “inventory” endpoint:
+   - GET /api/yodeck/inventory?workspaceId=42 (optional)
+Return JSON:
+{
+  "generatedAt": "...",
+  "screens": [
+    {
+      "screenId": <id>,
+      "name": "...",
+      "workspaceId": 42,
+      "screen_content": { "source_type": "...", "source_id": ... },
+      "counts": {
+        "totalPlaylistItems": <number>,
+        "mediaItemsTotal": <number>,
+        "uniqueMediaIds": <number>,
+        "widgetItemsTotal": <number>
+      },
+      "mediaBreakdown": {
+        "video": <n>,
+        "image": <n>,
+        "audio": <n>,
+        "other": <n>
+      },
+      "media": [
+        { "id": 123, "type": "video", "file_extension": "mp4", "name": "...", "folder": "...", "tags": [...] }
+      ]
+    }
+  ],
+  "totals": {
+    "screens": <n>,
+    "totalItemsAllScreens": <n>,
+    "totalMediaAllScreens": <n>,
+    "uniqueMediaAcrossAllScreens": <n>,
+    "topMediaByScreens": [
+      { "mediaId": 123, "screenCount": 7 }
+    ]
+  }
+}
+
+4) Media details:
+   - Voor elk uniek mediaId dat je tegenkomt: GET /media/{id}
+   - Cache media responses in-memory (Map) zodat je niet 200x dezelfde media ophaalt.
+   - Rate limit: max 5 concurrent requests (p-limit).
+
+5) Lijsten ophalen:
+   - Ik heb alleen voorbeelden van /{resource}/{id} gestuurd.
+   - Jij moet de LIST endpoints gebruiken die Yodeck v2 biedt (meestal GET /screens, /playlists, /layouts, /schedules, /media met pagination).
+   - Implementeer paginering: blijf doorhalen tot alle items binnen zijn.
+   - Filter op workspaceId als de API dat ondersteunt (query param workspace=42). Als niet beschikbaar: filter client-side op workspace.id.
+
+B) Frontend (React)
+1) Maak pagina “Content Inventory” met:
+   - knop “Sync from Yodeck”
+   - tabel per screen: Screen name, source_type, source_id, #items, #media, #unique media, #widgets
+   - detail drawer per screen met media lijst + breakdown
+   - totaalblok bovenaan: totals + topMedia lijst
+
+C) Tests / betrouwbaarheid
+- Voeg unit tests toe voor resolvers met mock JSON (de structuren hierboven).
+- Voorkom oneindige loops bij nested playlists/layouts: gebruik visited set per resolver (bijv. visitedPlaylists, visitedLayouts) en stop recursion als id al gezien is.
+
+D) Deliverables
+- Werkende endpoints + UI
+- README: hoe env vars zetten, hoe runnen, wat te verwachten
+
+LET OP
+- Zorg dat de mapping correct is: playlist.items[].id kan ambigu zijn; inspecteer de playlist response en pas de mapping aan op basis van echte fields (bijv. item.media_id of item.resource_id als dat zo is).
+- Log duidelijk (debug) als een itemtype niet herkend wordt.
+
+Maak dit nu in de codebase, commit de wijzigingen logisch (client, routes, ui, types), en zorg dat alles compileert en draait.
