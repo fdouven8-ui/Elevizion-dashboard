@@ -1,0 +1,81 @@
+Je bent senior full-stack engineer in mijn Elevizion Dashboard (Express backend + React frontend + Postgres/Drizzle).
+Probleem: de Yodeck sync haalt wel screens op (GET https://app.yodeck.com/api/v2/screens) en zet naam/status goed, maar “screen content” blijft altijd leeg:
+- screens hebben yodeckContentCount = 0
+- yodeckContentSummary.items = []
+- Control Room toont “Geen content in Yodeck” of “Content status onbekend”
+Terwijl er WEL content draait op het online scherm (nieuws, weer, video/foto ads).
+
+Doel:
+1) Implementeer een robuuste “Yodeck content sync” die per screen ophaalt wat er daadwerkelijk aan content/playlist/schedule hangt.
+2) Sla dat op in de bestaande velden:
+   - yodeckContentStatus: "ok" | "empty" | "unknown" | "error"
+   - yodeckContentCount: number
+   - yodeckContentSummary: { items:[], topItems:[], playlists:[], lastFetchedAt: ISO }
+   - yodeckContentLastFetchedAt: ISO
+   - yodeckContentError: string|null
+
+Belangrijk:
+- In de UI/Control Room moet de schermnaam (yodeckPlayerName / name) leidend zijn, niet de interne screenId. (Dat is al grotendeels gefixt; laat zo.)
+- Ik wil minimaal kunnen zien: “dit scherm heeft content” + een korte samenvatting (top 3 items) en liefst ook “welke playlist(s)”.
+
+Aanpak (vereist):
+A) Onderzoek welke Yodeck API endpoints beschikbaar zijn voor content/schedule per screen.
+   - We kunnen de officiële docs niet goed renderen in Replit, dus doe dit pragmatisch:
+     1. Maak een helper die voor een screen meerdere mogelijke endpoints probeert en response keys logt (eenmalig).
+     2. Probeer in deze volgorde (en voeg varianten toe als nodig):
+        - GET /api/v2/screens/{yodeckPlayerId}
+        - GET /api/v2/screens/{yodeckPlayerId}/details
+        - GET /api/v2/screens/{yodeckPlayerId}/playlists
+        - GET /api/v2/screens/{yodeckPlayerId}/schedule
+        - GET /api/v2/playlists?screen_id={yodeckPlayerId}
+        - GET /api/v2/schedules?screen_id={yodeckPlayerId}
+        - GET /api/v2/tags/{...} (alleen als screen object tags bevat)
+   - Gebruik dezelfde auth header als bij /screens (API key).
+
+B) Parseer de response(s) defensief:
+   - Zoek arrays zoals: playlist(s), schedule items, media/items/assets/widgets/web_pages/layouts.
+   - Bouw een genormaliseerde “items[]” lijst met per item:
+     { type, name, id, duration?, source? }
+     type voorbeelden: "video","image","rss","weather","webpage","playlist","widget","unknown"
+   - Maak topItems[] (max 3) op basis van meest voorkomende/zichtbare items.
+   - playlists[] (max 3) met naam + id als je die vindt.
+
+C) Stel yodeckContentStatus:
+   - "ok" als je >0 items kunt afleiden
+   - "empty" als je zeker weet dat er geen schedule/playlist/items hangen
+   - "unknown" als endpoints niets bruikbaars opleveren maar ook geen harde error
+   - "error" als request faalt (4xx/5xx) → bewaar error message in yodeckContentError
+
+D) Update database per screen:
+   - Zet yodeckContentCount = items.length
+   - Zet yodeckContentSummary + yodeckContentLastFetchedAt
+   - Zet status/error velden correct
+
+E) Triggering:
+   - Laat de bestaande Yodeck sync óók content ophalen (of voeg een aparte stap toe direct erna).
+   - Zorg dat /api/sync/yodeck/run of de auto-sync dit meeneemt, zodat Control Room klopt zonder handwerk.
+
+F) Control Room:
+   - Stats:
+     screensWithContent = count(status=="ok")
+     screensEmpty = count(status=="empty")
+     contentUnknown = count(status=="unknown")
+     contentError = count(status=="error")
+   - Actions:
+     - als status=="empty": toon “Geen content in Yodeck”
+     - als status=="unknown": toon “Content status onbekend (sync nodig)”
+     - als status=="error": toon “Content sync error: {kort}”
+     - als status=="ok": GEEN warning action (of optioneel info “Content OK: {topItems}”)
+
+G) Debug output (tijdelijk):
+   - Voeg server logs toe die per screen printen:
+     - welke endpoint(s) succes hadden
+     - welke keys in response staan (Object.keys)
+     - uiteindelijke items.length en topItems
+   - Zet dit achter een env flag, bv. YODECK_DEBUG=true
+
+Levering:
+- Pas de backend code aan waar de Yodeck sync zit.
+- Voeg eventuele nieuwe helper/ service files toe (netjes en klein).
+- Voeg tests toe als er al test infra is; anders minimaal een simpele “dry run” log.
+- Laat na implementatie in de logs duidelijk zien dat het online scherm NIET meer op 0 items blijft staan zodra sync draait.
