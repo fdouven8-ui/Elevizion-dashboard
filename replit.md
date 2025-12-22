@@ -105,11 +105,20 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
   - EVZ-### Mapping: Extracts SCREEN_ID from `basic.tags` or `name` field using regex `/EVZ-\d{3}/`
   - Content sync service: `server/services/yodeckContent.ts` handles fetching and parsing content details
   - **Content Status Enum**: `yodeckContentStatus` tracks content state per screen:
-    - `unknown`: Never synced or API failed
-    - `empty`: Yodeck confirmed no content assigned
+    - `unknown`: Never synced or screen not linked to Yodeck
+    - `empty`: Yodeck API confirmed no content assigned
     - `has_content`: Content detected (playlist/layout/media)
     - `likely_has_content`: Screenshot indicates content (fallback)
-  - Control-room uses status-based filtering instead of count-based logic
+    - `error`: API call failed (404, network error, etc.)
+  - **Content Error Tracking**: `yodeckContentError` field stores error messages when sync fails
+  - Control-room uses status-based filtering with action types:
+    - `offline_screen`: Screen is offline (severity: error)
+    - `no_yodeck`: Screen not linked to Yodeck (severity: info)
+    - `content_unknown`: Content status unknown (severity: info)
+    - `content_error`: Content sync failed (severity: warning)
+    - `empty_screen`: Yodeck confirmed no content (severity: warning)
+  - Control-room actions show recognizable screen names as itemName, screenId in description
+  - Debug endpoint: `GET /api/integrations/yodeck/debug/screen/{id}` for raw API inspection
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests (requires API key configuration).
 
