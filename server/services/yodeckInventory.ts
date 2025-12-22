@@ -36,29 +36,20 @@ interface YodeckScreen {
   screen_content?: YodeckScreenContent;
 }
 
+/**
+ * Yodeck Playlist Item structure (from API docs):
+ * - id: The resource ID (media ID, playlist ID, or layout ID depending on type)
+ * - type: "media" | "widget" | "layout" | "playlist"
+ * - name: Resource name
+ * - priority: Display priority
+ * - duration: Display duration in seconds
+ */
 interface YodeckPlaylistItem {
   id: number;
   name?: string;
   type: "media" | "widget" | "layout" | "playlist";
   priority?: number;
   duration?: number;
-  media_id?: number;
-  resource_id?: number;
-  playlist_id?: number;
-  layout_id?: number;
-  media?: {
-    id: number;
-    name?: string;
-    type?: string;
-  };
-  playlist?: {
-    id: number;
-    name?: string;
-  };
-  layout?: {
-    id: number;
-    name?: string;
-  };
 }
 
 interface YodeckPlaylist {
@@ -67,13 +58,16 @@ interface YodeckPlaylist {
   items: YodeckPlaylistItem[];
 }
 
+/**
+ * Yodeck Layout Region structure (from API docs):
+ * - item.type: "playlist" | "widget" | "media" | "layout"
+ * - item.id: The resource ID (directly the playlist/media/layout ID)
+ */
 interface YodeckLayoutRegion {
+  id: number;
   item?: {
     type: "playlist" | "widget" | "media" | "layout";
     id: number;
-    media?: { id: number; name?: string };
-    playlist?: { id: number; name?: string };
-    layout?: { id: number; name?: string };
   };
   duration?: number;
 }
@@ -423,16 +417,11 @@ async function resolvePlaylistToMedia(
   for (const item of playlist.items || []) {
     const itemType = item.type?.toLowerCase();
     
-    // Log item structure for debugging
-    console.log(`[YodeckInventory] Playlist ${playlistId} item: type=${itemType}, id=${item.id}, media=${JSON.stringify(item.media)}, playlist=${JSON.stringify(item.playlist)}, layout=${JSON.stringify(item.layout)}`);
-    
     switch (itemType) {
       case "media":
-        // Priority: embedded media object > media_id > resource_id > item.id (fallback)
-        const mediaId = item.media?.id || item.media_id || item.resource_id || item.id;
-        if (mediaId) {
-          result.mediaIds.push(mediaId);
-          console.log(`[YodeckInventory] Found media ID ${mediaId} in playlist ${playlistId}`);
+        // Per Yodeck API: item.id IS the media ID
+        if (item.id) {
+          result.mediaIds.push(item.id);
         }
         break;
         
@@ -441,12 +430,10 @@ async function resolvePlaylistToMedia(
         break;
         
       case "playlist":
-        // Priority: embedded playlist object > playlist_id > resource_id > item.id (fallback)
-        const nestedPlaylistId = item.playlist?.id || item.playlist_id || item.resource_id || item.id;
-        if (nestedPlaylistId) {
+        // Per Yodeck API: item.id IS the nested playlist ID
+        if (item.id) {
           result.nestedPlaylistCount++;
-          console.log(`[YodeckInventory] Recursing into nested playlist ${nestedPlaylistId}`);
-          const nestedPlaylist = await resolvePlaylistToMedia(nestedPlaylistId, apiKey, visitedPlaylists, visitedLayouts);
+          const nestedPlaylist = await resolvePlaylistToMedia(item.id, apiKey, visitedPlaylists, visitedLayouts);
           result.mediaIds.push(...nestedPlaylist.mediaIds);
           result.widgetCount += nestedPlaylist.widgetCount;
           result.totalPlaylistItems += nestedPlaylist.totalPlaylistItems;
@@ -454,19 +441,17 @@ async function resolvePlaylistToMedia(
         break;
         
       case "layout":
-        // Priority: embedded layout object > layout_id > resource_id > item.id (fallback)
-        const nestedLayoutId = item.layout?.id || item.layout_id || item.resource_id || item.id;
-        if (nestedLayoutId) {
+        // Per Yodeck API: item.id IS the layout ID
+        if (item.id) {
           result.nestedLayoutCount++;
-          console.log(`[YodeckInventory] Recursing into layout ${nestedLayoutId}`);
-          const layoutContent = await resolveLayoutToMedia(nestedLayoutId, apiKey, visitedPlaylists, visitedLayouts);
+          const layoutContent = await resolveLayoutToMedia(item.id, apiKey, visitedPlaylists, visitedLayouts);
           result.mediaIds.push(...layoutContent.mediaIds);
           result.widgetCount += layoutContent.widgetCount;
         }
         break;
         
       default:
-        console.log(`[YodeckInventory] Unknown playlist item type: ${itemType}, full item: ${JSON.stringify(item)}`);
+        console.log(`[YodeckInventory] Unknown playlist item type: ${itemType}`);
     }
   }
   
@@ -501,21 +486,16 @@ async function resolveLayoutToMedia(
     nestedLayoutCount: 0,
   };
   
-  // Process regions
+  // Process regions - per Yodeck API: region.item.id IS the resource ID
   for (const region of layout.regions || []) {
     if (!region.item) continue;
     
     const itemType = region.item.type?.toLowerCase();
-    
-    // Log region item structure for debugging
-    console.log(`[YodeckInventory] Layout ${layoutId} region: type=${itemType}, id=${region.item.id}, media=${JSON.stringify(region.item.media)}, playlist=${JSON.stringify(region.item.playlist)}, layout=${JSON.stringify(region.item.layout)}`);
+    const resourceId = region.item.id;
     
     switch (itemType) {
       case "media":
-        // Priority: embedded media object > item.id
-        const mediaId = region.item.media?.id || region.item.id;
-        result.mediaIds.push(mediaId);
-        console.log(`[YodeckInventory] Found media ID ${mediaId} in layout ${layoutId}`);
+        result.mediaIds.push(resourceId);
         break;
         
       case "widget":
@@ -523,10 +503,7 @@ async function resolveLayoutToMedia(
         break;
         
       case "playlist":
-        // Priority: embedded playlist object > item.id
-        const playlistId = region.item.playlist?.id || region.item.id;
-        console.log(`[YodeckInventory] Recursing into playlist ${playlistId} from layout ${layoutId}`);
-        const playlistContent = await resolvePlaylistToMedia(playlistId, apiKey, visitedPlaylists, visitedLayouts);
+        const playlistContent = await resolvePlaylistToMedia(resourceId, apiKey, visitedPlaylists, visitedLayouts);
         result.mediaIds.push(...playlistContent.mediaIds);
         result.widgetCount += playlistContent.widgetCount;
         result.totalPlaylistItems += playlistContent.totalPlaylistItems;
@@ -534,17 +511,14 @@ async function resolveLayoutToMedia(
         break;
         
       case "layout":
-        // Priority: embedded layout object > item.id
-        const nestedLayoutId = region.item.layout?.id || region.item.id;
-        console.log(`[YodeckInventory] Recursing into nested layout ${nestedLayoutId} from layout ${layoutId}`);
-        const nestedLayoutContent = await resolveLayoutToMedia(nestedLayoutId, apiKey, visitedPlaylists, visitedLayouts);
+        const nestedLayoutContent = await resolveLayoutToMedia(resourceId, apiKey, visitedPlaylists, visitedLayouts);
         result.mediaIds.push(...nestedLayoutContent.mediaIds);
         result.widgetCount += nestedLayoutContent.widgetCount;
         result.nestedLayoutCount++;
         break;
         
       default:
-        console.log(`[YodeckInventory] Unknown layout region type: ${itemType}, full item: ${JSON.stringify(region.item)}`);
+        console.log(`[YodeckInventory] Unknown layout region type: ${itemType}`);
     }
   }
   
