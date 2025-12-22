@@ -578,20 +578,28 @@ export async function syncAllScreensContent(): Promise<{
       );
 
       if (contentResult.error) {
-        console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): unknown (${contentResult.error})`);
+        // Real API errors should be marked as "error", not "unknown"
+        const errorMessage = contentResult.error === "not_found"
+          ? "Screen not found in Yodeck (404)"
+          : contentResult.error === "no_numeric_id"
+          ? "No numeric Yodeck ID available"
+          : `API error: ${contentResult.error}`;
+        
+        console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): error (${contentResult.error})`);
         
         await storage.updateScreen(screen.id, {
-          yodeckContentStatus: "unknown",
+          yodeckContentStatus: "error",
           yodeckContentCount: null,
           yodeckContentSummary: null,
           yodeckContentLastFetchedAt: new Date(),
+          yodeckContentError: errorMessage,
         });
         
         return {
           screenId: screen.screenId,
           yodeckName: yodeckScreen.name || yodeckName,
           yodeckId: String(yodeckScreen.id),
-          status: "unknown",
+          status: "error",
           contentCount: null,
           summary: null,
           error: contentResult.error,
@@ -617,6 +625,7 @@ export async function syncAllScreensContent(): Promise<{
         yodeckContentCount: contentCount,
         yodeckContentSummary: contentSummary,
         yodeckContentLastFetchedAt: new Date(),
+        yodeckContentError: null, // Clear any previous error
       });
 
       return {
@@ -639,10 +648,11 @@ export async function syncAllScreensContent(): Promise<{
     withContent: results.filter(r => r.status === "has_content").length,
     empty: results.filter(r => r.status === "empty").length,
     unknown: results.filter(r => r.status === "unknown").length,
+    error: results.filter(r => r.status === "error").length,
   };
 
   console.log(`[YodeckContent] Sync complete: ${stats.total} screens`);
-  console.log(`[YodeckContent] Results: ${stats.withContent} with content, ${stats.empty} empty, ${stats.unknown} unknown`);
+  console.log(`[YodeckContent] Results: ${stats.withContent} with content, ${stats.empty} empty, ${stats.unknown} unknown, ${stats.error} errors`);
 
   return { 
     success: true, 
