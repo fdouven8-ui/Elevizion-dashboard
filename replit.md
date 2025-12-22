@@ -111,6 +111,13 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
     - `likely_has_content`: Screenshot indicates content (fallback)
     - `error`: API call failed (404, network error, etc.)
   - **Content Error Tracking**: `yodeckContentError` field stores error messages when sync fails
+  - **Screenshot Analysis with Perceptual Hashing (pHash)**:
+    - When API content detection fails, analyzes screenshot using perceptual hashing
+    - Library: `sharp` for image processing, custom pHash implementation in `server/utils/phash.ts`
+    - Empty/blank screen detection: Identifies screens with uniform color (low variance)
+    - Creative matching: Compares screenshot pHash against known creative hashes (80% threshold)
+    - DB fields: `yodeckScreenshotHash` on screens, `phash`/`phashUpdatedAt` on creatives
+    - API endpoint: `POST /api/creatives/:id/compute-hash` to hash creative images
   - **Control Room Action Priority** (Elevizion placement data is PRIMARY, Yodeck is SECONDARY):
     1. `offline_screen` (error): Screen is offline
     2. `onboarding_hint` (warning): Online but no Elevizion placements registered
