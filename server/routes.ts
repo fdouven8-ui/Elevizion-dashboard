@@ -3253,9 +3253,9 @@ export async function registerRoutes(
       const actions: any[] = [];
       const now = new Date();
       
-      // Helper: get recognizable screen name (priority: yodeckPlayerName -> name -> screenId)
+      // Helper: get recognizable screen name (priority: name -> yodeckPlayerName -> screenId)
       const getScreenDisplayName = (screen: any) => 
-        screen.yodeckPlayerName || screen.name || screen.screenId || "Onbekend scherm";
+        screen.name || screen.yodeckPlayerName || screen.screenId || "Onbekend scherm";
       
       // Helper: get location description with optional screenId
       const getLocationDesc = (screen: any, includeScreenId: boolean = false) => {
@@ -3315,15 +3315,15 @@ export async function registerRoutes(
           const isLinkedToYodeck = screen.yodeckUuid || screen.yodeckPlayerId;
           
           if (isLinkedToYodeck) {
-            // Screen is in Yodeck but no Elevizion placements - just info
+            // Screen is in Yodeck but no Elevizion placements - onboarding hint
             actions.push({
-              id: `no-placements-${screen.id}`,
-              type: "no_internal_placements",
+              id: `onboarding-${screen.id}`,
+              type: "onboarding_hint",
               itemName: getScreenDisplayName(screen),
               description: locationDesc || "Geen locatie",
               severity: "info",
               link: `/screens/${screen.id}`,
-              statusText: "Geen placements in Elevizion",
+              statusText: "Nog geen placements in Elevizion aangemaakt",
             });
           } else {
             // Screen not linked to Yodeck at all

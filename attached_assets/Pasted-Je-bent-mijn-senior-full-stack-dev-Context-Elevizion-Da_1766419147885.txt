@@ -1,0 +1,32 @@
+Je bent mijn senior full-stack dev. Context: Elevizion Dashboard (React+TS+Vite frontend, Express backend, Drizzle ORM, Postgres). We syncen screens uit Yodeck. In de Control Room acties wil ik NIET de interne screenId (zoals YDK-591896) als primary label zien, maar de herkenbare Yodeck naam (yodeckPlayerName / name). ScreenId mag hooguit klein/secondair in de description.
+
+TASK 1 — Control Room Actions: toon herkenbare namen
+- Pas de backend endpoint aan die /api/control-room/actions bouwt.
+- Voor actie types zoals offline_screen en empty_screen:
+  - itemName moet zijn: screen.name (of fallback screen.yodeckPlayerName), en pas als laatste fallback screen.screenId.
+  - description moet zijn: locatie naam (location.name) en eventueel klein “• YDK-xxxxx” als secondary.
+  - Zorg dat dit overal consistent is (ook op Home/Control Room cards).
+- Frontend: als er ergens nog “YDK-…” als titel staat, vervang dat door screen.name.
+
+TASK 2 — Empty screen logica klopt nu niet
+Probleem: ik heb wél content op het scherm via Yodeck (nieuws/weer/ads), maar dashboard zegt “empty_screen” omdat ons systeem placements/creatives nog niet kent (DB is leeg, /api/placements = []).
+Oplossing:
+- Verander de empty_screen detectie zodat hij NIET gebaseerd is op “geen placements in onze DB” als we (nog) niet de Yodeck content/playlist syncen.
+- Toon in plaats daarvan een info-actie:
+  - type: onboarding_hint (of hergebruik empty_screen maar met andere tekst)
+  - itemName: screen.name
+  - description: “Nog geen placements in Elevizion-dashboard aangemaakt (Yodeck content wordt nog niet ingelezen).”
+- Alleen als we wél placements hebben (DB) EN er 0 actieve placements zijn voor die screenId, dan mag empty_screen echt verschijnen.
+
+TASK 3 — (Robuustheid) Yodeck player detail 404 fixen
+Ik zag errors zoals: “Failed to fetch Yodeck player 591896: 404 Not Found”.
+- Zoek in de code waar we player-details ophalen (waarschijnlijk verkeerde endpoint: /players/{id} vs /screens/{id}).
+- Fix endpoint of stop met die call.
+- Belangrijk: 404 mag NOOIT de hele stats call breken. Log netjes, zet available=true/false correct, en geef een bruikbaar antwoord terug.
+
+OUTPUT
+- Geef een korte uitleg wat je hebt aangepast.
+- Laat de relevante gewijzigde files zien (backend + frontend).
+- Voeg 1-2 kleine tests of simpele checks toe (desnoods “manual test steps”) om te bewijzen dat:
+  - Actions tonen nu “Basil’s Barber Shop Maasbracht” en “Test” als titel.
+  - “empty_screen” wordt vervangen door onboarding/info zolang placements nog leeg zijn.
