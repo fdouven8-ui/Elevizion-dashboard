@@ -96,11 +96,14 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 ### External Service Integrations
 - **Yodeck API**: Digital signage player management and screen synchronization.
   - Base URL: `https://app.yodeck.com/api/v2`
-  - Endpoint: `/screens`
   - Authentication: `Authorization: Token <API_KEY>`
   - API Key storage: Encrypted in integrations table (`encryptedCredentials`), decrypted at runtime
-  - Response format: `{ results: [...], count: N }` with screen objects containing `id`, `uuid`, `name`, `workspace`, `state.online`, `state.last_seen`
+  - **Two-Phase Sync Flow**:
+    1. **Screen List** (`GET /screens`): Returns `{ results: [...], count: N }` with screen objects containing `id`, `uuid`, `name`, `workspace`, `state.online`, `state.last_seen`. Does NOT contain content info.
+    2. **Screen Detail** (`GET /screens/{id}`): Returns full screen details including `screen_content`. IMPORTANT: Use numeric ID (e.g., `591896`), NOT UUID - UUID returns 404.
+  - **Content Detection**: The `screen_content` field uses format `{"source_type":"playlist","source_id":27644453,"source_name":"Test Playlist"}`. Parse `source_type` and `source_name` to detect what's playing.
   - EVZ-### Mapping: Extracts SCREEN_ID from `basic.tags` or `name` field using regex `/EVZ-\d{3}/`
+  - Content sync service: `server/services/yodeckContent.ts` handles fetching and parsing content details
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests (requires API key configuration).
 
