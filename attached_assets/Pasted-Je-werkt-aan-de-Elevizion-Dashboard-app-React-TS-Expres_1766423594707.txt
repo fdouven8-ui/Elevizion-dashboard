@@ -1,0 +1,61 @@
+Je werkt aan de Elevizion Dashboard app (React + TS + Express + Drizzle + Postgres) met een Yodeck integratie.
+
+DOEL 1 (UI / Control Room actions):
+- In de actie-lijst en overal waar een screen wordt genoemd: toon primair de menselijke naam.
+- Gebruik dus `screen.name` / `yodeckPlayerName` als hoofdlabel (itemName).
+- Het interne `screenId` (zoals YDK-591896) mag alleen secundair in de description (klein), of helemaal niet als ik dat instel.
+ACCEPTANCE:
+- Control room actions tonen bijv. “Test” of “Basil’s Barber Shop Maasbracht” als itemName.
+- `YDK-xxxxx` staat hooguit in description.
+
+DOEL 2 (Yodeck content status klopt):
+Probleem: Ik heb wél content draaien (nieuws/weer/ads), maar de app zet `yodeckContentCount` op 0 en toont “Geen content in Yodeck”.
+Dat is fout. Fix de sync zodat we echt kunnen bepalen wat er op het scherm staat (of minimaal of er content is toegewezen).
+
+BELANGRIJK: Bij Yodeck bestaan er meerdere identifiers.
+- We hebben in de DB zowel `yodeckPlayerId` (nummer zoals 591896) als `yodeckUuid` (uuid string).
+- Ik zag eerder een fout: “Failed to fetch Yodeck player 591896: 404 Not Found”.
+Dus je gebruikt waarschijnlijk het verkeerde id in de detail-call.
+Gebruik bij detail/playlist calls altijd de identifier die Yodeck endpoint verwacht (waarschijnlijk UUID).
+
+WAT JE MOET DOEN:
+1) Zoek in de code waar Yodeck sync draait (routes/services). Er is al:
+   - GET https://app.yodeck.com/api/v2/screens  (werkt, levert ook yodeck_uuid, yodeck_name, screenshot_url, online, last_seen)
+   - daarna wordt `yodeckContentCount` nu blijkbaar op 0 gezet.
+2) Voeg een tweede stap toe per screen om “content status” te bepalen:
+   - Haal screen/player details op via Yodeck API met de juiste identifier.
+   - Achterhaal welk playlist/schedule/content aan dit scherm gekoppeld is.
+   - Tel het aantal items (of haal minstens een lijstje namen/types) en vul:
+        screens.yodeckContentCount (integer)
+        screens.yodeckContentSummary (korte string, bv. “Weather • News • 3 ads”)
+        screens.yodeckContentLastFetchedAt (timestamp)
+   - Als Yodeck geen directe “items op scherm” geeft, bepaal dan minimaal:
+        - heeft het scherm een assigned playlist / layout / schedule? => contentCount > 0
+        - en zet contentSummary op iets zinvols (“Playlist assigned”, “Schedule active”, etc.)
+3) Fallback / robuustheid:
+   - Als detail endpoint faalt: log duidelijke fout (endpoint + gebruikte id + response status)
+   - Probeer dan dezelfde call met het andere id (eerst UUID, dan numeric id) zodat we zeker weten wat werkt.
+   - Nooit meer defaulten naar 0 zonder te weten; gebruik in dat geval “unknown” status.
+4) Update Control Room acties logic:
+   - Maak types:
+        - content_unknown (als we nog geen fetch hebben of API faalt)
+        - empty_screen (alleen als we zeker weten dat er géén playlist/schedule/content is)
+        - has_content (optioneel, als er content is, dan geen warning)
+   - Voor het online scherm “Test” moet het NIET meer “Geen content in Yodeck” zeggen als er wél playlist/content gekoppeld is.
+5) Voeg een handmatige endpoint/button toe (of bestaande sync uitbreiden) om content-status te refreshen:
+   - Bijvoorbeeld: POST /api/integrations/yodeck/sync moet ook content-status verversen
+   - Of aparte: POST /api/integrations/yodeck/sync-content
+6) Lever ook een korte “DEV NOTES” in comments:
+   - Welke Yodeck endpoints je gebruikt
+   - Welke identifier je uiteindelijk nodig had (uuid vs numeric)
+   - Voorbeeld response mapping
+
+ACCEPTANCE TEST (moet slagen):
+- Na sync toont /api/screens voor “Test” een `yodeckContentCount` > 0 OF tenminste contentSummary != null, als er content in Yodeck is toegewezen.
+- Control Room actions voor “Test” is niet meer “Geen content in Yodeck” als er playlist/schedule/content assigned is.
+- Als de API niet te bepalen is: action is “content_unknown” met statusText “Content status onbekend (sync nodig of API beperking)”, maar NIET “empty”.
+
+LET OP:
+- Verander geen bestaande DB constraints stukmaken.
+- Houd het simpel: liever betrouwbare boolean/summary dan perfecte “alle ads detecteren”.
+- Maar het moet wél overeenkomen met de realiteit: als het scherm iets afspeelt, mag het niet als leeg worden gemarkeerd.
