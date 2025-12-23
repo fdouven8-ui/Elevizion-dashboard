@@ -1,0 +1,53 @@
+JE BENT MIJN SENIOR FULL-STACK ENGINEER (React + TS + Vite frontend, Express backend). 
+Doel: Koppel met de Yodeck API v2 en bouw een endpoint + UI die per scherm laat zien:
+- welk “source” er op dat scherm staat (playlist/layout)
+- hoeveel media items er effectief in die source zitten
+- totaal aantal media items over alle schermen samen
+- optioneel: unieke media IDs per scherm (en uniek totaal)
+
+BELANGRIJK (AUTH):
+Yodeck gebruikt APIKeyAuthentication met header:
+Authorization: Token <label:value>
+Voorbeeld: Authorization: Token mylabel:XXXXXXXX
+Maak env var: YODECK_AUTH_TOKEN = "mylabel:XXXXXXXX" (dus zonder "Token ", die voeg je in code toe)
+Base URL: https://app.yodeck.com/api/v2
+
+DE JSON STRUCTUUR (die moet je herkennen):
+1) Screens:
+GET /screens (paginated)
+screen_content: { source_id, source_name, source_type }  // dit is wat nu “op het scherm staat”
+Voorbeeld: source_type = "playlist" en source_id = 45
+
+2) Playlist:
+GET /playlists/{id}
+items: [{ id, priority, duration, name, type }]
+type kan "media" zijn -> dat telt als media item.
+
+3) Layout:
+GET /layouts/{id}
+regions[].item: { type, id }
+type kan "playlist" zijn -> dan playlist ophalen en media tellen
+type kan "media" zijn -> direct 1 media item tellen
+(widget/webpage etc negeren voor media count)
+
+4) Media List (optioneel voor “unieke media totaal” of validatie):
+GET /media?limit=100&offset=0 (paginated met next)
+result: { count, next, previous, results:[{id,name,media_origin{type},tags,parent_folder,workspace,...}] }
+=> Dit hoeft NIET om per scherm te tellen, maar is handig voor “totaal media in account/workspace”.
+
+5) Tagbased playlists (alleen als we ze tegenkomen):
+GET /tagbased-playlists/{id}
+tagbased.tags[].name en tagbased.workspaces[]
+Voor MVP: als source_type == "tagbased_playlist" of "tagbased-playlist": 
+- haal tagbased playlist op
+- bepaal media via /media met tags=... en workspace=... (ANY tag match), en respecteer excludes indien aanwezig
+- tel results (paginated)
+
+WAT JE MOET BOUWEN:
+
+A) Backend (Express + TypeScript)
+1) Maak een Yodeck client module: src/integrations/yodeck/client.ts
+- function yodeckGet<T>(path: string, query?: Record<string, any>): Promise<T>
+- voegt header toe: Authorization: `Token ${process.env.YODECK_AUTH_TOKEN}`
+- timeout + nette errors
+- helper voor pagination: async functio

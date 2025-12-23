@@ -201,6 +201,14 @@ export class YodeckClient {
 
   static async create(): Promise<YodeckClient | null> {
     try {
+      // First check for env var (format: "label:apikey" without "Token " prefix)
+      const envToken = process.env.YODECK_AUTH_TOKEN;
+      if (envToken) {
+        console.log("[YodeckClient] Using YODECK_AUTH_TOKEN from environment");
+        return new YodeckClient(envToken);
+      }
+
+      // Fallback to database integration config
       const config = await storage.getIntegrationConfig("yodeck");
       if (!config?.encryptedCredentials) return null;
       const credentials = decryptCredentials(config.encryptedCredentials);
