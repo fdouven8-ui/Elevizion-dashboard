@@ -3136,23 +3136,156 @@ export async function registerRoutes(
   // YODECK SYNC ENDPOINT
   // ============================================================================
 
-  app.post("/api/sync/yodeck/run", requirePermission("manage_integrations"), async (_req, res) => {
+  app.post("/api/sync/yodeck/run", requirePermission("manage_integrations"), async (req, res) => {
     try {
-      const result = await syncYodeckScreens();
-      if (result.success) {
-        res.json({ 
-          success: true, 
-          message: `Sync voltooid: ${result.count} schermen opgehaald, ${result.updated} bijgewerkt`,
-          count: result.count,
-          mapped: result.mapped,
-          unmapped: result.unmapped,
-          updated: result.updated,
+      const onlyOnline = Boolean(req.body?.onlyOnline);
+      
+      const { getYodeckClient, ContentResolver } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      
+      if (!client) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: "Missing YODECK_AUTH_TOKEN env var",
+          hint: "Check env YODECK_AUTH_TOKEN. Must be: Token mylabel:XXXXXXXX (include 'Token ' prefix) OR label:value (without prefix)."
         });
-      } else {
-        res.status(400).json({ success: false, message: result.message });
       }
+
+      // Get all Yodeck screens
+      const allScreens = await client.getScreens();
+      const screens = onlyOnline 
+        ? allScreens.filter(s => s.state?.online === true) 
+        : allScreens;
+      
+      const resolver = new ContentResolver(client);
+      
+      type ContentSummary = {
+        screenYodeckId: number;
+        screenUuid: string;
+        screenName: string;
+        online: boolean | null;
+        screenshotUrl: string | null;
+        sourceType: string | null;
+        sourceId: number | null;
+        sourceName: string | null;
+        distinctItemCount: number;
+        breakdown: {
+          playlistsResolved: number;
+          playlistsFailed: number;
+          mediaItems: number;
+          widgetItems: number;
+          unknownItems: number;
+        };
+        status: "no_content_set" | "ok" | "unknown_source" | "error";
+        error?: string | null;
+      };
+
+      const results: ContentSummary[] = [];
+      
+      for (const screen of screens) {
+        const base: ContentSummary = {
+          screenYodeckId: screen.id,
+          screenUuid: screen.uuid || String(screen.id),
+          screenName: screen.name,
+          online: screen.state?.online ?? null,
+          screenshotUrl: (screen as any).screenshot_url ?? null,
+          sourceType: screen.screen_content?.source_type ?? null,
+          sourceId: screen.screen_content?.source_id ?? null,
+          sourceName: screen.screen_content?.source_name ?? null,
+          distinctItemCount: 0,
+          breakdown: {
+            playlistsResolved: 0,
+            playlistsFailed: 0,
+            mediaItems: 0,
+            widgetItems: 0,
+            unknownItems: 0,
+          },
+          status: "no_content_set",
+          error: null,
+        };
+
+        if (!screen.screen_content?.source_type || !screen.screen_content?.source_id) {
+          results.push(base);
+          continue;
+        }
+
+        try {
+          const resolved = await resolver.resolveScreenContent(screen);
+          
+          // Count breakdown from resolved items
+          let playlistsResolved = 0;
+          let mediaItems = 0;
+          let widgetItems = 0;
+          let unknownItems = 0;
+          
+          for (const item of resolved.items) {
+            if (item.type === "playlist") playlistsResolved++;
+            else if (item.type === "media") mediaItems++;
+            else if (item.type === "widget" || item.type === "app" || item.type === "webpage") widgetItems++;
+            else unknownItems++;
+          }
+          
+          // Media items from resolved media
+          mediaItems = resolved.mediaItems.length;
+          
+          results.push({
+            ...base,
+            distinctItemCount: resolved.uniqueMediaCount,
+            breakdown: {
+              playlistsResolved,
+              playlistsFailed: resolved.warnings.filter(w => w.includes("not found")).length,
+              mediaItems,
+              widgetItems,
+              unknownItems,
+            },
+            status: resolved.status === "unknown" || resolved.status === "unknown_tagbased" 
+              ? "unknown_source" 
+              : resolved.status === "error" 
+                ? "error" 
+                : resolved.uniqueMediaCount > 0 || resolved.items.length > 0 
+                  ? "ok" 
+                  : "no_content_set",
+            error: resolved.warnings.length > 0 ? resolved.warnings.join("; ") : null,
+          });
+        } catch (e: any) {
+          results.push({
+            ...base,
+            status: "error",
+            error: e?.message ?? String(e),
+          });
+        }
+      }
+
+      // Calculate stats
+      const screensTotal = results.length;
+      const screensOnline = results.filter(r => r.online === true).length;
+      const screensWithYodeckContent = results.filter(r => r.status === "ok" && r.distinctItemCount > 0).length;
+      const screensYodeckEmpty = results.filter(r => r.status === "no_content_set" || (r.status === "ok" && r.distinctItemCount === 0)).length;
+      const contentUnknown = results.filter(r => r.status === "unknown_source").length;
+      const contentError = results.filter(r => r.status === "error").length;
+
+      return res.json({
+        ok: true,
+        stats: {
+          screensTotal,
+          screensOnline,
+          screensWithYodeckContent,
+          screensYodeckEmpty,
+          contentUnknown,
+          contentError,
+        },
+        results,
+        meta: {
+          baseUrl: "https://app.yodeck.com",
+          note: "distinctItemCount = number of different ads/messages/items. playlist=items.length; layout=distinct items across regions + playlist items.",
+        },
+      });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ 
+        ok: false, 
+        error: error?.message ?? String(error),
+        hint: "Check env YODECK_AUTH_TOKEN. Must be: Token mylabel:XXXXXXXX (include 'Token ' prefix)."
+      });
     }
   });
 

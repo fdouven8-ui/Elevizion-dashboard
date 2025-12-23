@@ -58,6 +58,10 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
 - **Drizzle ORM**: Type-safe database operations.
 
 ### External Service Integrations
-- **Yodeck API**: Digital signage player management and screen synchronization, including content detection, content resolution, and statistics. Supports two-phase sync flow for screen lists and details.
+- **Yodeck API**: Digital signage player management and screen synchronization.
+  - **Auth Priority**: 1) `YODECK_AUTH_TOKEN` (format: `label:apikey`), 2) `YODECK_TOKEN_LABEL` + `YODECK_TOKEN_VALUE`, 3) Database config
+  - **ContentResolver**: Recursive content resolution (max depth 3, cycle detection) for playlist, tagbased-playlist, layout, schedule, media
+  - **POST /api/sync/yodeck/run**: Per-screen distinctItemCount, breakdown (playlistsResolved/Failed, mediaItems, widgetItems, unknownItems), stats (screensTotal, screensOnline, screensWithYodeckContent, screensYodeckEmpty, contentUnknown, contentError)
+  - **GET /api/yodeck/content/summary**: topItems (top 5 media), mediaItems (sorted by name with mediaType), totals (totalScreens, screensWithContent/Empty/Unknown/Error, top10Media)
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests.

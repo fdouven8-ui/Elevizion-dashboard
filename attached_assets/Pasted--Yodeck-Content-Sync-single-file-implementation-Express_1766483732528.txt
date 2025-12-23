@@ -1,0 +1,373 @@
+/**
+ * Yodeck Content Sync (single-file implementation)
+ * - Express router: POST /api/sync/yodeck/run
+ * - Fetches /api/v2/screens
+ * - For each screen, resolves screen_content:
+ *    - playlist -> /api/v2/playlists/{id} -> items.length
+ *    - layout   -> /api/v2/layouts/{id}   -> sum unique content items (playlist/media/widget)
+ *    - media    -> /api/v2/media/{id}     -> 1
+ * - Returns per-screen counts + overall stats
+ *
+ * ENV:
+ *  - YODECK_AUTH_TOKEN="Token mylabel:XXXXXXXX"   (IMPORTANT: include "Token ")
+ *  - YODECK_BASE_URL="https://app.yodeck.com"     (optional)
+ */
+
+import express from "express";
+
+// If you're on Node < 18, uncomment next 2 lines and install node-fetch:
+// import fetch from "node-fetch";
+// const _fetch = fetch as any;
+
+const router = express.Router();
+
+const BASE_URL = process.env.YODECK_BASE_URL || "https://app.yodeck.com";
+const AUTH = process.env.YODECK_AUTH_TOKEN; // must already include: "Token label:value"
+
+if (!AUTH) {
+  console.warn(
+    "[yodeck] Missing env YODECK_AUTH_TOKEN. Expected: Token mylabel:XXXXXXXX"
+  );
+}
+
+type YodeckScreenListResponse = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: Array<{
+    id: number;
+    uuid: string;
+    name: string;
+    workspace?: { id: number; name: string };
+    state?: { online: boolean; last_seen?: string };
+    screen_content?: {
+      source_id: number;
+      source_name?: string;
+      source_type: "playlist" | "layout" | "media" | "widget" | string;
+    } | null;
+    screenshot_url?: string | null;
+  }>;
+};
+
+type YodeckPlaylist = {
+  id: number;
+  name: string;
+  items?: Array<{ id: number; type: "media" | "widget" | "webpage" | string }>;
+};
+
+type YodeckLayout = {
+  id: number;
+  name: string;
+  regions?: Array<{
+    id: number;
+    item?: { type: "playlist" | "media" | "widget" | string; id: number } | null;
+    hidden?: boolean;
+  }>;
+  background_audio?: { item?: { type: string; id: number } };
+};
+
+type ContentSummary = {
+  screenYodeckId: number;
+  screenUuid: string;
+  screenName: string;
+  online: boolean | null;
+  screenshotUrl: string | null;
+
+  sourceType: string | null;
+  sourceId: number | null;
+  sourceName: string | null;
+
+  distinctItemCount: number; // <- what you asked for: number of different ads/messages/items
+  breakdown: {
+    playlistsResolved: number;
+    playlistsFailed: number;
+    mediaItems: number;
+    widgetItems: number;
+    unknownItems: number;
+  };
+
+  status:
+    | "no_content_set"
+    | "ok"
+    | "unknown_source"
+    | "error";
+  error?: string | null;
+};
+
+function assertAuth() {
+  if (!AUTH) throw new Error("Missing YODECK_AUTH_TOKEN env var");
+}
+
+async function yodeckFetch<T>(pathOrUrl: string): Promise<T> {
+  assertAuth();
+
+  const url = pathOrUrl.startsWith("http")
+    ? pathOrUrl
+    : `${BASE_URL}${pathOrUrl.startsWith("/") ? "" : "/"}${pathOrUrl}`;
+
+  const res = await fetch(url, {
+    headers: {
+      Authorization: AUTH!,
+      Accept: "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Yodeck ${res.status} ${res.statusText} for ${url} :: ${text}`);
+  }
+
+  return (await res.json()) as T;
+}
+
+async function getAllScreens(): Promise<YodeckScreenListResponse["results"]> {
+  // handle pagination safely
+  const screens: YodeckScreenListResponse["results"] = [];
+  let nextUrl: string | null = `${BASE_URL}/api/v2/screens?limit=100&offset=0`;
+
+  while (nextUrl) {
+    const page = await yodeckFetch<YodeckScreenListResponse>(nextUrl);
+    screens.push(...page.results);
+    nextUrl = page.next;
+  }
+
+  return screens;
+}
+
+async function getPlaylistItemsCount(playlistId: number): Promise<number> {
+  const playlist = await yodeckFetch<YodeckPlaylist>(`/api/v2/playlists/${playlistId}`);
+  return Array.isArray(playlist.items) ? playlist.items.length : 0;
+}
+
+function uniqKey(type: string, id: number) {
+  return `${type}:${id}`;
+}
+
+async function resolveLayoutDistinctCount(layoutId: number): Promise<{
+  distinctCount: number;
+  breakdown: ContentSummary["breakdown"];
+}> {
+  const breakdown: ContentSummary["breakdown"] = {
+    playlistsResolved: 0,
+    playlistsFailed: 0,
+    mediaItems: 0,
+    widgetItems: 0,
+    unknownItems: 0,
+  };
+
+  const layout = await yodeckFetch<YodeckLayout>(`/api/v2/layouts/${layoutId}`);
+
+  // We count distinct items across regions.
+  // If a region points to a playlist, we count playlist's internal items as distinct too.
+  const distinct = new Set<string>();
+
+  const regions = Array.isArray(layout.regions) ? layout.regions : [];
+  for (const r of regions) {
+    if (r?.hidden) continue;
+    const item = r?.item;
+    if (!item || typeof item.id !== "number" || !item.type) continue;
+
+    if (item.type === "playlist") {
+      // For layout regions that reference a playlist:
+      // count playlist itself as a distinct content source + count its items.
+      distinct.add(uniqKey("playlist", item.id));
+      try {
+        const playlist = await yodeckFetch<YodeckPlaylist>(`/api/v2/playlists/${item.id}`);
+        breakdown.playlistsResolved += 1;
+
+        const items = Array.isArray(playlist.items) ? playlist.items : [];
+        for (const it of items) {
+          if (!it?.id || !it?.type) {
+            breakdown.unknownItems += 1;
+            continue;
+          }
+          distinct.add(uniqKey(it.type, it.id));
+          if (it.type === "media") breakdown.mediaItems += 1;
+          else if (it.type === "widget") breakdown.widgetItems += 1;
+          else breakdown.unknownItems += 1;
+        }
+      } catch {
+        breakdown.playlistsFailed += 1;
+      }
+    } else if (item.type === "media") {
+      distinct.add(uniqKey("media", item.id));
+      breakdown.mediaItems += 1;
+    } else if (item.type === "widget") {
+      distinct.add(uniqKey("widget", item.id));
+      breakdown.widgetItems += 1;
+    } else {
+      distinct.add(uniqKey(item.type, item.id));
+      breakdown.unknownItems += 1;
+    }
+  }
+
+  // Optional: include background audio as media/widget if present
+  const bgItem = layout?.background_audio?.item;
+  if (bgItem && typeof bgItem.id === "number" && bgItem.type) {
+    distinct.add(uniqKey(bgItem.type, bgItem.id));
+    if (bgItem.type === "media") breakdown.mediaItems += 1;
+    else if (bgItem.type === "widget") breakdown.widgetItems += 1;
+    else breakdown.unknownItems += 1;
+  }
+
+  // distinctCount: how many different ads/messages/items
+  // Note: playlists themselves are included as distinct sources, but the real “ads/messages” are usually playlist items.
+  // If you want to exclude the playlist container itself, remove the distinct.add(playlist...) above.
+  return { distinctCount: distinct.size, breakdown };
+}
+
+async function resolveScreenContent(screen: YodeckScreenListResponse["results"][number]): Promise<ContentSummary> {
+  const online = screen?.state?.online ?? null;
+  const sc = screen?.screen_content ?? null;
+
+  const base: ContentSummary = {
+    screenYodeckId: screen.id,
+    screenUuid: screen.uuid,
+    screenName: screen.name,
+    online,
+    screenshotUrl: screen.screenshot_url ?? null,
+
+    sourceType: sc?.source_type ?? null,
+    sourceId: sc?.source_id ?? null,
+    sourceName: (sc as any)?.source_name ?? null,
+
+    distinctItemCount: 0,
+    breakdown: {
+      playlistsResolved: 0,
+      playlistsFailed: 0,
+      mediaItems: 0,
+      widgetItems: 0,
+      unknownItems: 0,
+    },
+
+    status: "no_content_set",
+    error: null,
+  };
+
+  if (!sc || !sc.source_type || !sc.source_id) {
+    return base; // no content configured in Yodeck
+  }
+
+  try {
+    if (sc.source_type === "playlist") {
+      // playlist -> count playlist items
+      const count = await getPlaylistItemsCount(sc.source_id);
+      return {
+        ...base,
+        distinctItemCount: count,
+        breakdown: {
+          ...base.breakdown,
+          playlistsResolved: 1,
+        },
+        status: "ok",
+      };
+    }
+
+    if (sc.source_type === "layout") {
+      // layout -> count region content items (and playlist items)
+      const { distinctCount, breakdown } = await resolveLayoutDistinctCount(sc.source_id);
+      return {
+        ...base,
+        distinctItemCount: distinctCount,
+        breakdown,
+        status: "ok",
+      };
+    }
+
+    if (sc.source_type === "media") {
+      // single media item is 1
+      return {
+        ...base,
+        distinctItemCount: 1,
+        breakdown: { ...base.breakdown, mediaItems: 1 },
+        status: "ok",
+      };
+    }
+
+    if (sc.source_type === "widget") {
+      return {
+        ...base,
+        distinctItemCount: 1,
+        breakdown: { ...base.breakdown, widgetItems: 1 },
+        status: "ok",
+      };
+    }
+
+    // Unknown source_type
+    return { ...base, status: "unknown_source" };
+  } catch (e: any) {
+    return { ...base, status: "error", error: e?.message ?? String(e) };
+  }
+}
+
+/**
+ * POST /api/sync/yodeck/run
+ * Body optional:
+ *  - { onlyOnline?: boolean }
+ */
+router.post("/api/sync/yodeck/run", async (req, res) => {
+  try {
+    const onlyOnline = Boolean(req.body?.onlyOnline);
+
+    const screens = await getAllScreens();
+    const filtered = onlyOnline ? screens.filter(s => s?.state?.online) : screens;
+
+    const results: ContentSummary[] = [];
+    for (const s of filtered) {
+      results.push(await resolveScreenContent(s));
+    }
+
+    const screensTotal = results.length;
+    const screensOnline = results.filter(r => r.online === true).length;
+
+    const screensWithYodeckContent = results.filter(r => r.status === "ok" && r.distinctItemCount > 0).length;
+    const screensYodeckEmpty = results.filter(r => r.status === "no_content_set" || (r.status === "ok" && r.distinctItemCount === 0)).length;
+    const contentUnknown = results.filter(r => r.status === "unknown_source").length;
+    const contentError = results.filter(r => r.status === "error").length;
+
+    // This is the key number you want available in your UI per screen:
+    // results[i].distinctItemCount
+
+    return res.json({
+      ok: true,
+      stats: {
+        screensTotal,
+        screensOnline,
+        screensWithYodeckContent,
+        screensYodeckEmpty,
+        contentUnknown,
+        contentError,
+      },
+      results,
+      meta: {
+        baseUrl: BASE_URL,
+        note:
+          "distinctItemCount = number of different ads/messages/items. playlist=items.length; layout=distinct items across regions + playlist items.",
+      },
+    });
+  } catch (e: any) {
+    return res.status(500).json({
+      ok: false,
+      error: e?.message ?? String(e),
+      hint:
+        "Check env YODECK_AUTH_TOKEN. Must be: Token mylabel:XXXXXXXX (include 'Token ' prefix).",
+    });
+  }
+});
+
+export default router;
+
+/**
+ * HOW TO WIRE IT IN YOUR APP (quick):
+ *
+ * In your server bootstrap (e.g. src/index.ts or src/server.ts):
+ *   import yodeckSyncRouter from './path/to/this/file';
+ *   app.use(yodeckSyncRouter);
+ *
+ * Then call:
+ *   POST http://localhost:5000/api/sync/yodeck/run
+ *
+ * And in your frontend you can show:
+ *   - per screen: distinctItemCount
+ *   - overall stats: screensWithYodeckContent, screensYodeckEmpty, contentError, etc.
+ */
