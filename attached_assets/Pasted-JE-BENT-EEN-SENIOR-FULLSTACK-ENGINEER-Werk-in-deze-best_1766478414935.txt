@@ -1,0 +1,91 @@
+JE BENT EEN SENIOR FULLSTACK ENGINEER. Werk in deze bestaande codebase:
+- Frontend: React + TypeScript + Vite
+- Backend: Express + TypeScript
+- DB: PostgreSQL + Drizzle ORM
+- Project: Elevizion Dashboard
+- Belangrijk principe: SCREEN_ID (EVZ-001 / intern) bestaat al, maar Yodeck screens komen binnen als YDK-<playerId>. We slaan Yodeck playerId/uuid apart op.
+
+DOEL
+Bouw/verbeter de Yodeck-sync zodat we per screen kunnen tonen:
+1) welk content-type er draait (playlist/layout/schedule/tagbased-playlist/unknown)
+2) hoeveel items er “op staan”
+3) hoeveel UNIEKE media-items daaronder zitten (uniqueMediaCount)
+4) een compacte content summary met:
+   - items: [{id,name,type}] van de top-level bronnen (bv playlist of layout)
+   - topItems: top 5 strings zoals "media: NOS sport algemeen"
+   - mediaItems: [{id,name,type:"media",duration}] (uniek, gesorteerd op name)
+   - lastFetchedAt ISO
+   - uniqueMediaCount getal
+
+EN EXTRA
+Maak ook totaal-statistiek over alle screens in één run:
+- totalScreens
+- screensWithContent / empty / unknown / error
+- totalUniqueMediaAcrossAllScreens (set van media IDs)
+- en optioneel: top 10 meest gebruikte media over alle screens
+
+AUTH
+Yodeck API v2 gebruikt header:
+Authorization: Token <label:value>
+Zet dit in ENV:
+- YODECK_TOKEN_LABEL (bv "elevizion")
+- YODECK_TOKEN_VALUE (de echte token)
+Base URL: https://app.yodeck.com/api/v2
+
+ENDPOINTS DIE JE MOET GEBRUIKEN (met pagination waar nodig)
+- GET /screens?limit=100&offset=0 (haal alle screens op)
+- GET /screens/{id} (voor screen_content details)
+- GET /playlists/{id}
+- GET /layouts/{id}
+- GET /schedules/{id}
+- GET /tagbased-playlists/{id}
+- GET /media?limit=100&offset=0&tags=... (alleen nodig voor tagbased playlists als we media op tags moeten resolven)
+
+BELANGRIJK: content-resolving (DE KERN)
+Voor elk screen:
+A) Lees screen_content uit /screens/{id}:
+   screen_content = { source_type, source_id, source_name }
+   source_type kan zijn: "playlist" | "layout" | "schedule" (en mogelijk andere)
+   Als ontbreekt: status = "unknown" of "empty" afhankelijk van API response.
+
+B) Maak een RESOLVER die recursief content omzet naar media-items:
+
+1) source_type = "playlist"
+   - GET /playlists/{id}
+   - playlist.items is array met {id, priority, duration, name, type}
+   - Neem items met type="media" => mediaId = item.id, name=item.name, duration=item.duration
+   - (Als later playlist items ook "layout"/"playlist" kunnen zijn: schrijf defensief en log unknown types)
+   - Return: mediaItems[], plus top-level items = [{id, name, type:"playlist"}]
+
+2) source_type = "layout"
+   - GET /layouts/{id}
+   - layout.regions[*].item geeft {type, id}
+   - Voor elke region item:
+     - als type="playlist" => resolve playlist
+     - als type="widget" => telt NIET mee als media, maar wel als content aanwezig (optioneel opnemen in items-lijst als "widget: <id>")
+     - als andere types: log & markeer als "unknown_region_item_type"
+   - Combineer alle media uit alle region-playlists tot 1 unieke set.
+   - Top-level items bevat de layout zelf [{id,name,type:"layout"}] en daarnaast de child playlists (optioneel).
+
+3) source_type = "schedule"
+   - GET /schedules/{id}
+   - schedule.events[*].source = {source_id, source_name, source_type}
+   - schedule.filler_content kan ook {source_id, source_name, source_type} hebben
+   - Voor elke event.source:
+     - source_type="layout" => resolve layout
+     - source_type="playlist" => resolve playlist
+     - anders: log & skip
+   - Voor filler_content idem (maar markeer in items-lijst als filler)
+   - Combineer tot unieke media set.
+
+4) source_type = "tagbased-playlist"
+   - GET /tagbased-playlists/{id}
+   - tagbased.tags[] bevat tag-namen.
+   - tagbased.content_to_filter kan "only_media" zijn.
+   - Resolving aanpak:
+     - Als content_to_filter = "only_media":
+       - Query media endpoint met tags (OR): GET /media?limit=100&offset=0&tags=tag1,tag2
+       - Paginate totdat next=null
+       - Neem results als media items: {id,name,default_duration as duration fallback, type:"media"}
+     - Respecteer excludes als mogelijk:
+       - Als tagba

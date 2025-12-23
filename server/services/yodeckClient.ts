@@ -201,11 +201,19 @@ export class YodeckClient {
 
   static async create(): Promise<YodeckClient | null> {
     try {
-      // First check for env var (format: "label:apikey" without "Token " prefix)
+      // Option 1: Combined format YODECK_AUTH_TOKEN (format: "label:apikey")
       const envToken = process.env.YODECK_AUTH_TOKEN;
       if (envToken) {
         console.log("[YodeckClient] Using YODECK_AUTH_TOKEN from environment");
         return new YodeckClient(envToken);
+      }
+
+      // Option 2: Separate YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE
+      const label = process.env.YODECK_TOKEN_LABEL;
+      const value = process.env.YODECK_TOKEN_VALUE;
+      if (label && value) {
+        console.log("[YodeckClient] Using YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE from environment");
+        return new YodeckClient(`${label}:${value}`);
       }
 
       // Fallback to database integration config
@@ -449,9 +457,11 @@ export interface ResolvedContent {
   sourceId?: number;
   sourceName?: string;
   items: Array<{ type: string; id: number; name: string }>;
+  topItems: string[];
   fillerContent?: { sourceType: string; sourceId: number; sourceName?: string };
   takeoverContent?: { sourceType: string; sourceId: number; sourceName?: string; active: boolean };
   warnings: string[];
+  lastFetchedAt: string;
 }
 
 const MAX_DEPTH = 3;
@@ -484,7 +494,9 @@ export class ContentResolver {
         mediaItems: [],
         mediaIds: [],
         items: [],
+        topItems: [],
         warnings: ["No screen_content found"],
+        lastFetchedAt: new Date().toISOString(),
       };
     }
 
@@ -499,7 +511,9 @@ export class ContentResolver {
     }
 
     const mediaIds = Array.from(this.mediaItems.keys());
-    const mediaItemsArr = Array.from(this.mediaItems.values());
+    const mediaItemsArr = Array.from(this.mediaItems.values()).sort((a, b) => 
+      a.name.localeCompare(b.name)
+    );
 
     // Determine status
     let status: ResolvedContent["status"] = "has_content";
@@ -509,6 +523,9 @@ export class ContentResolver {
     if (sourceType === "tagbased-playlist" && mediaItemsArr.length === 0) {
       status = "unknown_tagbased";
     }
+
+    // Generate topItems (top 5 media names formatted as "media: <name>")
+    const topItems = mediaItemsArr.slice(0, 5).map(m => `media: ${m.name}`);
 
     // Check for takeover content
     let takeoverContent: ResolvedContent["takeoverContent"] = undefined;
@@ -536,9 +553,11 @@ export class ContentResolver {
       sourceId,
       sourceName,
       items: this.items,
+      topItems,
       fillerContent: this.fillerContent,
       takeoverContent,
       warnings: this.warnings,
+      lastFetchedAt: new Date().toISOString(),
     };
   }
 

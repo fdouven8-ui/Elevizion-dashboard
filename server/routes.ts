@@ -3632,15 +3632,26 @@ export async function registerRoutes(
         status: string;
         uniqueMediaCount: number;
         itemsPlaying: Array<{ type: string; id: number; name: string }>;
-        mediaItems: Array<{ id: number; name: string; type: string; duration: number }>;
+        topItems: string[];
+        mediaItems: Array<{ id: number; name: string; type: string; duration: number; mediaType?: string }>;
         sourceType?: string;
         sourceId?: number;
         sourceName?: string;
         warnings: string[];
+        lastFetchedAt: string;
       }> = [];
 
       const allMediaIds = new Set<number>();
       let totalMediaCountSum = 0;
+      
+      // Track status counts
+      let screensWithContent = 0;
+      let screensEmpty = 0;
+      let screensUnknown = 0;
+      let screensError = 0;
+      
+      // Track media usage for top10
+      const mediaUsageCount = new Map<number, { id: number; name: string; count: number }>();
 
       for (const screen of screens) {
         const resolved = await resolver.resolveScreenContent(screen);
@@ -3651,19 +3662,41 @@ export async function registerRoutes(
           status: resolved.status,
           uniqueMediaCount: resolved.uniqueMediaCount,
           itemsPlaying: resolved.items,
+          topItems: resolved.topItems,
           mediaItems: resolved.mediaItems,
           sourceType: resolved.sourceType,
           sourceId: resolved.sourceId,
           sourceName: resolved.sourceName,
           warnings: resolved.warnings,
+          lastFetchedAt: resolved.lastFetchedAt,
         });
 
-        // Accumulate totals
-        for (const mediaId of resolved.mediaIds) {
-          allMediaIds.add(mediaId);
+        // Count by status
+        switch (resolved.status) {
+          case "has_content": screensWithContent++; break;
+          case "empty": screensEmpty++; break;
+          case "unknown": case "unknown_tagbased": screensUnknown++; break;
+          case "error": screensError++; break;
+        }
+
+        // Accumulate totals and track media usage
+        for (const media of resolved.mediaItems) {
+          allMediaIds.add(media.id);
+          const existing = mediaUsageCount.get(media.id);
+          if (existing) {
+            existing.count++;
+          } else {
+            mediaUsageCount.set(media.id, { id: media.id, name: media.name, count: 1 });
+          }
         }
         totalMediaCountSum += resolved.uniqueMediaCount;
       }
+
+      // Get top 10 most used media across all screens
+      const top10Media = Array.from(mediaUsageCount.values())
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10)
+        .map(m => ({ mediaId: m.id, name: m.name, screenCount: m.count }));
 
       // Get last sync timestamp from our DB
       const dbScreens = await storage.getScreens();
@@ -3677,8 +3710,16 @@ export async function registerRoutes(
 
       return res.json({
         screens: screenSummaries,
-        totalUniqueMediaAcrossAllScreens: allMediaIds.size,
-        totalMediaCountSum,
+        totals: {
+          totalScreens: screens.length,
+          screensWithContent,
+          screensEmpty,
+          screensUnknown,
+          screensError,
+          totalUniqueMediaAcrossAllScreens: allMediaIds.size,
+          totalMediaAssignments: totalMediaCountSum,
+          top10Media,
+        },
         lastSyncedAt: lastSyncedAt?.toISOString() || null,
       });
     } catch (error: any) {
