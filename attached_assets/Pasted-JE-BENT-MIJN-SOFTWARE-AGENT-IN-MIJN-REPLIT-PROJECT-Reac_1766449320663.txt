@@ -1,0 +1,161 @@
+JE BENT MIJN SOFTWARE-AGENT IN MIJN REPLIT PROJECT (React+TS+Vite frontend, Express backend, Drizzle ORM + Postgres). 
+Doel: Yodeck content per scherm volledig ophalen en tellen: 
+- hoeveel (UNIEKE) media items er op elk scherm draaien
+- welke media IDs dat zijn
+- totals: totaal unieke media over alle schermen + totaal per scherm
+- de bronketen correct resolven: Screen -> screen_content (playlist/layout/tagbased-playlist/unknown) -> media
+
+BELANGRIJK
+- Gebruik Yodeck API v2.
+- Auth header: Authorization: Token <label:API_TOKEN> (label is vrij, bv "elevizion:<token>").
+- Base URL: https://app.yodeck.com/api/v2
+- Gebruik pagination op list endpoints (count/next/previous/results). Haal ALLES op wanneer je totals berekent.
+- Rate limiting: STANDARD → voeg kleine concurrency limiter toe (max 3–5 gelijktijdig) + retries (2x) bij 429/5xx.
+
+INPUT JSON STRUCTURE (zoals de user stuurde)
+1) Screen:
+GET /screens/{id}
+Response bevat:
+- screen_content: { source_type: "playlist"|"layout"|... , source_id, source_name }
+2) Playlist:
+GET /playlists/{id}
+Response bevat:
+- items: [ { id, priority, duration, name, type: "media" } ...]
+3) Layout:
+GET /layouts/{id}
+Response bevat:
+- regions: [ { item: { type: "playlist"|"widget"|..., id } } ... ]
+4) Tagbased playlist:
+GET /tagbased-playlists/{id}
+Response bevat:
+- tagbased.tags: [{id,name}, ...]
+- tagbased.includes / excludes (nested arrays)
+- tagbased.workspaces: [workspaceId,...]
+- tagbased.content_to_filter: "only_media" (relevant)
+5) Media list:
+GET /media?limit=100&offset=0&workspace=<id>&tags=tag1,tag2&exclude_tags=a,b&parent_folder=<id>&q=...
+Response bevat results[] met media (id,name,tags,parent_folder,etc)
+
+WAT MOET HET SYSTEEM DOEN (FUNCTIONEEL)
+A) Voeg een backend sync toe (of verbeter de bestaande) zodat we per screen de content kunnen “resolven” naar media IDs.
+   Endpoint: POST /api/integrations/yodeck/sync
+   Response (voorbeeld): 
+   {
+     success:true,
+     count:<screens>,
+     updated:<screensUpdated>,
+     content:{
+       total:<screens>,
+       withContent:<n>,
+       empty:<n>,
+       unknown:<n>,
+       error:<n>
+     },
+     totals:{
+       totalUniqueMedia:<n>,
+       totalMediaAssignments:<n>  // som van alle unique-per-screen of desnoods som van item counts
+     }
+   }
+
+B) Per screen bepalen:
+- status:
+  - has_content: als we media IDs kunnen resolven en >0
+  - empty: als screen_content ontbreekt of source_id null of resolutie levert 0
+  - unknown: als source_type niet ondersteund
+  - error: bij exception/fout API
+- counts:
+  - uniqueMediaCount (SET over media IDs)
+  - mediaIds (array ints)
+  - sourceType/sourceId/sourceName (van screen_content)
+  - optional: itemCount (aantal playlist items, als bekend)
+
+C) Resolutie-logica (zeer belangrijk)
+Maak 1 functie: resolveScreenContentToMediaIds(screen_content, workspaceId) → {mediaIds:Set<number>, debug:{...}}
+Ondersteun minimaal deze source_types:
+1) source_type = "playlist"
+   - GET /playlists/{id}
+   - loop playlist.items:
+     - als item.type == "media": voeg item.id toe aan mediaIds
+     - anders (onbekend): log en skip
+2) source_type = "layout"
+   - GET /layouts/{id}
+   - loop regions:
+     - als region.item.type == "playlist":
+         resolve playlist (zoals hierboven) en voeg media toe
+     - als region.item.type == "layout":
+         recursief resolve layout
+     - widgets negeren voor media telling (maar log wel dat widget bestaat)
+3) source_type = "tagbased-playlist" (of als je in praktijk de type-string anders ziet, map het)
+   - GET /tagbased-playlists/{id}
+   - neem tagbased.tags[].name → lijst tagNames
+   - query media list: GET /media?limit=100&offset=0&tags=tag1,tag2 (Yodeck: ANY match) 
+   - als excludes aanwezig en je kunt tag namen achterhalen, gebruik exclude_tags
+   - als tagbased.workspaces aanwezig, filter per workspace (loop workspaces en merge results)
+   - resultaat: alle media IDs uit /media results
+   - (includes/excludes nested arrays: implementeer defensief: log het, en als je de betekenis niet 100% weet, laat het buiten beschouwing maar laat in debug zien dat het genegeerd is)
+4) Anders:
+   - return unknown
+
+D) Screens lijst ophalen
+- Gebruik GET /screens (pagination) om alle screens te synchroniseren.
+- Voor iedere screen haal je screen_content (zit meestal al in list results, maar vertrouw daarop: als nodig GET /screens/{id} voor complete keys).
+- Koppel screens aan onze interne Screen tabel via uuid of naam:
+  - Als er al een Screen bestaat met dezelfde yodeck uuid → update die.
+  - Anders maak “unmapped” record aan (zoals nu) maar sla wel yodeck metadata op.
+- Log zoals in mijn logs: 
+  [Yodeck] YDK-xxxxxx: Found N unique media items in playlists
+  [Yodeck] screen_content = {...}
+  [Yodeck] Fetching playlist <id>: GET <url>
+  etc.
+
+DATA MODEL (DB / Drizzle)
+Maak (of breid uit) tabel voor content-samenvatting per screen:
+Table: yodeck_screen_content
+- id (uuid)
+- screenId (FK naar screens tabel)
+- yodeckScreenId (int) en yodeckUuid (string)
+- workspaceId (int)
+- sourceType (string)
+- sourceId (int)
+- sourceName (string)
+- status ("has_content"|"empty"|"unknown"|"error")
+- uniqueMediaCount (int)
+- mediaIds (jsonb array of int)
+- itemCount (int, nullable)
+- debug (jsonb) // bv: playlistsResolved, layoutsResolved, unknownItems, ignoredWidgets, etc
+- lastSyncedAt (timestamp)
+
+Update ook control-room stats endpoint zodat “screensWithYodeckContent” klopt + “Speelt content (niet vanuit Elevizion) • X items” de unieke count toont.
+
+TECHNISCH / CODE STYLE
+- Maak een yodeckClient.ts met:
+  - request(method,url,params)
+  - pagination helper: fetchAllPages(path, params, pageSize=100)
+  - concurrency limiter
+  - retry/backoff op 429/5xx
+- Zet API token in env:
+  YODECK_TOKEN_LABEL (bv "elevizion")
+  YODECK_TOKEN_VALUE (de token)
+  Header: Authorization: Token ${label}:${value}
+- Zorg dat er NOOIT tokens in logs komen.
+
+ACCEPTANCE CRITERIA (MOET)
+1) POST /api/integrations/yodeck/sync haalt alle screens op.
+2) Voor elke screen met screen_content.source_type="playlist" haalt hij playlist op en telt unique media IDs uit items[type=media].
+3) Resultaat wordt in DB opgeslagen per screen met status/uniqueMediaCount/mediaIds.
+4) Response van sync bevat totals.totalUniqueMedia (unieke set over ALLE screens).
+5) Frontend control-room / screens detail kan die counts tonen (minimaal via bestaande endpoints).
+6) Werkt met pagination (media list / screens list / playlists list indien nodig).
+7) Robust: unknown types geven status unknown, geen crash.
+
+BONUS (als snel te doen)
+- Cache playlist/layout requests per sync-run zodat dezelfde playlist maar 1x opgehaald wordt (ik zie in logs 2 screens met dezelfde playlist).
+- Voeg query param ?workspace=<id> optie toe aan sync endpoint om alleen die workspace te syncen.
+
+BEGIN NU MET IMPLEMENTATIE
+- Inspecteer bestaande codebase: zoek routes /api/integrations/yodeck/sync en bestaande integratie structuur.
+- Implementeer bovenstaande zonder het project groter te maken dan nodig.
+- Geef mij na implementatie: 
+  - welke files aangepast/nieuw
+  - korte uitleg hoe ik test (curl voorbeelden)
+  - voorbeeld response met totals en per-screen samenvatting.

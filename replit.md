@@ -106,6 +106,9 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
   - **Content Detection**: The `screen_content` field uses format `{"source_type":"playlist","source_id":27644453,"source_name":"Test Playlist"}`. Parse `source_type` and `source_name` to detect what's playing.
   - EVZ-### Mapping: Extracts SCREEN_ID from `basic.tags` or `name` field using regex `/EVZ-\d{3}/`
   - Content sync service: `server/services/yodeckContent.ts` handles fetching and parsing content details
+  - **Content Sync Response** (`POST /api/integrations/yodeck/content-sync`):
+    - Per-screen fields: `mediaIds[]`, `uniqueMediaCount`, `sourceType`, `sourceId`, `sourceName`
+    - Totals: `totalUniqueMedia` (unique media across all screens), `totalMediaAssignments` (sum of media per screen)
   - **Content Status Enum**: `yodeckContentStatus` tracks content state per screen:
     - `unknown`: Never synced or screen not linked to Yodeck
     - `empty`: Yodeck API confirmed no content assigned

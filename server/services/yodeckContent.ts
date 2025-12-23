@@ -88,6 +88,10 @@ export interface ContentSummary {
   lastFetchedAt: string;
   mediaItems?: MediaItem[];
   uniqueMediaCount?: number;
+  mediaIds?: number[];
+  sourceType?: string;
+  sourceId?: number;
+  sourceName?: string;
 }
 
 interface YodeckScreenListItem {
@@ -309,12 +313,24 @@ export function clearMediaCache() {
  * PROBE ORDER (stops at first success with content):
  * 1. GET /screens/{id} - Primary endpoint, contains screen_content
  */
+interface FetchContentResult {
+  items: ContentItem[];
+  mediaItems: MediaItem[];
+  raw?: any;
+  error?: string;
+  confirmedEmpty?: boolean;
+  endpoint?: string;
+  sourceType?: string;
+  sourceId?: number;
+  sourceName?: string;
+}
+
 async function fetchScreenAssignedContent(
   screenId: string,
   uuid: string | null,
   numericId: string | null,
   apiKey: string
-): Promise<{ items: ContentItem[]; mediaItems: MediaItem[]; raw?: any; error?: string; confirmedEmpty?: boolean; endpoint?: string }> {
+): Promise<FetchContentResult> {
   // Check if this is a real Yodeck ID (not a dummy placeholder)
   if (!numericId || !isRealYodeckId(numericId)) {
     console.log(`[Yodeck] ${screenId}: Invalid or dummy ID "${numericId}" - skipping API call`);
@@ -404,7 +420,21 @@ async function fetchScreenAssignedContent(
       console.log(`[Yodeck] ${screenId}: TOTAL UNIQUE MEDIA ITEMS: ${allMediaItems.length}`);
     }
     
-    return { items, mediaItems: allMediaItems, raw: result.data, confirmedEmpty, endpoint };
+    // Extract source info from screen_content
+    const sourceType = sc?.source_type as string | undefined;
+    const sourceId = sc?.source_id as number | undefined;
+    const sourceName = sc?.source_name as string | undefined;
+    
+    return { 
+      items, 
+      mediaItems: allMediaItems, 
+      raw: result.data, 
+      confirmedEmpty, 
+      endpoint,
+      sourceType,
+      sourceId,
+      sourceName,
+    };
   }
   
   if (result.status === 404) {
@@ -1117,6 +1147,10 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
         lastFetchedAt: new Date().toISOString(),
         mediaItems: mediaItems.length > 0 ? mediaItems : undefined,
         uniqueMediaCount: mediaItems.length > 0 ? mediaItems.length : undefined,
+        mediaIds: mediaItems.length > 0 ? mediaItems.map(m => m.id) : undefined,
+        sourceType: contentResult.sourceType,
+        sourceId: contentResult.sourceId,
+        sourceName: contentResult.sourceName,
       };
 
       await storage.updateScreen(screen.id, {
@@ -1144,6 +1178,11 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
         contentCount: finalContentCount,
         summary: finalSummary,
         items: finalItems,
+        mediaIds: mediaItems.map(m => m.id),
+        uniqueMediaCount: mediaItems.length,
+        sourceType: contentResult.sourceType,
+        sourceId: contentResult.sourceId,
+        sourceName: contentResult.sourceName,
       };
     });
 
@@ -1152,6 +1191,20 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
   }
 
   const skippedCount = results.filter((r: any) => r.skipped === true).length;
+  
+  // Calculate totals across all screens
+  const allMediaIds = new Set<number>();
+  let totalMediaAssignments = 0;
+  
+  for (const r of results) {
+    if (r.mediaIds && Array.isArray(r.mediaIds)) {
+      for (const id of r.mediaIds) {
+        allMediaIds.add(id);
+      }
+      totalMediaAssignments += r.mediaIds.length;
+    }
+  }
+  
   const stats = {
     total: results.length,
     withContent: results.filter(r => r.status === "has_content").length,
@@ -1163,12 +1216,17 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
 
   console.log(`[YodeckContent] Sync complete: ${stats.total} screens (${stats.skipped} cached)`);
   console.log(`[YodeckContent] Results: ${stats.withContent} with content, ${stats.empty} empty, ${stats.unknown} unknown, ${stats.error} errors`);
+  console.log(`[YodeckContent] Totals: ${allMediaIds.size} unique media, ${totalMediaAssignments} total assignments`);
 
   return { 
     success: true, 
     results, 
     stats,
     yodeckScreenCount: yodeckScreens.length,
+    totals: {
+      totalUniqueMedia: allMediaIds.size,
+      totalMediaAssignments,
+    },
   };
 }
 
