@@ -96,8 +96,10 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 ### External Service Integrations
 - **Yodeck API**: Digital signage player management and screen synchronization.
   - Base URL: `https://app.yodeck.com/api/v2`
-  - Authentication: `Authorization: Token <API_KEY>`
-  - API Key storage: Encrypted in integrations table (`encryptedCredentials`), decrypted at runtime
+  - Authentication: `Authorization: Token <label:apikey>`
+  - API Key sources (priority order):
+    1. Environment variable `YODECK_AUTH_TOKEN` (format: `label:apikey` without "Token " prefix)
+    2. Encrypted in integrations table (`encryptedCredentials`), decrypted at runtime
   - **Two-Phase Sync Flow**:
     1. **Screen List** (`GET /screens`): Returns `{ results: [...], count: N }` with screen objects containing `id`, `uuid`, `name`, `workspace`, `state.online`, `state.last_seen`. Does NOT contain content info.
     2. **Screen Detail** (`GET /screens/{id}`): Returns full screen details including `screen_content`. IMPORTANT: Use numeric ID (e.g., `591896`), NOT UUID - UUID returns 404.
