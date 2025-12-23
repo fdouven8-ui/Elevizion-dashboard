@@ -1,18 +1,11 @@
 # Elevizion Dashboard
 
 ## Overview
-Elevizion Dashboard is an OPS-first internal operations control room for digital signage network management. Its primary purpose is to ensure high screen uptime, efficient ad delivery, fast onboarding processes, and simple automation for digital signage networks. The core principle is that `SCREEN_ID` (e.g., EVZ-001) is the mandatory central identifier across the system.
-
-Key capabilities include:
-- Real-time screen monitoring (status, alerts, uptime).
-- Management of advertisers, ad creatives, and placement configurations.
-- Quick onboarding wizards for screens, advertisers, and ad placements.
-- Automation rules for alerts and inventory management.
-- Simplified navigation focusing on essential operational aspects.
+Elevizion Dashboard is an OPS-first internal operations control room for digital signage network management. Its primary purpose is to ensure high screen uptime, efficient ad delivery, fast onboarding processes, and simple automation for digital signage networks. The core principle is that `SCREEN_ID` (e.g., EVZ-001) is the mandatory central identifier across the system. It aims to provide real-time screen monitoring, advertiser and ad creative management, quick onboarding wizards, and automation rules, all with a simplified, Dutch-language interface focused on essential operational aspects. The project's ambition is to answer key operational questions like "How many screens are running, how many ads are live, how many customers are paying?" instantly.
 
 ## User Preferences
 - Preferred communication style: Simple, everyday language.
-- **Language**: Dutch (Nederlands) - All UI text, labels, buttons, and navigation items are in Dutch.
+- Language: Dutch (Nederlands) - All UI text, labels, buttons, and navigation items are in Dutch.
 
 ## System Architecture
 
@@ -24,6 +17,14 @@ Key capabilities include:
 - **Styling**: Tailwind CSS v4 with CSS variables.
 - **Forms**: React Hook Form with Zod validation.
 - **UI/UX**: Pages-based structure, sidebar layout, breadcrumb navigation, Dutch language UI.
+- **UI/UX Decisions**:
+    - **Home page (`/dashboard`)**: Owner-focused overview with 4 KPI tiles (Screens online/offline, Ads online, Paying advertisers) and an "Actie Overzicht" for operational items (offline screens, screens without placements, paused placements).
+    - **Onboarding**: Quick wizards for screens, advertisers, and ad placements.
+    - **Modules**: Dedicated sections for Schermen, Ads & Plaatsingen, Adverteerders, Instellingen.
+    - **Screens module**: City-first organization with "Plaats" as primary filter.
+    - **Placements module**: Operational-first design with KPIs (Active placements, Placements on offline screens).
+    - **Finance page (`/finance`)**: Minimal design showing paying customers and monthly recurring revenue (MRR) with a trend chart.
+    - **Detail Pages**: Owner-friendly Screen and Advertiser detail pages with key information, action buttons, and integrated statistics (uptime, plays, top creatives).
 
 ### Backend
 - **Framework**: Express.js with TypeScript.
@@ -34,58 +35,21 @@ Key capabilities include:
 - **Architecture**: Thin controller layer, business logic in storage service.
 
 ### Data Model
-Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, Placements, ScheduleSnapshots (immutable monthly records), Invoices/Payments, and Payouts/CarryOvers. Monthly snapshots ensure billing accuracy by freezing critical business data (contracts, locations, carry-overs) at the time of creation.
+Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placements, ScheduleSnapshots (immutable monthly records), Invoices/Payments, and Payouts/CarryOvers. Monthly snapshots ensure billing accuracy.
 
 ### Authentication & Authorization
-- **Provider**: Username/password authentication with bcrypt hashing.
+- **Provider**: Username/password with bcrypt hashing.
 - **Session Storage**: PostgreSQL-backed via `connect-pg-simple`.
 - **User Roles**: Five predefined roles (eigenaar, finance, ops, viewer, partner) with hierarchical access control.
 - **Permission Middleware**: `requireRole()` for route protection.
-- **Audit Logging**: Tracks permission changes (role changes, activation/deactivation).
-- **Auto Admin Initialization**: On server startup, if `ADMIN_USERNAME` and `ADMIN_PASSWORD` environment variables are set, the system automatically creates or syncs the admin user password. This ensures deployments are always accessible.
+- **Audit Logging**: Tracks permission changes.
+- **Auto Admin Initialization**: Admin user creation/sync on server startup via environment variables.
 
-### Required Deployment Secrets
-- `ADMIN_USERNAME`: Admin login username (required for auto-init)
-- `ADMIN_PASSWORD`: Admin login password (required for auto-init)
-- `SESSION_SECRET`: Session encryption key (must remain stable)
-
-### UI/UX Decisions
-- **Home page** (`/dashboard`): Minimal owner-focused overview with 4 calm KPI tiles: Schermen online (count/total), Schermen offline, Ads online (active placements), Actief betalende adverteerders. All tiles are clickable and route to filtered pages. Below the tiles, a lightweight "Actie Overzicht" section shows operational items only (offline screens, screens without placements, paused placements) with subtle color-coded badges (red=error, yellow=warning, blue=info). Each item is clickable and routes to its detail page. No financial or contract items shown. Answers "How many screens are running, how many ads are live, how many customers are paying?" in 3 seconds.
-- Onboarding via quick wizards.
-- Specific sections for Schermen, Ads & Plaatsingen, Adverteerders, and Instellingen.
-- **Screens module**: City-first organization with "Plaats" (city) as primary filter and "Locatie/Bedrijf" as secondary cascading filter. Table columns: Screen ID, Plaats, Locatie/Bedrijf, Status, Actieve plaatsingen, Actie. "Laatst gezien" removed from list view (only shown on detail page).
-- **Placements module**: Operational-first design with 2 KPIs (Active placements, Placements on offline screens). No financial metrics. Filters: Plaats, Locatie/Scherm, Adverteerder, Status. Search matches advertiser, screen ID, location, city. Table columns: Adverteerder, Plaats, Locatie/Scherm, Creative, Periode, Status (with warning badges), Actie. Placement detail page shows advertiser, screen/location, creative, period, status with warnings, and actions (Pause/Resume, Move, Open in Yodeck).
-- **Finance page** (`/finance`): Minimal design answering "How many paying customers and what comes in monthly?" in 5 seconds. Contains 2 KPI tiles (Betalende Klanten, Maandomzet MRR) and 12-month revenue trend chart. NO invoice lists, NO open/overdue breakdowns, NO accounting tables. KPI tiles link to /advertisers?filter=paying. Paying customers = advertisers with active/signed contract AND active placements. MRR = sum of monthlyPriceExVat from qualifying contracts.
-- "Template Center" for managing various communication templates with versioning and preview.
-- "Cold Walk-in Onboarding Wizard" for rapid field onboarding of locations and advertisers.
-- Sales pipeline with Kanban board for lead management, including location surveys with photo upload and supply lists.
-- Task management system with role-based filtering.
-- Dashboard redesigned to be "Screen-First," showing visual cards with status indicators and active ads.
-- Public landing page at `/` (dashboard moved to `/dashboard`).
-- "Backup & Export" page for data backup (JSON/CSV).
-- "Handleiding" page for Dutch user manual.
-
-### Detail Pages (Owner-Friendly)
-**Screen Detail Page** (`/screens/:id`):
-- Header: Screen ID (EVZ-###), Location name, Online/Offline status, Last seen
-- Action buttons: Open in Yodeck, Contact locatie, Plaats Ad
-- Location/Contact block: Address, Contact person, Phone, Email, Notes
-- "Wat draait er op dit scherm?" table: Advertiser (linked), Creative, Start/End dates, Status, Open placement link
-- **Statistieken accordion**: Uptime timeline (AreaChart), playback metrics (BarChart), 3 KPI cards (Uptime %, Totaal plays, Speeltijd), date range filters (today/7d/30d), granularity selector (hour/day/week), snapshot (PNG export), shareable link
-
-**Advertiser Detail Page** (`/advertisers/:id`):
-- Header: Company name, Status badge
-- Contactgegevens: Contact person, Phone, Email, Address (street/zipcode/city), BTW-nummer, KVK-nummer
-- Moneybird link status, Notes, SEPA Incasso status
-- Contract status cards, "Waar draaien mijn ads?" placements list, Payment status
-- **Statistieken accordion**: Plays per scherm (BarChart), plays per stad (PieChart), top creatives (BarChart), 3 KPI cards (Totaal plays, Totale speeltijd, Schermen), date range filters, snapshot, shareable link
-
-### Yodeck Statistics Integration
-- Backend service: `server/yodeckStats.ts` with 5-minute caching via memoizee
-- API endpoints: `GET /api/screens/:id/stats` and `GET /api/advertisers/:id/stats` with date range and granularity filters
-- Frontend uses Recharts library for data visualization
-- Graceful fallback when Yodeck API not configured or screen not linked
-- Share links persist exact date ranges via URL parameters
+### System Design Choices
+- **Yodeck Statistics Integration**: Backend service `server/yodeckStats.ts` with 5-minute caching, providing API endpoints for screen and advertiser statistics. Frontend uses Recharts for visualization with date range and granularity filters.
+- **Content Inventory Module**: Centralized YodeckClient with retry logic, pagination, rate limiting, and TTL-based caching. Supports all Yodeck source types (playlist, layout, schedule, tagbased-playlist). Provides API endpoints for inventory loading and refreshing.
+- **Screenshot Analysis with Perceptual Hashing (pHash)**: Used to detect empty/blank screens and match creative content when Yodeck API content detection is insufficient.
+- **Control Room Action Priority**: Prioritizes `offline_screen`, `onboarding_hint`, `unmanaged_content`, and `paused_placement` statuses for operational alerts.
 
 ## External Dependencies
 
@@ -94,81 +58,6 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
 - **Drizzle ORM**: Type-safe database operations.
 
 ### External Service Integrations
-- **Yodeck API**: Digital signage player management and screen synchronization.
-  - Base URL: `https://app.yodeck.com/api/v2`
-  - Authentication: `Authorization: Token <label:apikey>`
-  - API Key sources (priority order):
-    1. Environment variable `YODECK_AUTH_TOKEN` (format: `label:apikey` without "Token " prefix)
-    2. Encrypted in integrations table (`encryptedCredentials`), decrypted at runtime
-  - **Two-Phase Sync Flow**:
-    1. **Screen List** (`GET /screens`): Returns `{ results: [...], count: N }` with screen objects containing `id`, `uuid`, `name`, `workspace`, `state.online`, `state.last_seen`. Does NOT contain content info.
-    2. **Screen Detail** (`GET /screens/{id}`): Returns full screen details including `screen_content`. IMPORTANT: Use numeric ID (e.g., `591896`), NOT UUID - UUID returns 404.
-  - **Content Detection**: The `screen_content` field uses format `{"source_type":"playlist","source_id":27644453,"source_name":"Test Playlist"}`. Parse `source_type` and `source_name` to detect what's playing.
-  - EVZ-### Mapping: Extracts SCREEN_ID from `basic.tags` or `name` field using regex `/EVZ-\d{3}/`
-  - Content sync service: `server/services/yodeckContent.ts` handles fetching and parsing content details
-  - **Content Sync Response** (`POST /api/integrations/yodeck/content-sync`):
-    - Per-screen fields: `mediaIds[]`, `uniqueMediaCount`, `sourceType`, `sourceId`, `sourceName`
-    - Totals: `totalUniqueMedia` (unique media across all screens), `totalMediaAssignments` (sum of media per screen)
-  - **Content Resolver** (`server/services/yodeckClient.ts`):
-    - `ContentResolver` class with recursive content resolution (max depth 3)
-    - Supported source types: playlist, tagbased-playlist, layout, schedule, media
-    - Cycle detection prevents infinite loops in nested structures
-    - Media enrichment with name, duration, and mediaType from media index
-    - Takeover content detection with active/inactive status
-    - Filler content tracking for schedules
-  - **Content Summary Endpoint** (`GET /api/yodeck/content/summary`):
-    - Returns resolved content for each Yodeck screen
-    - Per-screen: screenId, name, status, uniqueMediaCount, itemsPlaying[], mediaItems[], warnings[]
-    - Totals: totalUniqueMediaAcrossAllScreens, totalMediaCountSum, lastSyncedAt
-  - **Content Status Enum**: `yodeckContentStatus` tracks content state per screen:
-    - `unknown`: Never synced or screen not linked to Yodeck
-    - `empty`: Yodeck API confirmed no content assigned
-    - `has_content`: Content detected (playlist/layout/media)
-    - `likely_has_content`: Screenshot indicates content (fallback)
-    - `error`: API call failed (404, network error, etc.)
-  - **Content Error Tracking**: `yodeckContentError` field stores error messages when sync fails
-  - **Screenshot Analysis with Perceptual Hashing (pHash)**:
-    - When API content detection fails, analyzes screenshot using perceptual hashing
-    - Library: `sharp` for image processing, custom pHash implementation in `server/utils/phash.ts`
-    - Empty/blank screen detection: Identifies screens with uniform color (low variance)
-    - Creative matching: Compares screenshot pHash against known creative hashes (80% threshold)
-    - DB fields: `yodeckScreenshotHash` on screens, `phash`/`phashUpdatedAt` on creatives
-    - API endpoint: `POST /api/creatives/:id/compute-hash` to hash creative images
-  - **Control Room Action Priority** (Elevizion placement data is PRIMARY, Yodeck is SECONDARY):
-    1. `offline_screen` (error): Screen is offline
-    2. `onboarding_hint` (warning): Online but no Elevizion placements registered
-    3. `unmanaged_content` (info): Has screenshot or Yodeck content but not managed in Elevizion
-    4. `paused_placement` (warning): Placement exists but is paused
-    - Screens with active placements are considered OK and not shown in actions
-  - Control-room actions show yodeckPlayerName primarily (avoid screenId in action list)
-  - Debug endpoint: `GET /api/integrations/yodeck/debug/screen/{id}` for raw API inspection
-  - **Content Inventory Module** (`/content-inventory`):
-    - Centralized YodeckClient (`server/services/yodeckClient.ts`): Retry logic, pagination, rate limiting (max 5 concurrent), TTL-based caching (10min default)
-    - Inventory service (`server/services/yodeckInventory.ts`): Supports all source types (playlist, layout, schedule, tagbased-playlist)
-    - Media index prefetch: Caches all media items for fast type lookups (video/image/audio/document/webpage/other)
-    - API endpoints:
-      - `GET /api/yodeck/inventory`: Load inventory (uses cache)
-      - `POST /api/yodeck/inventory/refresh`: Force clear cache and rebuild
-    - Frontend: Dual buttons (Laden/Vernieuwen), extended media type icons, top-10 preview per screen
-    - Permission: Requires `manage_integrations`
-  - **Yodeck API Routes** (`/yodeck`):
-    - `GET /api/yodeck/health`: Test Yodeck API connection (returns mock mode if not configured)
-    - `GET /api/yodeck/screens/summary`: All screens with media counts, warnings, playlists_resolved, and content info
-    - `GET /api/yodeck/screens/:id/details`: Detailed screen info with raw_screen_content, playlists_resolved, and timings
-    - `GET /api/yodeck/stats`: Aggregated statistics (total_screens, total_media_in_use, top_media, top_playlists, warnings_count)
-    - Query params: `refresh=1` bypasses cache, `workspace_id` filters by workspace
-    - Mock mode: Returns demo data with playlists_resolved when Yodeck API not configured
-    - Response fields per screen:
-      - `playlists_resolved[]`: Array of resolved playlists with playlist_id, name, media_count, unique_media_count
-      - `warnings[]`: Array of warning messages from content resolution (e.g., "playlist not found", "no content assigned")
-    - Frontend page: `/yodeck` with screens table, details dialog, stats cards, and refresh functionality
+- **Yodeck API**: Digital signage player management and screen synchronization, including content detection, content resolution, and statistics. Supports two-phase sync flow for screen lists and details.
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
-- **SendGrid**: Email integration for contract confirmations and SEPA mandate requests (requires API key configuration).
-
-### Key NPM Dependencies
-- `@tanstack/react-query`
-- `drizzle-orm` / `drizzle-zod`
-- `express`
-- `date-fns`
-- `zod`
-- `shadcn/ui` (via Radix UI)
+- **SendGrid**: Email integration for contract confirmations and SEPA mandate requests.
