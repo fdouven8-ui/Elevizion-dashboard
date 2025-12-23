@@ -3611,6 +3611,82 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/yodeck/content/summary - Full content summary using ContentResolver
+  app.get("/api/yodeck/content/summary", requirePermission("manage_integrations"), async (_req, res) => {
+    try {
+      const { getYodeckClient, ContentResolver } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      
+      if (!client) {
+        return res.status(400).json({ error: "Yodeck API not configured" });
+      }
+
+      // Get all Yodeck screens
+      const screens = await client.getScreens();
+      
+      // Resolve content for each screen
+      const resolver = new ContentResolver(client);
+      const screenSummaries: Array<{
+        screenId: number;
+        name: string;
+        status: string;
+        uniqueMediaCount: number;
+        itemsPlaying: Array<{ type: string; id: number; name: string }>;
+        mediaItems: Array<{ id: number; name: string; type: string; duration: number }>;
+        sourceType?: string;
+        sourceId?: number;
+        sourceName?: string;
+        warnings: string[];
+      }> = [];
+
+      const allMediaIds = new Set<number>();
+      let totalMediaCountSum = 0;
+
+      for (const screen of screens) {
+        const resolved = await resolver.resolveScreenContent(screen);
+        
+        screenSummaries.push({
+          screenId: screen.id,
+          name: screen.name,
+          status: resolved.status,
+          uniqueMediaCount: resolved.uniqueMediaCount,
+          itemsPlaying: resolved.items,
+          mediaItems: resolved.mediaItems,
+          sourceType: resolved.sourceType,
+          sourceId: resolved.sourceId,
+          sourceName: resolved.sourceName,
+          warnings: resolved.warnings,
+        });
+
+        // Accumulate totals
+        for (const mediaId of resolved.mediaIds) {
+          allMediaIds.add(mediaId);
+        }
+        totalMediaCountSum += resolved.uniqueMediaCount;
+      }
+
+      // Get last sync timestamp from our DB
+      const dbScreens = await storage.getScreens();
+      const lastSyncedAt = dbScreens.reduce((latest, s) => {
+        if (s.yodeckContentLastFetchedAt) {
+          const ts = new Date(s.yodeckContentLastFetchedAt);
+          return !latest || ts > latest ? ts : latest;
+        }
+        return latest;
+      }, null as Date | null);
+
+      return res.json({
+        screens: screenSummaries,
+        totalUniqueMediaAcrossAllScreens: allMediaIds.size,
+        totalMediaCountSum,
+        lastSyncedAt: lastSyncedAt?.toISOString() || null,
+      });
+    } catch (error: any) {
+      console.error("[Yodeck] Error fetching content summary:", error);
+      return res.status(500).json({ error: error.message || "Failed to fetch content summary" });
+    }
+  });
+
   // ============================================================================
   // CONTROL ROOM (OPS-FIRST DASHBOARD)
   // ============================================================================

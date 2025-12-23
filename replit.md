@@ -109,6 +109,17 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
   - **Content Sync Response** (`POST /api/integrations/yodeck/content-sync`):
     - Per-screen fields: `mediaIds[]`, `uniqueMediaCount`, `sourceType`, `sourceId`, `sourceName`
     - Totals: `totalUniqueMedia` (unique media across all screens), `totalMediaAssignments` (sum of media per screen)
+  - **Content Resolver** (`server/services/yodeckClient.ts`):
+    - `ContentResolver` class with recursive content resolution (max depth 3)
+    - Supported source types: playlist, tagbased-playlist, layout, schedule, media
+    - Cycle detection prevents infinite loops in nested structures
+    - Media enrichment with name, duration, and mediaType from media index
+    - Takeover content detection with active/inactive status
+    - Filler content tracking for schedules
+  - **Content Summary Endpoint** (`GET /api/yodeck/content/summary`):
+    - Returns resolved content for each Yodeck screen
+    - Per-screen: screenId, name, status, uniqueMediaCount, itemsPlaying[], mediaItems[], warnings[]
+    - Totals: totalUniqueMediaAcrossAllScreens, totalMediaCountSum, lastSyncedAt
   - **Content Status Enum**: `yodeckContentStatus` tracks content state per screen:
     - `unknown`: Never synced or screen not linked to Yodeck
     - `empty`: Yodeck API confirmed no content assigned

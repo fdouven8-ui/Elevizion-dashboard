@@ -72,6 +72,29 @@ export interface ScreenContentResult {
   summary: string | null;
   items?: ContentItem[];
   error?: string;
+  mediaIds?: number[];
+  uniqueMediaCount?: number;
+  sourceType?: string;
+  sourceId?: number;
+  sourceName?: string;
+}
+
+export interface SyncAllScreensResult {
+  success: boolean;
+  results: ScreenContentResult[];
+  stats: {
+    total: number;
+    withContent: number;
+    empty: number;
+    unknown: number;
+    error: number;
+    skipped: number;
+  };
+  yodeckScreenCount?: number;
+  totals: {
+    totalUniqueMedia: number;
+    totalMediaAssignments: number;
+  };
 }
 
 export interface MediaItem {
@@ -872,19 +895,7 @@ export async function analyzeScreenshot(
  * Sync content for all screens in database
  * @param force - If true, skip cache and force refresh all screens
  */
-export async function syncAllScreensContent(force: boolean = false): Promise<{
-  success: boolean;
-  results: ScreenContentResult[];
-  stats: {
-    total: number;
-    withContent: number;
-    empty: number;
-    unknown: number;
-    error: number;
-    skipped: number;
-  };
-  yodeckScreenCount?: number;
-}> {
+export async function syncAllScreensContent(force: boolean = false): Promise<SyncAllScreensResult> {
   const apiKey = await getYodeckApiKey();
   if (!apiKey) {
     console.warn("[YodeckContent] No API key configured");
@@ -892,6 +903,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
       success: false,
       results: [],
       stats: { total: 0, withContent: 0, empty: 0, unknown: 0, error: 0, skipped: 0 },
+      totals: { totalUniqueMedia: 0, totalMediaAssignments: 0 },
     };
   }
 
@@ -904,6 +916,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<{
       success: false,
       results: [],
       stats: { total: 0, withContent: 0, empty: 0, unknown: 0, error: 0, skipped: 0 },
+      totals: { totalUniqueMedia: 0, totalMediaAssignments: 0 },
     };
   }
 

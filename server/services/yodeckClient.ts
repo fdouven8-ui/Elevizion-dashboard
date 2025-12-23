@@ -426,3 +426,306 @@ export function clearYodeckClient(): void {
   }
   clientInstance = null;
 }
+
+// ============================================================================
+// CONTENT RESOLVER - Resolves all content types recursively
+// ============================================================================
+
+export interface ResolvedMediaItem {
+  id: number;
+  name: string;
+  type: "media";
+  duration: number;
+  mediaType?: string;
+}
+
+export interface ResolvedContent {
+  status: "has_content" | "empty" | "unknown" | "error" | "unknown_tagbased";
+  uniqueMediaCount: number;
+  totalItemsInStructure: number;
+  mediaItems: ResolvedMediaItem[];
+  mediaIds: number[];
+  sourceType?: string;
+  sourceId?: number;
+  sourceName?: string;
+  items: Array<{ type: string; id: number; name: string }>;
+  fillerContent?: { sourceType: string; sourceId: number; sourceName?: string };
+  takeoverContent?: { sourceType: string; sourceId: number; sourceName?: string; active: boolean };
+  warnings: string[];
+}
+
+const MAX_DEPTH = 3;
+
+export class ContentResolver {
+  private client: YodeckClient;
+  private visited: Set<string> = new Set();
+  private mediaItems: Map<number, ResolvedMediaItem> = new Map();
+  private items: Array<{ type: string; id: number; name: string }> = [];
+  private warnings: string[] = [];
+  private fillerContent?: { sourceType: string; sourceId: number; sourceName?: string };
+
+  constructor(client: YodeckClient) {
+    this.client = client;
+  }
+
+  async resolveScreenContent(screen: YodeckScreen): Promise<ResolvedContent> {
+    this.visited.clear();
+    this.mediaItems.clear();
+    this.items = [];
+    this.warnings = [];
+    this.fillerContent = undefined;
+
+    const sc = screen.screen_content;
+    if (!sc || !sc.source_type || !sc.source_id) {
+      return {
+        status: "unknown",
+        uniqueMediaCount: 0,
+        totalItemsInStructure: 0,
+        mediaItems: [],
+        mediaIds: [],
+        items: [],
+        warnings: ["No screen_content found"],
+      };
+    }
+
+    const sourceType = String(sc.source_type).toLowerCase().replace("_", "-");
+    const sourceId = sc.source_id;
+    const sourceName = sc.source_name || undefined;
+
+    try {
+      await this.resolveSource(sourceType, sourceId, sourceName, 0);
+    } catch (err: any) {
+      this.warnings.push(`Error resolving ${sourceType} ${sourceId}: ${err.message}`);
+    }
+
+    const mediaIds = Array.from(this.mediaItems.keys());
+    const mediaItemsArr = Array.from(this.mediaItems.values());
+
+    // Determine status
+    let status: ResolvedContent["status"] = "has_content";
+    if (mediaItemsArr.length === 0 && this.items.length === 0) {
+      status = "empty";
+    }
+    if (sourceType === "tagbased-playlist" && mediaItemsArr.length === 0) {
+      status = "unknown_tagbased";
+    }
+
+    // Check for takeover content
+    let takeoverContent: ResolvedContent["takeoverContent"] = undefined;
+    const tc = (screen as any).takeover_content;
+    if (tc?.source_type && tc?.source_id) {
+      const now = new Date();
+      const start = tc.start_datetime ? new Date(tc.start_datetime) : null;
+      const end = tc.end_datetime ? new Date(tc.end_datetime) : null;
+      const active = (!start || now >= start) && (!end || now <= end);
+      takeoverContent = {
+        sourceType: tc.source_type,
+        sourceId: tc.source_id,
+        sourceName: tc.source_name,
+        active,
+      };
+    }
+
+    return {
+      status,
+      uniqueMediaCount: mediaIds.length,
+      totalItemsInStructure: this.items.length,
+      mediaItems: mediaItemsArr,
+      mediaIds,
+      sourceType,
+      sourceId,
+      sourceName,
+      items: this.items,
+      fillerContent: this.fillerContent,
+      takeoverContent,
+      warnings: this.warnings,
+    };
+  }
+
+  private async resolveSource(
+    type: string,
+    id: number,
+    name?: string,
+    depth: number = 0
+  ): Promise<void> {
+    const key = `${type}:${id}`;
+    if (this.visited.has(key)) {
+      this.warnings.push(`Cycle detected: ${key} already visited`);
+      return;
+    }
+    if (depth > MAX_DEPTH) {
+      this.warnings.push(`Max depth (${MAX_DEPTH}) reached at ${key}`);
+      return;
+    }
+
+    this.visited.add(key);
+    this.items.push({ type, id, name: name || `${type} ${id}` });
+
+    switch (type) {
+      case "playlist":
+        await this.resolvePlaylist(id, depth);
+        break;
+      case "tagbased-playlist":
+      case "tagbased_playlist":
+        await this.resolveTagbasedPlaylist(id, depth);
+        break;
+      case "layout":
+        await this.resolveLayout(id, depth);
+        break;
+      case "schedule":
+        await this.resolveSchedule(id, depth);
+        break;
+      case "media":
+        await this.resolveMedia(id);
+        break;
+      case "widget":
+      case "app":
+      case "webpage":
+        // Widgets/apps/webpages don't contribute to media count
+        break;
+      default:
+        this.warnings.push(`Unknown source type: ${type}`);
+    }
+  }
+
+  private async resolvePlaylist(id: number, depth: number): Promise<void> {
+    const playlist = await this.client.getPlaylist(id);
+    if (!playlist) {
+      this.warnings.push(`Playlist ${id} not found`);
+      return;
+    }
+
+    for (const item of playlist.items || []) {
+      if (!item.id) continue;
+
+      const itemType = String(item.type || "media").toLowerCase();
+      if (itemType === "media") {
+        await this.resolveMedia(item.id, item.duration);
+      } else if (itemType === "playlist") {
+        await this.resolveSource("playlist", item.id, item.name, depth + 1);
+      } else if (itemType === "layout") {
+        await this.resolveSource("layout", item.id, item.name, depth + 1);
+      } else if (itemType === "tagbased-playlist" || itemType === "tagbased_playlist") {
+        await this.resolveSource("tagbased-playlist", item.id, item.name, depth + 1);
+      } else {
+        this.items.push({ type: itemType, id: item.id, name: item.name || `${itemType} ${item.id}` });
+      }
+    }
+  }
+
+  private async resolveTagbasedPlaylist(id: number, _depth: number): Promise<void> {
+    const tagbased = await this.client.getTagbasedPlaylist(id);
+    if (!tagbased) {
+      this.warnings.push(`Tagbased playlist ${id} not found`);
+      return;
+    }
+
+    // Best-effort resolution using tags
+    const tags = tagbased.tags?.map(t => t.name) || [];
+    const workspaceId = tagbased.workspaces?.[0]?.id;
+
+    if (tags.length === 0) {
+      this.warnings.push(`Tagbased playlist ${id} has no tags, cannot resolve media`);
+      return;
+    }
+
+    if (workspaceId) {
+      try {
+        const mediaList = await this.client.getMediaByTags(workspaceId, tags);
+        const excludedIds = new Set(tagbased.excludes?.media || []);
+        
+        for (const media of mediaList) {
+          if (!excludedIds.has(media.id)) {
+            this.addMediaItem(media.id, media.name, undefined, media.media_origin?.type);
+          }
+        }
+      } catch (err: any) {
+        this.warnings.push(`Error fetching media for tagbased playlist ${id}: ${err.message}`);
+      }
+    } else {
+      this.warnings.push(`Tagbased playlist ${id} has no workspace, cannot fetch media`);
+    }
+  }
+
+  private async resolveLayout(id: number, depth: number): Promise<void> {
+    const layout = await this.client.getLayout(id);
+    if (!layout) {
+      this.warnings.push(`Layout ${id} not found`);
+      return;
+    }
+
+    for (const region of layout.regions || []) {
+      if (!region.item?.id) continue;
+
+      const itemType = String(region.item.type || "media").toLowerCase();
+      if (itemType === "media") {
+        await this.resolveMedia(region.item.id);
+      } else if (itemType === "playlist") {
+        await this.resolveSource("playlist", region.item.id, undefined, depth + 1);
+      } else if (itemType === "layout") {
+        await this.resolveSource("layout", region.item.id, undefined, depth + 1);
+      } else if (itemType === "tagbased-playlist" || itemType === "tagbased_playlist") {
+        await this.resolveSource("tagbased-playlist", region.item.id, undefined, depth + 1);
+      } else {
+        this.items.push({ type: itemType, id: region.item.id, name: `${itemType} ${region.item.id}` });
+      }
+    }
+  }
+
+  private async resolveSchedule(id: number, depth: number): Promise<void> {
+    const schedule = await this.client.getSchedule(id);
+    if (!schedule) {
+      this.warnings.push(`Schedule ${id} not found`);
+      return;
+    }
+
+    for (const event of schedule.events || []) {
+      if (!event.source?.source_id) continue;
+
+      const sourceType = String(event.source.source_type || "playlist").toLowerCase();
+      if (sourceType === "playlist") {
+        await this.resolveSource("playlist", event.source.source_id, event.source.source_name, depth + 1);
+      } else if (sourceType === "layout") {
+        await this.resolveSource("layout", event.source.source_id, event.source.source_name, depth + 1);
+      }
+    }
+
+    // Store filler content info (but don't include in main count)
+    if (schedule.filler_content?.source_id) {
+      this.fillerContent = {
+        sourceType: schedule.filler_content.source_type,
+        sourceId: schedule.filler_content.source_id,
+        sourceName: schedule.filler_content.source_name || undefined,
+      };
+      this.items.push({
+        type: `filler:${schedule.filler_content.source_type}`,
+        id: schedule.filler_content.source_id,
+        name: schedule.filler_content.source_name || "Filler content",
+      });
+    }
+  }
+
+  private async resolveMedia(id: number, duration?: number): Promise<void> {
+    if (this.mediaItems.has(id)) return;
+
+    const media = await this.client.getMedia(id);
+    if (media) {
+      this.addMediaItem(id, media.name, duration, media.media_origin?.type);
+    } else {
+      this.addMediaItem(id, `Media ${id}`, duration, undefined);
+      this.warnings.push(`Media ${id} not found in index`);
+    }
+  }
+
+  private addMediaItem(id: number, name: string, duration?: number, mediaType?: string): void {
+    if (this.mediaItems.has(id)) return;
+
+    this.mediaItems.set(id, {
+      id,
+      name,
+      type: "media",
+      duration: duration && duration > 0 ? duration : -1,
+      mediaType,
+    });
+  }
+}

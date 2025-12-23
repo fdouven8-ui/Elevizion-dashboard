@@ -1,0 +1,117 @@
+You are working in my existing app:
+
+Stack:
+- Backend: Node/Express + TypeScript
+- ORM: Drizzle ORM + PostgreSQL
+- Frontend: React + TypeScript + Vite
+
+Goal:
+Implement a robust Yodeck V2 API “content resolver” that can determine, for EACH screen, what content it is actually playing and how many media items are in that content, plus total unique media items across all screens.
+
+Authentication:
+- Use header: Authorization: Token <label:value>
+- Read from env: YODECK_API_TOKEN (full value including label:token OR store label separately if already used in project)
+- Base URL: https://app.yodeck.com/api/v2
+
+We already have:
+- An integration module for Yodeck (routes exist).
+- A sync endpoint exists (e.g. /api/sync/yodeck/run or /api/integrations/yodeck/sync).
+Extend it, do NOT break existing behavior.
+
+What to build:
+
+1) Yodeck API Client
+Create a reusable client with:
+- get(path, params) and automatic querystring
+- pagination support for list endpoints using limit/offset OR “next” URL from response
+- safe retries (2 retries) on 429/5xx with exponential backoff
+- small concurrency limit (e.g. 4) when fetching many screens/playlists to avoid rate-limits
+- typed responses (interfaces) for:
+  - Screen (includes screen_content {source_type, source_id, source_name})
+  - Playlist (items: [{type:'media'|'widget'|'playlist' etc, id, duration, name}])
+  - TagbasedPlaylist (tagbased config)
+  - Layout (regions[].item {type, id})
+  - Schedule (events[].source {source_type, source_id})
+  - Media list item (id, name, media_origin.type, tags, default_duration, parent_folder, workspace)
+
+2) Content Resolution Logic (the core)
+Given a Yodeck screen object, resolve its current content by following:
+- screen.screen_content: {source_type, source_id, source_name}
+Possible source_type values to support:
+  a) "playlist" -> fetch /playlists/{id}, parse playlist.items
+  b) "tagbased-playlist" -> fetch /tagbased-playlists/{id}, then resolve it into media by querying /media with tags/includes/excludes rules if possible (best-effort):
+     - If tagbased.content_to_filter = "only_media": fetch media list filtered by tagbased.tags + workspace filters
+     - Apply excludes if present
+     - If includes exist, treat as additional allow-lists
+     - If this is too ambiguous, still store “status=unknown_tagbased” but return a count based on fetched results where possible
+  c) "layout" -> fetch /layouts/{id}, for each region.item:
+       - if item.type === "playlist" -> resolve playlist (same as a)
+       - if item.type === "media" -> include that media id directly
+       - if item.type === "widget" -> ignore for media counting (but include in summary as “widget”)
+  d) "schedule" -> fetch /schedules/{id}, for each event.source:
+       - if source_type === "playlist" -> resolve playlist
+       - if source_type === "layout" -> resolve layout
+       - ignore filler_content for counting unless the screen would be empty; store filler content separately in summary
+If screen_content is missing/null:
+- set status = "unknown"
+- yodeckContentCount = 0
+- summary empty
+
+Also consider takeover_content (if present) as “temporary”; store it in summary but don’t mix into main count unless it is active (best-effort: if now between takeover start/end, count it).
+
+Important:
+- We must count:
+  - totalItemsInResolvedStructure (including widgets/playlists/layouts references)
+  - uniqueMediaCount (unique media IDs after traversing everything)
+  - mediaItems[] with {id, name, type:'media', duration}
+- For playlist.items:
+  - Include items where item.type === "media"
+  - If playlists can contain nested playlists, support that recursively with a maxDepth=3 and cycle detection (visited set)
+
+3) Media Name Enrichment
+Sometimes playlist items have only id/name already; still create a small cache:
+- mediaCache: Map<id, {id,name,default_duration,media_origin.type,tags}>
+- When you have media IDs, batch-fetch details efficiently:
+  - Either call /media?ids=1,2,3 (if supported) OR fallback to /media/{id}
+- Prefer batching and caching.
+- Store duration:
+  - Use playlist item.duration if >0
+  - Else fallback to media.default_duration if exists
+  - Else -1
+
+4) Database storage
+We already store screens in our DB. Extend schema for screen records:
+- yodeckContentStatus: enum('has_content','empty','unknown','error','unknown_tagbased')
+- yodeckContentCount: integer (uniqueMediaCount)
+- yodeckContentSummary: jsonb
+  Example structure:
+  {
+    "items":[{"type":"playlist","id":27644453,"name":"Test(auto-playlist-...)"}, ...],
+    "topItems":["media: ...", "widget: ...", "playlist: ..."],
+    "mediaItems":[{"id":27476141,"name":"NOS sport algemeen","type":"media","duration":20}, ...],
+    "uniqueMediaCount": 6,
+    "lastFetchedAt": "ISO"
+  }
+- yodeckContentLastFetchedAt: timestamp
+- yodeckContentError: text nullable
+
+Use Drizzle migrations properly.
+
+5) API endpoints
+Add/extend endpoints:
+A) POST /api/integrations/yodeck/sync (or the existing sync route)
+- For each Yodeck screen (from /screens list), resolve content using the resolver above
+- Upsert the screen record and update content fields
+- Return summary:
+  { success:true, count:<screens>, content:{total, withContent, empty, unknown, error}, totals:{uniqueMediaAcrossAllScreens, mediaPerScreen:[...] } }
+
+B) GET /api/yodeck/content/summary
+- Returns:
+  - screens: [{screenId, name, status, uniqueMediaCount, itemsPlaying:[...], mediaItems:[...]}]
+  - totalUniqueMediaAcrossAllScreens
+  - totalMediaCountSum (sum of per-screen unique counts)
+  - lastSyncedAt
+
+6) UI integration
+In the Control Room / Screens UI:
+- Show “Speelt content (niet vanuit Elevizion) • X item
