@@ -1,0 +1,164 @@
+JE BENT EEN SENIOR FULL-STACK ENGINEER. Bouw in deze Replit workspace een werkende Yodeck-integratie die per screen kan tonen: (1) welke content bron actief is (playlist/layout), (2) hoeveel media items er in die bron zitten, (3) welke media IDs/namen dat zijn, (4) totalen over alle screens. 
+
+STACK/CONTEXT
+- Project: Elevizion Dashboard
+- Frontend: React + TypeScript + Vite
+- Backend: Express + TypeScript (Node 18+)
+- Doel: intern operations overzicht
+- IMPORTANT: API token mag NOOIT in de frontend. Gebruik backend-only env vars.
+
+YODECK API (BASE)
+- Base URL: https://app.yodeck.com/api/v2
+- Auth header (APIKeyAuthentication):
+  Authorization: Token <label:value>
+  Voorbeeld: Authorization: Token mylabel:XXXXXXXX
+- Rate limiting: STANDARD (dus implementeer concurrency-limits + retry/backoff)
+
+ENV VARS (backend)
+- YODECK_AUTH_TOKEN="Token mylabel:XXXXXXXX"  (dus de hele string inclusief "Token ...")
+- YODECK_BASE_URL="https://app.yodeck.com/api/v2" (default)
+- OPTIONAL: YODECK_WORKSPACE_ID=42 (als filter handig is, anders weglaten)
+
+ENDPOINTS DIE JE MOET GEBRUIKEN
+1) Screens list:
+GET /screens?limit=100&offset=0 (paginatie mogelijk)
+Response: results[].id, results[].name, results[].workspace, results[].screen_content {source_type, source_id, source_name}
+
+2) Playlist by id:
+GET /playlists/{id}
+Response: items[] met {id, type, name, duration}
+- type kan minimaal: "media" (en mogelijk andere types; maak code defensief)
+
+3) Layout by id:
+GET /layouts/{id}
+Response: regions[].item {type, id}
+- type kan o.a. "playlist" en "widget"
+- Alleen playlists bevatten media-items; widgets tellen niet mee als media.
+
+4) Media list (optioneel voor namen/extra info):
+GET /media?limit=100&offset=0 (&workspace=... optional)
+Response: results[] met {id, name, media_origin.type, parent_folder, workspace, tags}
+- Dit endpoint is gepagineerd via next/previous.
+- Gebruik dit om media ID -> name te kunnen mappen als playlist-items alleen een id hebben.
+- Maar: playlist items hebben ook "name"; dus media list is OPTIONEEL. Toch wil ik dat je het implementeert als “cache”, zodat we consistente namen/thumbnails kunnen tonen.
+
+5) (Later/optioneel) schedules:
+GET /schedules/{id} of schedules list — alleen voorbereiden als helper, maar focus nu op “wat staat er per screen”.
+
+FUNCTIONELE REQUIREMENTS
+A) Backend routes (Express)
+Maak een router /api/yodeck met:
+
+1) GET /api/yodeck/health
+- test call naar /workspaces?limit=1 of /screens?limit=1
+- return {ok:true, yodeck:true} of foutmelding (zonder token te loggen)
+
+2) GET /api/yodeck/screens/summary
+Return een array met per screen:
+{
+  screen_id: number,
+  screen_name: string,
+  workspace_id?: number,
+  workspace_name?: string,
+  source_type: "playlist" | "layout" | string,
+  source_id: number,
+  source_name?: string,
+  media_count: number,                 // totaal aantal media items (met duplicates)
+  unique_media_count: number,          // uniek op media_id
+  media: Array<{ media_id:number, name?:string, from:"playlist"|"layout", playlist_id?:number, playlist_name?:string }>,
+  playlists_resolved?: Array<{playlist_id:number, name?:string, media_count:number, unique_media_count:number}>,
+  warnings: string[]
+}
+
+3) GET /api/yodeck/screens/:id/details
+- Zelfde als summary maar alleen 1 screen, inclusief debugvelden:
+  - raw screen_content
+  - welke playlists/layout regions zijn gevonden
+  - welke types genegeerd zijn (widgets, onbekend)
+  - timings (ms) voor fetches
+
+4) GET /api/yodeck/stats
+- total_screens
+- total_media_in_use (som media_count over screens)
+- total_unique_media_in_use (uniek over alle screens samen)
+- top_media (meest voorkomende media over screens)
+- top_playlists (meest gebruikte playlists)
+- errors_count / warnings_count
+
+B) Resolving logic: "wat staat er op een screen"
+Startpunt: GET /screens list. Per screen:
+- Lees screen.screen_content:
+  - Als source_type === "playlist":
+    - Fetch playlist: GET /playlists/{source_id}
+    - Neem playlist.items waar type === "media"
+    - Verzamel media_id’s
+  - Als source_type === "layout":
+    - Fetch layout: GET /layouts/{source_id}
+    - Loop layout.regions:
+      - Als region.item.type === "playlist":
+        - Fetch playlist: GET /playlists/{region.item.id}
+        - Neem media items (type===media)
+      - Anders (widget/unknown): negeer als media, maar voeg warning toe “region item type ignored: X”
+- Deduplicate playlists fetches: als meerdere screens dezelfde playlist gebruiken, maar 1x ophalen (in-memory cache per request of globale cache met TTL).
+
+C) Pagination helpers (belangrijk)
+Implementeer een generieke functie fetchAllPages(path, {limit}) die:
+- GET met limit=100 (of 200 indien toegestaan; maar veilig 100)
+- offset verhoogt totdat results leeg of count bereikt
+- let op: sommige responses hebben {count,next,previous,results}
+- log NOOIT headers met token
+
+D) Concurrency + retry
+- Max 5 gelijktijdige requests naar Yodeck (p-limit).
+- Retry op 429/5xx met exponential backoff (bijv. 250ms, 750ms, 1500ms) max 3 pogingen.
+- Als iets faalt, ga door met andere screens en zet warnings/errors in response.
+
+E) Caching
+- In-memory cache (Map) met TTL 60 seconden voor:
+  - playlists by id
+  - layouts by id
+  - media list map (id->name, thumbnail_url) (TTL bijv. 5 minuten)
+- Voeg query param ?refresh=1 toe op endpoints om cache te bypass’en.
+
+F) Security
+- Token alleen backend env var.
+- Sanitized errors naar frontend (geen stacktrace in prod).
+- Voeg basic input validation toe (id must be number).
+
+FRONTEND (MINIMUM UI)
+Maak 1 simpele pagina/component (bv. /yodeck) met:
+- knop “Refresh”
+- tabel met screens:
+  - Screen naam
+  - Workspace
+  - Source type + source name
+  - media_count / unique_media_count
+  - knop “Details”
+- Details view toont:
+  - lijst media (met media_id + name)
+  - lijst playlists resolved (als layout meerdere playlists bevat)
+  - warnings
+
+TESTING / OUTPUT
+- Voeg een “mock mode” toe als YODECK_AUTH_TOKEN niet gezet is:
+  - return demo data zodat UI werkt
+- Als token wel gezet is, moet het live werken.
+
+EDGE CASES DIE JE MOET AFHANDELEN
+- screen_content ontbreekt of null -> media_count=0 + warning
+- playlist.items heeft items met type != media -> ignore + warning
+- layout.regions heeft item null -> ignore + warning
+- onbekende source_type -> warning “unsupported screen_content type”
+- sommige playlist-items kunnen “tagbased-playlists” zijn in de toekomst: zet warning en sla over (of implementeer later)
+
+DELIVERABLES
+- Werkende Express endpoints + React UI
+- Duidelijke README:
+  - hoe env var zetten
+  - welke endpoints bestaan
+  - hoe refresh werkt
+  - wat “unique_media_count” betekent
+
+NU BOUWEN: maak commits/changes in de codebase zodat alles compileert en draait.
+
+Let op: gebruik TypeScript types/interfaces voor de Yodeck responses (ScreensResponse, Playlist, Layout, MediaListResponse). Gebruik fetch (node) of axios. Maak nette mapstructuur: /server/yodeckClient.ts, /server/routes/yodeck.ts, /client/pages/Yodeck.tsx.

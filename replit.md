@@ -135,6 +135,17 @@ Core entities include Advertisers, Locations, Screens, PackagePlans, Contracts, 
       - `POST /api/yodeck/inventory/refresh`: Force clear cache and rebuild
     - Frontend: Dual buttons (Laden/Vernieuwen), extended media type icons, top-10 preview per screen
     - Permission: Requires `manage_integrations`
+  - **Yodeck API Routes** (`/yodeck`):
+    - `GET /api/yodeck/health`: Test Yodeck API connection (returns mock mode if not configured)
+    - `GET /api/yodeck/screens/summary`: All screens with media counts, warnings, playlists_resolved, and content info
+    - `GET /api/yodeck/screens/:id/details`: Detailed screen info with raw_screen_content, playlists_resolved, and timings
+    - `GET /api/yodeck/stats`: Aggregated statistics (total_screens, total_media_in_use, top_media, top_playlists, warnings_count)
+    - Query params: `refresh=1` bypasses cache, `workspace_id` filters by workspace
+    - Mock mode: Returns demo data with playlists_resolved when Yodeck API not configured
+    - Response fields per screen:
+      - `playlists_resolved[]`: Array of resolved playlists with playlist_id, name, media_count, unique_media_count
+      - `warnings[]`: Array of warning messages from content resolution (e.g., "playlist not found", "no content assigned")
+    - Frontend page: `/yodeck` with screens table, details dialog, stats cards, and refresh functionality
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests (requires API key configuration).
 

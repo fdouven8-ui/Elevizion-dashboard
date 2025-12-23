@@ -3308,6 +3308,310 @@ export async function registerRoutes(
   });
 
   // ============================================================================
+  // YODECK DEDICATED ROUTES (Spec-compliant API)
+  // ============================================================================
+
+  // GET /api/yodeck/health - Test Yodeck API connection
+  app.get("/api/yodeck/health", async (_req, res) => {
+    try {
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      
+      if (!client) {
+        return res.json({
+          ok: true,
+          yodeck: false,
+          mode: "mock",
+          message: "Yodeck API not configured - using mock mode",
+        });
+      }
+
+      const screens = await client.getScreens();
+      
+      return res.json({
+        ok: true,
+        yodeck: true,
+        mode: "live",
+        screens_found: screens.length,
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        ok: false,
+        yodeck: false,
+        error: error.message || "Failed to connect to Yodeck API",
+      });
+    }
+  });
+
+  // Mock data for when Yodeck API is not configured
+  const MOCK_SCREENS = [
+    {
+      screen_id: 1,
+      screen_name: "Demo Screen 1",
+      workspace_id: 1,
+      workspace_name: "Demo Workspace",
+      source_type: "playlist",
+      source_id: 100,
+      source_name: "Demo Playlist",
+      media_count: 5,
+      unique_media_count: 4,
+      media: [
+        { media_id: 1001, name: "Welcome Video", type: "video", from: "playlist" },
+        { media_id: 1002, name: "Promo Image 1", type: "image", from: "playlist" },
+        { media_id: 1003, name: "Promo Image 2", type: "image", from: "playlist" },
+        { media_id: 1004, name: "Background Music", type: "audio", from: "playlist" },
+      ],
+      playlists_resolved: [
+        { playlist_id: 100, name: "Demo Playlist", media_count: 5, unique_media_count: 4 },
+      ],
+      warnings: [],
+    },
+    {
+      screen_id: 2,
+      screen_name: "Demo Screen 2",
+      workspace_id: 1,
+      workspace_name: "Demo Workspace",
+      source_type: "layout",
+      source_id: 200,
+      source_name: "Demo Layout",
+      media_count: 8,
+      unique_media_count: 6,
+      media: [
+        { media_id: 2001, name: "Header Image", type: "image", from: "layout" },
+        { media_id: 2002, name: "Main Video", type: "video", from: "layout" },
+        { media_id: 2003, name: "Side Banner", type: "image", from: "layout" },
+      ],
+      playlists_resolved: [
+        { playlist_id: 201, name: "Layout Playlist 1", media_count: 4, unique_media_count: 3 },
+        { playlist_id: 202, name: "Layout Playlist 2", media_count: 4, unique_media_count: 3 },
+      ],
+      warnings: ["region item type ignored: widget"],
+    },
+  ];
+
+  const MOCK_STATS = {
+    total_screens: 2,
+    total_media_in_use: 13,
+    total_unique_media_in_use: 10,
+    top_media: [
+      { media_id: 1001, name: "Welcome Video", screen_count: 1 },
+      { media_id: 2002, name: "Main Video", screen_count: 1 },
+    ],
+    top_playlists: [
+      { source_type: "playlist", source_name: "Demo Playlist", screen_count: 1 },
+      { source_type: "layout", source_name: "Demo Layout", screen_count: 1 },
+    ],
+    errors_count: 0,
+    warnings_count: 1,
+  };
+
+  // GET /api/yodeck/screens/summary - Get all screens with media counts
+  app.get("/api/yodeck/screens/summary", requirePermission("manage_integrations"), async (req, res) => {
+    const refresh = req.query.refresh === "1";
+    const workspaceId = req.query.workspace_id ? parseInt(req.query.workspace_id as string, 10) : undefined;
+
+    try {
+      const startTime = Date.now();
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      
+      if (!client) {
+        return res.json({
+          mode: "mock",
+          screens: MOCK_SCREENS,
+          total: MOCK_SCREENS.length,
+          generated_at: new Date().toISOString(),
+          timing_ms: Date.now() - startTime,
+        });
+      }
+
+      const { buildContentInventory, refreshInventory } = await import("./services/yodeckInventory");
+      
+      let inventory;
+      if (refresh) {
+        inventory = await refreshInventory();
+      } else {
+        inventory = await buildContentInventory(workspaceId);
+      }
+
+      const screens = inventory.screens.map(s => ({
+        screen_id: s.screenId,
+        screen_name: s.name,
+        workspace_id: s.workspaceId,
+        workspace_name: s.workspaceName,
+        source_type: s.screen_content?.source_type || null,
+        source_id: s.screen_content?.source_id || null,
+        source_name: s.screen_content?.source_name || undefined,
+        media_count: s.counts.mediaItemsTotal,
+        unique_media_count: s.counts.uniqueMediaIds,
+        media: s.topMedia.map(m => ({
+          media_id: m.id,
+          name: m.name,
+          type: m.type,
+          from: s.screen_content?.source_type || "playlist",
+        })),
+        playlists_resolved: s.playlistsResolved || [],
+        warnings: s.warnings.length > 0 
+          ? s.warnings 
+          : (s.screen_content?.source_type ? [] : ["no content assigned"]),
+      }));
+
+      return res.json({
+        mode: "live",
+        screens,
+        total: screens.length,
+        generated_at: inventory.generatedAt,
+        timing_ms: Date.now() - startTime,
+      });
+    } catch (error: any) {
+      console.error("[Yodeck] Error fetching screens summary:", error);
+      return res.status(500).json({ error: error.message || "Failed to fetch screens" });
+    }
+  });
+
+  // GET /api/yodeck/screens/:id/details - Get detailed info for single screen
+  app.get("/api/yodeck/screens/:id/details", requirePermission("manage_integrations"), async (req, res) => {
+    const screenId = parseInt(req.params.id, 10);
+    
+    if (isNaN(screenId) || screenId <= 0) {
+      return res.status(400).json({ error: "Invalid screen ID - must be a positive number" });
+    }
+
+    try {
+      const startTime = Date.now();
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const { buildContentInventory } = await import("./services/yodeckInventory");
+      
+      const client = await getYodeckClient();
+      if (!client) {
+        const mockScreen = MOCK_SCREENS.find(s => s.screen_id === screenId);
+        if (!mockScreen) {
+          return res.status(404).json({ error: "Screen not found", mode: "mock" });
+        }
+        return res.json({
+          mode: "mock",
+          screen: {
+            ...mockScreen,
+            raw_screen_content: { source_type: mockScreen.source_type, source_id: mockScreen.source_id, source_name: mockScreen.source_name },
+            timings_ms: { screen_fetch: 10, content_resolve: 20, total: 30 },
+          },
+        });
+      }
+
+      const screenFetchStart = Date.now();
+      const screen = await client.getScreen(screenId);
+      const screenFetchTime = Date.now() - screenFetchStart;
+
+      if (!screen) {
+        return res.status(404).json({ error: "Screen not found in Yodeck" });
+      }
+
+      const contentResolveStart = Date.now();
+      const inventory = await buildContentInventory();
+      const screenInventory = inventory.screens.find(s => s.screenId === screenId);
+      const contentResolveTime = Date.now() - contentResolveStart;
+
+      if (!screenInventory) {
+        return res.status(404).json({ error: "Screen not found in inventory" });
+      }
+
+      const details = {
+        screen_id: screenInventory.screenId,
+        screen_name: screenInventory.name,
+        workspace_id: screenInventory.workspaceId,
+        workspace_name: screenInventory.workspaceName,
+        source_type: screenInventory.screen_content?.source_type || null,
+        source_id: screenInventory.screen_content?.source_id || null,
+        source_name: screenInventory.screen_content?.source_name || undefined,
+        media_count: screenInventory.counts.mediaItemsTotal,
+        unique_media_count: screenInventory.counts.uniqueMediaIds,
+        media: screenInventory.topMedia.map(m => ({
+          media_id: m.id,
+          name: m.name,
+          type: m.type,
+          from: screenInventory.screen_content?.source_type || "playlist",
+        })),
+        playlists_resolved: screenInventory.playlistsResolved || [],
+        warnings: screenInventory.warnings.length > 0 
+          ? screenInventory.warnings 
+          : (screenInventory.screen_content?.source_type ? [] : ["no content assigned"]),
+        raw_screen_content: screen.screen_content,
+        timings_ms: {
+          screen_fetch: screenFetchTime,
+          content_resolve: contentResolveTime,
+          total: Date.now() - startTime,
+        },
+      };
+
+      return res.json({ mode: "live", screen: details });
+    } catch (error: any) {
+      console.error(`[Yodeck] Error fetching screen ${screenId} details:`, error);
+      return res.status(500).json({ error: error.message || "Failed to fetch screen details" });
+    }
+  });
+
+  // GET /api/yodeck/stats - Get aggregated statistics
+  app.get("/api/yodeck/stats", requirePermission("manage_integrations"), async (req, res) => {
+    const refresh = req.query.refresh === "1";
+
+    try {
+      const startTime = Date.now();
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      
+      if (!client) {
+        return res.json({
+          mode: "mock",
+          stats: MOCK_STATS,
+          generated_at: new Date().toISOString(),
+          timing_ms: Date.now() - startTime,
+        });
+      }
+
+      const { buildContentInventory, refreshInventory } = await import("./services/yodeckInventory");
+      
+      let inventory;
+      if (refresh) {
+        inventory = await refreshInventory();
+      } else {
+        inventory = await buildContentInventory();
+      }
+
+      const totalWarnings = inventory.screens.reduce((count, s) => {
+        return count + (s.warnings?.length || 0) + (s.screen_content?.source_type ? 0 : 1);
+      }, 0);
+
+      const stats = {
+        total_screens: inventory.totals.screens,
+        total_media_in_use: inventory.totals.totalMediaAllScreens,
+        total_unique_media_in_use: inventory.totals.uniqueMediaAcrossAllScreens,
+        top_media: inventory.totals.topMediaByScreens.map(m => ({
+          media_id: m.mediaId,
+          name: m.name,
+          screen_count: m.screenCount,
+        })),
+        top_playlists: inventory.totals.topSourcesByUsage.map(s => ({
+          source_type: s.sourceType,
+          source_name: s.sourceName,
+          screen_count: s.screenCount,
+        })),
+        errors_count: 0,
+        warnings_count: totalWarnings,
+      };
+
+      return res.json({
+        mode: "live",
+        stats,
+        generated_at: inventory.generatedAt,
+        timing_ms: Date.now() - startTime,
+      });
+    } catch (error: any) {
+      console.error("[Yodeck] Error fetching stats:", error);
+      return res.status(500).json({ error: error.message || "Failed to fetch stats" });
+    }
+  });
+
+  // ============================================================================
   // CONTROL ROOM (OPS-FIRST DASHBOARD)
   // ============================================================================
 

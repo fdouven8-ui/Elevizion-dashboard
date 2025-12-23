@@ -19,12 +19,21 @@ import {
   clearYodeckClient,
 } from "./yodeckClient";
 
+export interface PlaylistResolved {
+  playlist_id: number;
+  name?: string;
+  media_count: number;
+  unique_media_count: number;
+}
+
 export interface ResolvedContent {
   mediaIds: number[];
   widgetCount: number;
   totalPlaylistItems: number;
   nestedPlaylistCount: number;
   nestedLayoutCount: number;
+  playlistsResolved: PlaylistResolved[];
+  warnings: string[];
 }
 
 export interface MediaDetail {
@@ -62,6 +71,8 @@ export interface ScreenInventory {
     other: number;
   };
   topMedia: MediaDetail[];
+  playlistsResolved: PlaylistResolved[];
+  warnings: string[];
 }
 
 export interface InventoryResult {
@@ -125,15 +136,29 @@ class InventoryResolver {
     return mediaToDetail(media);
   }
 
+  private emptyResult(): ResolvedContent {
+    return {
+      mediaIds: [],
+      widgetCount: 0,
+      totalPlaylistItems: 0,
+      nestedPlaylistCount: 0,
+      nestedLayoutCount: 0,
+      playlistsResolved: [],
+      warnings: [],
+    };
+  }
+
   async resolvePlaylist(playlistId: number): Promise<ResolvedContent> {
     if (this.visitedPlaylists.has(playlistId)) {
-      return { mediaIds: [], widgetCount: 0, totalPlaylistItems: 0, nestedPlaylistCount: 0, nestedLayoutCount: 0 };
+      return this.emptyResult();
     }
     this.visitedPlaylists.add(playlistId);
 
     const playlist = await this.client.getPlaylist(playlistId);
     if (!playlist) {
-      return { mediaIds: [], widgetCount: 0, totalPlaylistItems: 0, nestedPlaylistCount: 0, nestedLayoutCount: 0 };
+      const result = this.emptyResult();
+      result.warnings.push(`playlist ${playlistId} not found`);
+      return result;
     }
 
     const result: ResolvedContent = {
@@ -142,14 +167,21 @@ class InventoryResolver {
       totalPlaylistItems: playlist.items?.length || 0,
       nestedPlaylistCount: 0,
       nestedLayoutCount: 0,
+      playlistsResolved: [],
+      warnings: [],
     };
+
+    const uniqueMediaInPlaylist = new Set<number>();
 
     for (const item of playlist.items || []) {
       const itemType = item.type?.toLowerCase();
 
       switch (itemType) {
         case "media":
-          if (item.id) result.mediaIds.push(item.id);
+          if (item.id) {
+            result.mediaIds.push(item.id);
+            uniqueMediaInPlaylist.add(item.id);
+          }
           break;
         case "widget":
           result.widgetCount++;
@@ -159,8 +191,11 @@ class InventoryResolver {
             result.nestedPlaylistCount++;
             const nested = await this.resolvePlaylist(item.id);
             result.mediaIds.push(...nested.mediaIds);
+            nested.mediaIds.forEach(id => uniqueMediaInPlaylist.add(id));
             result.widgetCount += nested.widgetCount;
             result.totalPlaylistItems += nested.totalPlaylistItems;
+            result.playlistsResolved.push(...nested.playlistsResolved);
+            result.warnings.push(...nested.warnings);
           }
           break;
         case "layout":
@@ -168,7 +203,10 @@ class InventoryResolver {
             result.nestedLayoutCount++;
             const layoutContent = await this.resolveLayout(item.id);
             result.mediaIds.push(...layoutContent.mediaIds);
+            layoutContent.mediaIds.forEach(id => uniqueMediaInPlaylist.add(id));
             result.widgetCount += layoutContent.widgetCount;
+            result.playlistsResolved.push(...layoutContent.playlistsResolved);
+            result.warnings.push(...layoutContent.warnings);
           }
           break;
         case "tagbased-playlist":
@@ -176,25 +214,36 @@ class InventoryResolver {
           if (item.id) {
             const tagbasedContent = await this.resolveTagbasedPlaylist(item.id);
             result.mediaIds.push(...tagbasedContent.mediaIds);
+            tagbasedContent.mediaIds.forEach(id => uniqueMediaInPlaylist.add(id));
+            result.warnings.push(...tagbasedContent.warnings);
           }
           break;
         default:
-          console.log(`[InventoryResolver] Unknown playlist item type: ${itemType}`);
+          result.warnings.push(`playlist item type ignored: ${itemType}`);
       }
     }
+
+    result.playlistsResolved.push({
+      playlist_id: playlistId,
+      name: playlist.name,
+      media_count: result.mediaIds.length,
+      unique_media_count: uniqueMediaInPlaylist.size,
+    });
 
     return result;
   }
 
   async resolveLayout(layoutId: number): Promise<ResolvedContent> {
     if (this.visitedLayouts.has(layoutId)) {
-      return { mediaIds: [], widgetCount: 0, totalPlaylistItems: 0, nestedPlaylistCount: 0, nestedLayoutCount: 0 };
+      return this.emptyResult();
     }
     this.visitedLayouts.add(layoutId);
 
     const layout = await this.client.getLayout(layoutId);
     if (!layout) {
-      return { mediaIds: [], widgetCount: 0, totalPlaylistItems: 0, nestedPlaylistCount: 0, nestedLayoutCount: 0 };
+      const result = this.emptyResult();
+      result.warnings.push(`layout ${layoutId} not found`);
+      return result;
     }
 
     const result: ResolvedContent = {
@@ -203,6 +252,8 @@ class InventoryResolver {
       totalPlaylistItems: 0,
       nestedPlaylistCount: 0,
       nestedLayoutCount: 0,
+      playlistsResolved: [],
+      warnings: [],
     };
 
     for (const region of layout.regions || []) {
@@ -224,17 +275,22 @@ class InventoryResolver {
           result.widgetCount += playlistContent.widgetCount;
           result.totalPlaylistItems += playlistContent.totalPlaylistItems;
           result.nestedPlaylistCount++;
+          result.playlistsResolved.push(...playlistContent.playlistsResolved);
+          result.warnings.push(...playlistContent.warnings);
           break;
         case "layout":
           const nestedLayout = await this.resolveLayout(resourceId);
           result.mediaIds.push(...nestedLayout.mediaIds);
           result.widgetCount += nestedLayout.widgetCount;
           result.nestedLayoutCount++;
+          result.playlistsResolved.push(...nestedLayout.playlistsResolved);
+          result.warnings.push(...nestedLayout.warnings);
           break;
         case "tagbased-playlist":
         case "tagbased_playlist":
           const tagbasedContent = await this.resolveTagbasedPlaylist(resourceId);
           result.mediaIds.push(...tagbasedContent.mediaIds);
+          result.warnings.push(...tagbasedContent.warnings);
           break;
       }
     }
@@ -254,7 +310,9 @@ class InventoryResolver {
   async resolveSchedule(scheduleId: number): Promise<ResolvedContent> {
     const schedule = await this.client.getSchedule(scheduleId);
     if (!schedule) {
-      return { mediaIds: [], widgetCount: 0, totalPlaylistItems: 0, nestedPlaylistCount: 0, nestedLayoutCount: 0 };
+      const result = this.emptyResult();
+      result.warnings.push(`schedule ${scheduleId} not found`);
+      return result;
     }
 
     const result: ResolvedContent = {
@@ -263,6 +321,8 @@ class InventoryResolver {
       totalPlaylistItems: 0,
       nestedPlaylistCount: 0,
       nestedLayoutCount: 0,
+      playlistsResolved: [],
+      warnings: [],
     };
 
     for (const event of schedule.events || []) {
@@ -276,10 +336,14 @@ class InventoryResolver {
         result.mediaIds.push(...playlistContent.mediaIds);
         result.widgetCount += playlistContent.widgetCount;
         result.totalPlaylistItems += playlistContent.totalPlaylistItems;
+        result.playlistsResolved.push(...playlistContent.playlistsResolved);
+        result.warnings.push(...playlistContent.warnings);
       } else if (sourceType === "layout" && sourceId) {
         const layoutContent = await this.resolveLayout(sourceId);
         result.mediaIds.push(...layoutContent.mediaIds);
         result.widgetCount += layoutContent.widgetCount;
+        result.playlistsResolved.push(...layoutContent.playlistsResolved);
+        result.warnings.push(...layoutContent.warnings);
       }
     }
 
@@ -292,10 +356,14 @@ class InventoryResolver {
         result.mediaIds.push(...playlistContent.mediaIds);
         result.widgetCount += playlistContent.widgetCount;
         result.totalPlaylistItems += playlistContent.totalPlaylistItems;
+        result.playlistsResolved.push(...playlistContent.playlistsResolved);
+        result.warnings.push(...playlistContent.warnings);
       } else if (fillerType === "layout" && fillerId) {
         const layoutContent = await this.resolveLayout(fillerId);
         result.mediaIds.push(...layoutContent.mediaIds);
         result.widgetCount += layoutContent.widgetCount;
+        result.playlistsResolved.push(...layoutContent.playlistsResolved);
+        result.warnings.push(...layoutContent.warnings);
       }
     }
 
@@ -305,7 +373,9 @@ class InventoryResolver {
   async resolveTagbasedPlaylist(tagbasedId: number, fallbackWorkspaceId?: number): Promise<ResolvedContent> {
     const tagbased = await this.client.getTagbasedPlaylist(tagbasedId);
     if (!tagbased) {
-      return { mediaIds: [], widgetCount: 0, totalPlaylistItems: 0, nestedPlaylistCount: 0, nestedLayoutCount: 0 };
+      const result = this.emptyResult();
+      result.warnings.push(`tagbased-playlist ${tagbasedId} not found`);
+      return result;
     }
 
     const result: ResolvedContent = {
@@ -314,10 +384,13 @@ class InventoryResolver {
       totalPlaylistItems: 0,
       nestedPlaylistCount: 0,
       nestedLayoutCount: 0,
+      playlistsResolved: [],
+      warnings: [],
     };
 
     const tagNames = (tagbased.tags || []).map(t => t.name);
     if (tagNames.length === 0) {
+      result.warnings.push(`tagbased-playlist ${tagbasedId} has no tags`);
       return result;
     }
 
@@ -358,8 +431,9 @@ class InventoryResolver {
       case "tagbased-playlist":
         return this.resolveTagbasedPlaylist(sourceId, workspaceId);
       default:
-        console.log(`[InventoryResolver] Unknown source type: ${sourceType}`);
-        return { mediaIds: [], widgetCount: 0, totalPlaylistItems: 0, nestedPlaylistCount: 0, nestedLayoutCount: 0 };
+        const result = this.emptyResult();
+        result.warnings.push(`unknown source type: ${sourceType}`);
+        return result;
     }
   }
 
@@ -405,6 +479,8 @@ export async function buildContentInventory(workspaceId?: number): Promise<Inven
       totalPlaylistItems: 0,
       nestedPlaylistCount: 0,
       nestedLayoutCount: 0,
+      playlistsResolved: [],
+      warnings: [],
     };
 
     if (screenContent?.source_type && screenContent?.source_id) {
@@ -462,6 +538,8 @@ export async function buildContentInventory(workspaceId?: number): Promise<Inven
       },
       mediaBreakdown,
       topMedia,
+      playlistsResolved: resolved.playlistsResolved,
+      warnings: resolved.warnings,
     });
 
     console.log(`[YodeckInventory] Screen "${screen.name}": ${uniqueMediaIds.length} unique media, ${resolved.widgetCount} widgets`);
