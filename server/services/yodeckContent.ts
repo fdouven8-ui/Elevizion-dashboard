@@ -56,6 +56,16 @@ import { classifyMediaItem, type MediaCategory } from "./mediaClassifier";
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const CONCURRENT_LIMIT = 3; // Max parallel requests to avoid rate limiting
 
+// Debug flags - set via environment variables
+const DEBUG_YODECK = process.env.DEBUG_YODECK === "true";
+const DEBUG_MEMORY = process.env.DEBUG_MEMORY === "true";
+
+function debugLog(...args: any[]) {
+  if (DEBUG_YODECK) {
+    console.log(...args);
+  }
+}
+
 export type ContentStatus = "unknown" | "empty" | "has_content" | "error";
 
 export interface ContentItem {
@@ -205,24 +215,30 @@ function isRealYodeckId(playerId: string | null): boolean {
 }
 
 /**
- * Fetch playlist items from Yodeck API
+ * Fetch playlist items from Yodeck API (with caching)
  * Returns array of media items within the playlist
  */
 async function fetchPlaylistItems(playlistId: number, apiKey: string): Promise<MediaItem[]> {
+  // Check cache first
+  if (playlistCache.has(playlistId)) {
+    debugLog(`[Yodeck] Playlist ${playlistId}: Using cached data`);
+    return playlistCache.get(playlistId)!;
+  }
+  
   const endpoint = `/playlists/${playlistId}`;
-  console.log(`[Yodeck] Fetching playlist ${playlistId}: GET ${YODECK_BASE_URL}${endpoint}`);
+  debugLog(`[Yodeck] Fetching playlist ${playlistId}: GET ${YODECK_BASE_URL}${endpoint}`);
   
   const result = await yodeckApiRequest<any>(endpoint, apiKey);
   
   if (!result.ok || !result.data) {
-    console.log(`[Yodeck] Playlist ${playlistId}: Failed with status ${result.status || result.error}`);
+    debugLog(`[Yodeck] Playlist ${playlistId}: Failed with status ${result.status || result.error}`);
     return [];
   }
   
   const data = result.data;
   const mediaItems: MediaItem[] = [];
   
-  console.log(`[Yodeck] Playlist ${playlistId} keys: [${Object.keys(data).join(", ")}]`);
+  debugLog(`[Yodeck] Playlist ${playlistId} keys: [${Object.keys(data).join(", ")}]`);
   
   // Yodeck playlist response structure observed:
   // - items: array of {id, name, type, duration, ...}
@@ -280,14 +296,28 @@ async function fetchPlaylistItems(playlistId: number, apiKey: string): Promise<M
     }
   }
   
-  console.log(`[Yodeck] Playlist ${playlistId}: Found ${mediaItems.length} media items`);
+  debugLog(`[Yodeck] Playlist ${playlistId}: Found ${mediaItems.length} media items`);
+  
+  // Cache for future use in this sync run
+  playlistCache.set(playlistId, mediaItems);
+  
   return mediaItems;
 }
 
 /**
- * In-memory cache for media lookups during sync (prevents duplicate API calls)
+ * In-memory caches for sync runs (prevents duplicate API calls)
+ * These are cleared at the start of each sync run
  */
 const mediaCache = new Map<number, MediaItem>();
+const playlistCache = new Map<number, MediaItem[]>();
+
+/**
+ * Clear all caches (call at start of sync run)
+ */
+export function clearAllCaches() {
+  mediaCache.clear();
+  playlistCache.clear();
+}
 
 /**
  * Fetch media details from Yodeck API (with caching)
@@ -357,41 +387,41 @@ async function fetchScreenAssignedContent(
 ): Promise<FetchContentResult> {
   // Check if this is a real Yodeck ID (not a dummy placeholder)
   if (!numericId || !isRealYodeckId(numericId)) {
-    console.log(`[Yodeck] ${screenId}: Invalid or dummy ID "${numericId}" - skipping API call`);
+    debugLog(`[Yodeck] ${screenId}: Invalid or dummy ID "${numericId}" - skipping API call`);
     return { items: [], mediaItems: [], error: "invalid_yodeck_id" };
   }
 
   const endpoint = `/screens/${numericId}`;
-  console.log(`[Yodeck] ${screenId}: GET ${YODECK_BASE_URL}${endpoint}`);
+  debugLog(`[Yodeck] ${screenId}: GET ${YODECK_BASE_URL}${endpoint}`);
   
   const result = await yodeckApiRequest<YodeckScreenDetail>(endpoint, apiKey);
   
   if (result.ok && result.data) {
     // Log response keys for debugging
     const responseKeys = Object.keys(result.data);
-    console.log(`[Yodeck] ${screenId}: SUCCESS - Response keys: [${responseKeys.join(", ")}]`);
+    debugLog(`[Yodeck] ${screenId}: SUCCESS - Response keys: [${responseKeys.join(", ")}]`);
     
     const items = extractContentItems(result.data);
     
-    // Log detailed content detection
+    // Log detailed content detection (debug only)
     if (items.length > 0) {
-      console.log(`[Yodeck] ${screenId}: CONTENT DETECTED - ${items.length} item(s):`);
+      debugLog(`[Yodeck] ${screenId}: CONTENT DETECTED - ${items.length} item(s):`);
       items.forEach((item, i) => {
-        console.log(`[Yodeck]   ${i + 1}. ${item.type}: "${item.name}" (id: ${item.id || "n/a"})`);
+        debugLog(`[Yodeck]   ${i + 1}. ${item.type}: "${item.name}" (id: ${item.id || "n/a"})`);
       });
     }
     
-    // Log screen_content structure if present
+    // Log screen_content structure if present (debug only)
     const sc = result.data.screen_content as any;
     if (sc) {
-      console.log(`[Yodeck] ${screenId}: screen_content = ${JSON.stringify(sc)}`);
+      debugLog(`[Yodeck] ${screenId}: screen_content = ${JSON.stringify(sc)}`);
     } else {
-      console.log(`[Yodeck] ${screenId}: screen_content = null (no content assigned in Yodeck)`);
+      debugLog(`[Yodeck] ${screenId}: screen_content = null (no content assigned in Yodeck)`);
     }
     
-    // Log assigned_content if present
+    // Log assigned_content if present (debug only)
     if (result.data.assigned_content) {
-      console.log(`[Yodeck] ${screenId}: assigned_content found with keys: [${Object.keys(result.data.assigned_content).join(", ")}]`);
+      debugLog(`[Yodeck] ${screenId}: assigned_content found with keys: [${Object.keys(result.data.assigned_content).join(", ")}]`);
     }
     
     // Determine if screen is CONFIRMED empty
@@ -412,7 +442,7 @@ async function fetchScreenAssignedContent(
     const confirmedEmpty = items.length === 0 && !hasScreenContent && !hasAssignedContent;
     
     if (items.length === 0) {
-      console.log(`[Yodeck] ${screenId}: NO CONTENT - confirmedEmpty=${confirmedEmpty}`);
+      debugLog(`[Yodeck] ${screenId}: NO CONTENT - confirmedEmpty=${confirmedEmpty}`);
     }
     
     // Fetch playlist items for all playlists found
@@ -441,7 +471,7 @@ async function fetchScreenAssignedContent(
     }
     
     if (allMediaItems.length > 0) {
-      console.log(`[Yodeck] ${screenId}: TOTAL UNIQUE MEDIA ITEMS: ${allMediaItems.length}`);
+      debugLog(`[Yodeck] ${screenId}: TOTAL UNIQUE MEDIA ITEMS: ${allMediaItems.length}`);
     }
     
     // Extract source info from screen_content
@@ -462,11 +492,11 @@ async function fetchScreenAssignedContent(
   }
   
   if (result.status === 404) {
-    console.log(`[Yodeck] ${screenId}: 404 NOT FOUND - screen may have been deleted from Yodeck`);
+    debugLog(`[Yodeck] ${screenId}: 404 NOT FOUND - screen may have been deleted from Yodeck`);
     return { items: [], mediaItems: [], error: "not_found" };
   }
   
-  console.log(`[Yodeck] ${screenId}: ERROR ${result.status || "network"} - ${result.error || "unknown"}`);
+  debugLog(`[Yodeck] ${screenId}: ERROR ${result.status || "network"} - ${result.error || "unknown"}`);
   return { items: [], mediaItems: [], error: result.error || `http_${result.status}` };
 }
 
@@ -753,7 +783,7 @@ async function checkScreenshotFallback(
     return { hasContent: false, byteSize: null, error: "no_url" };
   }
 
-  console.log(`[Yodeck] ${screenId}: Trying screenshot fallback: ${screenshotUrl.substring(0, 60)}...`);
+  debugLog(`[Yodeck] ${screenId}: Trying screenshot fallback: ${screenshotUrl.substring(0, 60)}...`);
 
   try {
     // Try HEAD request first (faster, no body download)
@@ -765,13 +795,13 @@ async function checkScreenshotFallback(
     });
 
     if (!headResponse.ok) {
-      console.log(`[Yodeck] ${screenId}: Screenshot HEAD failed with ${headResponse.status}`);
+      debugLog(`[Yodeck] ${screenId}: Screenshot HEAD failed with ${headResponse.status}`);
       return { hasContent: false, byteSize: null, error: `http_${headResponse.status}` };
     }
 
     const contentType = headResponse.headers.get("content-type");
     if (!contentType?.startsWith("image/")) {
-      console.log(`[Yodeck] ${screenId}: Screenshot is not an image: ${contentType}`);
+      debugLog(`[Yodeck] ${screenId}: Screenshot is not an image: ${contentType}`);
       return { hasContent: false, byteSize: null, error: "not_image" };
     }
 
@@ -780,12 +810,12 @@ async function checkScreenshotFallback(
     if (contentLength) {
       const byteSize = parseInt(contentLength, 10);
       const hasContent = byteSize >= SCREENSHOT_MIN_SIZE_BYTES;
-      console.log(`[Yodeck] ${screenId}: Screenshot size=${byteSize} bytes, hasContent=${hasContent}`);
+      debugLog(`[Yodeck] ${screenId}: Screenshot size=${byteSize} bytes, hasContent=${hasContent}`);
       return { hasContent, byteSize };
     }
 
     // If HEAD doesn't give size, do a partial GET to estimate
-    console.log(`[Yodeck] ${screenId}: No content-length in HEAD, trying partial GET...`);
+    debugLog(`[Yodeck] ${screenId}: No content-length in HEAD, trying partial GET...`);
     const getResponse = await fetch(screenshotUrl, {
       method: "GET",
       headers: {
@@ -795,7 +825,7 @@ async function checkScreenshotFallback(
     });
 
     if (!getResponse.ok && getResponse.status !== 206) {
-      console.log(`[Yodeck] ${screenId}: Screenshot GET failed with ${getResponse.status}`);
+      debugLog(`[Yodeck] ${screenId}: Screenshot GET failed with ${getResponse.status}`);
       return { hasContent: false, byteSize: null, error: `http_${getResponse.status}` };
     }
 
@@ -805,11 +835,11 @@ async function checkScreenshotFallback(
     
     // If we got 25KB (our range limit), likely there's more content
     const hasContent = byteSize >= SCREENSHOT_MIN_SIZE_BYTES;
-    console.log(`[Yodeck] ${screenId}: Screenshot partial size=${byteSize} bytes, hasContent=${hasContent}`);
+    debugLog(`[Yodeck] ${screenId}: Screenshot partial size=${byteSize} bytes, hasContent=${hasContent}`);
     
     return { hasContent, byteSize };
   } catch (error: any) {
-    console.log(`[Yodeck] ${screenId}: Screenshot fetch error: ${error.message}`);
+    debugLog(`[Yodeck] ${screenId}: Screenshot fetch error: ${error.message}`);
     return { hasContent: false, byteSize: null, error: error.message };
   }
 }
@@ -830,22 +860,22 @@ export async function analyzeScreenshot(
     return { hasContent: false, byteSize: null, hash: null, isEmptyOrBlank: false, error: "no_url" };
   }
 
-  console.log(`[Yodeck] ${screenId}: Analyzing screenshot with pHash...`);
+  debugLog(`[Yodeck] ${screenId}: Analyzing screenshot with pHash...`);
 
   try {
     // Compute pHash from screenshot
     const hashResult = await computePHashFromUrl(screenshotUrl);
     
     if (!hashResult) {
-      console.log(`[Yodeck] ${screenId}: Failed to compute pHash`);
+      debugLog(`[Yodeck] ${screenId}: Failed to compute pHash`);
       return { hasContent: false, byteSize: null, hash: null, isEmptyOrBlank: false, error: "hash_failed" };
     }
 
-    console.log(`[Yodeck] ${screenId}: pHash computed: ${hashResult.hash.substring(0, 16)}... empty=${hashResult.isEmptyOrBlank}`);
+    debugLog(`[Yodeck] ${screenId}: pHash computed: ${hashResult.hash.substring(0, 16)}... empty=${hashResult.isEmptyOrBlank}`);
 
     // If the image appears blank/empty, return early
     if (hashResult.isEmptyOrBlank) {
-      console.log(`[Yodeck] ${screenId}: Screenshot appears blank/empty`);
+      debugLog(`[Yodeck] ${screenId}: Screenshot appears blank/empty`);
       return { 
         hasContent: false, 
         byteSize: null, 
@@ -864,7 +894,7 @@ export async function analyzeScreenshot(
       );
 
       if (match) {
-        console.log(`[Yodeck] ${screenId}: Matched creative ${match.creativeId} (${Math.round(match.similarity * 100)}% match)`);
+        debugLog(`[Yodeck] ${screenId}: Matched creative ${match.creativeId} (${Math.round(match.similarity * 100)}% match)`);
         return {
           hasContent: true,
           byteSize: null,
@@ -878,7 +908,7 @@ export async function analyzeScreenshot(
     }
 
     // Has content but no matching creative (unmanaged content)
-    console.log(`[Yodeck] ${screenId}: Screenshot has content but no matching creative`);
+    debugLog(`[Yodeck] ${screenId}: Screenshot has content but no matching creative`);
     return {
       hasContent: true,
       byteSize: null,
@@ -887,7 +917,7 @@ export async function analyzeScreenshot(
     };
 
   } catch (error: any) {
-    console.log(`[Yodeck] ${screenId}: Screenshot analysis error: ${error.message}`);
+    debugLog(`[Yodeck] ${screenId}: Screenshot analysis error: ${error.message}`);
     return { hasContent: false, byteSize: null, hash: null, isEmptyOrBlank: false, error: error.message };
   }
 }
@@ -897,6 +927,9 @@ export async function analyzeScreenshot(
  * @param force - If true, skip cache and force refresh all screens
  */
 export async function syncAllScreensContent(force: boolean = false): Promise<SyncAllScreensResult> {
+  // Clear all caches at start of sync run
+  clearAllCaches();
+  
   const apiKey = await getYodeckApiKey();
   if (!apiKey) {
     console.warn("[YodeckContent] No API key configured");
@@ -949,7 +982,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
         const lastFetched = new Date(screen.yodeckContentLastFetchedAt);
         const ageMs = now.getTime() - lastFetched.getTime();
         if (ageMs < CONTENT_CACHE_DURATION_MS) {
-          console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): cached (${Math.round(ageMs / 1000)}s ago)`);
+          debugLog(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): cached (${Math.round(ageMs / 1000)}s ago)`);
           return {
             screenId: screen.screenId,
             yodeckName,
@@ -965,7 +998,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
       const hasRealYodeckId = isRealYodeckId(screen.yodeckPlayerId);
       
       if (!hasRealYodeckId && !screen.yodeckUuid) {
-        console.log(`[Yodeck] ${screen.screenId}: NOT LINKED - No valid Yodeck player ID or UUID`);
+        debugLog(`[Yodeck] ${screen.screenId}: NOT LINKED - No valid Yodeck player ID or UUID`);
         
         // Set to unknown (not linked to Yodeck)
         await storage.updateScreen(screen.id, {
@@ -995,7 +1028,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
       }
 
       if (!yodeckScreen) {
-        console.log(`[Yodeck] ${screen.screenId}: NOT FOUND IN LIST - ID "${screen.yodeckPlayerId}" UUID "${screen.yodeckUuid}" not in Yodeck`);
+        debugLog(`[Yodeck] ${screen.screenId}: NOT FOUND IN LIST - ID "${screen.yodeckPlayerId}" UUID "${screen.yodeckUuid}" not in Yodeck`);
         
         // Set to unknown (not in Yodeck)
         await storage.updateScreen(screen.id, {
@@ -1031,7 +1064,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
         // Local skip reasons should NOT be marked as "error"
         if (contentResult.error === "invalid_yodeck_id") {
           // This shouldn't happen now since we use yodeckScreen.id, but handle gracefully
-          console.log(`[Yodeck] ${screen.screenId}: SKIP - Invalid ID despite match`);
+          debugLog(`[Yodeck] ${screen.screenId}: SKIP - Invalid ID despite match`);
           await storage.updateScreen(screen.id, {
             yodeckContentStatus: "unknown",
             yodeckContentCount: null,
@@ -1053,7 +1086,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
           ? "Screen not found in Yodeck (404)"
           : `API error: ${contentResult.error}`;
         
-        console.log(`[Yodeck] ${screen.screenId}: API ERROR - ${contentResult.error}`);
+        debugLog(`[Yodeck] ${screen.screenId}: API ERROR - ${contentResult.error}`);
         
         await storage.updateScreen(screen.id, {
           yodeckContentStatus: "error",
@@ -1083,9 +1116,9 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
       
       // Log media items if found
       if (mediaItems.length > 0) {
-        console.log(`[Yodeck] ${screen.screenId}: Found ${mediaItems.length} unique media items in playlists`);
+        debugLog(`[Yodeck] ${screen.screenId}: Found ${mediaItems.length} unique media items in playlists`);
         mediaItems.slice(0, 5).forEach((m, i) => {
-          console.log(`[Yodeck]   ${i + 1}. ${m.type || "media"}: "${m.name}" (id: ${m.id})`);
+          debugLog(`[Yodeck]   ${i + 1}. ${m.type || "media"}: "${m.name}" (id: ${m.id})`);
         });
         
         // Upsert media items to yodeck_creatives table with classification
@@ -1102,7 +1135,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
               lastSeenAt: new Date(),
             });
           } catch (err: any) {
-            console.log(`[Yodeck] Failed to upsert creative ${media.id}: ${err.message}`);
+            debugLog(`[Yodeck] Failed to upsert creative ${media.id}: ${err.message}`);
           }
         }
       }
@@ -1119,7 +1152,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
       } else if (contentResult.confirmedEmpty === true) {
         // ONLY set "empty" if API explicitly confirmed no content
         status = "empty";
-        console.log(`[Yodeck] ${screen.screenId}: CONFIRMED EMPTY by API`);
+        debugLog(`[Yodeck] ${screen.screenId}: CONFIRMED EMPTY by API`);
       } else {
         // We couldn't find content but API didn't confirm empty
         // Try screenshot fallback before giving up
@@ -1131,7 +1164,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
           if (analysisResult.isEmptyOrBlank) {
             // Screenshot analysis confirms screen is blank/empty
             status = "empty";
-            console.log(`[Yodeck] ${screen.screenId}: Screenshot analysis confirms BLANK/EMPTY screen`);
+            debugLog(`[Yodeck] ${screen.screenId}: Screenshot analysis confirms BLANK/EMPTY screen`);
             
             await storage.updateScreen(screen.id, {
               yodeckScreenshotLastOkAt: new Date(),
@@ -1140,7 +1173,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
           } else if (analysisResult.hasContent) {
             status = "has_content";
             screenshotFallbackUsed = true;
-            console.log(`[Yodeck] ${screen.screenId}: Screenshot analysis SUCCESS - hash=${analysisResult.hash?.substring(0, 16)}...`);
+            debugLog(`[Yodeck] ${screen.screenId}: Screenshot analysis SUCCESS - hash=${analysisResult.hash?.substring(0, 16)}...`);
             
             // Update screenshot tracking fields with hash
             await storage.updateScreen(screen.id, {
@@ -1151,20 +1184,20 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
             
             // If matched a creative, log it (for future use in managed content detection)
             if (analysisResult.matchedCreativeId) {
-              console.log(`[Yodeck] ${screen.screenId}: Matched creative ${analysisResult.matchedCreativeId} (${Math.round((analysisResult.matchSimilarity || 0) * 100)}%)`);
+              debugLog(`[Yodeck] ${screen.screenId}: Matched creative ${analysisResult.matchedCreativeId} (${Math.round((analysisResult.matchSimilarity || 0) * 100)}%)`);
             }
           } else {
             // Screenshot fallback also failed - stay unknown
             status = "unknown";
-            console.log(`[Yodeck] ${screen.screenId}: Screenshot fallback failed - keeping as unknown`);
+            debugLog(`[Yodeck] ${screen.screenId}: Screenshot fallback failed - keeping as unknown`);
           }
         } else {
           status = "unknown";
-          console.log(`[Yodeck] ${screen.screenId}: No content found, no screenshot URL - keeping as unknown`);
+          debugLog(`[Yodeck] ${screen.screenId}: No content found, no screenshot URL - keeping as unknown`);
         }
       }
 
-      console.log(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): ${contentCount} items, status=${status}${screenshotFallbackUsed ? " (screenshot fallback)" : ""}`);
+      debugLog(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): ${contentCount} items, status=${status}${screenshotFallbackUsed ? " (screenshot fallback)" : ""}`);
 
       // Save to DB - include media items for detailed content tracking
       const contentSummary: ContentSummary = {
@@ -1347,11 +1380,11 @@ export async function fetchScreenContentSummary(screen: {
   } else if (contentResult.confirmedEmpty) {
     // Only set "empty" if API explicitly confirmed no content
     status = "empty";
-    console.log(`[Yodeck] Screen ${screen.screenId} confirmed EMPTY by API`);
+    debugLog(`[Yodeck] Screen ${screen.screenId} confirmed EMPTY by API`);
   } else {
     // We couldn't find content but API didn't confirm empty - stay unknown
     status = "unknown";
-    console.log(`[Yodeck] Screen ${screen.screenId} content unclear - keeping as unknown`);
+    debugLog(`[Yodeck] Screen ${screen.screenId} content unclear - keeping as unknown`);
   }
 
   const contentSummary: ContentSummary = {
