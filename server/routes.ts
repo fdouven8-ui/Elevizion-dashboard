@@ -1211,11 +1211,31 @@ export async function registerRoutes(
     res.json(status);
   });
 
-  // Yodeck config-status endpoint - checks if YODECK_API_KEY is set
+  // Yodeck config-status endpoint - checks all auth options
   app.get("/api/integrations/yodeck/config-status", async (_req, res) => {
-    console.log("[YODECK CONFIG-STATUS] handler hit");
-    const status = getYodeckConfigStatus();
-    res.json(status);
+    const hasAuthToken = Boolean(process.env.YODECK_AUTH_TOKEN?.trim());
+    const hasV2Token = Boolean(process.env.YODECK_V2_TOKEN?.trim());
+    const hasLabel = Boolean(process.env.YODECK_TOKEN_LABEL?.trim());
+    const hasValue = Boolean(process.env.YODECK_TOKEN_VALUE?.trim());
+    const hasSeparate = hasLabel && hasValue;
+    const hasDbConfig = await getYodeckConfigStatus();
+
+    res.json({
+      ok: hasAuthToken || hasV2Token || hasSeparate || hasDbConfig.configured,
+      baseUrl: process.env.YODECK_BASE_URL || "https://app.yodeck.com",
+      hasAuthToken,
+      hasV2Token,
+      hasLabel,
+      hasValue,
+      hasDbConfig: hasDbConfig.configured,
+      authFormatExample: "Authorization: Token <label:value>",
+      envPriority: [
+        "1. YODECK_AUTH_TOKEN (format: label:apikey)",
+        "2. YODECK_V2_TOKEN (format: label:apikey)",
+        "3. YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE",
+        "4. Database integration config"
+      ]
+    });
   });
   
   console.log("[routes] Yodeck routes registered: GET /api/integrations/yodeck/config-status, POST /api/integrations/yodeck/test");
@@ -3133,9 +3153,10 @@ export async function registerRoutes(
   });
 
   // ============================================================================
-  // YODECK SYNC ENDPOINT
+  // YODECK SYNC ENDPOINTS
   // ============================================================================
 
+  // POST /api/sync/yodeck/run - Full sync with distinctItemCount per screen
   app.post("/api/sync/yodeck/run", requirePermission("manage_integrations"), async (req, res) => {
     try {
       const onlyOnline = Boolean(req.body?.onlyOnline);

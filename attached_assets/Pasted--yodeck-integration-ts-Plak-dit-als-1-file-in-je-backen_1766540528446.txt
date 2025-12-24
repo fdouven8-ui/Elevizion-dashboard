@@ -1,0 +1,348 @@
+/**
+ * yodeck.integration.ts
+ * Plak dit als 1 file in je backend (TypeScript).
+ * Mount daarna: app.use(createYodeckRouter());
+ *
+ * ENV required:
+ * - YODECK_TOKEN_LABEL
+ * - YODECK_TOKEN_VALUE
+ * Optional:
+ * - YODECK_BASE_URL (default https://app.yodeck.com)
+ */
+
+import express, { Request, Response } from "express";
+
+// ---------- Config ----------
+const YODECK_BASE_URL = (process.env.YODECK_BASE_URL || "https://app.yodeck.com").replace(/\/$/, "");
+const YODECK_TOKEN_LABEL = process.env.YODECK_TOKEN_LABEL || "";
+const YODECK_TOKEN_VALUE = process.env.YODECK_TOKEN_VALUE || "";
+const YODECK_AUTH =
+  YODECK_TOKEN_LABEL && YODECK_TOKEN_VALUE
+    ? `Token ${YODECK_TOKEN_LABEL}:${YODECK_TOKEN_VALUE}`
+    : "";
+
+// Node 18+ heeft fetch native. In oudere setups: npm i node-fetch en importeren.
+const DEFAULT_TIMEOUT_MS = 12_000;
+
+type YodeckScreen = {
+  id: number;
+  uuid: string;
+  name: string;
+  screenshot_url?: string | null;
+  state?: { online?: boolean; last_seen?: string | null };
+  workspace?: { id: number; name: string };
+  screen_content?: {
+    source_id: number;
+    source_name?: string;
+    source_type: "playlist" | "layout" | "tagbased-playlist" | string;
+  } | null;
+};
+
+type YodeckPlaylist = {
+  id: number;
+  name: string;
+  items?: Array<{ id: number; type: "media" | "widget" | "playlist" | string; duration?: number; name?: string }>;
+};
+
+type YodeckLayout = {
+  id: number;
+  name: string;
+  regions?: Array<{
+    id: number;
+    item?: { type: "playlist" | "media" | "widget" | string; id: number } | null;
+  }>;
+  background_audio?: { item?: { type: string; id: number } };
+};
+
+type ContentRef =
+  | { kind: "media"; id: number }
+  | { kind: "playlist"; id: number }
+  | { kind: "layout"; id: number }
+  | { kind: "widget"; id: number }
+  | { kind: "unknown"; id: number; type: string };
+
+type ScreenContentSummary = {
+  sourceType: string;
+  sourceId: number;
+  uniqueItemCount: number;
+  refs: ContentRef[];
+  topRefs: ContentRef[]; // compact preview
+  lastFetchedAt: string;
+};
+
+// ---------- Small utils ----------
+function isoNow() {
+  return new Date().toISOString();
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label = "timeout"): Promise<T> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(label), ms);
+  // @ts-ignore
+  promise.signal = ctrl.signal;
+  return promise.finally(() => clearTimeout(t));
+}
+
+async function yodeckFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  if (!YODECK_AUTH) {
+    throw new Error("Yodeck token missing. Set YODECK_TOKEN_LABEL and YODECK_TOKEN_VALUE in env.");
+  }
+
+  const url = `${YODECK_BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort("timeout"), DEFAULT_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        ...(init?.headers || {}),
+        Authorization: YODECK_AUTH,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Yodeck API error ${res.status} ${res.statusText} :: ${url} :: ${text.slice(0, 500)}`);
+    }
+
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function uniqRefs(refs: ContentRef[]): ContentRef[] {
+  const seen = new Set<string>();
+  const out: ContentRef[] = [];
+  for (const r of refs) {
+    const key = `${r.kind}:${r.id}${r.kind === "unknown" ? ":" + (r as any).type : ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}
+
+// simpele concurrency limiter (geen extra dependency)
+async function mapLimit<T, R>(arr: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  let i = 0;
+
+  const workers = new Array(Math.min(limit, arr.length)).fill(0).map(async () => {
+    while (i < arr.length) {
+      const idx = i++;
+      results[idx] = await fn(arr[idx]);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+// ---------- Yodeck endpoints wrappers ----------
+async function listScreens(limit = 250, offset = 0): Promise<{ count: number; results: YodeckScreen[]; next?: string | null }> {
+  const qs = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  return yodeckFetch(`/api/v2/screens?${qs.toString()}`);
+}
+
+async function getPlaylist(id: number): Promise<YodeckPlaylist> {
+  return yodeckFetch(`/api/v2/playlists/${id}`);
+}
+
+async function getLayout(id: number): Promise<YodeckLayout> {
+  return yodeckFetch(`/api/v2/layouts/${id}`);
+}
+
+// tagbased playlist geeft vaak “regels” en geen concrete items; tellen kan beperkt zijn.
+// We pakken hem wel op zodat je niet crasht.
+async function getTagbasedPlaylistRaw(id: number): Promise<any> {
+  return yodeckFetch(`/api/v2/tagbased-playlists/${id}`);
+}
+
+// ---------- Core: bepaal “items op dit scherm” ----------
+async function computeScreenContentSummary(screen: YodeckScreen): Promise<ScreenContentSummary | null> {
+  const sc = screen.screen_content;
+  if (!sc?.source_type || !sc?.source_id) return null;
+
+  const sourceType = sc.source_type;
+  const sourceId = sc.source_id;
+
+  let refs: ContentRef[] = [];
+
+  if (sourceType === "playlist") {
+    const pl = await getPlaylist(sourceId);
+    const items = pl.items || [];
+    refs = items.map((it) => {
+      if (it.type === "media") return { kind: "media", id: it.id };
+      if (it.type === "playlist") return { kind: "playlist", id: it.id };
+      if (it.type === "widget") return { kind: "widget", id: it.id };
+      return { kind: "unknown", id: it.id, type: it.type };
+    });
+  } else if (sourceType === "layout") {
+    const lay = await getLayout(sourceId);
+    const regions = lay.regions || [];
+    refs = regions
+      .map((r) => r.item)
+      .filter(Boolean)
+      .map((item) => {
+        const t = item!.type;
+        const id = item!.id;
+        if (t === "playlist") return { kind: "playlist", id };
+        if (t === "media") return { kind: "media", id };
+        if (t === "widget") return { kind: "widget", id };
+        return { kind: "unknown", id, type: t };
+      });
+
+    // background audio telt ook mee als "item" (optioneel)
+    const bg = lay.background_audio?.item;
+    if (bg?.id) {
+      if (bg.type === "media") refs.push({ kind: "media", id: bg.id });
+      else if (bg.type === "widget") refs.push({ kind: "widget", id: bg.id });
+      else refs.push({ kind: "unknown", id: bg.id, type: bg.type });
+    }
+  } else if (sourceType === "tagbased-playlist") {
+    // We kunnen hier niet altijd exact item-count weten zonder extra filtering/logica.
+    // Maar we kunnen wel "regels" tellen of minimaal laten zien dat het tagbased is.
+    const raw = await getTagbasedPlaylistRaw(sourceId);
+    const tags = raw?.tagbased?.tags || [];
+    // Als je wil: uniqueItemCount = tags.length (maar dat is niet “ads”).
+    refs = tags.map((t: any) => ({ kind: "unknown", id: Number(t?.id || 0), type: `tag:${t?.name || "unknown"}` }));
+  } else {
+    // onbekende source type
+    refs = [{ kind: "unknown", id: sourceId, type: `source:${sourceType}` }];
+  }
+
+  const unique = uniqRefs(refs);
+
+  return {
+    sourceType,
+    sourceId,
+    uniqueItemCount: unique.length,
+    refs: unique,
+    topRefs: unique.slice(0, 10),
+    lastFetchedAt: isoNow(),
+  };
+}
+
+// ---------- Router ----------
+export function createYodeckRouter() {
+  const router = express.Router();
+
+  router.get("/api/integrations/yodeck/config-status", (_req: Request, res: Response) => {
+    res.json({
+      ok: Boolean(YODECK_AUTH),
+      baseUrl: YODECK_BASE_URL,
+      hasLabel: Boolean(YODECK_TOKEN_LABEL),
+      hasToken: Boolean(YODECK_TOKEN_VALUE),
+      authFormatExample: "Authorization: Token <label:value>",
+    });
+  });
+
+  // snelle testcall (pakt 1 scherm)
+  router.post("/api/integrations/yodeck/test", async (_req: Request, res: Response) => {
+    try {
+      const page = await listScreens(1, 0);
+      res.json({ ok: true, sample: page.results?.[0] || null });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
+  /**
+   * Sync endpoint: haalt ALLE schermen op (gepagineerd) en berekent content-count per scherm.
+   * Je kunt hierna je eigen DB updaten met: yodeckContentCount + yodeckContentSummary + lastFetchedAt.
+   */
+  router.post("/api/sync/yodeck/run", async (_req: Request, res: Response) => {
+    const startedAt = Date.now();
+
+    try {
+      // 1) haal alle screens op
+      const all: YodeckScreen[] = [];
+      let offset = 0;
+      const limit = 100;
+
+      while (true) {
+        const page = await listScreens(limit, offset);
+        all.push(...(page.results || []));
+        offset += limit;
+        if (!page.results || page.results.length < limit) break;
+      }
+
+      // 2) bereken content per screen (concurrency 3 om rate limit/timeout te voorkomen)
+      const summaries = await mapLimit(all, 3, async (s) => {
+        try {
+          const summary = await computeScreenContentSummary(s);
+          return {
+            screenYodeckId: s.id,
+            uuid: s.uuid,
+            name: s.name,
+            online: Boolean(s.state?.online),
+            lastSeen: s.state?.last_seen || null,
+            screenshotUrl: s.screenshot_url || null,
+            content: summary,
+            yodeckContentCount: summary?.uniqueItemCount ?? 0,
+            yodeckContentStatus: summary ? "ok" : "unknown",
+            yodeckContentError: null as string | null,
+          };
+        } catch (err: any) {
+          return {
+            screenYodeckId: s.id,
+            uuid: s.uuid,
+            name: s.name,
+            online: Boolean(s.state?.online),
+            lastSeen: s.state?.last_seen || null,
+            screenshotUrl: s.screenshot_url || null,
+            content: null,
+            yodeckContentCount: 0,
+            yodeckContentStatus: "error",
+            yodeckContentError: err?.message || String(err),
+          };
+        }
+      });
+
+      // 3) Hier zou je je DB updaten (Drizzle/Prisma/etc).
+      //    Omdat ik je project-structuur niet exact heb, return ik het resultaat zodat jij ziet dat het klopt.
+      //    Je kunt dit 1-op-1 mappen naar jouw Screen model velden.
+      //
+      // Voorbeeld velden die jij al toont in je logs:
+      // - yodeckContentCount
+      // - yodeckContentSummary (items/topItems/playlists/lastFetchedAt)
+      // - yodeckContentLastFetchedAt
+      // - yodeckContentStatus
+      // - yodeckContentError
+
+      const durationMs = Date.now() - startedAt;
+
+      res.json({
+        ok: true,
+        durationMs,
+        screensProcessed: summaries.length,
+        results: summaries,
+      });
+    } catch (e: any) {
+      res.status(500).json({
+        ok: false,
+        error: e?.message || String(e),
+      });
+    }
+  });
+
+  return router;
+}
+
+/**
+ * ---- Mount voorbeeld (in jouw server.ts/index.ts) ----
+ *
+ * import express from "express";
+ * import { createYodeckRouter } from "./yodeck.integration";
+ *
+ * const app = express();
+ * app.use(express.json());
+ * app.use(createYodeckRouter());
+ * app.listen(5000, () => console.log("serving on 5000"));
+ */
