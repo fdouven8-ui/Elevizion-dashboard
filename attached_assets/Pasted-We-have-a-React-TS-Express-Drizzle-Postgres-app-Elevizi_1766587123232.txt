@@ -1,0 +1,30 @@
+We have a React + TS + Express + Drizzle + Postgres app (Elevizion Dashboard). Yodeck sync logs show content is detected (6 media items in playlist) and /api/integrations/yodeck/sync returns success, but the UI does not show the actual content list—only a status like “6 items”.
+
+Fix end-to-end so Yodeck content details are persisted and displayed.
+
+Backend tasks:
+1) Find the code that fetches Yodeck screen content (playlist/media/schedule) and produces a summary (items/topItems/playlists/count/lastFetchedAt). Ensure it UPDATES the correct screen rows in the database even when screens are unmapped (screenId like YDK-xxxxx). Update by priority: yodeckUuid, else yodeckPlayerId, else screen record id.
+2) Persist these fields on the screen record:
+   - yodeckContentCount (number, not null when known)
+   - yodeckContentSummary (JSON with playlists + items + topItems + lastFetchedAt)
+   - yodeckContentLastFetchedAt (timestamp)
+3) Ensure the API endpoints that the frontend uses include these fields:
+   - GET /api/screens (list)
+   - GET /api/screens/:id (detail)
+   If there’s a DTO/serializer layer, include yodeckContentCount, yodeckContentSummary, yodeckContentLastFetchedAt.
+4) Add a dedicated endpoint if needed:
+   - GET /api/screens/:id/yodeck-content returning {count, summary} for clarity.
+
+Frontend tasks:
+5) In the Screens detail page (/screens/:id), add a “Content” card that renders:
+   - Count
+   - Last fetched timestamp
+   - List of items (show topItems, with “show more” if >5)
+   - Playlists names
+6) After “Sync Nu” or “Test Verbinding” success, invalidate/refetch the screens query so UI updates immediately.
+
+Acceptance criteria:
+- After running Yodeck Sync, each screen detail shows the 6 content items by name (e.g., NOS sport algemeen, NOS algemeen nieuws, Weer goed, Sample Sales Sign, See your business grow, etc.).
+- Works for both mapped EVZ-### and unmapped YDK-### screens.
+
+Do not change the auth method: Yodeck API key must remain stored in integrations table encryptedCredentials (not env). Provide a short summary of changes + which files were modified.

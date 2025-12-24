@@ -340,6 +340,9 @@ export default function ScreenDetail() {
         </CardContent>
       </Card>
 
+      {/* Yodeck Content Card */}
+      <YodeckContentCard screen={screen} />
+
       {/* C) What is running on this screen */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
@@ -853,5 +856,167 @@ function ScreenStatistics({ screenId, yodeckPlayerId, openInYodeck }: { screenId
         </AccordionContent>
       </AccordionItem>
     </Accordion>
+  );
+}
+
+interface MediaItemDisplay {
+  id: number;
+  name: string;
+  type?: string;
+  duration?: number;
+}
+
+interface ContentSummaryData {
+  items: Array<{ type: string; name: string; id?: number }>;
+  topItems: string[];
+  lastFetchedAt: string;
+  mediaItems?: MediaItemDisplay[];
+  uniqueMediaCount?: number;
+  sourceType?: string;
+  sourceName?: string;
+}
+
+function YodeckContentCard({ screen }: { screen: any }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const contentSummary = screen.yodeckContentSummary as ContentSummaryData | null;
+  const contentCount = screen.yodeckContentCount;
+  const contentStatus = screen.yodeckContentStatus;
+  const lastFetchedAt = screen.yodeckContentLastFetchedAt;
+
+  const handleSync = async () => {
+    setIsSyncing(true);
+    try {
+      const response = await fetch("/api/sync/yodeck/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Sync failed");
+      
+      await queryClient.invalidateQueries({ queryKey: ["screens"] });
+      toast({ title: "Content gesynchroniseerd" });
+    } catch (error) {
+      toast({ title: "Sync mislukt", variant: "destructive" });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const getStatusBadge = () => {
+    switch (contentStatus) {
+      case "has_content":
+        return <Badge variant="default" className="bg-green-600">Actieve content</Badge>;
+      case "empty":
+        return <Badge variant="secondary">Geen content</Badge>;
+      case "error":
+        return <Badge variant="destructive">Fout</Badge>;
+      default:
+        return <Badge variant="outline">Onbekend</Badge>;
+    }
+  };
+
+  const formatLastFetched = () => {
+    if (!lastFetchedAt) return "Nooit gesynchroniseerd";
+    try {
+      const date = new Date(lastFetchedAt);
+      return formatDistanceToNow(date, { addSuffix: true, locale: nl });
+    } catch {
+      return "Onbekend";
+    }
+  };
+
+  return (
+    <Card data-testid="yodeck-content-card">
+      <CardHeader className="flex flex-row items-center justify-between pb-3">
+        <CardTitle className="text-lg flex items-center gap-2">
+          <Share2 className="h-5 w-5" />
+          Yodeck Content
+        </CardTitle>
+        <div className="flex items-center gap-2">
+          {getStatusBadge()}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleSync}
+            disabled={isSyncing}
+            data-testid="button-sync-content"
+          >
+            <RefreshCw className={`h-4 w-4 mr-1 ${isSyncing ? "animate-spin" : ""}`} />
+            Synchroniseren
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {contentStatus === "unknown" && !contentSummary ? (
+          <div className="text-center py-6 text-muted-foreground">
+            <Share2 className="h-10 w-10 mx-auto mb-3 opacity-50" />
+            <p>Nog niet gesynchroniseerd</p>
+            <p className="text-sm mt-1">Klik op "Sync" om content te laden</p>
+          </div>
+        ) : contentStatus === "empty" ? (
+          <div className="text-center py-6 text-muted-foreground">
+            <AlertTriangle className="h-10 w-10 mx-auto mb-3 text-amber-500" />
+            <p>Geen content toegewezen in Yodeck</p>
+          </div>
+        ) : contentStatus === "error" ? (
+          <div className="text-center py-6 text-muted-foreground">
+            <AlertTriangle className="h-10 w-10 mx-auto mb-3 text-red-500" />
+            <p>Kon content niet ophalen</p>
+            {screen.yodeckContentError && (
+              <p className="text-sm mt-1">{screen.yodeckContentError}</p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Bron:</span>
+              <span className="font-medium">
+                {contentSummary?.sourceType === "playlist" ? "Playlist" : contentSummary?.sourceType || "-"}
+                {contentSummary?.sourceName && `: ${contentSummary.sourceName}`}
+              </span>
+            </div>
+            
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Aantal items:</span>
+              <span className="font-medium">{contentCount ?? "-"}</span>
+            </div>
+
+            {contentSummary?.mediaItems && contentSummary.mediaItems.length > 0 && (
+              <div className="mt-4">
+                <p className="text-sm font-medium mb-2">Media items:</p>
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {contentSummary.mediaItems.map((item, index) => (
+                    <div
+                      key={item.id || index}
+                      className="flex items-center justify-between text-sm py-1.5 px-2 rounded bg-muted/50"
+                      data-testid={`media-item-${item.id}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {item.type === "video" ? (
+                          <Video className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <Image className="h-4 w-4 text-muted-foreground" />
+                        )}
+                        <span className="truncate max-w-[200px]">{item.name}</span>
+                      </div>
+                      {item.duration && item.duration > 0 && (
+                        <span className="text-muted-foreground text-xs">{item.duration}s</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="text-xs text-muted-foreground pt-2 border-t">
+              Laatst gesynchroniseerd: {formatLastFetched()}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
