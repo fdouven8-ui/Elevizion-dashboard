@@ -1136,10 +1136,17 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
           debugLog(`[Yodeck]   ${i + 1}. ${m.type || "media"}: "${m.name}" (id: ${m.id})`);
         });
         
-        // Upsert media items to yodeck_creatives table with classification
+        // Upsert media items to yodeck_creatives AND yodeck_media_links tables with classification
         for (const media of mediaItems) {
           const mediaType = media.type || 'unknown';
           const category = classifyMediaItem(media.name, mediaType);
+          // Generate normalizedKey with fallback for empty/emoji-only names
+          let normalizedKey = media.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').substring(0, 100);
+          if (!normalizedKey || normalizedKey.length === 0) {
+            normalizedKey = `media_${media.id}`;
+          }
+          
+          // Upsert to legacy table (yodeck_creatives)
           try {
             await storage.upsertYodeckCreative({
               yodeckMediaId: media.id,
@@ -1150,7 +1157,21 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
               lastSeenAt: new Date(),
             });
           } catch (err: any) {
-            debugLog(`[Yodeck] Failed to upsert creative ${media.id}: ${err.message}`);
+            debugLog(`[Yodeck] Failed to upsert yodeck_creatives ${media.id}: ${err.message}`);
+          }
+          
+          // Upsert to new unified table (yodeck_media_links) for stats
+          try {
+            await storage.upsertYodeckMediaLink({
+              yodeckMediaId: media.id,
+              name: media.name,
+              normalizedKey,
+              mediaType,
+              category,
+              duration: media.duration || undefined,
+            });
+          } catch (err: any) {
+            debugLog(`[Yodeck] Failed to upsert yodeck_media_links ${media.id}: ${err.message}`);
           }
         }
       }

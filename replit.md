@@ -54,9 +54,14 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
 - **Memory Logging**: Optional via `DEBUG_MEMORY=true` - logs `process.memoryUsage()` every 60 seconds (RSS, Heap, External) for monitoring stability.
 - **Unmanaged Content Display**: Shows "Yodeck content actief • X items (nog niet via Elevizion placements)" with playlist name, lastFetchedAt, and expandable media items list with duration badges.
 - **Yodeck Media Links Table**: `yodeck_media_links` table tracks detected media items for Moneybird advertiser linking with normalized name keys, category (ad/non_ad), and advertiser/placement mapping fields.
+  - Sync populates both `yodeck_creatives` (legacy) and `yodeck_media_links` (new) tables for consistency.
+  - normalizedKey generation includes fallback for empty/emoji-only names: `media_${id}`.
   - **GET /api/yodeck/media-mappings**: Returns all media links for admin UI mapping management.
   - **POST /api/yodeck/media-mappings**: Updates advertiser/placement mappings for a specific yodeckMediaId.
-- **Home KPI Tiles**: 7 tiles including "Ads op schermen" (total ads), "Ads niet gekoppeld" (unlinked ads with warning styling), and "Overig content" (non-ad items).
+- **Home KPI Data Pipeline**: Control room stats (`/api/control-room/stats`) use `getYodeckMediaLinkStats()` for ads classification:
+  - `adsTotal`: Total number of ads detected on screens
+  - `adsUnlinked`: Ads without advertiser/placement mapping
+  - `nonAdsTotal`: Non-ad content (NOS nieuws, weer, etc.)
 
 ### Production Stability Features
 - **Graceful Shutdown**: Handlers for SIGTERM/SIGINT with 5-second drain period, database pool cleanup, and scheduler stop.

@@ -1,0 +1,45 @@
+Je bent senior fullstack engineer in mijn Replit project (Elevizion Dashboard: React+TS+Vite frontend, Express backend, Drizzle ORM + Postgres). De frontend (menu + “Ads Details” blok) werkt visueel, maar de KPI’s tonen 0 of kloppen niet omdat de backend de actuele data van de schermen/ads niet correct doorgeeft.
+
+DOEL
+1) De “Home” KPI kaartjes (Schermen online/offline, Ads online, Betalende adverteerders) moeten echte data tonen.
+2) De uitklap “Ads Details” sectie moet exact dezelfde brondata gebruiken en correcte totals tonen:
+   - Actieve placements
+   - Ads op schermen
+   - Ads gekoppeld
+   - Ads niet gekoppeld
+   - Overig content
+   - Schermen met content
+   - Schermen leeg
+3) Alles moet gebaseerd zijn op de meest recente sync met Yodeck (en waar nodig Moneybird), met fallback naar DB-cache.
+
+WAT JE NU MOET DOEN (stap voor stap)
+A) Vind waar de KPI data vandaan komt:
+   - Zoek frontend: Home page component (bv. src/pages/dashboard/Home*.tsx) en de hook/service die de stats ophaalt (bv. useDashboardStats / apiClient).
+   - Zoek backend endpoint(s): bv. GET /api/dashboard/stats of /api/home/overview of iets vergelijkbaars.
+   - Noteer exact welke endpoint de frontend aanroept en welke response shape hij verwacht.
+
+B) Diagnoseer waarom alles 0 is:
+   - Controleer of de backend endpoint daadwerkelijk wordt geraakt (server logs).
+   - Log in de backend tijdelijk: request binnen, auth ok, welke data wordt opgehaald, welke counts worden berekend.
+   - Controleer env vars: YODECK_API_KEY, YODECK_BASE_URL, MONEYBIRD_* etc. en of ze in Replit goed staan.
+   - Controleer of er errors/silent failures zijn (try/catch die alles naar []/0 maakt).
+
+C) Fix de data pipeline:
+   1) Yodeck fetch:
+      - Kijk waar je Yodeck data ophaalt (service file). Test met een simpele “health” call en log de response count:
+        - aantal screens/players
+        - aantal playlists
+        - aantal playlist items (ads/overig)
+      - Als Yodeck call faalt: return een duidelijke error + status in JSON (geen stille 0’en).
+   2) Normalisatie:
+      - Maak één centrale “normalizeDashboardStats(raw)” functie die:
+        - screensOnline: aantal screens met status online
+        - screensOffline: aantal offline
+        - screensWithContent: screens met playlist/items
+        - screensEmpty: screens zonder items
+        - adsOnline: aantal ads die daadwerkelijk draaien op minstens 1 screen (placements > 0)
+        - adsOnScreens: totaal aantal ad placements (of unieke ads op screens — kies één en documenteer)
+        - adsLinked: ads die gekoppeld zijn aan een adverteerder (Moneybird/DB relation)
+        - adsNotLinked: ads zonder adverteerder-koppeling
+        - otherContent: items die geen “ad” zijn (NOS/weer/etc)
+        - payingAdverti
