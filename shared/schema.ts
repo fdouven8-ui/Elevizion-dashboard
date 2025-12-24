@@ -11,7 +11,7 @@
  */
 
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, decimal, timestamp, integer, boolean, jsonb, date } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, decimal, timestamp, integer, boolean, jsonb, date, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -1164,3 +1164,40 @@ export const insertYodeckMediaLinkSchema = createInsertSchema(yodeckMediaLinks).
 
 export type YodeckMediaLink = typeof yodeckMediaLinks.$inferSelect;
 export type InsertYodeckMediaLink = z.infer<typeof insertYodeckMediaLinkSchema>;
+
+// ============================================================================
+// SCREEN CONTENT ITEMS (Inferred placements from Yodeck content)
+// ============================================================================
+
+/**
+ * ScreenContentItems - Track what's actually playing on each screen
+ * This allows us to show "inferred placements" from Yodeck content,
+ * even before they're linked to our Ads/Placements records.
+ */
+export const screenContentItems = pgTable("screen_content_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  screenId: varchar("screen_id").notNull().references(() => screens.id, { onDelete: "cascade" }),
+  yodeckMediaId: integer("yodeck_media_id").notNull(),
+  name: text("name").notNull(),
+  mediaType: text("media_type"), // video, image, app, etc.
+  category: text("category").notNull().default("ad"), // ad, non_ad
+  duration: integer("duration"),
+  isActive: boolean("is_active").notNull().default(true),
+  // Linking fields (null until linked)
+  linkedAdvertiserId: varchar("linked_advertiser_id").references(() => advertisers.id),
+  linkedPlacementId: varchar("linked_placement_id").references(() => placements.id),
+  // Tracking
+  detectedAt: timestamp("detected_at").notNull().defaultNow(),
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+}, (table) => [
+  // Unique constraint: one entry per screen + yodeck media combo
+  uniqueIndex("screen_content_items_screen_media_idx").on(table.screenId, table.yodeckMediaId),
+]);
+
+export const insertScreenContentItemSchema = createInsertSchema(screenContentItems).omit({
+  id: true,
+  detectedAt: true,
+});
+
+export type ScreenContentItem = typeof screenContentItems.$inferSelect;
+export type InsertScreenContentItem = z.infer<typeof insertScreenContentItemSchema>;

@@ -4,7 +4,7 @@
  */
 
 import { db } from "./db";
-import { eq, and, gte, lte, desc, sql, isNull } from "drizzle-orm";
+import { eq, and, gte, lte, desc, sql, isNull, notInArray } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import type {
   Advertiser, InsertAdvertiser,
@@ -51,6 +51,7 @@ import type {
   TemplateVersion, InsertTemplateVersion,
   YodeckCreative, InsertYodeckCreative,
   YodeckMediaLink, InsertYodeckMediaLink,
+  ScreenContentItem, InsertScreenContentItem,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -315,6 +316,12 @@ export interface IStorage {
   upsertYodeckMediaLink(data: { yodeckMediaId: number; name: string; normalizedKey: string; mediaType?: string; category: string; duration?: number }): Promise<YodeckMediaLink>;
   updateYodeckMediaLink(yodeckMediaId: number, data: { advertiserId?: string | null; placementId?: string | null; updatedAt?: Date }): Promise<YodeckMediaLink | undefined>;
   getYodeckMediaLinkStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number }>;
+  
+  // Screen Content Items (inferred placements from Yodeck)
+  getScreenContentItems(screenId: string): Promise<ScreenContentItem[]>;
+  upsertScreenContentItem(data: { screenId: string; yodeckMediaId: number; name: string; mediaType?: string; category: string; duration?: number; isActive?: boolean }): Promise<ScreenContentItem>;
+  markScreenContentItemsInactive(screenId: string, activeMediaIds: number[]): Promise<number>;
+  getScreenContentItemStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number; activeScreensWithContent: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1671,6 +1678,105 @@ export class DatabaseStorage implements IStorage {
       totalAds: ads.length,
       unlinkedAds: unlinked.length,
       totalNonAds: nonAds.length
+    };
+  }
+
+  // ============================================================================
+  // SCREEN CONTENT ITEMS (Inferred Placements)
+  // ============================================================================
+
+  async getScreenContentItems(screenId: string): Promise<ScreenContentItem[]> {
+    return await db.select()
+      .from(schema.screenContentItems)
+      .where(and(
+        eq(schema.screenContentItems.screenId, screenId),
+        eq(schema.screenContentItems.isActive, true)
+      ))
+      .orderBy(desc(schema.screenContentItems.lastSeenAt));
+  }
+
+  async upsertScreenContentItem(data: { screenId: string; yodeckMediaId: number; name: string; mediaType?: string; category: string; duration?: number; isActive?: boolean }): Promise<ScreenContentItem> {
+    // Check if exists
+    const [existing] = await db.select()
+      .from(schema.screenContentItems)
+      .where(and(
+        eq(schema.screenContentItems.screenId, data.screenId),
+        eq(schema.screenContentItems.yodeckMediaId, data.yodeckMediaId)
+      ));
+    
+    if (existing) {
+      // Update existing
+      const [updated] = await db.update(schema.screenContentItems)
+        .set({
+          name: data.name,
+          mediaType: data.mediaType || null,
+          category: data.category,
+          duration: data.duration || null,
+          isActive: data.isActive !== false,
+          lastSeenAt: new Date(),
+        })
+        .where(eq(schema.screenContentItems.id, existing.id))
+        .returning();
+      return updated;
+    }
+    
+    // Insert new
+    const [item] = await db.insert(schema.screenContentItems).values({
+      screenId: data.screenId,
+      yodeckMediaId: data.yodeckMediaId,
+      name: data.name,
+      mediaType: data.mediaType || null,
+      category: data.category,
+      duration: data.duration || null,
+      isActive: data.isActive !== false,
+      lastSeenAt: new Date(),
+    }).returning();
+    return item;
+  }
+
+  async markScreenContentItemsInactive(screenId: string, activeMediaIds: number[]): Promise<number> {
+    // Mark items as inactive if they're not in the active list
+    if (activeMediaIds.length === 0) {
+      // Mark all items for this screen as inactive
+      const result = await db.update(schema.screenContentItems)
+        .set({ isActive: false, lastSeenAt: new Date() })
+        .where(and(
+          eq(schema.screenContentItems.screenId, screenId),
+          eq(schema.screenContentItems.isActive, true)
+        ))
+        .returning();
+      return result.length;
+    }
+    
+    // Mark items not in the active list as inactive
+    const result = await db.update(schema.screenContentItems)
+      .set({ isActive: false, lastSeenAt: new Date() })
+      .where(and(
+        eq(schema.screenContentItems.screenId, screenId),
+        eq(schema.screenContentItems.isActive, true),
+        notInArray(schema.screenContentItems.yodeckMediaId, activeMediaIds)
+      ))
+      .returning();
+    return result.length;
+  }
+
+  async getScreenContentItemStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number; activeScreensWithContent: number }> {
+    const all = await db.select()
+      .from(schema.screenContentItems)
+      .where(eq(schema.screenContentItems.isActive, true));
+    
+    const ads = all.filter(c => c.category === 'ad');
+    const unlinked = ads.filter(c => !c.linkedAdvertiserId && !c.linkedPlacementId);
+    const nonAds = all.filter(c => c.category === 'non_ad');
+    
+    // Count unique screens with content
+    const uniqueScreens = new Set(all.map(c => c.screenId));
+    
+    return {
+      totalAds: ads.length,
+      unlinkedAds: unlinked.length,
+      totalNonAds: nonAds.length,
+      activeScreensWithContent: uniqueScreens.size
     };
   }
 }

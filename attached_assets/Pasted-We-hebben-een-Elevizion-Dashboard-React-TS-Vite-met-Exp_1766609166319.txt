@@ -1,0 +1,117 @@
+We hebben een Elevizion Dashboard (React+TS+Vite) met Express + Drizzle + Postgres. Yodeck sync werkt: screens[].yodeckContentSummary.mediaItems bevat wat er echt draait (ads + overig). Probleem: op de Schermen detailpagina (“Wat draait er op dit scherm?”) staat “Geen plaatsingen”, omdat “plaatsingen” nu alleen uit onze eigen Placement/Ad-koppelingen komen. Maar ook niet-gekoppelde ads draaien al op het scherm en moeten dus zichtbaar worden als “plaatsing (concept)” of “inferred placement”.
+
+Doel
+
+Alles wat Yodeck op een scherm afspeelt moet als “plaatsing” zichtbaar zijn, óók als het nog niet gekoppeld is aan een Adverteerder/Ad in onze DB.
+
+KPI’s op Home moeten kloppen (nu adsTotal=0 terwijl actions laat zien dat er 3 ads draaien).
+
+In UI moeten de items onder “Wat draait er op dit scherm?” vallen onder “plaatsingen”, met status badges:
+
+Gekoppeld (als er een match is met een Ad record / Placement record)
+
+Niet gekoppeld (draait wel, maar nog geen match)
+
+Overig (non-ad content)
+
+Implementatie (backend-first, minimale UI changes)
+
+Voeg een nieuw datamodel toe voor “inferred placements” vanuit Yodeck content:
+
+Tabel screen_content_items (of vergelijkbaar):
+
+id uuid
+
+screenId (FK screens.id)
+
+yodeckMediaId (int, uniek per screen)
+
+name (string)
+
+duration (int nullable)
+
+category enum: ad | non_ad
+
+detectedAt timestamp
+
+lastSeenAt timestamp
+
+isActive boolean default true
+
+linkedAdId uuid nullable (FK ads.id) (optional)
+
+linkedPlacementId uuid nullable (FK placements.id) (optional)
+
+Update de Yodeck sync (de job die /api/sync/yodeck/run draait) zodat hij bij elke screen:
+
+yodeckContentSummary.mediaItems doorloopt
+
+Voor elke mediaItem een record upsert in screen_content_items op (screenId, yodeckMediaId)
+
+Markeer items die niet meer in de huidige playlist voorkomen als isActive=false (of update lastSeenAt en laat oude staan)
+
+Maak een match-strategie om “linkedAdId / linkedPlacementId” te vullen:
+
+Als we een ads tabel hebben met een yodeckMediaId of externalMediaId, match daarop.
+
+Als dat niet bestaat: match op name (case-insensitive, trimmed) als fallback.
+
+Als er een match is: zet linkedAdId en indien er al een Placement bestaat voor die ad+screen, zet ook linkedPlacementId.
+
+Zo niet: laat linked* null => status “Niet gekoppeld”.
+
+API wijzigingen
+
+Maak/Update endpoint voor scherm-detail data (wat de pagina “Schermen > detail” gebruikt):
+
+Voeg veld toe currentContent of placementsInferred gebaseerd op screen_content_items where screenId=? and isActive=true.
+
+Return per item: { yodeckMediaId, name, duration, category, status: 'linked'|'unlinked'|'non_ad', linkedAdId?, linkedPlacementId? }
+
+Fix /api/control-room/stats zodat adsTotal, nonAdsTotal, adsUnlinked NIET alleen uit placements komt, maar uit de realiteit:
+
+Als screen_content_items bestaat: tel daaruit:
+
+adsTotal = count(category='ad' and isActive=true) over alle screens
+
+nonAdsTotal = count(category='non_ad' and isActive=true)
+
+adsUnlinked = count(category='ad' and isActive=true and linkedAdId is null)
+
+screensWithYodeckContent etc blijft zoals nu.
+
+Frontend minimale aanpassing (alleen als nodig)
+
+In de “Wat draait er op dit scherm?” kaart:
+
+Gebruik het nieuwe veld placementsInferred/currentContent.
+
+Toon elk item als “plaatsing” met badge:
+
+linked => groen “Gekoppeld”
+
+unlinked ad => oranje/rood “Niet gekoppeld”
+
+non_ad => blauw “Overig”
+
+Update teller rechtsboven “X plaatsing(en)” = aantal actieve items (of alleen ads, kies consistent; default: alle actieve items).
+
+Zorg dat de bestaande UI (lijsten met Ads/Overig) blijft werken.
+
+Belangrijk
+
+Hou het klein: geen nieuwe grote pagina’s. Alleen data correct maken en tonen.
+
+Voeg migrations toe (Drizzle) + update schema.
+
+Voeg logging toe in sync: hoeveel items ge-upsert per screen.
+
+Voeg eenvoudige unit test of simpele dev-check toe: na sync moeten stats adsTotal overeenkomen met het aantal Yodeck ad-items in mediaItems (bijv. 3).
+
+Lever de daadwerkelijke code changes in de juiste bestanden (schema, migration, sync service, stats endpoint, screen detail endpoint, front consume).
+
+Voer dit nu uit en zorg dat:
+
+Op Home “Ads online” niet meer 0 is als er 3 ad-items draaien.
+
+Op Scherm detail “Wat draait er op dit scherm?” niet meer “Geen plaatsingen” toont, maar de 6 items met correcte status.
