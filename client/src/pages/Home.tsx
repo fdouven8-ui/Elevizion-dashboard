@@ -39,6 +39,10 @@ interface ActionItem {
   severity: "error" | "warning" | "info";
   link: string;
   statusText?: string;
+  contentCount?: number;
+  topItems?: string[];
+  sourceType?: string;
+  sourceName?: string;
 }
 
 export default function Home() {
@@ -225,18 +229,28 @@ export default function Home() {
                       className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors cursor-pointer group"
                       data-testid={`action-item-${item.id}`}
                     >
-                      <div className="flex items-center gap-3">
-                        <div className={`p-2 rounded-full ${colorClasses}`}>
+                      <div className="flex items-center gap-3 flex-1">
+                        <div className={`p-2 rounded-full ${colorClasses} shrink-0`}>
                           <Icon className="h-4 w-4" />
                         </div>
-                        <div>
-                          <div className="flex items-center gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium text-sm">{item.itemName}</span>
                             <Badge variant={getBadgeVariant(item.severity)} className="text-xs px-1.5 py-0">
                               {getTypeLabel(item.type, item.statusText)}
                             </Badge>
                           </div>
                           <p className="text-xs text-muted-foreground">{item.description}</p>
+                          {item.type === "unmanaged_content" && item.topItems && item.topItems.length > 0 && (
+                            <div className="mt-1.5 text-xs text-muted-foreground">
+                              <span className="font-medium">Content:</span>
+                              <ul className="mt-0.5 space-y-0.5 ml-3">
+                                {item.topItems.slice(0, 5).map((topItem, idx) => (
+                                  <li key={idx} className="truncate">• {topItem}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
                         </div>
                       </div>
                       <Button variant="ghost" size="sm" className="opacity-0 group-hover:opacity-100 transition-opacity">

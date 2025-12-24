@@ -4273,6 +4273,7 @@ export async function registerRoutes(
             // Screen is playing SOMETHING (screenshot/Yodeck content) but not managed by Elevizion
             // Show item count if available
             const itemCount = screen.yodeckContentCount;
+            const contentSummary = screen.yodeckContentSummary as any;
             const statusText = itemCount && itemCount > 0
               ? `Speelt content (niet vanuit Elevizion) • ${itemCount} items`
               : "Speelt content (niet vanuit Elevizion)";
@@ -4285,6 +4286,10 @@ export async function registerRoutes(
               severity: "info",
               link: `/screens/${screen.id}`,
               statusText,
+              contentCount: itemCount || 0,
+              topItems: contentSummary?.topItems || [],
+              sourceType: contentSummary?.sourceType,
+              sourceName: contentSummary?.sourceName,
             });
           } else {
             // Screen has no placements and we can't confirm content

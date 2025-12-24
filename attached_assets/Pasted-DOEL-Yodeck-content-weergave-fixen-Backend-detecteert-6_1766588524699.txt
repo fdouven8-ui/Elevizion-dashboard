@@ -1,0 +1,49 @@
+DOEL: Yodeck content weergave fixen. Backend detecteert 6 items (zie logs), maar UI toont alleen “• 6 items” en geen lijst. Implementeer end-to-end: opslaan in DB + teruggeven via API + tonen in frontend.
+
+1) DATABASE / MODEL
+- Controleer dat Screen entity/tabel velden heeft:
+  - yodeckContentCount (int, nullable)
+  - yodeckContentSummary (json, nullable) -> bevat items[], topItems[], playlists[], lastFetchedAt
+  - yodeckContentLastFetchedAt (timestamp/date, nullable)
+Als ze ontbreken: voeg migratie toe + update Drizzle schema + storage methods.
+
+2) BACKEND: CONTENT SYNC OPSLAAN
+- In de code waar playlists/media worden opgehaald (de content-sync stap die nu logs produceert zoals:
+  "[Yodeck] ... TOTAL UNIQUE MEDIA ITEMS: 6"
+  "[Yodeck] Content for ...: 6 items, status=has_content"
+)
+Zorg dat na het bouwen van contentSummary je opslag update doet:
+  storage.updateScreen(screenId, {
+    yodeckContentCount: <count>,
+    yodeckContentSummary: <contentSummaryObject>,
+    yodeckContentLastFetchedAt: new Date(),
+  })
+Let op: dit moet gebeuren voor ALLE screens (ook unmapped YDK-xxxx).
+
+3) BACKEND: API RESPONSE UITBREIDEN
+- Update endpoints:
+  - GET /api/screens
+  - GET /api/screens/:id
+zodat ze altijd deze velden teruggeven:
+  yodeckContentCount, yodeckContentSummary, yodeckContentLastFetchedAt
+Als er een “screen serializer / mapper” is, voeg ze daar toe.
+
+4) FRONTEND: RENDER CONTENT DETAILS
+- In de Screen detail page en/of Control Room:
+  - Als screen.yodeckContentCount > 0:
+     toon “Yodeck content: 6 items”
+     toon een lijst met screen.yodeckContentSummary.topItems (max 5) als bullets
+     indien items.length > 5: toon “Bekijk alle content” button -> modal met volledige items lijst.
+- Zorg dat UI niet alleen statusText gebruikt, maar de echte data uit screen object.
+
+5) DEBUGGING
+- Voeg tijdelijk log toe in GET /api/screens/:id response om te verifiëren dat yodeckContentSummary gevuld is.
+- Na deploy: run manual sync (POST /api/integrations/yodeck/sync) en check:
+  - DB heeft yodeckContentSummary gevuld voor beide screens
+  - GET /api/screens geeft deze velden terug
+  - UI toont lijst.
+
+BELANGRIJK:
+- Verander niets aan Moneybird/Dropbox, alleen Yodeck.
+- Houd bestaande auth intact.
+- Zorg dat code types correct zijn (TypeScript).
