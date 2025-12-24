@@ -271,6 +271,9 @@ export async function registerRoutes(
     const screen = await storage.getScreen(req.params.id);
     if (!screen) return res.status(404).json({ message: "Screen not found" });
     
+    // Fetch current content items from screen_content_items table
+    const currentContent = await storage.getScreenContentItems(screen.id);
+    
     // Enrich mediaItems with category if missing (for backward compatibility)
     const summary = screen.yodeckContentSummary as any;
     if (summary?.mediaItems && Array.isArray(summary.mediaItems)) {
@@ -284,9 +287,10 @@ export async function registerRoutes(
       res.json({
         ...screen,
         yodeckContentSummary: { ...summary, mediaItems: enrichedMediaItems },
+        currentContent,
       });
     } else {
-      res.json(screen);
+      res.json({ ...screen, currentContent });
     }
   });
 
