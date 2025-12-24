@@ -853,6 +853,27 @@ export const taskAttachments = pgTable("task_attachments", {
 });
 
 // ============================================================================
+// YODECK MEDIA TRACKING
+// ============================================================================
+
+/**
+ * YodeckCreatives - Media items detected from Yodeck sync
+ * Used to track ads vs non-ads and link to advertisers
+ */
+export const yodeckCreatives = pgTable("yodeck_creatives", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  yodeckMediaId: integer("yodeck_media_id").notNull().unique(),
+  name: text("name").notNull(),
+  mediaType: text("media_type"), // video, image, widget, unknown
+  duration: integer("duration"), // Duration in seconds (-1 for dynamic/unknown)
+  category: text("category").notNull().default("ad"), // ad, non_ad
+  advertiserId: varchar("advertiser_id").references(() => advertisers.id), // Nullable - linked when known
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// ============================================================================
 // INSERT SCHEMAS (for validation)
 // ============================================================================
 
@@ -865,6 +886,7 @@ export const insertSupplyItemSchema = createInsertSchema(supplyItems).omit({ id:
 export const insertSurveySupplySchema = createInsertSchema(surveySupplies).omit({ id: true, createdAt: true });
 export const insertTaskSchema = createInsertSchema(tasks).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertTaskAttachmentSchema = createInsertSchema(taskAttachments).omit({ id: true, createdAt: true });
+export const insertYodeckCreativeSchema = createInsertSchema(yodeckCreatives).omit({ id: true, createdAt: true, updatedAt: true });
 
 export const insertAdvertiserSchema = createInsertSchema(advertisers).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertLocationSchema = createInsertSchema(locations).omit({ id: true, createdAt: true, updatedAt: true });
@@ -1012,6 +1034,9 @@ export type InsertWebhook = z.infer<typeof insertWebhookSchema>;
 
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
 export type InsertWebhookDelivery = z.infer<typeof insertWebhookDeliverySchema>;
+
+export type YodeckCreative = typeof yodeckCreatives.$inferSelect;
+export type InsertYodeckCreative = z.infer<typeof insertYodeckCreativeSchema>;
 
 // ============================================================================
 // TEMPLATE CENTER

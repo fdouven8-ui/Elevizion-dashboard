@@ -4,7 +4,7 @@
  */
 
 import { db } from "./db";
-import { eq, and, gte, lte, desc, sql } from "drizzle-orm";
+import { eq, and, gte, lte, desc, sql, isNull } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import type {
   Advertiser, InsertAdvertiser,
@@ -49,6 +49,7 @@ import type {
   TaskAttachment, InsertTaskAttachment,
   Template, InsertTemplate,
   TemplateVersion, InsertTemplateVersion,
+  YodeckCreative, InsertYodeckCreative,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -290,6 +291,22 @@ export interface IStorage {
   getTaskAttachments(taskId: string): Promise<TaskAttachment[]>;
   createTaskAttachment(data: InsertTaskAttachment): Promise<TaskAttachment>;
   deleteTaskAttachment(id: string): Promise<boolean>;
+
+  // Yodeck Creatives (media tracking)
+  getYodeckCreatives(): Promise<YodeckCreative[]>;
+  getYodeckCreative(id: string): Promise<YodeckCreative | undefined>;
+  getYodeckCreativeByMediaId(yodeckMediaId: number): Promise<YodeckCreative | undefined>;
+  getUnlinkedYodeckCreatives(): Promise<YodeckCreative[]>;
+  upsertYodeckCreative(data: {
+    yodeckMediaId: number;
+    name: string;
+    mediaType?: string | null;
+    duration?: number | null;
+    category: string;
+    lastSeenAt?: Date | null;
+  }): Promise<YodeckCreative>;
+  updateYodeckCreative(id: string, data: Partial<YodeckCreative>): Promise<YodeckCreative | undefined>;
+  getYodeckCreativeStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1497,6 +1514,88 @@ export class DatabaseStorage implements IStorage {
     const regex = /\{\{([^}]+)\}\}/g;
     const matches = body.match(regex) || [];
     return [...new Set(matches.map(m => m.replace(/[{}]/g, '')))];
+  }
+
+  // ============================================================================
+  // YODECK CREATIVES (Media tracking for ads classification)
+  // ============================================================================
+
+  async getYodeckCreatives(): Promise<YodeckCreative[]> {
+    return await db.select().from(schema.yodeckCreatives).orderBy(desc(schema.yodeckCreatives.lastSeenAt));
+  }
+
+  async getYodeckCreative(id: string): Promise<YodeckCreative | undefined> {
+    const [creative] = await db.select().from(schema.yodeckCreatives).where(eq(schema.yodeckCreatives.id, id));
+    return creative;
+  }
+
+  async getYodeckCreativeByMediaId(yodeckMediaId: number): Promise<YodeckCreative | undefined> {
+    const [creative] = await db.select().from(schema.yodeckCreatives).where(eq(schema.yodeckCreatives.yodeckMediaId, yodeckMediaId));
+    return creative;
+  }
+
+  async getUnlinkedYodeckCreatives(): Promise<YodeckCreative[]> {
+    return await db.select().from(schema.yodeckCreatives)
+      .where(and(
+        eq(schema.yodeckCreatives.category, 'ad'),
+        isNull(schema.yodeckCreatives.advertiserId)
+      ))
+      .orderBy(desc(schema.yodeckCreatives.lastSeenAt));
+  }
+
+  async upsertYodeckCreative(data: {
+    yodeckMediaId: number;
+    name: string;
+    mediaType?: string | null;
+    duration?: number | null;
+    category: string;
+    lastSeenAt?: Date | null;
+  }): Promise<YodeckCreative> {
+    const mediaId = Number(data.yodeckMediaId);
+    const existing = await this.getYodeckCreativeByMediaId(mediaId);
+    if (existing) {
+      const [updated] = await db.update(schema.yodeckCreatives)
+        .set({ 
+          name: data.name,
+          mediaType: data.mediaType || null,
+          duration: data.duration || null,
+          category: data.category,
+          lastSeenAt: new Date(),
+          updatedAt: new Date()
+        })
+        .where(eq(schema.yodeckCreatives.yodeckMediaId, mediaId))
+        .returning();
+      return updated;
+    }
+    const [creative] = await db.insert(schema.yodeckCreatives).values({
+      yodeckMediaId: mediaId,
+      name: data.name,
+      mediaType: data.mediaType || null,
+      duration: data.duration || null,
+      category: data.category,
+      lastSeenAt: data.lastSeenAt || new Date(),
+    }).returning();
+    return creative;
+  }
+
+  async updateYodeckCreative(id: string, data: Partial<YodeckCreative>): Promise<YodeckCreative | undefined> {
+    const [creative] = await db.update(schema.yodeckCreatives)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.yodeckCreatives.id, id))
+      .returning();
+    return creative;
+  }
+
+  async getYodeckCreativeStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number }> {
+    const all = await db.select().from(schema.yodeckCreatives);
+    const ads = all.filter(c => c.category === 'ad');
+    const unlinked = ads.filter(c => !c.advertiserId);
+    const nonAds = all.filter(c => c.category === 'non_ad');
+    return {
+      totalAds: ads.length,
+      unlinkedAds: unlinked.length,
+      totalNonAds: nonAds.length
+    };
   }
 }
 

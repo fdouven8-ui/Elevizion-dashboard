@@ -4062,6 +4062,9 @@ export async function registerRoutes(
       });
       const payingAdvertisers = payingAdvertiserIds.size;
       
+      // Yodeck creatives stats (ads classification)
+      const creativeStats = await storage.getYodeckCreativeStats();
+      
       const result = {
         screensOnline,
         screensTotal,
@@ -4077,6 +4080,10 @@ export async function registerRoutes(
         screensYodeckEmpty,
         contentUnknown,
         contentError,
+        // Ads classification stats
+        adsTotal: creativeStats.totalAds,
+        adsUnlinked: creativeStats.unlinkedAds,
+        nonAdsTotal: creativeStats.totalNonAds,
       };
       setCache("control-room-stats", result);
       res.json(result);

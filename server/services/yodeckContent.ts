@@ -51,6 +51,7 @@
 import { storage } from "../storage";
 import { decryptCredentials } from "../crypto";
 import { computePHashFromUrl, ImageHashResult, isHashMatch, findBestCreativeMatch } from "../utils/phash";
+import { classifyMediaItem, type MediaCategory } from "./mediaClassifier";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const CONCURRENT_LIMIT = 3; // Max parallel requests to avoid rate limiting
@@ -1086,6 +1087,24 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
         mediaItems.slice(0, 5).forEach((m, i) => {
           console.log(`[Yodeck]   ${i + 1}. ${m.type || "media"}: "${m.name}" (id: ${m.id})`);
         });
+        
+        // Upsert media items to yodeck_creatives table with classification
+        for (const media of mediaItems) {
+          const mediaType = media.type || 'unknown';
+          const category = classifyMediaItem(media.name, mediaType);
+          try {
+            await storage.upsertYodeckCreative({
+              yodeckMediaId: media.id,
+              name: media.name,
+              mediaType,
+              duration: media.duration || null,
+              category,
+              lastSeenAt: new Date(),
+            });
+          } catch (err: any) {
+            console.log(`[Yodeck] Failed to upsert creative ${media.id}: ${err.message}`);
+          }
+        }
       }
       
       // CRITICAL STATUS LOGIC:

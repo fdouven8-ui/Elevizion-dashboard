@@ -1,0 +1,146 @@
+Ik werk aan “Elevizion Dashboard” (React+TS+Vite frontend, Express+Drizzle+Postgres backend). Yodeck sync werkt: in logs zie ik 6 items per scherm en API endpoints geven yodeckContentSummary terug (mediaItems/topItems/sourceType/sourceName etc). In de UI staat nu “Speelt content (niet vanuit Elevizion) • 6 items” en een lijstje, maar ik wil dit verder professionaliseren en uitbreiden:
+
+DOEL 1 — Contentweergave 100% betrouwbaar en duidelijk
+
+Controleer dat de content die in /api/control-room/actions en /api/screens wordt teruggegeven altijd de actuele yodeckContentSummary gebruikt (dus uit DB na sync), en dat de UI dit consistent rendert.
+
+Zorg dat de “unmanaged_content” actie (die nu “Speelt content (niet vanuit Elevizion) • 6 items” toont) ook extra velden mee kan krijgen:
+
+contentCount
+
+topItems (max 5)
+
+sourceType + sourceName
+
+NIEUW: adsCount, nonAdsCount, en optioneel adsTopItems (max 5)
+
+Als een scherm offline is, moet content nog steeds zichtbaar kunnen zijn op basis van laatst bekende sync (dat lijkt nu al zo, houd dat zo).
+
+DOEL 2 — Ads vs Overig (nieuws/weer) automatisch classificeren
+
+Ik wil dat het systeem zelf ziet wat “echte ads” zijn en wat “overig” is (nieuws, weer, informatief). Dit moet zonder Moneybird (voor nu).
+
+Implementatie-eisen:
+
+Voeg een eenvoudige classificatie toe die draait op basis van Yodeck media/playlist namen (en eventueel type/metadata als beschikbaar).
+
+Start met een “default rule set”:
+
+Overig/non-ads als naam één van deze bevat (case-insensitive):
+nos, nieuws, weer, weather, buienradar, radar, clock, tijd, rss, feed, sport
+
+Alles wat niet matcht => ad
+
+Maak het uitbreidbaar via config:
+
+Optie A (snel): definieer constants in backend (later UI settings).
+
+Optie B (beter): sla regels op in DB in integration settings (yodeck settings JSON) met adIncludePatterns en nonAdExcludePatterns.
+Kies B als het niet te veel werk is, anders A.
+
+Datamodel / opslag:
+
+Breid yodeckContentSummary uit met:
+
+adsCount: number
+
+nonAdsCount: number
+
+adsTopItems: string[]
+
+classifiedMediaItems: Array<{ id:number; name:string; type:string; duration?:number; category:'ad'|'non_ad' }>
+
+Zorg dat deze velden in DB worden opgeslagen bij de content sync (dus niet “alleen runtime berekenen”).
+
+DOEL 3 — “Ads niet gekoppeld” tellen (zonder Moneybird)
+
+Ik wil dat het dashboard kan laten zien:
+
+hoeveel “ads” er op een scherm draaien
+
+hoeveel daarvan nog niet gekoppeld zijn aan een adverteerder/contact (Moneybird later)
+
+Maak hiervoor een minimale DB-laag:
+
+Introduceer een tabel creatives (of yodeck_creatives) met minimaal:
+
+id (uuid)
+
+yodeckMediaId (unique, number)
+
+name
+
+category ('ad'|'non_ad')
+
+advertiserId (nullable, foreign key naar advertisers table als die al bestaat; anders nullable string)
+
+lastSeenAt
+
+timestamps
+
+Tijdens Yodeck content sync:
+
+Upsert alle mediaItems naar creatives
+
+Zet category op basis van classificatie
+
+Laat advertiserId NULL (tenzij al gekoppeld)
+
+Voeg endpoints / aggregaties toe:
+
+In /api/dashboard/kpis of /api/control-room/stats:
+totalAdsDetected, totalAdsUnlinked
+
+In /api/control-room/actions: bij unmanaged_content actie ook
+adsCount, adsUnlinkedCount
+
+Optioneel per scherm in /api/screens:
+adsCount, adsUnlinkedCount (afgeleid van creatives)
+
+Frontend:
+
+Voeg 1 extra KPI card op Home: “Ads (niet gekoppeld)” met “X / Y”
+
+X = unlinked
+
+Y = total ads detected
+
+In Actie Overzicht, onder het scherm “Test”, toon:
+
+Content: 6 items
+
+Ads: 1 (niet gekoppeld: 1) (voorbeeld)
+
+Overig: 5
+
+DOEL 4 — Stabiliteit bij “signal: terminated”
+
+Ik zie regelmatig system: received signal terminated in Replit logs. Voeg een nette shutdown toe zodat dit geen half-afgebroken jobs oplevert:
+
+In server start file: process.on('SIGTERM'/'SIGINT') -> log + stop http server + sluit db pools indien aanwezig.
+
+Zorg dat de sync job niet dubbel loopt (voorkom overlap) door:
+
+een simpele “mutex” in memory (per instance) of
+
+een DB lock/flag in integrations table (preferred light version: in-memory boolean isSyncRunning).
+
+ACCEPTANCE CRITERIA (wat ik straks wil zien)
+
+/api/control-room/actions geeft bij unmanaged_content nu ook adsCount en adsUnlinkedCount terug.
+
+/api/screens toont per scherm contentSummary inclusief classifiedMediaItems.
+
+Home dashboard toont een KPI “Ads (niet gekoppeld)”.
+
+Actie Overzicht toont “Ads: X (niet gekoppeld: X)” + “Overig: Y”.
+
+Geen extra env/configs nodig voor Yodeck: secrets zijn al ok; alles komt uit encryptedCredentials/DB.
+
+Ga direct aanpassingen doen in backend + frontend. Laat me na implementatie zien:
+
+welke files je hebt aangepast
+
+welke nieuwe DB migrations je hebt toegevoegd (Drizzle)
+
+voorbeeld JSON van /api/control-room/actions en /api/dashboard/kpis na de change.

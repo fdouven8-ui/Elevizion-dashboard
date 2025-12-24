@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ListMusic,
   Clock,
+  ImageOff,
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -38,6 +39,9 @@ interface ControlRoomStats {
   screensWithYodeckContent: number;
   screensYodeckEmpty: number;
   contentUnknown: number;
+  adsTotal: number;
+  adsUnlinked: number;
+  nonAdsTotal: number;
 }
 
 interface MediaItem {
@@ -227,6 +231,17 @@ export default function Home() {
       accentBg: "bg-purple-500",
       link: "/advertisers?filter=paying",
     },
+    ...(stats?.adsUnlinked && stats.adsUnlinked > 0 ? [{
+      id: "unlinked-ads",
+      title: "Ads niet gekoppeld",
+      value: stats.adsUnlinked,
+      subtitle: `/ ${stats.adsTotal || 0}`,
+      icon: ImageOff,
+      iconColor: "text-orange-600",
+      iconBg: "bg-orange-50",
+      accentBg: "bg-orange-500",
+      link: "/yodeck-creatives?filter=unlinked",
+    }] : []),
   ];
 
   const getTypeIcon = (type: string) => {
