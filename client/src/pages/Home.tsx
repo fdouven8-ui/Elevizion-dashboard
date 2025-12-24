@@ -424,7 +424,7 @@ export default function Home() {
     setSelectedMetric(prev => prev === 'adsOnline' ? null : 'adsOnline');
   };
 
-  // 5 kern-KPI's: Schermen, Ads op schermen, Ads niet gekoppeld, Plaatsingen, Adverteerders
+  // 4 kern-KPI's: Schermen, Ads (gecombineerd), Plaatsingen, Adverteerders
   const mainKpiTiles = [
     {
       id: "screens-online",
@@ -449,26 +449,6 @@ export default function Home() {
       isWarning: (stats?.screensOffline || 0) > 0,
     },
     {
-      id: "ads-running",
-      title: "Ads op schermen",
-      value: stats?.adsTotal || 0,
-      icon: Target,
-      iconColor: "text-orange-600",
-      iconBg: "bg-orange-50",
-      accentBg: "bg-orange-500",
-      link: "/screens",
-    },
-    {
-      id: "ads-unlinked",
-      title: "Ads niet gekoppeld",
-      value: stats?.adsUnlinked || 0,
-      icon: ImageOff,
-      iconColor: "text-amber-600",
-      iconBg: "bg-amber-50",
-      accentBg: "bg-amber-500",
-      isWarning: (stats?.adsUnlinked || 0) > 0,
-    },
-    {
       id: "placements",
       title: "Actieve plaatsingen",
       value: stats?.activePlacements || 0,
@@ -489,6 +469,11 @@ export default function Home() {
       link: "/advertisers?filter=paying",
     },
   ];
+  
+  // Gecombineerde Ads KPI berekening
+  const adsTotal = stats?.adsTotal || 0;
+  const adsLinked = adsTotal - (stats?.adsUnlinked || 0);
+  const adsUnlinked = stats?.adsUnlinked || 0;
 
   const getTypeIcon = (type: string) => {
     switch (type) {
@@ -538,8 +523,8 @@ export default function Home() {
         <p className="text-muted-foreground">Overzicht van je Elevizion netwerk</p>
       </div>
 
-      {/* Compacte KPI rij - 6 kern-KPI's */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+      {/* Compacte KPI rij - 5 kern-KPI's (4 standaard + 1 gecombineerde Ads) */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {mainKpiTiles.map((tile) => (
           <KpiCard
             key={tile.id}
@@ -556,6 +541,42 @@ export default function Home() {
             isWarning={tile.isWarning}
           />
         ))}
+        
+        {/* Gecombineerde Ads KPI kaart */}
+        <Link href="/placements">
+          <div 
+            className={`bg-card rounded-lg shadow-sm transition-all hover:shadow-md hover:scale-[1.02] border overflow-hidden ${
+              adsUnlinked > 0 ? 'border-amber-300 bg-amber-50/30' : 'border-border'
+            }`}
+            data-testid="kpi-ads-combined"
+          >
+            <div className="h-1 bg-orange-500" />
+            <div className="p-4">
+              {statsLoading ? (
+                <Skeleton className="h-14 w-full" />
+              ) : (
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs text-muted-foreground font-medium mb-1">Ads</p>
+                    <div className="flex items-baseline gap-1">
+                      <span className="text-2xl font-bold">{adsTotal}</span>
+                      <span className="text-sm text-muted-foreground">totaal</span>
+                    </div>
+                    <div className="flex gap-3 mt-1 text-xs text-muted-foreground">
+                      <span>Op schermen: <b className="text-foreground">{adsLinked}</b></span>
+                      <span className={adsUnlinked > 0 ? 'text-amber-600' : ''}>
+                        Niet gekoppeld: <b className={adsUnlinked > 0 ? 'text-amber-600' : 'text-foreground'}>{adsUnlinked}</b>
+                      </span>
+                    </div>
+                  </div>
+                  <div className="p-2 rounded-full bg-orange-50 flex-shrink-0">
+                    <Target className="h-5 w-5 text-orange-600" />
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </Link>
       </div>
 
       {/* Verwijderd: Ads Detail Panel - details worden nu op Screen detail pagina getoond */}

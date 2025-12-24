@@ -1,0 +1,200 @@
+JE BENT DE REPLIT SOFTWARE AGENT IN MIJN APP (React + TS + Vite frontend, Express + Drizzle ORM + PostgreSQL backend).
+
+DOEL
+1) Voeg de KPI’s over Ads samen onder 1 vakje op Home (dus NIET meer twee losse vakjes “Ads op schermen” + “Ads niet gekoppeld”).
+2) Zorg dat in “Plaatsingen” ALLE ads zichtbaar zijn, óók als ze niet gekoppeld zijn (dus “niet gekoppeld” hoort ook een rij te zijn in Plaatsingen).
+
+ACCEPTANCE CRITERIA
+- Home toont 1 KPI-tegel “Ads” met:
+  - Totaal Ads
+  - Op schermen (gekoppeld)
+  - Niet gekoppeld
+- Het bestaande “Ads op schermen” KPI kaartje verdwijnt
+- Het bestaande “Ads niet gekoppeld” KPI kaartje verdwijnt
+- Plaatsingen-pagina toont een lijst waarin elke Ad 1 rij is:
+  - Als gekoppeld: toon Screen/Locatie + status “Actief/Gepland/etc”
+  - Als NIET gekoppeld: toon status “Niet gekoppeld”, Screen/Locatie leeg of “—”
+  - Er is een “Koppelen” actie/knop (mag simpel: open modal of navigeer naar onboarding/link flow)
+- Backend endpoint(s) leveren deze data correct: placements endpoint moet ads includen met LEFT JOIN zodat unlinked ads ook terugkomen.
+
+IMPLEMENTATIE PLAN (DOE DIT ZONDER EXTRA FEATURE-CREEP)
+A) BACKEND: Maak/upgrade endpoint dat placements lijst voedt (bijv. GET /api/placements)
+- Retourneer “placement rows” op ad-niveau:
+  {
+    adId,
+    adName,
+    advertiserId,
+    advertiserName,
+    placementId: null|string,
+    screenId: null|EVZ-001,
+    screenName: null|string,
+    locationName: null|string,
+    status: "active"|"scheduled"|"paused"|"unlinked",
+    startAt,
+    endAt,
+    updatedAt
+  }
+- Gebruik Drizzle: SELECT FROM ads
+  LEFT JOIN placements ON placements.ad_id = ads.id AND placements.is_active = true (of jouw business logic)
+  LEFT JOIN screens ON screens.id = placements.screen_id
+  LEFT JOIN advertisers ON advertisers.id = ads.advertiser_id
+- Status = "unlinked" als placements.id IS NULL
+
+B) BACKEND: Home stats endpoint (bijv. GET /api/dashboard/stats)
+- Bereken:
+  - totalAds = count(ads)
+  - linkedAds = count(distinct placements.ad_id WHERE placements.ad_id IS NOT NULL)  (of count placements die actief zijn)
+  - unlinkedAds = totalAds - linkedAds
+- Return deze in JSON, en pas frontend aan zodat Home 1 gecombineerde Ads KPI kaart gebruikt.
+
+C) FRONTEND: Home KPI-tegel
+- Vervang twee cards door 1 card “Ads”
+- Toon 3 kleine regels/mini-stats binnen die card:
+  “Totaal: X” “Op schermen: Y” “Niet gekoppeld: Z”
+- Houd dezelfde styling/spacing als andere KPI cards (icon rechts, border/gradient zoals je nu doet).
+
+D) FRONTEND: Plaatsingen pagina
+- Gebruik nieuw/gewijzigd endpoint (GET /api/placements) en render elke ad als rij.
+- Voeg filter tabs of chips (optioneel, klein): “Alle”, “Gekoppeld”, “Niet gekoppeld”
+- In “Niet gekoppeld” rijen: toon button “Koppelen” die route naar /onboarding of /plaatsingen/koppelen?adId=... doet (kies 1 en implementeer minimal).
+
+========================
+CONCRETE CODE CHANGES
+========================
+
+1) BACKEND: routes/placements.ts (of waar jouw placements route staat)
+- Als dit bestand niet bestaat: maak het, registreer in server routes.
+
+VOORBEELD (PAS TABLE/COLUMN NAMEN AAN AAN JOUW SCHEMA):
+
+// src/server/routes/placements.ts
+import { Router } from "express";
+import { db } from "../db";
+import { ads, placements, screens, advertisers } from "../db/schema";
+import { and, eq, isNull, sql } from "drizzle-orm";
+
+export const placementsRouter = Router();
+
+placementsRouter.get("/", async (req, res) => {
+  try {
+    // 1 rij per Ad, met optionele placement/screen info
+    const rows = await db
+      .select({
+        adId: ads.id,
+        adName: ads.name,
+        advertiserId: advertisers.id,
+        advertiserName: advertisers.name,
+        placementId: placements.id,
+        screenId: screens.screenId,          // bv. EVZ-001 string kolom
+        screenName: screens.name,
+        locationName: screens.locationName, // als je dat zo hebt
+        startAt: placements.startAt,
+        endAt: placements.endAt,
+        updatedAt: sql`COALESCE(${placements.updatedAt}, ${ads.updatedAt})`.as("updatedAt"),
+      })
+      .from(ads)
+      .leftJoin(advertisers, eq(advertisers.id, ads.advertiserId))
+      .leftJoin(placements, eq(placements.adId, ads.id))
+      .leftJoin(screens, eq(screens.id, placements.screenId))
+      .orderBy(ads.name);
+
+    const normalized = rows.map(r => ({
+      ...r,
+      status: r.placementId ? "linked" : "unlinked",
+    }));
+
+    res.json({ items: normalized });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Failed to load placements" });
+  }
+});
+
+Let op:
+- Als je meerdere placements per ad hebt, kies dan je “actieve” placement met een extra filter:
+  leftJoin(placements, and(eq(placements.adId, ads.id), eq(placements.isActive, true)))
+- Of haal latest placement via subquery. Maar hou het minimal: “1 actieve placement per ad” is prima.
+
+REGISTREER ROUTE in je server entry (bijv. src/server/index.ts):
+import { placementsRouter } from "./routes/placements";
+app.use("/api/placements", placementsRouter);
+
+2) BACKEND: dashboard stats endpoint (waar je Home KPI’s vandaan komen)
+Zoek je huidige stats route (bijv. src/server/routes/dashboard.ts of /api/dashboard/stats)
+Voeg daar linked/unlinked toe:
+
+const totalAds = await db.select({ c: sql<number>`count(*)` }).from(ads);
+const linkedAds = await db.select({ c: sql<number>`count(distinct ${placements.adId})` })
+  .from(placements); // evt. where isActive = true
+
+const total = totalAds[0]?.c ?? 0;
+const linked = linkedAds[0]?.c ?? 0;
+const unlinked = Math.max(0, total - linked);
+
+Return:
+ads: { total, linked, unlinked }
+
+3) FRONTEND: Home KPI component
+Zoek Home pagina (bijv. src/pages/dashboard/Home.tsx of src/pages/Home.tsx)
+- Vervang 2 KPI cards door 1:
+
+VOORBEELD:
+
+// in je stats type:
+type DashboardStats = {
+  screensOnline: number;
+  screensOffline: number;
+  ads?: { total: number; linked: number; unlinked: number };
+  activePlacements: number;
+  payingAdvertisers: number;
+};
+
+Render:
+<KpiCard title="Ads" icon="target" value={stats.ads?.total ?? 0}>
+  <div className="mt-2 text-sm text-muted-foreground flex gap-3">
+    <span>Op schermen: <b className="text-foreground">{stats.ads?.linked ?? 0}</b></span>
+    <span>Niet gekoppeld: <b className="text-foreground">{stats.ads?.unlinked ?? 0}</b></span>
+  </div>
+</KpiCard>
+
+- Verwijder de oude cards “Ads op schermen” en “Ads niet gekoppeld”.
+- Houd grid netjes (zelfde aantal kolommen, of laat het automatisch wrappen).
+
+4) FRONTEND: Plaatsingen pagina
+Zoek Plaatsingen list page (bijv. src/pages/Plaatsingen.tsx)
+- Gebruik GET /api/placements en render items.
+- Als status unlinked: toon “Niet gekoppeld” badge + Koppelen knop.
+
+VOORBEELD:
+
+const { data } = useQuery(["placements"], () => api.get("/api/placements").then(r => r.data));
+
+{data.items.map((it) => (
+  <Row key={it.adId}>
+    <Cell>
+      <div className="font-medium">{it.adName}</div>
+      <div className="text-xs text-muted-foreground">{it.advertiserName ?? "—"}</div>
+    </Cell>
+    <Cell>{it.screenId ? `${it.screenId} • ${it.locationName ?? it.screenName ?? ""}` : "—"}</Cell>
+    <Cell>
+      {it.status === "unlinked" ? <Badge variant="secondary">Niet gekoppeld</Badge> : <Badge>Gekoppeld</Badge>}
+    </Cell>
+    <Cell className="text-right">
+      {it.status === "unlinked" ? (
+        <Button size="sm" onClick={() => navigate(`/onboarding?adId=${it.adId}`)}>Koppelen</Button>
+      ) : (
+        <Button size="sm" variant="outline" onClick={() => navigate(`/plaatsingen/${it.placementId}`)}>Details</Button>
+      )}
+    </Cell>
+  </Row>
+))}
+
+5) CHECKS
+- Run typecheck/build
+- Home toont 1 Ads KPI
+- Plaatsingen toont ook unlinked ads
+
+DO IT NOW:
+- Zoek de huidige bestanden en pas exact in deze codebase toe (juiste paden, schema, types, componenten).
+- Hou het minimal en consistent met bestaande styling (shadcn/tailwind).
+- Als je tegen schema-naam verschillen aanloopt: pas alleen de identifiers aan, niet het concept.
