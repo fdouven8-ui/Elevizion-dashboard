@@ -1,0 +1,317 @@
+/* src/integrations/yodeck/yodeckV2.ts
+   Yodeck v2 integration: fetch screens + resolve content source + compute item counts.
+
+   ENV:
+   - YODECK_V2_TOKEN = "mylabel:XXXXXXXXXXX"   (WITHOUT "Token " prefix; we add it)
+   - YODECK_V2_BASE_URL = "https://app.yodeck.com" (optional)
+*/
+
+import express from "express";
+
+type Json = any;
+
+const BASE_URL = process.env.YODECK_V2_BASE_URL?.trim() || "https://app.yodeck.com";
+const TOKEN_VALUE = (process.env.YODECK_V2_TOKEN || "").trim();
+
+function assertEnv() {
+  if (!TOKEN_VALUE) {
+    throw new Error(
+      "Missing env YODECK_V2_TOKEN. Expected format: mylabel:XXXXXXXXXXX (we will send 'Authorization: Token <value>')."
+    );
+  }
+}
+
+async function yodeckFetch<T = Json>(path: string, init?: RequestInit): Promise<T> {
+  assertEnv();
+
+  const url = path.startsWith("http") ? path : `${BASE_URL}${path}`;
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Token ${TOKEN_VALUE}`,
+      ...(init?.headers || {}),
+    },
+  });
+
+  // Helpful error body
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Yodeck API error ${res.status} ${res.statusText} for ${url}: ${text}`);
+  }
+
+  // Some endpoints might return no JSON; handle safely
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    // @ts-ignore
+    return (await res.text()) as T;
+  }
+
+  return (await res.json()) as T;
+}
+
+type Page<T> = {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: T[];
+};
+
+type YodeckScreen = {
+  id: number;
+  uuid: string;
+  name: string;
+  workspace?: { id: number; name: string };
+  screen_content?: {
+    source_id: number;
+    source_name: string;
+    source_type: "playlist" | "layout" | "tagbased-playlist" | string;
+  };
+  state?: { online: boolean; last_seen?: string };
+  screenshot_url?: string;
+};
+
+type PlaylistItem = { id: number; type: string; name?: string; duration?: number; priority?: number };
+type YodeckPlaylist = { id: number; name: string; items: PlaylistItem[] };
+
+type YodeckLayout = {
+  id: number;
+  name: string;
+  regions?: Array<{ item?: { type: string; id: number }; id?: number }>;
+  background_audio?: { item?: { type: string; id: number } };
+};
+
+type TagBasedPlaylist = {
+  id: number;
+  name: string;
+  tagbased?: { tags?: Array<{ id: number; name: string }> };
+};
+
+export type ContentSummary = {
+  sourceType: string;
+  sourceId: number | null;
+  sourceName: string | null;
+  contentCount: number; // "aantal verschillende ads/berichten/items"
+  items: Array<{ type: string; id: number; name?: string }>;
+  lastFetchedAt: string;
+};
+
+function uniqKey(type: string, id: number) {
+  return `${type}:${id}`;
+}
+
+function uniqItems(items: Array<{ type: string; id: number; name?: string }>) {
+  const map = new Map<string, { type: string; id: number; name?: string }>();
+  for (const it of items) map.set(uniqKey(it.type, it.id), it);
+  return [...map.values()];
+}
+
+async function listAllScreens(): Promise<YodeckScreen[]> {
+  const all: YodeckScreen[] = [];
+  let next: string | null = `${BASE_URL}/api/v2/screens?limit=100&offset=0`;
+
+  while (next) {
+    const page = await yodeckFetch<Page<YodeckScreen>>(next);
+    all.push(...(page.results || []));
+    next = page.next;
+  }
+  return all;
+}
+
+async function getPlaylist(id: number) {
+  return yodeckFetch<YodeckPlaylist>(`/api/v2/playlists/${id}`);
+}
+
+async function getLayout(id: number) {
+  return yodeckFetch<YodeckLayout>(`/api/v2/layouts/${id}`);
+}
+
+async function getTagBasedPlaylist(id: number) {
+  return yodeckFetch<TagBasedPlaylist>(`/api/v2/tagbased-playlists/${id}`);
+}
+
+async function getMediaCountByTags(tags: string[]) {
+  if (!tags.length) return 0;
+  const qp = new URLSearchParams();
+  qp.set("limit", "1");
+  qp.set("offset", "0");
+  // v2 docs: tags=tag1,tag2 returns any match
+  qp.set("tags", tags.join(","));
+  const page = await yodeckFetch<Page<any>>(`/api/v2/media?${qp.toString()}`);
+  return page.count || 0;
+}
+
+export async function fetchContentSummaryForScreen(screen: YodeckScreen): Promise<ContentSummary> {
+  const sc = screen.screen_content;
+
+  // If screen_content missing, we don't know what's playing
+  if (!sc?.source_id || !sc?.source_type) {
+    return {
+      sourceType: "unknown",
+      sourceId: null,
+      sourceName: null,
+      contentCount: 0,
+      items: [],
+      lastFetchedAt: new Date().toISOString(),
+    };
+  }
+
+  const sourceType = sc.source_type;
+  const sourceId = sc.source_id;
+  const sourceName = sc.source_name || null;
+
+  // 1) Playlist: count unique playlist items
+  if (sourceType === "playlist") {
+    const pl = await getPlaylist(sourceId);
+
+    const items = (pl.items || []).map((it) => ({
+      type: it.type || "media",
+      id: it.id,
+      name: it.name,
+    }));
+
+    const uniq = uniqItems(items);
+
+    return {
+      sourceType,
+      sourceId,
+      sourceName,
+      contentCount: uniq.length,
+      items: uniq,
+      lastFetchedAt: new Date().toISOString(),
+    };
+  }
+
+  // 2) Layout: count unique region items (playlist/media/widget etc)
+  if (sourceType === "layout") {
+    const layout = await getLayout(sourceId);
+
+    const items: Array<{ type: string; id: number; name?: string }> = [];
+
+    for (const r of layout.regions || []) {
+      if (r?.item?.type && typeof r.item.id === "number") {
+        items.push({ type: r.item.type, id: r.item.id });
+      }
+    }
+
+    if (layout.background_audio?.item?.type && typeof layout.background_audio.item.id === "number") {
+      items.push({ type: layout.background_audio.item.type, id: layout.background_audio.item.id });
+    }
+
+    const uniq = uniqItems(items);
+
+    return {
+      sourceType,
+      sourceId,
+      sourceName,
+      contentCount: uniq.length,
+      items: uniq,
+      lastFetchedAt: new Date().toISOString(),
+    };
+  }
+
+  // 3) Tagbased playlist: resolve tags -> media count (fast & robust)
+  if (sourceType === "tagbased-playlist") {
+    const tb = await getTagBasedPlaylist(sourceId);
+    const tags = (tb.tagbased?.tags || []).map((t) => t.name).filter(Boolean);
+
+    const mediaCount = await getMediaCountByTags(tags);
+
+    // We return tag "items" as a hint; the count is mediaCount
+    const items = tags.map((name, idx) => ({ type: "tag", id: idx + 1, name }));
+
+    return {
+      sourceType,
+      sourceId,
+      sourceName,
+      contentCount: mediaCount,
+      items,
+      lastFetchedAt: new Date().toISOString(),
+    };
+  }
+
+  // Fallback for unknown content types
+  return {
+    sourceType,
+    sourceId,
+    sourceName,
+    contentCount: 0,
+    items: [],
+    lastFetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function fetchScreensWithContent(): Promise<
+  Array<{
+    screen: YodeckScreen;
+    content: ContentSummary;
+  }>
+> {
+  const screens = await listAllScreens();
+
+  // Resolve content with limited concurrency (avoid rate limiting)
+  const concurrency = 5;
+  const out: Array<{ screen: YodeckScreen; content: ContentSummary }> = [];
+  let i = 0;
+
+  async function worker() {
+    while (i < screens.length) {
+      const idx = i++;
+      const s = screens[idx];
+      try {
+        const content = await fetchContentSummaryForScreen(s);
+        out.push({ screen: s, content });
+      } catch (e: any) {
+        out.push({
+          screen: s,
+          content: {
+            sourceType: s.screen_content?.source_type || "unknown",
+            sourceId: s.screen_content?.source_id ?? null,
+            sourceName: s.screen_content?.source_name ?? null,
+            contentCount: 0,
+            items: [],
+            lastFetchedAt: new Date().toISOString(),
+          },
+        });
+        console.error("[yodeckV2] content fetch failed for screen", s.id, s.name, e?.message || e);
+      }
+    }
+  }
+
+  const workers = Array.from({ length: concurrency }, () => worker());
+  await Promise.all(workers);
+
+  return out;
+}
+
+/**
+ * EXPRESS ROUTER (test endpoint)
+ * GET /api/sync/yodeck/run-v2
+ * -> returns screens + contentCount per screen
+ */
+export function yodeckV2Router() {
+  const router = express.Router();
+
+  router.get("/api/sync/yodeck/run-v2", async (_req, res) => {
+    try {
+      const data = await fetchScreensWithContent();
+
+      // Example compact response
+      const mapped = data.map(({ screen, content }) => ({
+        yodeckScreenId: screen.id,
+        name: screen.name,
+        online: !!screen.state?.online,
+        lastSeen: screen.state?.last_seen || null,
+        sourceType: content.sourceType,
+        sourceId: content.sourceId,
+        contentCount: content.contentCount,
+      }));
+
+      res.json({ ok: true, total: mapped.length, results: mapped });
+    } catch (e: any) {
+      res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
+  });
+
+  return router;
+}

@@ -3289,6 +3289,63 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/sync/yodeck/run-v2 - Compact content summary per screen
+  app.get("/api/sync/yodeck/run-v2", requirePermission("manage_integrations"), async (_req, res) => {
+    try {
+      const { getYodeckClient, ContentResolver } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      
+      if (!client) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: "Missing YODECK_V2_TOKEN env var. Expected format: mylabel:XXXXXXXXXXX"
+        });
+      }
+
+      const screens = await client.getScreens();
+      const resolver = new ContentResolver(client);
+      
+      const results: Array<{
+        yodeckScreenId: number;
+        name: string;
+        online: boolean;
+        lastSeen: string | null;
+        sourceType: string;
+        sourceId: number | null;
+        contentCount: number;
+      }> = [];
+
+      for (const screen of screens) {
+        try {
+          const resolved = await resolver.resolveScreenContent(screen);
+          results.push({
+            yodeckScreenId: screen.id,
+            name: screen.name,
+            online: screen.state?.online ?? false,
+            lastSeen: screen.state?.last_seen ?? null,
+            sourceType: resolved.sourceType || "unknown",
+            sourceId: resolved.sourceId ?? null,
+            contentCount: resolved.uniqueMediaCount,
+          });
+        } catch (e: any) {
+          results.push({
+            yodeckScreenId: screen.id,
+            name: screen.name,
+            online: screen.state?.online ?? false,
+            lastSeen: screen.state?.last_seen ?? null,
+            sourceType: screen.screen_content?.source_type || "unknown",
+            sourceId: screen.screen_content?.source_id ?? null,
+            contentCount: 0,
+          });
+        }
+      }
+
+      return res.json({ ok: true, total: results.length, results });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error?.message ?? String(error) });
+    }
+  });
+
   // Yodeck content sync - fetches what's playing on each screen
   // Query params: force=true to bypass 10-minute cache
   app.post("/api/integrations/yodeck/content-sync", async (req, res) => {

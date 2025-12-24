@@ -208,7 +208,14 @@ export class YodeckClient {
         return new YodeckClient(envToken);
       }
 
-      // Option 2: Separate YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE
+      // Option 2: YODECK_V2_TOKEN (format: "label:apikey" - we add "Token " prefix)
+      const v2Token = process.env.YODECK_V2_TOKEN?.trim();
+      if (v2Token) {
+        console.log("[YodeckClient] Using YODECK_V2_TOKEN from environment");
+        return new YodeckClient(v2Token);
+      }
+
+      // Option 3: Separate YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE
       const label = process.env.YODECK_TOKEN_LABEL;
       const value = process.env.YODECK_TOKEN_VALUE;
       if (label && value) {
