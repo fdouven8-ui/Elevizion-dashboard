@@ -3460,6 +3460,47 @@ export async function registerRoutes(
     }
   });
 
+  // Yodeck media mappings endpoints
+  app.get("/api/yodeck/media-mappings", requirePermission("view_screens"), async (_req, res) => {
+    try {
+      const mappings = await storage.getYodeckMediaLinks();
+      res.json({ ok: true, mappings });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  const mediaMappingUpdateSchema = z.object({
+    yodeckMediaId: z.number(),
+    advertiserId: z.string().uuid().nullable().optional(),
+    placementId: z.string().uuid().nullable().optional(),
+  });
+
+  app.post("/api/yodeck/media-mappings", requirePermission("edit_screens"), async (req, res) => {
+    try {
+      const parsed = mediaMappingUpdateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ ok: false, error: parsed.error.message });
+      }
+      const { yodeckMediaId, advertiserId, placementId } = parsed.data;
+      
+      const existingLink = await storage.getYodeckMediaLink(yodeckMediaId);
+      if (!existingLink) {
+        return res.status(404).json({ ok: false, error: "Media item not found in database" });
+      }
+      
+      const updated = await storage.updateYodeckMediaLink(yodeckMediaId, {
+        advertiserId: advertiserId ?? null,
+        placementId: placementId ?? null,
+        updatedAt: new Date(),
+      });
+      
+      res.json({ ok: true, mapping: updated });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   // Debug endpoint to inspect raw Yodeck API responses for troubleshooting
   app.get("/api/integrations/yodeck/debug/screen/:yodeckScreenId", requirePermission("manage_integrations"), async (req, res) => {
     try {
@@ -4104,8 +4145,8 @@ export async function registerRoutes(
       });
       const payingAdvertisers = payingAdvertiserIds.size;
       
-      // Yodeck creatives stats (ads classification)
-      const creativeStats = await storage.getYodeckCreativeStats();
+      // Yodeck media links stats (ads classification from yodeck_media_links table)
+      const mediaLinkStats = await storage.getYodeckMediaLinkStats();
       
       const result = {
         screensOnline,
@@ -4122,10 +4163,10 @@ export async function registerRoutes(
         screensYodeckEmpty,
         contentUnknown,
         contentError,
-        // Ads classification stats
-        adsTotal: creativeStats.totalAds,
-        adsUnlinked: creativeStats.unlinkedAds,
-        nonAdsTotal: creativeStats.totalNonAds,
+        // Ads classification stats (from yodeck_media_links)
+        adsTotal: mediaLinkStats.totalAds,
+        adsUnlinked: mediaLinkStats.unlinkedAds,
+        nonAdsTotal: mediaLinkStats.totalNonAds,
       };
       setCache("control-room-stats", result);
       res.json(result);

@@ -313,6 +313,7 @@ export interface IStorage {
   getYodeckMediaLinks(): Promise<YodeckMediaLink[]>;
   getYodeckMediaLink(yodeckMediaId: number): Promise<YodeckMediaLink | undefined>;
   upsertYodeckMediaLink(data: { yodeckMediaId: number; name: string; normalizedKey: string; mediaType?: string; category: string; duration?: number }): Promise<YodeckMediaLink>;
+  updateYodeckMediaLink(yodeckMediaId: number, data: { advertiserId?: string | null; placementId?: string | null; updatedAt?: Date }): Promise<YodeckMediaLink | undefined>;
   getYodeckMediaLinkStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number }>;
 }
 
@@ -1647,6 +1648,18 @@ export class DatabaseStorage implements IStorage {
       lastSeenAt: new Date(),
     }).returning();
     return link;
+  }
+
+  async updateYodeckMediaLink(yodeckMediaId: number, data: { advertiserId?: string | null; placementId?: string | null; updatedAt?: Date }): Promise<YodeckMediaLink | undefined> {
+    const [updated] = await db.update(schema.yodeckMediaLinks)
+      .set({
+        advertiserId: data.advertiserId,
+        placementId: data.placementId,
+        updatedAt: data.updatedAt || new Date()
+      })
+      .where(eq(schema.yodeckMediaLinks.yodeckMediaId, yodeckMediaId))
+      .returning();
+    return updated;
   }
 
   async getYodeckMediaLinkStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number }> {

@@ -1,0 +1,77 @@
+DOEL: Alleen Yodeck integratie afronden. Frontend moet de content en (ads vs overig) duidelijk tonen, en de app mag niet random “signal terminated” krijgen.
+
+CONTEXT (wat werkt al):
+- Backend sync haalt Yodeck screens + playlist content + mediaItems op.
+- /api/control-room/stats geeft nu ook: adsTotal, adsUnlinked, nonAdsTotal.
+- /api/control-room/actions geeft bij unmanaged_content o.a.: contentCount, adsCount, nonAdsCount, adsUnlinkedCount, topAds, topNonAds, mediaItems (met category ad/non_ad), lastFetchedAt, sourceName/sourceType.
+
+WAT MOET JE BOUWEN / FIXEN:
+
+A) FRONTEND (Control Room / Home)
+1) Voeg 3 KPI tiles toe in de Control Room naast bestaande:
+   - “Ads op schermen” = stats.adsTotal
+   - “Ads niet gekoppeld” = stats.adsUnlinked (toon als warning/amber)
+   - “Overig content” = stats.nonAdsTotal
+   Zorg dat dit live ververst met dezelfde polling als bestaande stats.
+
+2) In de “Acties” lijst (unmanaged_content type):
+   - Toon statusText zoals nu, maar voeg een uitklapbare sectie toe:
+     * Ads (adsCount) → lijst topAds
+     * Overig (nonAdsCount) → lijst topNonAds
+   - Toon ook “Bron: {sourceType} • {sourceName}” en “Laatst opgehaald: {lastFetchedAt}”.
+
+3) In het Screen detail (/screens/:id):
+   - Toon “Huidige Yodeck content” kaart:
+     * contentCount
+     * adsCount/nonAdsCount
+     * lijst mediaItems met badge “Ad” of “Overig” (gebruik mediaItems[].category)
+     * link/knop “Nog niet gekoppelde ads” → filtert alleen ads waar nog geen koppeling is (zie punt B).
+
+B) BACKEND: “adsUnlinked” correct maken zonder Moneybird
+We hebben Moneybird nog niet, dus definieer “unlinked ad” als:
+- mediaItem.category === "ad"
+- EN er bestaat nog GEEN Placement of Creative mapping in Elevizion voor deze mediaId.
+Implementeer minimaal een simpele mapping-tabel in DB:
+  Table: yodeck_media_mappings
+  - id (uuid)
+  - yodeck_media_id (int, unique)
+  - advertiser_id (uuid, nullable)   // later koppelen
+  - placement_id (uuid, nullable)    // later koppelen
+  - created_at, updated_at
+En expose 2 endpoints:
+  GET /api/yodeck/media-mappings (list)
+  POST /api/yodeck/media-mappings (upsert mapping for yodeck_media_id)
+Zonder UI voor koppelen is oké, maar de backend moet adsUnlinked tellen op basis van ontbreken mapping.
+
+Update de control-room stats berekening:
+- adsTotal = unieke mediaItems waar category=ad over alle screens (dedupe op id)
+- nonAdsTotal = unieke mediaItems waar category=non_ad
+- adsUnlinked = unieke ads waar geen mapping bestaat
+
+Update unmanaged_content action payload:
+- adsUnlinkedCount + topAds/topNonAds blijven, maar topAds mag alleen ads tonen (en bij voorkeur ook markeren als “unlinked” als mapping ontbreekt)
+
+C) STABILITEIT: “signal terminated” voorkomen
+1) Verminder log-spam:
+   - Zet content item logging (per media item) achter een env flag DEBUG_YODECK=false default.
+   - Log alleen totals per sync (counts), niet alle items.
+
+2) Cache / rate-limit:
+   - Voeg in-memory cache toe voor content fetch results per screen met TTL (bijv 10 minuten).
+   - Als lastFetchedAt < TTL, gebruik cache en skip externe calls.
+   - Zorg dat sync niet dubbel tegelijk kan draaien: global mutex/lock (als lock actief → return “sync already running”).
+
+3) Voorkom dubbele auto-sync loops:
+   - Check of er zowel een scheduler als een endpoint trigger is. Zorg dat maar 1 mechanisme periodic runt.
+   - /api/sync/status mag geen sync triggeren; het moet alleen status returnen.
+
+D) GEEN extra integraties
+- Moneybird en Dropbox Sign niets aan doen.
+- Geen extra secrets vragen; Yodeck key staat al in DB encryptedCredentials.
+
+OPLEVERING / ACCEPTANCE
+- Control Room toont 3 nieuwe tiles + action card details (ads/overig).
+- Screen detail toont content lijst met badges.
+- adsUnlinked werkt op basis van ontbreken mapping in yodeck_media_mappings.
+- App blijft draaien zonder “signal terminated” bij normaal gebruik; logs zijn kort.
+- Alle types netjes in TS, geen any-spaghetti.

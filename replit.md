@@ -53,7 +53,10 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
 - **Server-side Caching**: 10-second in-memory TTL cache for `/api/control-room/stats` and `/api/control-room/actions` to reduce database load.
 - **Memory Logging**: Optional via `DEBUG_MEMORY=true` - logs `process.memoryUsage()` every 60 seconds (RSS, Heap, External) for monitoring stability.
 - **Unmanaged Content Display**: Shows "Yodeck content actief • X items (nog niet via Elevizion placements)" with playlist name, lastFetchedAt, and expandable media items list with duration badges.
-- **Yodeck Media Links Table**: `yodeck_media_links` table tracks detected media items for future Moneybird advertiser linking with normalized name keys.
+- **Yodeck Media Links Table**: `yodeck_media_links` table tracks detected media items for Moneybird advertiser linking with normalized name keys, category (ad/non_ad), and advertiser/placement mapping fields.
+  - **GET /api/yodeck/media-mappings**: Returns all media links for admin UI mapping management.
+  - **POST /api/yodeck/media-mappings**: Updates advertiser/placement mappings for a specific yodeckMediaId.
+- **Home KPI Tiles**: 7 tiles including "Ads op schermen" (total ads), "Ads niet gekoppeld" (unlinked ads with warning styling), and "Overig content" (non-ad items).
 
 ### Production Stability Features
 - **Graceful Shutdown**: Handlers for SIGTERM/SIGINT with 5-second drain period, database pool cleanup, and scheduler stop.

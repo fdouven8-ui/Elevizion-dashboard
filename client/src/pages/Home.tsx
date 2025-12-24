@@ -288,17 +288,38 @@ export default function Home() {
       accentBg: "bg-purple-500",
       link: "/advertisers?filter=paying",
     },
-    ...(stats?.adsUnlinked && stats.adsUnlinked > 0 ? [{
-      id: "unlinked-ads",
-      title: "Ads niet gekoppeld",
-      value: stats.adsUnlinked,
-      subtitle: `/ ${stats.adsTotal || 0}`,
-      icon: ImageOff,
+    {
+      id: "yodeck-ads",
+      title: "Ads op schermen",
+      value: stats?.adsTotal || 0,
+      icon: Target,
       iconColor: "text-orange-600",
       iconBg: "bg-orange-50",
       accentBg: "bg-orange-500",
-      link: "/yodeck-creatives?filter=unlinked",
-    }] : []),
+      link: "/screens",
+    },
+    {
+      id: "unlinked-ads",
+      title: "Ads niet gekoppeld",
+      value: stats?.adsUnlinked || 0,
+      subtitle: stats?.adsTotal ? `/ ${stats.adsTotal}` : undefined,
+      icon: ImageOff,
+      iconColor: "text-amber-600",
+      iconBg: "bg-amber-50",
+      accentBg: "bg-amber-500",
+      link: "/screens",
+      isWarning: (stats?.adsUnlinked || 0) > 0,
+    },
+    {
+      id: "non-ads",
+      title: "Overig content",
+      value: stats?.nonAdsTotal || 0,
+      icon: Monitor,
+      iconColor: "text-slate-600",
+      iconBg: "bg-slate-50",
+      accentBg: "bg-slate-400",
+      link: "/screens",
+    },
   ];
 
   const getTypeIcon = (type: string) => {
@@ -349,32 +370,34 @@ export default function Home() {
         <p className="text-muted-foreground">Overzicht van je Elevizion netwerk</p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
         {kpiTiles.map((tile) => (
           <Link key={tile.id} href={tile.link}>
             <div 
-              className="bg-card rounded-lg shadow-sm cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] border border-border overflow-hidden"
+              className={`bg-card rounded-lg shadow-sm cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] border overflow-hidden ${
+                (tile as any).isWarning ? 'border-amber-300 bg-amber-50/30' : 'border-border'
+              }`}
               data-testid={`kpi-${tile.id}`}
             >
               <div className={`h-1 ${tile.accentBg}`} />
-              <div className="p-5">
+              <div className="p-4">
                 {statsLoading ? (
-                  <Skeleton className="h-16 w-full" />
+                  <Skeleton className="h-14 w-full" />
                 ) : (
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm text-muted-foreground font-medium mb-1">{tile.title}</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-muted-foreground font-medium mb-1 truncate">{tile.title}</p>
                       <div className="flex items-baseline gap-1">
-                        <span className="text-3xl font-bold">
+                        <span className="text-2xl font-bold">
                           {tile.value}
                         </span>
                         {tile.subtitle && (
-                          <span className="text-lg text-muted-foreground">{tile.subtitle}</span>
+                          <span className="text-sm text-muted-foreground">{tile.subtitle}</span>
                         )}
                       </div>
                     </div>
-                    <div className={`p-3 rounded-full ${tile.iconBg}`}>
-                      <tile.icon className={`h-6 w-6 ${tile.iconColor}`} />
+                    <div className={`p-2 rounded-full ${tile.iconBg} flex-shrink-0`}>
+                      <tile.icon className={`h-5 w-5 ${tile.iconColor}`} />
                     </div>
                   </div>
                 )}
