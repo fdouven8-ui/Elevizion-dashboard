@@ -1,0 +1,60 @@
+DOEL: Schermen-pagina verfijnen.
+- Het vergrootglasje / zoeken is verdwenen: voeg een duidelijke zoekfunctie terug in de filterbalk.
+- De knop “Open” is een van de meest gebruikte acties: maak die prominenter (sneller te zien/klikken).
+- Niks slopen: huidige styling/structuur behouden, alleen verbeteren.
+
+CONTEXT
+Project: React + TypeScript + Vite.
+Pagina: Schermen (lijstweergave met filters en tabel).
+Gebruik lucide-react icons (zoals elders). Tailwind classes worden gebruikt.
+
+TAKEN
+
+1) ZOEKEN TERUG (vergrootglas)
+- Voeg in de Filters/toolbar een Search input toe met een vergrootglas-icoon links in het veld.
+- Placeholder: “Zoek op scherm, locatie, plaats, ID…”
+- Zoek moet client-side filteren op:
+  - schermnaam (Yodeck Naam / Scherm)
+  - Screen ID (EVZ-xxx als je die hebt) en/of Yodeck code (YDK-xxxxx)
+  - plaats
+  - locatie/bedrijf
+  - content titel (als zichtbaar in de tabel)
+- Zoek moet werken samen met bestaande filters (plaats, locatie, online/offline, plaatsingen min/max).
+- Debounce 150–250ms (zodat typen soepel blijft).
+
+2) “OPEN” MEER IN HET ZICHT (primary actie)
+- Maak “Open” een duidelijke primary knop:
+  - Groter click-target (min height 36–40px)
+  - Plaats de knop meer “in het zicht”:
+    Optie A (voorkeur): verplaats de Actie-kolom naar meer links (net na Status of zelfs direct na Scherm).
+    Optie B: laat kolommen staan, maar maak de knop visueel primary (filled/green) + voeg een “↗”/external icon.
+- Bonus (als makkelijk): maak de hele rij klikbaar om te openen (cursor-pointer), behalve wanneer je op filters/checkboxes klikt.
+- Zorg dat accessibility ok is (button blijft button, row-click gebruikt onClick met role/link of nav).
+
+3) UI DETAILS
+- In de toolbar rechts (waar nu “2/2” + view icons staan): laat de zoekinput NIET daar verdwijnen; hij moet altijd zichtbaar zijn in de filterbalk (links/midden).
+- Op mobiel: zoekinput full width boven de tabel, filters eronder (stack).
+
+IMPLEMENTATIE-AANWIJZING (zodat je snel het juiste component vindt)
+- Zoek in de codebase naar het component van deze pagina via:
+  - route "/screens" of label “Schermen”
+  - header tekst “Schermen”
+- Pas alleen deze pagina/componenten aan. Geen backend nodig.
+
+TECHNISCHE EISEN
+- Gebruik lucide-react: import { Search, ArrowUpRight } from "lucide-react";
+- Debounce met useEffect + setTimeout (geen extra libs).
+- Filterlogica: maak een derived array `filteredScreens` op basis van bestaande filters + searchQuery.
+- Search matching case-insensitive: normalize via `.toLowerCase()` en bij voorkeur trim.
+- Zorg dat de zoekinput state preserved blijft bij tab/view switch binnen de pagina (als dat bestaat).
+
+ACCEPTATIECRITERIA (checklist)
+- [ ] Vergrootglas + zoekinput zichtbaar boven de tabel
+- [ ] Typen filtert direct de rijen
+- [ ] Zoeken werkt op schermnaam + locatie/bedrijf + plaats + (YDK/Screen ID) + content
+- [ ] “Open” is duidelijker en sneller te vinden/klikken
+- [ ] Geen styling regressions, pagina blijft clean
+
+LEVER OP
+- Commit/patch in de relevante Schermen pagina component(en).
+- Laat me exact weten welke bestanden je hebt aangepast.

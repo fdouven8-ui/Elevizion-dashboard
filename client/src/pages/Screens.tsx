@@ -1,7 +1,7 @@
 import { useAppData } from "@/hooks/use-app-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid } from "lucide-react";
+import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useForm } from "react-hook-form";
 import { useLocation, Link } from "wouter";
@@ -66,7 +66,7 @@ function getScreenDisplayName(screen: any, location: any): string {
 
 export default function Screens() {
   const { screens, locations, placements } = useAppData();
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [rowDensity, setRowDensity] = useState<RowDensity>("normal");
 
@@ -82,6 +82,15 @@ export default function Screens() {
   const [maxPlacements, setMaxPlacements] = useState<string>("");
   const [cityPopoverOpen, setCityPopoverOpen] = useState(false);
   const [locationPopoverOpen, setLocationPopoverOpen] = useState(false);
+  const [searchInput, setSearchInput] = useState<string>("");
+  const [searchQuery, setSearchQuery] = useState<string>("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setSearchQuery(searchInput.trim().toLowerCase());
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [searchInput]);
 
   const uniqueCities = useMemo(() => {
     const cities = locations
@@ -126,9 +135,33 @@ export default function Screens() {
         return false;
       }
 
+      if (searchQuery) {
+        const displayName = getScreenDisplayName(scr, loc).toLowerCase();
+        const screenId = (scr.screenId || "").toLowerCase();
+        const yodeckIdRaw = (scr.yodeckPlayerId || "").toLowerCase();
+        const yodeckIdPrefixed = scr.yodeckPlayerId ? `ydk-${scr.yodeckPlayerId}`.toLowerCase() : "";
+        const city = (loc?.city || "").toLowerCase();
+        const locName = (loc?.name || "").toLowerCase();
+        const summary = scr.yodeckContentSummary as { topItems?: string[] } | null;
+        const contentStr = (summary?.topItems || []).join(" ").toLowerCase();
+        
+        const searchMatch = 
+          displayName.includes(searchQuery) ||
+          screenId.includes(searchQuery) ||
+          yodeckIdRaw.includes(searchQuery) ||
+          yodeckIdPrefixed.includes(searchQuery) ||
+          city.includes(searchQuery) ||
+          locName.includes(searchQuery) ||
+          contentStr.includes(searchQuery);
+        
+        if (!searchMatch) {
+          return false;
+        }
+      }
+
       return true;
     });
-  }, [screens, cityFilter, locationFilter, statusFilter, minPlacements, maxPlacements, placements, locations]);
+  }, [screens, cityFilter, locationFilter, statusFilter, minPlacements, maxPlacements, placements, locations, searchQuery]);
 
   const filteredLocations = useMemo(() => {
     if (!cityFilter) return locations;
@@ -152,9 +185,10 @@ export default function Screens() {
     setStatusFilter([]);
     setMinPlacements("");
     setMaxPlacements("");
+    setSearchInput("");
   };
 
-  const hasActiveFilters = cityFilter || locationFilter || statusFilter.length > 0 || minPlacements || maxPlacements;
+  const hasActiveFilters = cityFilter || locationFilter || statusFilter.length > 0 || minPlacements || maxPlacements || searchInput;
 
   const getRowClasses = () => {
     switch (rowDensity) {
@@ -205,7 +239,20 @@ export default function Screens() {
         <CardContent className="py-3 px-4">
           <div className="flex items-center justify-between gap-4 flex-wrap">
             <div className="flex items-center gap-3 flex-wrap flex-1">
-              <div className="flex items-center gap-2">
+              {/* Search input */}
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                <Input
+                  type="text"
+                  placeholder="Zoek op scherm, locatie, plaats, ID…"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  className="h-8 w-[220px] pl-8 text-sm"
+                  data-testid="filter-search"
+                />
+              </div>
+              
+              <div className="flex items-center gap-2 border-l pl-3">
                 <Filter className="h-4 w-4 text-muted-foreground" />
               </div>
               
@@ -420,7 +467,7 @@ export default function Screens() {
               <TableHead className={getCellPadding()}>Status</TableHead>
               <TableHead className={getCellPadding()}>Content</TableHead>
               <TableHead className={`${getCellPadding()} text-center`}>Plaatsingen</TableHead>
-              <TableHead className={`${getCellPadding()} w-[80px] text-right`}>Actie</TableHead>
+              <TableHead className={`${getCellPadding()} w-[100px] text-right`}>Actie</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody className={getRowClasses()}>
@@ -437,7 +484,12 @@ export default function Screens() {
                 : (scr.yodeckContentCount === 0 ? "Leeg" : "Onbekend");
               
               return (
-                <TableRow key={scr.id} data-testid={`screen-row-${scr.id}`}>
+                <TableRow 
+                  key={scr.id} 
+                  data-testid={`screen-row-${scr.id}`}
+                  className="cursor-pointer hover:bg-muted/50 transition-colors"
+                  onClick={() => setLocation(`/screens/${scr.id}`)}
+                >
                   {/* Scherm column: name + EVZ-ID + YDK subtitle */}
                   <TableCell className={getCellPadding()}>
                     <div className="flex items-center gap-2">
@@ -509,16 +561,17 @@ export default function Screens() {
                   </TableCell>
                   
                   {/* Actie */}
-                  <TableCell className={`${getCellPadding()} text-right`}>
+                  <TableCell className={`${getCellPadding()} text-right`} onClick={(e) => e.stopPropagation()}>
                     <Button 
-                      variant="outline" 
+                      variant="default" 
                       size="sm" 
-                      className="h-7 px-2 text-xs"
+                      className="h-9 px-3 font-medium shadow-sm"
                       asChild 
                       data-testid={`button-open-${scr.id}`}
                     >
                       <Link href={`/screens/${scr.id}`}>
                         Open
+                        <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
                       </Link>
                     </Button>
                   </TableCell>
