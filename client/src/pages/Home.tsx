@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ExpandableCard } from "@/components/ui/expandable-card";
 import { 
   Wifi,
   WifiOff,
@@ -237,98 +238,100 @@ export default function Home() {
       </div>
 
       {/* Acties & Alerts Panel */}
-      <Card data-testid="acties-alerts-panel">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base font-medium">Acties & Alerts</CardTitle>
-        </CardHeader>
-        <CardContent className="pt-0">
-          {actionsLoading || statsLoading ? (
-            <div className="space-y-3">
-              <Skeleton className="h-12 w-full" />
-              <Skeleton className="h-12 w-full" />
-            </div>
-          ) : !hasIssues ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <CheckCircle2 className="h-10 w-10 mx-auto mb-3 text-emerald-500 opacity-60" />
-              <p className="text-sm font-medium">Geen acties nodig — alles loopt.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              
-              {/* Offline Schermen */}
-              {offlineScreens.length > 0 && (
-                <div className="border rounded-lg p-4" data-testid="alert-offline-screens">
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="p-1.5 rounded-full bg-red-50">
-                      <WifiOff className="h-4 w-4 text-red-600" />
-                    </div>
-                    <span className="font-medium text-sm">Offline schermen</span>
-                    <Badge variant="destructive" className="ml-auto">{offlineScreens.length}</Badge>
-                  </div>
-                  <div className="space-y-2">
-                    {offlineScreens.slice(0, 5).map((screen) => (
-                      <Link key={screen.id} href={screen.link}>
-                        <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-muted/50 transition-colors cursor-pointer text-sm">
-                          <span className="truncate">{screen.itemName}</span>
-                          <Badge variant="destructive" className="text-xs shrink-0 ml-2">Offline</Badge>
-                        </div>
-                      </Link>
-                    ))}
-                  </div>
-                  {offlineScreens.length > 5 && (
-                    <div className="text-xs text-muted-foreground mt-2 text-center">
-                      +{offlineScreens.length - 5} meer
-                    </div>
-                  )}
-                  <Link href="/screens?status=offline">
-                    <Button variant="outline" size="sm" className="w-full mt-3" data-testid="link-alle-offline">
-                      Bekijk alle offline schermen
-                      <ExternalLink className="h-3 w-3 ml-2" />
-                    </Button>
-                  </Link>
+      <div data-testid="acties-alerts-panel">
+        <h2 className="text-base font-medium mb-3">Acties & Alerts</h2>
+        {actionsLoading || statsLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-14 w-full rounded-lg" />
+            <Skeleton className="h-14 w-full rounded-lg" />
+          </div>
+        ) : !hasIssues ? (
+          <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">
+            <CheckCircle2 className="h-10 w-10 mx-auto mb-3 text-emerald-500 opacity-60" />
+            <p className="text-sm font-medium">Geen acties nodig — alles loopt.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            
+            {/* Offline Schermen */}
+            {offlineScreens.length > 0 && (
+              <ExpandableCard
+                title="Offline schermen"
+                icon={<WifiOff className="h-4 w-4 text-red-600" />}
+                countBadge={offlineScreens.length}
+                variant="danger"
+                summaryLine={offlineScreens.length > 0 
+                  ? `${offlineScreens.slice(0, 2).map(s => s.itemName).join(", ")}${offlineScreens.length > 2 ? ` +${offlineScreens.length - 2}` : ""}`
+                  : "Geen offline schermen"
+                }
+                data-testid="alert-offline-screens"
+              >
+                <div className="space-y-1.5">
+                  {offlineScreens.slice(0, 5).map((screen) => (
+                    <Link key={screen.id} href={screen.link}>
+                      <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-muted/50 transition-colors cursor-pointer text-sm">
+                        <span className="truncate">{screen.itemName}</span>
+                        <Badge variant="destructive" className="text-xs shrink-0 ml-2">Offline</Badge>
+                      </div>
+                    </Link>
+                  ))}
                 </div>
-              )}
+                {offlineScreens.length > 5 && (
+                  <div className="text-xs text-muted-foreground mt-2 text-center">
+                    +{offlineScreens.length - 5} meer
+                  </div>
+                )}
+                <Link href="/screens?status=offline">
+                  <Button variant="outline" size="sm" className="w-full mt-3" data-testid="link-alle-offline">
+                    Bekijk alle offline schermen
+                    <ExternalLink className="h-3 w-3 ml-2" />
+                  </Button>
+                </Link>
+              </ExpandableCard>
+            )}
 
-              {/* Ads niet gekoppeld */}
-              {adsUnlinked > 0 && (
-                <div className="border rounded-lg p-4 border-amber-200" data-testid="alert-unlinked-ads">
-                  <div className="flex items-center gap-2 mb-3">
-                    <div className="p-1.5 rounded-full bg-amber-50">
-                      <LinkIcon className="h-4 w-4 text-amber-600" />
-                    </div>
-                    <span className="font-medium text-sm">Ads niet gekoppeld</span>
-                    <Badge className="ml-auto bg-amber-100 text-amber-800">{adsUnlinked}</Badge>
+            {/* Ads niet gekoppeld */}
+            {adsUnlinked > 0 && (
+              <ExpandableCard
+                title="Ads niet gekoppeld"
+                icon={<LinkIcon className="h-4 w-4 text-amber-600" />}
+                countBadge={adsUnlinked}
+                variant="warning"
+                summaryLine={topUnlinkedAds.length > 0 
+                  ? `${topUnlinkedAds.slice(0, 2).map(a => a.name).join(", ")}${adsUnlinked > 2 ? ` +${adsUnlinked - 2}` : ""}`
+                  : `${adsUnlinked} ads te koppelen`
+                }
+                data-testid="alert-unlinked-ads"
+              >
+                {topUnlinkedAds.length > 0 && (
+                  <div className="space-y-1.5 mb-3">
+                    {topUnlinkedAds.map((ad) => (
+                      <div 
+                        key={ad.yodeckMediaId} 
+                        className="flex items-center gap-2 py-1 px-2 rounded bg-amber-50/50 text-sm"
+                      >
+                        <Target className="h-3 w-3 text-amber-500 shrink-0" />
+                        <span className="truncate text-muted-foreground">{ad.name}</span>
+                      </div>
+                    ))}
+                    {adsUnlinked > 5 && (
+                      <div className="text-xs text-muted-foreground text-center pt-1">
+                        +{adsUnlinked - 5} meer ads
+                      </div>
+                    )}
                   </div>
-                  {topUnlinkedAds.length > 0 && (
-                    <div className="space-y-1.5 mb-3">
-                      {topUnlinkedAds.map((ad) => (
-                        <div 
-                          key={ad.yodeckMediaId} 
-                          className="flex items-center gap-2 py-1 px-2 rounded bg-amber-50/50 text-sm"
-                        >
-                          <Target className="h-3 w-3 text-amber-500 shrink-0" />
-                          <span className="truncate text-muted-foreground">{ad.name}</span>
-                        </div>
-                      ))}
-                      {adsUnlinked > 5 && (
-                        <div className="text-xs text-muted-foreground text-center pt-1">
-                          +{adsUnlinked - 5} meer ads
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  <Link href="/placements">
-                    <Button variant="outline" size="sm" className="w-full text-amber-600 border-amber-300 hover:bg-amber-50" data-testid="link-koppelen">
-                      Koppelen
-                      <ChevronRight className="h-3 w-3 ml-2" />
-                    </Button>
-                  </Link>
-                </div>
-              )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                )}
+                <Link href="/placements">
+                  <Button variant="outline" size="sm" className="w-full text-amber-600 border-amber-300 hover:bg-amber-50" data-testid="link-koppelen">
+                    Koppelen
+                    <ChevronRight className="h-3 w-3 ml-2" />
+                  </Button>
+                </Link>
+              </ExpandableCard>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

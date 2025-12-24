@@ -1,0 +1,76 @@
+VOER DEZE WIJZIGINGEN UIT IN DE REPO:
+
+DOEL
+- Op de Home pagina moet de sectie “Acties & Alerts” compacter zijn.
+- De 2 kaarten (Offline schermen, Ads niet gekoppeld) moeten standaard INGEKLAPT zijn.
+- Bij klik op de kaart-header (of chevron) klapt de content uit/in.
+- Toon in de ingeklapte status alleen een korte samenvatting + badge count.
+- Gebruik native <details>/<summary> zodat het simpel en toegankelijk is.
+- Hou bestaande styling zo veel mogelijk aan.
+
+STAP 1) Voeg een herbruikbare component toe
+Maak bestand: src/components/ui/ExpandableCard.tsx  (als map anders is: gebruik bestaande components/ui map)
+
+PLAATS DEZE CODE:
+
+```tsx
+import React from "react";
+
+type Props = {
+  title: string;
+  icon?: React.ReactNode;
+  countBadge?: number;
+  variant?: "default" | "warning" | "danger";
+  summaryLine?: React.ReactNode;   // wat je wil tonen wanneer ingeklapt
+  children: React.ReactNode;       // volledige content wanneer uitgeklapt
+  defaultOpen?: boolean;
+  className?: string;
+};
+
+const variantStyles: Record<NonNullable<Props["variant"]>, string> = {
+  default: "border-slate-200",
+  warning: "border-amber-200",
+  danger: "border-red-200",
+};
+
+const badgeStyles: Record<NonNullable<Props["variant"]>, string> = {
+  default: "bg-slate-100 text-slate-700",
+  warning: "bg-amber-100 text-amber-800",
+  danger: "bg-red-100 text-red-800",
+};
+
+export function ExpandableCard({
+  title,
+  icon,
+  countBadge,
+  variant = "default",
+  summaryLine,
+  children,
+  defaultOpen = false,
+  className = "",
+}: Props) {
+  return (
+    <details
+      className={[
+        "group rounded-2xl border bg-white shadow-sm",
+        variantStyles[variant],
+        className,
+      ].join(" ")}
+      open={defaultOpen}
+    >
+      <summary className="list-none cursor-pointer select-none px-5 py-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            {icon ? (
+              <div className="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-slate-50">
+                {icon}
+              </div>
+            ) : null}
+
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+                {typeof countBadge === "number" ? (
+                  <span
+                    className={[
+                      "inline-flex h-6 min-w-[24px] items-center justify-center rounded-full px-2 text-xs fo
