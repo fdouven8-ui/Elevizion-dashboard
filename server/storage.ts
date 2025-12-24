@@ -319,6 +319,7 @@ export interface IStorage {
   
   // Screen Content Items (inferred placements from Yodeck)
   getScreenContentItems(screenId: string): Promise<ScreenContentItem[]>;
+  getAllScreenContentItems(): Promise<ScreenContentItem[]>;
   upsertScreenContentItem(data: { screenId: string; yodeckMediaId: number; name: string; mediaType?: string; category: string; duration?: number; isActive?: boolean }): Promise<ScreenContentItem>;
   markScreenContentItemsInactive(screenId: string, activeMediaIds: number[]): Promise<number>;
   getScreenContentItemStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number; activeScreensWithContent: number }>;
@@ -1692,6 +1693,12 @@ export class DatabaseStorage implements IStorage {
         eq(schema.screenContentItems.screenId, screenId),
         eq(schema.screenContentItems.isActive, true)
       ))
+      .orderBy(desc(schema.screenContentItems.lastSeenAt));
+  }
+
+  async getAllScreenContentItems(): Promise<ScreenContentItem[]> {
+    return await db.select()
+      .from(schema.screenContentItems)
       .orderBy(desc(schema.screenContentItems.lastSeenAt));
   }
 

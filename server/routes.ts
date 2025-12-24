@@ -546,6 +546,82 @@ export async function registerRoutes(
     res.json(placements);
   });
 
+  // New endpoint: Get all ads (from Yodeck media) with linked/unlinked status
+  // This shows ALL ads including those that are not yet linked to a placement
+  app.get("/api/placements/ads-view", async (_req, res) => {
+    try {
+      const mediaLinks = await storage.getYodeckMediaLinks();
+      const screens = await storage.getScreens();
+      const advertisers = await storage.getAdvertisers();
+      const screenContentItems = await storage.getAllScreenContentItems();
+      
+      // Filter to only show ads (not non_ad content)
+      const ads = mediaLinks.filter(m => m.category === 'ad');
+      
+      // Build a map of which screens each ad is playing on
+      const adScreenMap: Record<number, Array<{ screenId: string; screenDisplayId: string; screenName: string; locationName: string }>> = {};
+      for (const item of screenContentItems) {
+        if (item.category === 'ad' && item.isActive) {
+          const screen = screens.find(s => s.id === item.screenId);
+          if (screen) {
+            if (!adScreenMap[item.yodeckMediaId]) {
+              adScreenMap[item.yodeckMediaId] = [];
+            }
+            adScreenMap[item.yodeckMediaId].push({
+              screenId: item.screenId,
+              screenDisplayId: screen.screenId, // EVZ-001 format
+              screenName: screen.name,
+              locationName: screen.locationId, // We'll resolve this in the frontend or add location lookup
+            });
+          }
+        }
+      }
+      
+      // Build response with all ads
+      const result = ads.map(ad => {
+        const advertiser = ad.advertiserId ? advertisers.find(a => a.id === ad.advertiserId) : null;
+        const screensPlaying = adScreenMap[ad.yodeckMediaId] || [];
+        
+        return {
+          yodeckMediaId: ad.yodeckMediaId,
+          name: ad.name,
+          mediaType: ad.mediaType,
+          duration: ad.duration,
+          // Linking status
+          advertiserId: ad.advertiserId,
+          advertiserName: advertiser?.companyName || null,
+          placementId: ad.placementId,
+          status: ad.advertiserId || ad.placementId ? 'linked' : 'unlinked',
+          // Where it's playing
+          screensCount: screensPlaying.length,
+          screens: screensPlaying,
+          // Timestamps
+          lastSeenAt: ad.lastSeenAt,
+          updatedAt: ad.updatedAt,
+        };
+      });
+      
+      // Sort: unlinked first, then by name
+      result.sort((a, b) => {
+        if (a.status === 'unlinked' && b.status !== 'unlinked') return -1;
+        if (a.status !== 'unlinked' && b.status === 'unlinked') return 1;
+        return a.name.localeCompare(b.name);
+      });
+      
+      res.json({ 
+        items: result,
+        summary: {
+          total: result.length,
+          linked: result.filter(r => r.status === 'linked').length,
+          unlinked: result.filter(r => r.status === 'unlinked').length,
+        }
+      });
+    } catch (error: any) {
+      console.error("Error fetching ads view:", error);
+      res.status(500).json({ message: "Failed to load ads view" });
+    }
+  });
+
   app.get("/api/contracts/:contractId/placements", async (req, res) => {
     const placements = await storage.getPlacementsByContract(req.params.contractId);
     res.json(placements);
