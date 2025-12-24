@@ -51,8 +51,16 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
 - **Screenshot Analysis with Perceptual Hashing (pHash)**: Used to detect empty/blank screens and match creative content when Yodeck API content detection is insufficient.
 - **Control Room Action Priority**: Prioritizes `offline_screen`, `onboarding_hint`, `unmanaged_content`, and `paused_placement` statuses for operational alerts.
 - **Server-side Caching**: 10-second in-memory TTL cache for `/api/control-room/stats` and `/api/control-room/actions` to reduce database load.
-- **Memory Logging**: Logs `process.memoryUsage()` every 60 seconds (RSS, Heap, External) for monitoring stability.
+- **Memory Logging**: Optional via `DEBUG_MEMORY=true` - logs `process.memoryUsage()` every 60 seconds (RSS, Heap, External) for monitoring stability.
 - **Unmanaged Content Display**: Shows "Yodeck content actief • X items (nog niet via Elevizion placements)" with playlist name, lastFetchedAt, and expandable media items list with duration badges.
+- **Yodeck Media Links Table**: `yodeck_media_links` table tracks detected media items for future Moneybird advertiser linking with normalized name keys.
+
+### Production Stability Features
+- **Graceful Shutdown**: Handlers for SIGTERM/SIGINT with 5-second drain period, database pool cleanup, and scheduler stop.
+- **Scheduled Background Sync**: 15-minute interval Yodeck content sync, starts 30 seconds after server boot to allow stabilization.
+- **Sync Caching**: `clearAllCaches()` at start of each sync run, then `mediaCache` and `playlistCache` prevent duplicate API calls within run.
+- **Reduced Logging**: `DEBUG_YODECK=true` flag gates verbose Yodeck sync logs, all detailed logs use `debugLog()` instead of `console.log()`.
+- **Control Room DB-Only**: `/api/control-room/stats` and `/api/control-room/actions` use only database queries, no Yodeck API calls.
 
 ## External Dependencies
 
