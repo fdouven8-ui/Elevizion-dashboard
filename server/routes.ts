@@ -53,6 +53,43 @@ import {
 import { setupAuth, registerAuthRoutes, isAuthenticated, requirePermission } from "./replit_integrations/auth";
 import { getScreenStats, getAdvertiserStats, clearStatsCache, checkYodeckScreenHasContent } from "./yodeckStats";
 
+// ============================================================================
+// IN-MEMORY CACHE (10 second TTL for control-room endpoints)
+// ============================================================================
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+const endpointCache = new Map<string, CacheEntry<any>>();
+const CACHE_TTL_MS = 10_000; // 10 seconds
+
+function getCached<T>(key: string): T | null {
+  const entry = endpointCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+    endpointCache.delete(key);
+    return null;
+  }
+  return entry.data as T;
+}
+
+function setCache<T>(key: string, data: T): void {
+  endpointCache.set(key, { data, timestamp: Date.now() });
+}
+
+// ============================================================================
+// MEMORY LOGGING (every 60 seconds)
+// ============================================================================
+function logMemoryUsage() {
+  const mem = process.memoryUsage();
+  const formatMB = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
+  console.log(`[MEMORY] RSS: ${formatMB(mem.rss)}MB | Heap: ${formatMB(mem.heapUsed)}/${formatMB(mem.heapTotal)}MB | External: ${formatMB(mem.external)}MB`);
+}
+
+// Start memory logging interval (60 seconds)
+setInterval(logMemoryUsage, 60_000);
+logMemoryUsage(); // Log once at startup
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -3945,6 +3982,12 @@ export async function registerRoutes(
 
   app.get("/api/control-room/stats", async (_req, res) => {
     try {
+      // Check cache first (10 second TTL)
+      const cached = getCached<any>("control-room-stats");
+      if (cached) {
+        return res.json(cached);
+      }
+      
       const screens = await storage.getScreens();
       const placements = await storage.getPlacements();
       const contracts = await storage.getContracts();
@@ -4019,7 +4062,7 @@ export async function registerRoutes(
       });
       const payingAdvertisers = payingAdvertiserIds.size;
       
-      res.json({
+      const result = {
         screensOnline,
         screensTotal,
         screensOffline,
@@ -4034,7 +4077,9 @@ export async function registerRoutes(
         screensYodeckEmpty,
         contentUnknown,
         contentError,
-      });
+      };
+      setCache("control-room-stats", result);
+      res.json(result);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -4186,6 +4231,12 @@ export async function registerRoutes(
   // 4. ok/active (success) - Has active placements (not shown in actions, these are good)
   app.get("/api/control-room/actions", async (_req, res) => {
     try {
+      // Check cache first (10 second TTL)
+      const cached = getCached<any[]>("control-room-actions");
+      if (cached) {
+        return res.json(cached);
+      }
+      
       const screens = await storage.getScreens();
       const placements = await storage.getPlacements();
       const locations = await storage.getLocations();
@@ -4271,12 +4322,24 @@ export async function registerRoutes(
           
           if (hasScreenshot || hasYodeckContent) {
             // Screen is playing SOMETHING (screenshot/Yodeck content) but not managed by Elevizion
-            // Show item count if available
             const itemCount = screen.yodeckContentCount;
             const contentSummary = screen.yodeckContentSummary as any;
-            const statusText = itemCount && itemCount > 0
-              ? `Speelt content (niet vanuit Elevizion) • ${itemCount} items`
-              : "Speelt content (niet vanuit Elevizion)";
+            const lastFetchedAt = screen.yodeckContentLastFetchedAt;
+            
+            // New statusText: "Yodeck content actief • X items"
+            // Add suffix "(nog niet via Elevizion placements)" only when 0 placements
+            let statusText = itemCount && itemCount > 0
+              ? `Yodeck content actief • ${itemCount} items`
+              : "Yodeck content actief";
+            statusText += " (nog niet via Elevizion placements)";
+            
+            // Build topItems from mediaItems if topItems not available
+            let topItems = contentSummary?.topItems || [];
+            if (topItems.length === 0 && contentSummary?.mediaItems?.length > 0) {
+              topItems = contentSummary.mediaItems.slice(0, 5).map((m: any) => 
+                `${m.type || 'media'}: ${m.name}`
+              );
+            }
             
             actions.push({
               id: `unmanaged-${screen.id}`,
@@ -4287,9 +4350,11 @@ export async function registerRoutes(
               link: `/screens/${screen.id}`,
               statusText,
               contentCount: itemCount || 0,
-              topItems: contentSummary?.topItems || [],
+              topItems,
               sourceType: contentSummary?.sourceType,
               sourceName: contentSummary?.sourceName,
+              lastFetchedAt: lastFetchedAt?.toISOString() || null,
+              mediaItems: contentSummary?.mediaItems || [],
             });
           } else {
             // Screen has no placements and we can't confirm content
@@ -4337,6 +4402,7 @@ export async function registerRoutes(
         return priorityA - priorityB;
       });
       
+      setCache("control-room-actions", actions);
       res.json(actions);
     } catch (error: any) {
       res.status(500).json({ message: error.message });

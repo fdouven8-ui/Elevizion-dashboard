@@ -1,0 +1,42 @@
+Doel: Yodeck content weergave is al correct gesynct (DB bevat yodeckContentSummary.mediaItems + uniqueMediaCount). Maak de UI + control-room acties compleet en verbeter stabiliteit (signal: terminated).
+
+1) CONTROL ROOM ACTIONS API
+- In /api/control-room/actions: als action.type == "unmanaged_content" voeg ALTIJD deze velden toe wanneer screen.yodeckContentStatus == "has_content":
+  - contentCount = screen.yodeckContentCount
+  - topItems = screen.yodeckContentSummary.topItems (fallback: maak topItems uit mediaItems namen)
+  - sourceType = screen.yodeckContentSummary.sourceType
+  - sourceName = screen.yodeckContentSummary.sourceName
+  - lastFetchedAt = screen.yodeckContentSummary.lastFetchedAt
+- Pas statusText aan:
+  - als has_content: "Yodeck content actief • {contentCount} items"
+  - voeg suffix "(nog niet via Elevizion placements)" alleen toe als er 0 placements actief zijn voor dit scherm.
+- Zorg dat dit geen extra Yodeck calls doet; alleen DB data gebruiken.
+
+2) UI: HOME (Control Room / Actie Overzicht)
+- Bij de action card "unmanaged_content":
+  - Toon sourceName + sourceType + lastFetchedAt (klein, grijs)
+  - Toon lijst van items:
+    - standaard topItems (max 5)
+    - voeg "Toon alle ({contentCount})" knop toe die expanded view toont:
+      - gebruik yodeckContentSummary.mediaItems als beschikbaar (toon naam + duration als badge)
+  - Als contentCount > topItems.length, laat "… +{rest}" zien.
+
+3) UI: SCREEN DETAIL PAGE (/screens/:id)
+- Voeg sectie "Huidige Yodeck content" toe met:
+  - sourceName/sourceType, lastFetchedAt
+  - volledige mediaItems lijst (naam + duration, -1 => "dynamic/unknown")
+  - Toon ook playlist id indien in summary aanwezig.
+
+4) STABILITEIT (Replit restarts)
+- Reduce frontend polling:
+  - Control room stats/actions: poll elke 30s (niet sneller), met cleanup on unmount.
+- Server-side caching:
+  - Cache /api/control-room/stats en /api/control-room/actions 10 seconden in-memory (simple Map + timestamp) om DB load te verminderen.
+- Voeg 1x per minuut log:
+  - process.memoryUsage() + event loop lag (optioneel) zodat we kunnen zien of memory oploopt.
+- Zorg dat sync routes niet automatisch constant draaien; alleen via 15min scheduler of handmatige knop.
+
+Lever als PR/commit met duidelijke wijzigingsoverzicht en test:
+- Open Home => content card toont source + items + expand.
+- Open Screen detail => volledige lijst zichtbaar.
+- Logs: geen spam calls; polling is 30s; endpoints reageren snel.

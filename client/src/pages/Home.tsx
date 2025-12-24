@@ -3,6 +3,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { 
   Wifi,
   WifiOff,
@@ -11,10 +16,15 @@ import {
   Monitor,
   Pause,
   ChevronRight,
+  ChevronDown,
   ListMusic,
+  Clock,
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
+import { useState } from "react";
+import { formatDistanceToNow } from "date-fns";
+import { nl } from "date-fns/locale";
 
 interface ControlRoomStats {
   screensOnline: number;
@@ -22,14 +32,19 @@ interface ControlRoomStats {
   screensOffline: number;
   activePlacements: number;
   payingAdvertisers: number;
-  // Placement-based stats (Elevizion data)
   screensWithPlacements: number;
   screensWithoutPlacements: number;
   screensWithScreenshot: number;
-  // Yodeck content stats (secondary)
   screensWithYodeckContent: number;
   screensYodeckEmpty: number;
   contentUnknown: number;
+}
+
+interface MediaItem {
+  name: string;
+  type: string;
+  mediaType?: string;
+  duration?: number;
 }
 
 interface ActionItem {
@@ -44,12 +59,16 @@ interface ActionItem {
   topItems?: string[];
   sourceType?: string;
   sourceName?: string;
+  lastFetchedAt?: string;
+  mediaItems?: MediaItem[];
 }
 
 function YodeckContentPreview({ item }: { item: ActionItem }) {
+  const [isExpanded, setIsExpanded] = useState(false);
   const topItems = item.topItems || [];
+  const mediaItems = item.mediaItems || [];
   const contentCount = item.contentCount || 0;
-  const hasMore = contentCount > topItems.length;
+  const hasMore = contentCount > topItems.length && mediaItems.length > topItems.length;
   
   const formatMediaName = (name: string) => {
     if (name.startsWith("media: ")) {
@@ -58,30 +77,77 @@ function YodeckContentPreview({ item }: { item: ActionItem }) {
     return name;
   };
 
+  const formatDuration = (seconds?: number) => {
+    if (!seconds || seconds < 0) return null;
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return secs > 0 ? `${mins}m${secs}s` : `${mins}m`;
+  };
+
   return (
     <div className="mt-2 text-xs" onClick={(e) => e.preventDefault()}>
-      {item.sourceName && (
-        <div className="flex items-center gap-1.5 text-muted-foreground mb-1.5">
-          <ListMusic className="h-3 w-3" />
-          <span className="font-medium">Playlist:</span>
-          <span className="truncate">{item.sourceName}</span>
-        </div>
-      )}
-      
-      <div className="space-y-0.5 text-muted-foreground">
-        {topItems.map((topItem, idx) => (
-          <div key={idx} className="flex items-center gap-1 truncate">
-            <span className="text-muted-foreground/60">•</span>
-            <span className="truncate">{formatMediaName(topItem)}</span>
+      <div className="flex items-center gap-2 text-muted-foreground mb-1.5 flex-wrap">
+        {item.sourceName && (
+          <div className="flex items-center gap-1">
+            <ListMusic className="h-3 w-3" />
+            <span className="font-medium">Playlist:</span>
+            <span className="truncate max-w-[150px]">{item.sourceName}</span>
           </div>
-        ))}
+        )}
+        {item.lastFetchedAt && (
+          <div className="flex items-center gap-1 text-muted-foreground/70">
+            <Clock className="h-3 w-3" />
+            <span>{formatDistanceToNow(new Date(item.lastFetchedAt), { addSuffix: true, locale: nl })}</span>
+          </div>
+        )}
       </div>
       
-      {hasMore && (
-        <p className="mt-1 text-muted-foreground/70 italic">
-          +{contentCount - topItems.length} meer items (zie details)
-        </p>
-      )}
+      <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
+        <div className="space-y-0.5 text-muted-foreground">
+          {topItems.map((topItem, idx) => (
+            <div key={idx} className="flex items-center gap-1 truncate">
+              <span className="text-muted-foreground/60">•</span>
+              <span className="truncate">{formatMediaName(topItem)}</span>
+            </div>
+          ))}
+        </div>
+        
+        {hasMore && (
+          <>
+            <CollapsibleContent className="space-y-0.5 text-muted-foreground mt-0.5">
+              {mediaItems.slice(topItems.length).map((media, idx) => (
+                <div key={idx} className="flex items-center gap-1 truncate">
+                  <span className="text-muted-foreground/60">•</span>
+                  <span className="truncate">{media.name}</span>
+                  {media.duration && media.duration > 0 && (
+                    <Badge variant="secondary" className="h-4 text-[10px] px-1">
+                      {formatDuration(media.duration)}
+                    </Badge>
+                  )}
+                </div>
+              ))}
+            </CollapsibleContent>
+            
+            <CollapsibleTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 px-1 mt-1 text-xs text-primary hover:text-primary"
+              >
+                <ChevronDown className={`h-3 w-3 mr-0.5 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+                {isExpanded ? "Minder tonen" : `Toon alle ${contentCount} items`}
+              </Button>
+            </CollapsibleTrigger>
+          </>
+        )}
+        
+        {!hasMore && contentCount > topItems.length && (
+          <p className="mt-1 text-muted-foreground/70 italic">
+            +{contentCount - topItems.length} meer items (zie details)
+          </p>
+        )}
+      </Collapsible>
     </div>
   );
 }
