@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { 
@@ -24,7 +25,8 @@ import {
   FileWarning,
   ImageIcon,
   Video,
-  ExternalLink
+  ExternalLink,
+  LinkIcon
 } from "lucide-react";
 import {
   Command,
@@ -40,6 +42,31 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Link } from "wouter";
+
+// Types for Ads View
+interface AdViewItem {
+  yodeckMediaId: number;
+  name: string;
+  mediaType: string | null;
+  duration: number | null;
+  advertiserId: string | null;
+  advertiserName: string | null;
+  placementId: string | null;
+  status: 'linked' | 'unlinked';
+  screensCount: number;
+  screens: Array<{ screenId: string; screenDisplayId: string; screenName: string; locationName: string }>;
+  lastSeenAt: string;
+  updatedAt: string;
+}
+
+interface AdsViewResponse {
+  items: AdViewItem[];
+  summary: {
+    total: number;
+    linked: number;
+    unlinked: number;
+  };
+}
 
 interface Placement {
   id: string;
@@ -94,15 +121,26 @@ interface Contract {
 export default function Placements() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState<"ads" | "placements">("ads");
   const [searchTerm, setSearchTerm] = useState("");
   const [cityFilter, setCityFilter] = useState<string>("");
   const [locationFilter, setLocationFilter] = useState<string>("");
   const [advertiserFilter, setAdvertiserFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [adsStatusFilter, setAdsStatusFilter] = useState<"all" | "linked" | "unlinked">("all");
   const [cityPopoverOpen, setCityPopoverOpen] = useState(false);
   const [locationPopoverOpen, setLocationPopoverOpen] = useState(false);
   const [advertiserPopoverOpen, setAdvertiserPopoverOpen] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
+
+  // Ads View query
+  const { data: adsViewData, isLoading: adsViewLoading } = useQuery<AdsViewResponse>({
+    queryKey: ["/api/placements/ads-view"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/placements/ads-view");
+      return res.json();
+    },
+  });
 
   const { data: placements = [], isLoading } = useQuery<Placement[]>({
     queryKey: ["/api/placements"],
@@ -298,12 +336,19 @@ export default function Placements() {
   const selectedLocationName = locationFilter ? getLocation(locationFilter)?.name || "" : "";
   const selectedAdvertiserName = advertiserFilter ? getAdvertiser(advertiserFilter)?.companyName || getAdvertiser(advertiserFilter)?.name || "" : "";
 
+  // Filter ads based on status filter
+  const filteredAds = useMemo(() => {
+    if (!adsViewData?.items) return [];
+    if (adsStatusFilter === "all") return adsViewData.items;
+    return adsViewData.items.filter(ad => ad.status === adsStatusFilter);
+  }, [adsViewData?.items, adsStatusFilter]);
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold" data-testid="page-title">Ads & Plaatsingen</h1>
-          <p className="text-muted-foreground">Wie adverteert waar en is alles in orde?</p>
+          <p className="text-muted-foreground">Alle ads en waar ze draaien</p>
         </div>
         <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
           <DialogTrigger asChild>
@@ -364,25 +409,51 @@ export default function Placements() {
         </Dialog>
       </div>
 
-      {/* Operational KPIs - only 2 cards */}
-      <div className="grid gap-4 md:grid-cols-2">
+      {/* Ads Summary KPIs */}
+      <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Target className="h-4 w-4" />
-              Actieve Plaatsingen
+              <Target className="h-4 w-4 text-orange-600" />
+              Totaal Ads
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold" data-testid="kpi-active">
-              {activePlacements.length}
+            <div className="text-2xl font-bold" data-testid="kpi-total-ads">
+              {adsViewData?.summary.total ?? 0}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <LinkIcon className="h-4 w-4 text-green-600" />
+              Gekoppeld
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600" data-testid="kpi-linked-ads">
+              {adsViewData?.summary.linked ?? 0}
+            </div>
+          </CardContent>
+        </Card>
+        <Card className={(adsViewData?.summary.unlinked ?? 0) > 0 ? "border-amber-300 bg-amber-50/30" : ""}>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <AlertTriangle className={`h-4 w-4 ${(adsViewData?.summary.unlinked ?? 0) > 0 ? "text-amber-600" : ""}`} />
+              Niet Gekoppeld
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className={`text-2xl font-bold ${(adsViewData?.summary.unlinked ?? 0) > 0 ? "text-amber-600" : ""}`} data-testid="kpi-unlinked-ads">
+              {adsViewData?.summary.unlinked ?? 0}
             </div>
           </CardContent>
         </Card>
         <Card className={offlineScreenPlacements.length > 0 ? "border-destructive" : ""}>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <AlertTriangle className={`h-4 w-4 ${offlineScreenPlacements.length > 0 ? "text-destructive" : ""}`} />
+              <WifiOff className={`h-4 w-4 ${offlineScreenPlacements.length > 0 ? "text-destructive" : ""}`} />
               Op Offline Schermen
             </CardTitle>
           </CardHeader>
@@ -390,14 +461,156 @@ export default function Placements() {
             <div className={`text-2xl font-bold ${offlineScreenPlacements.length > 0 ? "text-destructive" : ""}`} data-testid="kpi-offline">
               {offlineScreenPlacements.length}
             </div>
-            {offlineScreenPlacements.length > 0 && (
-              <p className="text-xs text-muted-foreground mt-1">
-                Actieve plaatsingen op offline schermen
-              </p>
-            )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Tabs for Ads view and Plaatsingen view */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "ads" | "placements")}>
+        <TabsList>
+          <TabsTrigger value="ads" data-testid="tab-ads">
+            Alle Ads ({adsViewData?.items.length ?? 0})
+          </TabsTrigger>
+          <TabsTrigger value="placements" data-testid="tab-placements">
+            Plaatsingen ({enrichedPlacements.length})
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ADS VIEW TAB */}
+        <TabsContent value="ads" className="mt-4 space-y-4">
+          {/* Ads filter chips */}
+          <div className="flex items-center gap-2">
+            <Button
+              variant={adsStatusFilter === "all" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setAdsStatusFilter("all")}
+              data-testid="filter-ads-all"
+            >
+              Alle ({adsViewData?.summary.total ?? 0})
+            </Button>
+            <Button
+              variant={adsStatusFilter === "linked" ? "default" : "outline"}
+              size="sm"
+              onClick={() => setAdsStatusFilter("linked")}
+              data-testid="filter-ads-linked"
+            >
+              Gekoppeld ({adsViewData?.summary.linked ?? 0})
+            </Button>
+            <Button
+              variant={adsStatusFilter === "unlinked" ? "default" : "outline"}
+              size="sm"
+              className={adsStatusFilter === "unlinked" ? "" : (adsViewData?.summary.unlinked ?? 0) > 0 ? "text-amber-600 border-amber-300" : ""}
+              onClick={() => setAdsStatusFilter("unlinked")}
+              data-testid="filter-ads-unlinked"
+            >
+              Niet Gekoppeld ({adsViewData?.summary.unlinked ?? 0})
+            </Button>
+          </div>
+
+          {/* Ads Table */}
+          <Card>
+            <CardContent className="p-0">
+              {adsViewLoading ? (
+                <div className="p-8 space-y-2">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-full" />
+                </div>
+              ) : filteredAds.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground">
+                  <Target className="h-12 w-12 mx-auto mb-4 opacity-30" />
+                  <p>Geen ads gevonden</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Ad Naam</TableHead>
+                      <TableHead>Adverteerder</TableHead>
+                      <TableHead>Schermen</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">Actie</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredAds.map((ad) => (
+                      <TableRow key={ad.yodeckMediaId} data-testid={`row-ad-${ad.yodeckMediaId}`}>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            {ad.mediaType?.includes("video") ? (
+                              <Video className="h-4 w-4 text-muted-foreground" />
+                            ) : (
+                              <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                            )}
+                            <div>
+                              <div className="truncate max-w-[200px]">{ad.name}</div>
+                              {ad.duration && (
+                                <div className="text-xs text-muted-foreground">{ad.duration}s</div>
+                              )}
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {ad.advertiserName ? (
+                            <span>{ad.advertiserName}</span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {ad.screensCount > 0 ? (
+                            <div className="flex flex-col gap-1">
+                              {ad.screens.slice(0, 2).map((s, idx) => (
+                                <Link key={idx} href={`/screens/${s.screenId}`}>
+                                  <Badge variant="outline" className="cursor-pointer hover:bg-muted">
+                                    {s.screenDisplayId}
+                                  </Badge>
+                                </Link>
+                              ))}
+                              {ad.screensCount > 2 && (
+                                <span className="text-xs text-muted-foreground">+{ad.screensCount - 2} meer</span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {ad.status === 'linked' ? (
+                            <Badge className="bg-green-100 text-green-800">Gekoppeld</Badge>
+                          ) : (
+                            <Badge className="bg-amber-100 text-amber-800">Niet gekoppeld</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {ad.status === 'unlinked' ? (
+                            <Link href={`/onboarding/placement?mediaId=${ad.yodeckMediaId}`}>
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                className="text-amber-600 border-amber-300 hover:bg-amber-50"
+                                data-testid={`button-link-ad-${ad.yodeckMediaId}`}
+                              >
+                                Koppelen
+                              </Button>
+                            </Link>
+                          ) : (
+                            <Button variant="ghost" size="sm" data-testid={`button-details-ad-${ad.yodeckMediaId}`}>
+                              Details
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* PLAATSINGEN VIEW TAB */}
+        <TabsContent value="placements" className="mt-4 space-y-4">
 
       {/* Filters */}
       <Card>
@@ -691,6 +904,8 @@ export default function Placements() {
           </Table>
         )}
       </div>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
