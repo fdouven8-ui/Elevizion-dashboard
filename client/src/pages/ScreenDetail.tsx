@@ -59,6 +59,28 @@ import { useToast } from "@/hooks/use-toast";
 import { useState, useRef, useCallback } from "react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from "recharts";
 
+interface ScreenContentItem {
+  id: string;
+  screenId: string;
+  yodeckMediaId: number;
+  name: string;
+  mediaType: string | null;
+  category: string;
+  duration: number | null;
+  isActive: boolean;
+  linkedAdvertiserId: string | null;
+  linkedPlacementId: string | null;
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+}
+
+interface ScreenWithContent {
+  id: string;
+  screenId: string;
+  currentContent?: ScreenContentItem[];
+  [key: string]: any;
+}
+
 export default function ScreenDetail() {
   const [, params] = useRoute("/screens/:id");
   const [, navigate] = useLocation();
@@ -69,6 +91,20 @@ export default function ScreenDetail() {
   const screenId = params?.id;
   const screen = screens.find(s => s.id === screenId);
   const location = screen ? locations.find(l => l.id === screen.locationId) : null;
+  
+  // Fetch screen detail with currentContent
+  const { data: screenDetail } = useQuery<ScreenWithContent>({
+    queryKey: ["screen-detail", screenId],
+    queryFn: async () => {
+      const response = await fetch(`/api/screens/${screenId}`, { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to fetch screen detail");
+      return response.json();
+    },
+    enabled: !!screenId,
+    staleTime: 30000,
+  });
+  
+  const currentContent = screenDetail?.currentContent || [];
 
   // Get all placements for this screen (active and paused)
   const screenPlacements = placements.filter(p => p.screenId === screenId);
@@ -464,7 +500,92 @@ export default function ScreenDetail() {
         </CardContent>
       </Card>
 
-      {/* D) Statistics Section (Accordion) */}
+      {/* D) Detected Content from Yodeck (Inferred Placements) */}
+      <Card data-testid="detected-content-card">
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Play className="h-5 w-5" />
+            Gedetecteerde content
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            {currentContent.length > 0 && (
+              <>
+                <Badge variant="default" className="bg-green-600">
+                  {currentContent.filter(c => c.category === 'ad').length} ads
+                </Badge>
+                <Badge variant="secondary">
+                  {currentContent.filter(c => c.category === 'non_ad').length} overig
+                </Badge>
+              </>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {currentContent.length === 0 ? (
+            <div className="text-center py-6 text-muted-foreground">
+              <Play className="h-10 w-10 mx-auto mb-3 opacity-50" />
+              <p>Nog geen content gedetecteerd</p>
+              <p className="text-sm mt-1">Sync het scherm om content te laden</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Naam</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Categorie</TableHead>
+                  <TableHead>Duur</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {currentContent.map((item) => (
+                  <TableRow key={item.id} data-testid={`content-row-${item.id}`}>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        {item.mediaType?.includes("video") ? (
+                          <Video className="h-4 w-4 text-muted-foreground" />
+                        ) : item.mediaType?.includes("image") ? (
+                          <Image className="h-4 w-4 text-muted-foreground" />
+                        ) : (
+                          <FileText className="h-4 w-4 text-muted-foreground" />
+                        )}
+                        <span className="truncate max-w-[200px]">{item.name}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <span className="text-sm text-muted-foreground">
+                        {item.mediaType || "Onbekend"}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      {item.category === 'ad' ? (
+                        <Badge variant="default" className="bg-blue-600">Advertentie</Badge>
+                      ) : (
+                        <Badge variant="secondary">Overig</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {item.duration ? `${item.duration}s` : "-"}
+                    </TableCell>
+                    <TableCell>
+                      {item.linkedAdvertiserId || item.linkedPlacementId ? (
+                        <Badge variant="default" className="bg-green-600">Gekoppeld</Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-amber-600 border-amber-300">
+                          Niet gekoppeld
+                        </Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* E) Statistics Section (Accordion) */}
       <ScreenStatistics screenId={screen.id} yodeckPlayerId={screen.yodeckPlayerId} openInYodeck={openInYodeck} />
     </div>
   );
