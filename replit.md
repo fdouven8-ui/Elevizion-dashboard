@@ -50,6 +50,9 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
 - **Content Inventory Module**: Centralized YodeckClient with retry logic, pagination, rate limiting, and TTL-based caching. Supports all Yodeck source types (playlist, layout, schedule, tagbased-playlist). Provides API endpoints for inventory loading and refreshing.
 - **Screenshot Analysis with Perceptual Hashing (pHash)**: Used to detect empty/blank screens and match creative content when Yodeck API content detection is insufficient.
 - **Control Room Action Priority**: Prioritizes `offline_screen`, `onboarding_hint`, `unmanaged_content`, and `paused_placement` statuses for operational alerts.
+- **Server-side Caching**: 10-second in-memory TTL cache for `/api/control-room/stats` and `/api/control-room/actions` to reduce database load.
+- **Memory Logging**: Logs `process.memoryUsage()` every 60 seconds (RSS, Heap, External) for monitoring stability.
+- **Unmanaged Content Display**: Shows "Yodeck content actief • X items (nog niet via Elevizion placements)" with playlist name, lastFetchedAt, and expandable media items list with duration badges.
 
 ## External Dependencies
 
