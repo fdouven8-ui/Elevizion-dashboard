@@ -1,0 +1,76 @@
+Je werkt aan mijn Elevizion Dashboard (React + TypeScript + Vite). Focus: HOME pagina (Dashboard > Home). Maak het minder chaotisch en meer “control room”.
+
+DOEL (UX):
+- KPI-rij moet rustiger: geen aparte “offline schermen” kaart als “schermen online” al x/y toont.
+- “Actie Overzicht” is nu een dump van scherm-info; dat moet weg van Home.
+- “Actieve plaatsingen” + “Ads” samenvoegen in 1 duidelijke kaart met een knop “Bekijk details”.
+
+WAT JE MOET BOUWEN
+
+1) KPI cards herstructureren (bovenaan)
+Vervang de huidige kaarten door maximaal 4 kaarten:
+A. “Schermen” (samengevoegd)
+   - Toon: Online: {onlineCount}/{totalScreens}
+   - Toon klein eronder: Offline: {offlineCount}
+   - Klikbaar: navigeer naar /schermen (optioneel met filter status=offline/online via query)
+   - Verwijder de losse “Schermen offline” kaart volledig.
+
+B. “Plaatsingen & Ads” (samengevoegd)
+   - Toon groot: Actieve plaatsingen: {activePlacements}
+   - Toon eronder: Ads totaal: {totalAds}
+   - Toon eronder klein: Niet gekoppeld: {unlinkedAds}
+   - Button: “Bekijk details” -> navigeer naar /plaatsingen (en als er tabs bestaan: open Ads-tab of query ?tab=ads)
+   - Deze kaart vervangt de losse kaart “Actieve plaatsingen” én de losse kaart “Ads”.
+
+C. “Betalende adverteerders”
+   - Laat staan zoals nu.
+
+D. (optioneel) “Alerts” kleine kaart OF laat dit weg als we onderaan al een Actie/Alerts panel maken.
+   - Als je twijfelt: hou het bij 3 kaarten (Schermen, Plaatsingen & Ads, Betalende adverteerders).
+
+2) Onder de KPI-rij: vervang “Actie Overzicht”
+Verwijder de huidige component/sectie die per scherm playlists/ads/info toont (die hoort niet op Home).
+
+Vervang dit door een “Acties & Alerts” panel dat echt actiegericht is:
+- Toon alleen actionable lijsten (compact), max 3 blokken:
+  a) Offline schermen (max 5 tonen) met schermnaam + badge “Offline”
+     - knop/link: “Bekijk alle offline schermen” -> /schermen?status=offline
+  b) Ads niet gekoppeld (toon count + max 5 voorbeelden)
+     - knop/link: “Koppelen” -> /plaatsingen?tab=ads&filter=unlinked (of normale /plaatsingen als filters nog niet bestaan)
+  c) Synchronisatie / aandacht (optioneel):
+     - bv “Schermen zonder recente sync” of “Playlist issues” ALS die data bestaat.
+- Als er geen issues zijn:
+  - Toon een rustige empty state: “Geen acties nodig — alles loopt.”
+
+3) Data mapping (heel belangrijk)
+- Gebruik de bestaande data die Home al ophaalt voor:
+  - onlineCount, totalScreens, offlineCount
+  - activePlacements
+  - totalAds, unlinkedAds
+  - payingAdvertisers
+- Voor het “Acties & Alerts” panel:
+  - offline schermen: gebruik dezelfde schermlijst/bron als elders; toon SCHERMNAAM (friendly name) i.p.v. codes.
+  - ads niet gekoppeld: gebruik dezelfde bron als Ads & Plaatsingen pagina.
+
+4) UI/Design details (kleine maar belangrijke polish)
+- Houd spacing strak: KPI cards in een grid, 1 rij op desktop.
+- “Acties & Alerts” panel moet veel compacter zijn dan de huidige kaart met alle playlist-items.
+- Gebruik consistente badges (Offline = rood, Niet gekoppeld = oranje/geel).
+- Zorg dat Home snel blijft: geen zware per-screen playlist render.
+
+ACCEPTATIECRITERIA
+- Op Home zie ik GEEN aparte “Schermen offline” KPI kaart meer.
+- “Actieve plaatsingen” en “Ads” zijn 1 kaart met “Bekijk details”.
+- “Actie Overzicht” met volledige schermdetails is verdwenen.
+- Er is een nieuw “Acties & Alerts” panel met alleen relevante actiepunten + links.
+
+IMPLEMENTATIE
+- Pas de bestaande HomePage/Home route component aan (waarschijnlijk src/pages/dashboard/Home.tsx of vergelijkbaar).
+- Als er al KPI-card componenten bestaan: hergebruik die.
+- Maak indien nodig een kleine nieuwe component: <HomeActionsPanel />.
+- Update eventuele tests/types als die bestaan.
+- Zorg dat alles compileert zonder lint/type errors.
+
+Voer dit uit en geef me daarna:
+- welke bestanden je aangepast hebt
+- korte samenvatting van de wijzigingen
