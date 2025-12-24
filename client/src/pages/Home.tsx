@@ -11,6 +11,7 @@ import {
   Monitor,
   Pause,
   ChevronRight,
+  ListMusic,
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -43,6 +44,46 @@ interface ActionItem {
   topItems?: string[];
   sourceType?: string;
   sourceName?: string;
+}
+
+function YodeckContentPreview({ item }: { item: ActionItem }) {
+  const topItems = item.topItems || [];
+  const contentCount = item.contentCount || 0;
+  const hasMore = contentCount > topItems.length;
+  
+  const formatMediaName = (name: string) => {
+    if (name.startsWith("media: ")) {
+      return name.replace("media: ", "");
+    }
+    return name;
+  };
+
+  return (
+    <div className="mt-2 text-xs" onClick={(e) => e.preventDefault()}>
+      {item.sourceName && (
+        <div className="flex items-center gap-1.5 text-muted-foreground mb-1.5">
+          <ListMusic className="h-3 w-3" />
+          <span className="font-medium">Playlist:</span>
+          <span className="truncate">{item.sourceName}</span>
+        </div>
+      )}
+      
+      <div className="space-y-0.5 text-muted-foreground">
+        {topItems.map((topItem, idx) => (
+          <div key={idx} className="flex items-center gap-1 truncate">
+            <span className="text-muted-foreground/60">•</span>
+            <span className="truncate">{formatMediaName(topItem)}</span>
+          </div>
+        ))}
+      </div>
+      
+      {hasMore && (
+        <p className="mt-1 text-muted-foreground/70 italic">
+          +{contentCount - topItems.length} meer items (zie details)
+        </p>
+      )}
+    </div>
+  );
 }
 
 export default function Home() {
@@ -132,12 +173,15 @@ export default function Home() {
     }
   };
 
-  const getTypeLabel = (type: string, statusText?: string) => {
-    if (statusText) return statusText;
+  const getTypeLabel = (type: string, item?: ActionItem) => {
     switch (type) {
       case "offline_screen": return "Offline";
       case "onboarding_hint": return "Nog geen placements";
-      case "unmanaged_content": return "Speelt content (niet vanuit Elevizion)";
+      case "unmanaged_content": 
+        if (item?.contentCount && item.contentCount > 0) {
+          return `Externe content (Yodeck) • ${item.contentCount} items`;
+        }
+        return "Externe content (Yodeck)";
       case "paused_placement": return "Gepauzeerd";
       default: return type;
     }
@@ -237,19 +281,12 @@ export default function Home() {
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium text-sm">{item.itemName}</span>
                             <Badge variant={getBadgeVariant(item.severity)} className="text-xs px-1.5 py-0">
-                              {getTypeLabel(item.type, item.statusText)}
+                              {getTypeLabel(item.type, item)}
                             </Badge>
                           </div>
                           <p className="text-xs text-muted-foreground">{item.description}</p>
                           {item.type === "unmanaged_content" && item.topItems && item.topItems.length > 0 && (
-                            <div className="mt-1.5 text-xs text-muted-foreground">
-                              <span className="font-medium">Content:</span>
-                              <ul className="mt-0.5 space-y-0.5 ml-3">
-                                {item.topItems.slice(0, 5).map((topItem, idx) => (
-                                  <li key={idx} className="truncate">• {topItem}</li>
-                                ))}
-                              </ul>
-                            </div>
+                            <YodeckContentPreview item={item} />
                           )}
                         </div>
                       </div>

@@ -1,0 +1,79 @@
+Context:
+Dit project is het Elevizion Dashboard (React + TypeScript + Express).
+De Yodeck-integratie werkt technisch correct:
+- Screens worden gesynchroniseerd
+- Playlists en media-items worden correct opgehaald
+- contentCount klopt (bijv. 6 items)
+- media-namen zijn beschikbaar in yodeckContentSummary.items
+
+Probleem:
+De content wordt technisch gedetecteerd, maar de UI-weergave is nog onvolledig / niet logisch.
+Ik wil GEEN nieuwe API-calls of secrets.
+Alle data is er al in de database en API responses.
+
+Doel:
+Maak de contentweergave in het dashboard correct, duidelijk en SaaS-waardig.
+
+---
+
+Taken:
+
+1. UI-LOGICA VERBETEREN
+- Als een scherm yodeckContentCount > 0 heeft:
+  - Toon status: "Heeft content"
+  - Vervang de tekst:
+    ❌ "Speelt content (niet vanuit Elevizion)"
+    ✅ "Externe content (Yodeck)"
+
+2. PLAYLIST STRUCTUUR TONEN
+- Als content afkomstig is uit een playlist:
+  - Toon eerst de playlistnaam (bijv. "Test (auto-playlist)")
+  - Toon daaronder de media-items als lijst
+- Gebruik yodeckContentSummary.playlists en yodeckContentSummary.items
+
+Voorbeeld UI:
+Playlist: Test (auto)
+• NOS sport algemeen
+• See your business grow
+• Weer goed
+• Sample Sales Sign
+• NOS algemeen nieuws
+
+3. MAX 5 ITEMS + UITKLAPOPTIE
+- Toon maximaal 5 media-items standaard
+- Als contentCount > 5:
+  - Toon knop: "Bekijk alle {count} items"
+  - Open een modal of expandable section met alle items
+
+4. STATUS CONSISTENTIE
+- Zorg dat deze velden correct gebruikt worden:
+  - yodeckContentCount
+  - yodeckContentSummary
+  - yodeckContentLastFetchedAt
+- Screens met content moeten meetellen in:
+  - screensWithYodeckContent
+  - niet in screensWithoutPlacements
+
+5. GEEN BACKEND-WIJZIGINGEN
+- NIET:
+  - nieuwe env vars
+  - nieuwe secrets
+  - nieuwe API calls naar Yodeck
+- ALLES gebeurt in frontend rendering + bestaande API data
+
+6. CODE KWALITEIT
+- Gebruik duidelijke componentstructuur
+- Geen console.logs achterlaten
+- Houd het consistent met bestaande styling
+
+---
+
+Resultaat:
+Na deze aanpassing zie ik in het Home/Dashboard:
+- Per scherm duidelijk welke content draait
+- Of dit externe (Yodeck) content is
+- Uit welke playlist het komt
+- Welke media-items exact draaien
+- Zonder verwarrende labels
+
+Begin met het aanpassen van het component waar het Home-overzicht / Actie Overzicht wordt gerenderd.
