@@ -62,6 +62,11 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
   - `adsTotal`: Total number of ads detected on screens
   - `adsUnlinked`: Ads without advertiser/placement mapping
   - `nonAdsTotal`: Non-ad content (NOS nieuws, weer, etc.)
+- **Screen Content Items (Inferred Placements)**: `screen_content_items` table tracks per-screen Yodeck media with unique index on (screenId, yodeckMediaId).
+  - Populated during scheduled sync with category (ad/non_ad), duration, and link status
+  - `markScreenContentItemsInactive()` sets isActive=false for removed media
+  - **GET /api/screens/:id** returns `currentContent` array for detail page display
+  - **Screen Detail Page**: "Gedetecteerde content" card shows detected media with category badges (Advertentie/Overig) and link status (Gekoppeld/Niet gekoppeld)
 
 ### Production Stability Features
 - **Graceful Shutdown**: Handlers for SIGTERM/SIGINT with 5-second drain period, database pool cleanup, and scheduler stop.
