@@ -8,7 +8,6 @@ import {
   WifiOff,
   Target,
   Users,
-  Monitor,
   ChevronRight,
   LinkIcon,
   CheckCircle2,
@@ -16,6 +15,17 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
+
+interface AdViewItem {
+  yodeckMediaId: number;
+  name: string;
+  status: 'linked' | 'unlinked';
+}
+
+interface AdsViewResponse {
+  items: AdViewItem[];
+  summary: { total: number; linked: number; unlinked: number };
+}
 
 interface ControlRoomStats {
   screensOnline: number;
@@ -88,6 +98,24 @@ export default function Home() {
     },
     refetchInterval: 30000,
   });
+
+  const { data: adsViewData } = useQuery<AdsViewResponse>({
+    queryKey: ["/api/placements/ads-view"],
+    queryFn: async () => {
+      try {
+        const res = await apiRequest("GET", "/api/placements/ads-view");
+        return res.json();
+      } catch {
+        return { items: [], summary: { total: 0, linked: 0, unlinked: 0 } };
+      }
+    },
+    refetchInterval: 60000,
+  });
+
+  // Top 5 unlinked ads voor Acties panel
+  const topUnlinkedAds = (adsViewData?.items || [])
+    .filter(ad => ad.status === 'unlinked')
+    .slice(0, 5);
 
   // Bereken KPI waarden
   const screensOnline = stats?.screensOnline || 0;
@@ -271,9 +299,24 @@ export default function Home() {
                     <span className="font-medium text-sm">Ads niet gekoppeld</span>
                     <Badge className="ml-auto bg-amber-100 text-amber-800">{adsUnlinked}</Badge>
                   </div>
-                  <p className="text-sm text-muted-foreground mb-3">
-                    Er zijn {adsUnlinked} ads die nog niet aan een adverteerder of plaatsing gekoppeld zijn.
-                  </p>
+                  {topUnlinkedAds.length > 0 && (
+                    <div className="space-y-1.5 mb-3">
+                      {topUnlinkedAds.map((ad) => (
+                        <div 
+                          key={ad.yodeckMediaId} 
+                          className="flex items-center gap-2 py-1 px-2 rounded bg-amber-50/50 text-sm"
+                        >
+                          <Target className="h-3 w-3 text-amber-500 shrink-0" />
+                          <span className="truncate text-muted-foreground">{ad.name}</span>
+                        </div>
+                      ))}
+                      {adsUnlinked > 5 && (
+                        <div className="text-xs text-muted-foreground text-center pt-1">
+                          +{adsUnlinked - 5} meer ads
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <Link href="/placements">
                     <Button variant="outline" size="sm" className="w-full text-amber-600 border-amber-300 hover:bg-amber-50" data-testid="link-koppelen">
                       Koppelen
