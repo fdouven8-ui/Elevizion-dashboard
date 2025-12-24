@@ -588,13 +588,26 @@ export default function Placements() {
                 {/* Search */}
                 <div className="space-y-2">
                   <Label className="text-xs text-muted-foreground">Zoeken</Label>
-                  <Input
-                    placeholder="Zoek op adnaam, adverteerder, schermnaam..."
-                    value={adsSearchTerm}
-                    onChange={(e) => setAdsSearchTerm(e.target.value)}
-                    className="h-9"
-                    data-testid="input-ads-search"
-                  />
+                  <div className="relative">
+                    <Input
+                      placeholder="Zoek op ad, adverteerder of scherm…"
+                      value={adsSearchTerm}
+                      onChange={(e) => setAdsSearchTerm(e.target.value)}
+                      className="h-9 pr-8"
+                      data-testid="input-ads-search"
+                    />
+                    {adsSearchTerm && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 p-0"
+                        onClick={() => setAdsSearchTerm("")}
+                        data-testid="button-clear-ads-search"
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Status filter */}
@@ -616,12 +629,12 @@ export default function Placements() {
                 {/* Advertiser filter */}
                 <div className="space-y-2">
                   <Label className="text-xs text-muted-foreground">Adverteerder</Label>
-                  <Select value={adsAdvertiserFilter} onValueChange={setAdsAdvertiserFilter}>
+                  <Select value={adsAdvertiserFilter || "__all__"} onValueChange={(v) => setAdsAdvertiserFilter(v === "__all__" ? "" : v)}>
                     <SelectTrigger className="h-9" data-testid="filter-ads-advertiser">
                       <SelectValue placeholder="Alle adverteerders" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">Alle adverteerders</SelectItem>
+                      <SelectItem value="__all__">Alle adverteerders</SelectItem>
                       {adsUniqueAdvertisers.map(name => (
                         <SelectItem key={name} value={name}>{name}</SelectItem>
                       ))}
@@ -632,12 +645,12 @@ export default function Placements() {
                 {/* Screen filter */}
                 <div className="space-y-2">
                   <Label className="text-xs text-muted-foreground">Scherm</Label>
-                  <Select value={adsScreenFilter} onValueChange={setAdsScreenFilter}>
+                  <Select value={adsScreenFilter || "__all__"} onValueChange={(v) => setAdsScreenFilter(v === "__all__" ? "" : v)}>
                     <SelectTrigger className="h-9" data-testid="filter-ads-screen">
                       <SelectValue placeholder="Alle schermen" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="">Alle schermen</SelectItem>
+                      <SelectItem value="__all__">Alle schermen</SelectItem>
                       {adsUniqueScreens.map(name => (
                         <SelectItem key={name} value={name}>{name}</SelectItem>
                       ))}
@@ -660,7 +673,11 @@ export default function Placements() {
               ) : filteredAds.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground">
                   <Target className="h-12 w-12 mx-auto mb-4 opacity-30" />
-                  <p>Geen ads gevonden</p>
+                  {debouncedAdsSearch ? (
+                    <p>Geen resultaten voor '{debouncedAdsSearch}'</p>
+                  ) : (
+                    <p>Geen ads gevonden</p>
+                  )}
                 </div>
               ) : (
                 <Table>

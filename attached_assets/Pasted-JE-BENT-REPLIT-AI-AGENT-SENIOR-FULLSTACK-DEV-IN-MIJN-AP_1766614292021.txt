@@ -1,0 +1,69 @@
+JE BENT REPLIT AI AGENT + SENIOR FULLSTACK DEV IN MIJN APP.
+Stack: React + TypeScript + Vite (frontend) + Express (backend) + Drizzle/Postgres.
+Context: Pagina “Ads & Plaatsingen” (Plaatsingen route) toont een tabel met kolommen: Ad Naam, Adverteerder, Schermen, Status, Actie. In “Schermen” staan nu Yodeck codes zoals “YDK-591895”, maar ik wil daar de echte schermnaam zien (zoals “Test” of “Basil’s Barber Shop Maasbracht”).
+
+DOEL 1 — ZOEKEN + FILTEREN (CLIENT-SIDE)
+Voeg boven de tabel (onder de tabs/chips) 1 zoekbalk toe waarmee ik live kan zoeken door de rijen op:
+- ad naam
+- adverteerder naam
+- scherm naam (dus niet de Yodeck code)
+Zoeken moet werken in de huidige tab/chip context (Alle / Gekoppeld / Niet gekoppeld), dus eerst de bestaande filters toepassen en daarna search.
+Extra:
+- Zoekveld met placeholder: “Zoek op ad, adverteerder of scherm…”
+- Toon een klein “X” knopje om de zoekterm te wissen
+- Debounce 250ms zodat het soepel blijft
+- Als geen resultaten: nette empty state tekst “Geen resultaten voor ‘…’”
+
+DOEL 2 — SCHERMNAAM TONEN IPV YODECK CODE
+In de tabelkolom “Schermen” wil ik chips/labels met de schermNAAM in plaats van de Yodeck code.
+Bron van waarheid:
+- Ik heb in het systeem al schermen met naam + gekoppelde yodeck identifier.
+Pak schermen uit de bestaande data-layer:
+1) Check of de Ads/plaatsingen API al schermen teruggeeft met schermnaam. Zo ja: render die naam.
+2) Zo niet: los het op door een mapping te maken:
+   - Voeg (indien nodig) een backend endpoint toe of gebruik bestaand endpoint om alle schermen op te halen (minimaal: { id, name, yodeckScreenId } of vergelijkbaar).
+   - In frontend: bouw een map: screenId/yodeckId -> screenName.
+   - Bij rendering van ads: vervang elke YDK-… chip door de gevonden screenName.
+   - Fallback: als naam niet gevonden is, toon dan “Onbekend scherm” (en NIET de YDK-code). Eventueel tooltip met code mag, maar de tekst in de chip moet naam zijn.
+
+DOEL 3 — SEARCH MOET SCHERMNAAM GEBRUIKEN
+De zoekfunctie moet matchen op:
+- ad.name
+- advertiser.name (of “—” als null)
+- alle gekoppelde schermnamen (de getoonde namen)
+Dus: als ik “basil” typ moet hij de ads vinden die op dat scherm draaien.
+
+IMPLEMENTATIE-INSTRUCTIES
+A) Zoek in de repo naar de pagina component voor “Ads & Plaatsingen” (iets als: PlaatsingenPage.tsx / AdsPlacementsPage.tsx / routes/plaatsingen).
+B) Voeg state toe:
+- searchQuery (string)
+- debouncedSearchQuery
+C) Voeg UI toe:
+- Input veld + clear button in dezelfde row als de chips of net erboven.
+D) Filter pipeline:
+1. start met dataset (ads of placements rows die je al rendert)
+2. pas bestaande status-filter toe (Alle/Gekoppeld/Niet gekoppeld)
+3. pas search toe op bovenstaande 3 velden (case-insensitive)
+E) Screen name mapping:
+- Als je schermen al in state hebt: maak `const screenNameByYodeckId = new Map<string, string>()`
+- Anders: voeg een fetch toe (react-query of bestaande fetch helper) om schermen op te halen.
+- Normaliseer ids (string trim).
+F) Render:
+- In “Schermen” kolom: render chips met screenName (niet code)
+- Zorg dat layout hetzelfde blijft als nu.
+G) Zorg dat TypeScript types kloppen (maak/extend types indien nodig).
+H) Pas geen design overhaul toe; alleen toevoegen zoek/filter + schermnaam vervanging.
+
+ACCEPTATIECRITERIA (MOET WERKEN)
+- Ik kan “test” typen en krijg ads terug die op scherm “Test” draaien.
+- Ik kan “basil” typen en krijg ads terug die op “Basil’s Barber Shop Maasbracht” draaien.
+- In de scherm-chips staat geen “YDK-…”, alleen namen.
+- Clear (X) wist search en toont weer originele lijst.
+- Lege lijst toont empty state.
+
+VOER DIT NU UIT IN DE CODEBASE:
+- Pas frontend pagina aan
+- Voeg backend endpoint toe als dat nodig is voor schermnaam mapping
+- Update eventuele API clients/types
+- Zorg dat build lint/typecheck groen is
+- Laat bestaande functionaliteit intact (tabs/chips blijven werken)
