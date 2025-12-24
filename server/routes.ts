@@ -52,6 +52,7 @@ import {
 } from "./contract-signing";
 import { setupAuth, registerAuthRoutes, isAuthenticated, requirePermission } from "./replit_integrations/auth";
 import { getScreenStats, getAdvertiserStats, clearStatsCache, checkYodeckScreenHasContent } from "./yodeckStats";
+import { classifyMediaItems } from "./services/mediaClassifier";
 
 // ============================================================================
 // IN-MEMORY CACHE (10 second TTL for control-room endpoints)
@@ -4332,18 +4333,25 @@ export async function registerRoutes(
             const itemCount = screen.yodeckContentCount;
             const contentSummary = screen.yodeckContentSummary as any;
             const lastFetchedAt = screen.yodeckContentLastFetchedAt;
+            const mediaItems = contentSummary?.mediaItems || [];
             
-            // New statusText: "Yodeck content actief • X items"
-            // Add suffix "(nog niet via Elevizion placements)" only when 0 placements
+            // Classify media items
+            const classification = classifyMediaItems(mediaItems);
+            const ads = classification.classifiedMediaItems.filter(m => m.category === 'ad');
+            const nonAds = classification.classifiedMediaItems.filter(m => m.category === 'non_ad');
+            
+            // New statusText: "Yodeck content actief • X items (A ads, B overig) • Y nog niet gekoppeld"
             let statusText = itemCount && itemCount > 0
-              ? `Yodeck content actief • ${itemCount} items`
+              ? `Yodeck content actief • ${itemCount} items (${ads.length} ads, ${nonAds.length} overig)`
               : "Yodeck content actief";
-            statusText += " (nog niet via Elevizion placements)";
+            if (ads.length > 0) {
+              statusText += ` • ${ads.length} nog niet gekoppeld`;
+            }
             
             // Build topItems from mediaItems if topItems not available
             let topItems = contentSummary?.topItems || [];
-            if (topItems.length === 0 && contentSummary?.mediaItems?.length > 0) {
-              topItems = contentSummary.mediaItems.slice(0, 5).map((m: any) => 
+            if (topItems.length === 0 && mediaItems.length > 0) {
+              topItems = mediaItems.slice(0, 5).map((m: any) => 
                 `${m.type || 'media'}: ${m.name}`
               );
             }
@@ -4357,11 +4365,16 @@ export async function registerRoutes(
               link: `/screens/${screen.id}`,
               statusText,
               contentCount: itemCount || 0,
+              adsCount: ads.length,
+              nonAdsCount: nonAds.length,
+              adsUnlinkedCount: ads.length, // All ads on unmanaged screens are unlinked
+              topAds: ads.slice(0, 5).map(m => m.name),
+              topNonAds: nonAds.slice(0, 5).map(m => m.name),
               topItems,
               sourceType: contentSummary?.sourceType,
               sourceName: contentSummary?.sourceName,
               lastFetchedAt: lastFetchedAt?.toISOString() || null,
-              mediaItems: contentSummary?.mediaItems || [],
+              mediaItems: classification.classifiedMediaItems,
             });
           } else {
             // Screen has no placements and we can't confirm content

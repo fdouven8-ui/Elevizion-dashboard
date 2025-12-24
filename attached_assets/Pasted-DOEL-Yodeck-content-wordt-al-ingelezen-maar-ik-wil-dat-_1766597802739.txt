@@ -1,0 +1,67 @@
+DOEL: Yodeck content wordt al ingelezen, maar ik wil dat de UI dit overal netjes toont én dat we ads vs non-ads (nieuws/weer/etc) automatisch classificeren. Daarnaast wil ik het aantal ads tonen in het dashboard, inclusief hoeveel ads nog niet gekoppeld zijn aan een Advertiser (Moneybird later). Fix ook de stabiliteit zodat Replit niet random “signal: terminated” krijgt door onnodige polling/logging.
+
+CONTEXT:
+- Backend haalt Yodeck content op en slaat dit op in screens.yodeckContentSummary met mediaItems, topItems, sourceType/sourceName.
+- /api/control-room/stats moet adsTotal, adsUnlinked, nonAdsTotal blijven teruggeven (zoals in logs).
+- /api/control-room/actions geeft nu ook mediaItems + contentCount + topItems; UI moet dat tonen.
+- Moneybird staat UIT; koppeling is voorlopig alleen met Advertiser records (later Moneybird contact).
+
+TAKEN (stap voor stap):
+
+1) CLASSIFICATIE “AD vs NON-AD”
+- Voeg een helper toe (server) die per mediaItem bepaalt: isAd=true/false.
+- Start met rule-based heuristics:
+  NON-AD als naam bevat (case-insensitive) één van:
+  ["weer","buienradar","forecast","weather","nieuws","nos","sport","clock","klok","rss","tv guide","agenda"]
+  AD als NIET NON-AD en type == "media".
+- Sla per screen ook totals op:
+  yodeckAdsCount, yodeckNonAdsCount, yodeckAdsUnlinkedCount
+- “Unlinked” betekent: ad media item heeft (nog) geen advertiserId mapping.
+
+2) OPTIONEEL MAAR BELANGRIJK: MAPPING TABEL (voor later koppelen)
+- Maak een nieuwe DB tabel (drizzle) yodeck_media_map:
+  id (uuid), yodeckMediaId (int unique), name (text), isAd (bool), advertiserId (uuid nullable), updatedAt
+- Bij elke Yodeck content sync:
+  - upsert alle mediaItems in yodeck_media_map
+  - als record al bestaat en isAd handmatig ooit gezet: respecteer die override
+  - default isAd komt uit heuristics
+- adsUnlinked = count where isAd=true AND advertiserId is null
+
+3) API UPDATES
+- /api/control-room/stats:
+  Voeg toe: adsTotal, adsUnlinked, nonAdsTotal
+  Bereken dit over alle screens (unique mediaIds via yodeck_media_map als beschikbaar, anders fallback heuristics op screen.yodeckContentSummary.mediaItems).
+- /api/control-room/actions:
+  Voeg per “unmanaged_content” action toe:
+   - contentCount
+   - adsCount
+   - nonAdsCount
+   - adsUnlinkedCount
+   - topAds (max 5 ad names)
+   - topNonAds (max 5 non-ad names)
+   - lastFetchedAt
+
+4) UI (FRONTEND) – zichtbaar maken
+- Control Room:
+  - In het “unmanaged content” kaartje toon:
+    “Yodeck content actief • X items (A ads, B overig) • A_unlinked nog niet gekoppeld”
+  - Toon 2 chips/lijstjes: Top Ads + Top Overig (max 5).
+- Dashboard / Home KPIs:
+  - Voeg 3 KPI tiles toe:
+    Ads (totaal), Ads niet gekoppeld, Overige content
+- Screen detail pagina:
+  - Toon volledige lijst mediaItems met badge: AD / OVERIG en duration.
+  - Voeg later-knop placeholders: “Koppel aan adverteerder” (nog geen Moneybird).
+
+5) STABILITEIT / REPLIT CRASH FIX
+- Verminder logging:
+  - Verwijder/disable spam logs per item; alleen 1 summary log per screen per sync.
+- Cache Yodeck content sync:
+  - Als yodeckContentLastFetchedAt < 10 minuten geleden: skip zware fetch tenzij force=true.
+- Zorg dat de frontend polling voor /api/control-room/* niet sneller dan elke 30s is (nu lijkt het 15s of sneller).
+- Voeg simpele rate-limit / debounce toe server-side voor /api/integrations/yodeck/sync (max 1 tegelijk).
+
+OPLEVERING:
+- Alle bovenstaande wijzigingen in code + migrations.
+- Zorg dat build slaagt en dat /api/control-room/stats en actions dezelfde velden blijven teruggeven.
+- Test met mijn bestaande 2 screens en playlist met 6 items: verwacht adsTotal=3, nonAdsTotal=3, adsUnlinked=3 (zoals in logs).
