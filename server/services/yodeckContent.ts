@@ -1186,6 +1186,28 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
           } catch (err: any) {
             debugLog(`[Yodeck] Failed to upsert yodeck_media_links ${media.id}: ${err.message}`);
           }
+          
+          // Upsert to screen_content_items for per-screen content tracking (inferred placements)
+          try {
+            await storage.upsertScreenContentItem({
+              screenId: screen.id,
+              yodeckMediaId: media.id,
+              name: media.name,
+              mediaType,
+              category,
+              duration: media.duration || undefined,
+              isActive: true,
+            });
+          } catch (err: any) {
+            debugLog(`[Yodeck] Failed to upsert screen_content_item ${screen.screenId}/${media.id}: ${err.message}`);
+          }
+        }
+        
+        // Mark content items not in current sync as inactive for this screen
+        const activeMediaIds = mediaItems.map(m => m.id);
+        const deactivated = await storage.markScreenContentItemsInactive(screen.id, activeMediaIds);
+        if (deactivated > 0) {
+          debugLog(`[Yodeck] ${screen.screenId}: Marked ${deactivated} old content items as inactive`);
         }
       }
       
