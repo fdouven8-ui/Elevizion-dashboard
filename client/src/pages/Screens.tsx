@@ -1,7 +1,7 @@
 import { useAppData } from "@/hooks/use-app-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Monitor, Filter, X } from "lucide-react";
+import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -38,17 +38,41 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group";
+
+type RowDensity = "compact" | "normal" | "comfortable";
+
+function getScreenDisplayName(screen: any, location: any): string {
+  if (screen?.name && screen.name.trim()) {
+    return screen.name;
+  }
+  if (location?.name && location.name.trim()) {
+    return location.name;
+  }
+  if (screen?.screenId) {
+    return `Scherm ${screen.screenId}`;
+  }
+  return "Onbekend scherm";
+}
 
 export default function Screens() {
-  const { screens, locations, addScreen, placements } = useAppData();
+  const { screens, locations, placements } = useAppData();
   const [location] = useLocation();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [rowDensity, setRowDensity] = useState<RowDensity>("normal");
 
-  // Parse URL params for initial filter state
   const urlParams = new URLSearchParams(location.split('?')[1] || '');
   const initialStatus = urlParams.get('status');
 
-  // Filter state
   const [cityFilter, setCityFilter] = useState<string>("");
   const [locationFilter, setLocationFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string[]>(
@@ -59,47 +83,39 @@ export default function Screens() {
   const [cityPopoverOpen, setCityPopoverOpen] = useState(false);
   const [locationPopoverOpen, setLocationPopoverOpen] = useState(false);
 
-  // Get unique cities from locations
   const uniqueCities = useMemo(() => {
     const cities = locations
       .map(loc => loc.city)
       .filter((city): city is string => !!city && city.trim() !== "");
-    return [...new Set(cities)].sort();
+    return Array.from(new Set(cities)).sort();
   }, [locations]);
 
-  // Count active placements per screen
   const getActivePlacementsCount = (screenId: string) => {
     return placements.filter(p => 
       p.screenId === screenId && p.isActive
     ).length;
   };
 
-  // Get location for a screen
   const getLocation = (locationId: string) => {
     return locations.find(l => l.id === locationId);
   };
 
-  // Filter logic
   const filteredScreens = useMemo(() => {
     return screens.filter(scr => {
       const loc = getLocation(scr.locationId);
 
-      // City filter (Plaats)
       if (cityFilter && loc?.city !== cityFilter) {
         return false;
       }
 
-      // Location filter (Locatie/Bedrijf)
       if (locationFilter && scr.locationId !== locationFilter) {
         return false;
       }
 
-      // Status filter (multi-select)
       if (statusFilter.length > 0 && !statusFilter.includes(scr.status)) {
         return false;
       }
 
-      // Active placements range
       const placementCount = getActivePlacementsCount(scr.id);
       const minVal = minPlacements ? parseInt(minPlacements, 10) : NaN;
       const maxVal = maxPlacements ? parseInt(maxPlacements, 10) : NaN;
@@ -114,31 +130,13 @@ export default function Screens() {
     });
   }, [screens, cityFilter, locationFilter, statusFilter, minPlacements, maxPlacements, placements, locations]);
 
-  // Filter locations by selected city
   const filteredLocations = useMemo(() => {
     if (!cityFilter) return locations;
     return locations.filter(loc => loc.city === cityFilter);
   }, [locations, cityFilter]);
 
   const getLocationName = (id: string) => locations.find(l => l.id === id)?.name || "Onbekend";
-  const getLocationCity = (id: string) => locations.find(l => l.id === id)?.city || "-";
   const selectedLocationName = locationFilter ? getLocationName(locationFilter) : "";
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'online': return 'default';
-      case 'offline': return 'destructive';
-      default: return 'secondary';
-    }
-  };
-
-  const getStatusLabel = (status: string) => {
-    switch (status) {
-      case 'online': return 'Online';
-      case 'offline': return 'Offline';
-      default: return status;
-    }
-  };
 
   const toggleStatusFilter = (status: string) => {
     setStatusFilter(prev => 
@@ -158,8 +156,30 @@ export default function Screens() {
 
   const hasActiveFilters = cityFilter || locationFilter || statusFilter.length > 0 || minPlacements || maxPlacements;
 
+  const getRowClasses = () => {
+    switch (rowDensity) {
+      case "compact":
+        return "text-sm";
+      case "comfortable":
+        return "text-base";
+      default:
+        return "text-sm";
+    }
+  };
+
+  const getCellPadding = () => {
+    switch (rowDensity) {
+      case "compact":
+        return "py-1.5 px-3";
+      case "comfortable":
+        return "py-4 px-4";
+      default:
+        return "py-2.5 px-4";
+    }
+  };
+
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight" data-testid="page-title">Schermen</h1>
@@ -180,36 +200,22 @@ export default function Screens() {
         </Dialog>
       </div>
 
-      {/* Inline Filters */}
-      <Card>
-        <CardContent className="pt-4 pb-4">
-          <div className="flex items-center gap-2 mb-3">
-            <Filter className="h-4 w-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Filters</span>
-            {hasActiveFilters && (
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="h-6 px-2 text-xs"
-                onClick={clearFilters}
-                data-testid="button-clear-filters"
-              >
-                <X className="h-3 w-3 mr-1" />
-                Wissen
-              </Button>
-            )}
-          </div>
-          
-          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-            {/* City filter (Plaats) - PRIMARY */}
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Plaats</Label>
+      {/* Compact Filters */}
+      <Card className="border-muted">
+        <CardContent className="py-3 px-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3 flex-wrap flex-1">
+              <div className="flex items-center gap-2">
+                <Filter className="h-4 w-4 text-muted-foreground" />
+              </div>
+              
+              {/* City filter */}
               <Popover open={cityPopoverOpen} onOpenChange={setCityPopoverOpen}>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
-                    role="combobox"
-                    className="w-full justify-between h-9 font-normal"
+                    size="sm"
+                    className="h-8 font-normal"
                     data-testid="filter-city"
                   >
                     {cityFilter || "Alle plaatsen"}
@@ -225,7 +231,7 @@ export default function Screens() {
                           value="" 
                           onSelect={() => {
                             setCityFilter("");
-                            setLocationFilter(""); // Clear location when city changes
+                            setLocationFilter("");
                             setCityPopoverOpen(false);
                           }}
                         >
@@ -237,7 +243,7 @@ export default function Screens() {
                             value={city}
                             onSelect={() => {
                               setCityFilter(city);
-                              setLocationFilter(""); // Clear location when city changes
+                              setLocationFilter("");
                               setCityPopoverOpen(false);
                             }}
                           >
@@ -249,17 +255,14 @@ export default function Screens() {
                   </Command>
                 </PopoverContent>
               </Popover>
-            </div>
 
-            {/* Location filter (Locatie/Bedrijf) - SECONDARY */}
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Locatie/Bedrijf</Label>
+              {/* Location filter */}
               <Popover open={locationPopoverOpen} onOpenChange={setLocationPopoverOpen}>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
-                    role="combobox"
-                    className="w-full justify-between h-9 font-normal"
+                    size="sm"
+                    className="h-8 font-normal"
                     data-testid="filter-location"
                   >
                     {selectedLocationName || "Alle locaties"}
@@ -297,17 +300,15 @@ export default function Screens() {
                   </Command>
                 </PopoverContent>
               </Popover>
-            </div>
 
-            {/* Status filter (multi-select) */}
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Status</Label>
-              <div className="flex gap-3 h-9 items-center">
+              {/* Status filter */}
+              <div className="flex items-center gap-2 border-l pl-3">
                 <div className="flex items-center gap-1.5">
                   <Checkbox 
                     id="status-online"
                     checked={statusFilter.includes("online")}
                     onCheckedChange={() => toggleStatusFilter("online")}
+                    className="h-4 w-4"
                     data-testid="filter-status-online"
                   />
                   <Label htmlFor="status-online" className="text-sm cursor-pointer">Online</Label>
@@ -317,42 +318,93 @@ export default function Screens() {
                     id="status-offline"
                     checked={statusFilter.includes("offline")}
                     onCheckedChange={() => toggleStatusFilter("offline")}
+                    className="h-4 w-4"
                     data-testid="filter-status-offline"
                   />
                   <Label htmlFor="status-offline" className="text-sm cursor-pointer">Offline</Label>
                 </div>
               </div>
-            </div>
 
-            {/* Active placements range */}
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Actieve plaatsingen</Label>
-              <div className="flex gap-2">
+              {/* Placements range */}
+              <div className="flex items-center gap-1 border-l pl-3">
+                <span className="text-xs text-muted-foreground mr-1">Plaatsingen:</span>
                 <Input 
                   type="number" 
                   placeholder="Min" 
-                  className="h-9 w-16"
+                  className="h-8 w-14 text-xs"
                   value={minPlacements}
                   onChange={(e) => setMinPlacements(e.target.value)}
                   data-testid="filter-min-placements"
                 />
-                <span className="text-muted-foreground self-center">-</span>
+                <span className="text-muted-foreground">-</span>
                 <Input 
                   type="number" 
                   placeholder="Max" 
-                  className="h-9 w-16"
+                  className="h-8 w-14 text-xs"
                   value={maxPlacements}
                   onChange={(e) => setMaxPlacements(e.target.value)}
                   data-testid="filter-max-placements"
                 />
               </div>
+
+              {hasActiveFilters && (
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="h-8 px-2 text-xs"
+                  onClick={clearFilters}
+                  data-testid="button-clear-filters"
+                >
+                  <X className="h-3 w-3 mr-1" />
+                  Wissen
+                </Button>
+              )}
             </div>
 
-            {/* Results count */}
-            <div className="flex items-end">
-              <Badge variant="secondary" className="h-9 px-3">
-                {filteredScreens.length} / {screens.length} schermen
-              </Badge>
+            {/* Right side: count + density toggle */}
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground">
+                {filteredScreens.length} / {screens.length}
+              </span>
+              
+              <ToggleGroup 
+                type="single" 
+                value={rowDensity} 
+                onValueChange={(val) => val && setRowDensity(val as RowDensity)}
+                className="border rounded-md"
+                data-testid="toggle-row-density"
+              >
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value="compact" size="sm" className="h-8 px-2" data-testid="density-compact">
+                        <Rows4 className="h-4 w-4" />
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent>Compact</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value="normal" size="sm" className="h-8 px-2" data-testid="density-normal">
+                        <Rows3 className="h-4 w-4" />
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent>Normaal</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <ToggleGroupItem value="comfortable" size="sm" className="h-8 px-2" data-testid="density-comfortable">
+                        <LayoutGrid className="h-4 w-4" />
+                      </ToggleGroupItem>
+                    </TooltipTrigger>
+                    <TooltipContent>Ruim</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </ToggleGroup>
             </div>
           </div>
         </CardContent>
@@ -363,67 +415,119 @@ export default function Screens() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Screen ID</TableHead>
-              <TableHead>Yodeck Naam</TableHead>
-              <TableHead>Plaats</TableHead>
-              <TableHead>Locatie/Bedrijf</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Content</TableHead>
-              <TableHead className="text-center">Actieve plaatsingen</TableHead>
-              <TableHead className="w-[100px] text-right">Actie</TableHead>
+              <TableHead className={getCellPadding()}>Scherm</TableHead>
+              <TableHead className={getCellPadding()}>Locatie / Bedrijf</TableHead>
+              <TableHead className={getCellPadding()}>Status</TableHead>
+              <TableHead className={getCellPadding()}>Content</TableHead>
+              <TableHead className={`${getCellPadding()} text-center`}>Plaatsingen</TableHead>
+              <TableHead className={`${getCellPadding()} w-[80px] text-right`}>Actie</TableHead>
             </TableRow>
           </TableHeader>
-          <TableBody>
-            {filteredScreens.map((scr) => (
-              <TableRow key={scr.id} data-testid={`screen-row-${scr.id}`}>
-                <TableCell className="font-medium font-mono">
-                  <div className="flex items-center gap-2">
-                    <Monitor className="h-4 w-4 text-muted-foreground" />
-                    {scr.screenId || scr.name}
-                  </div>
-                </TableCell>
-                <TableCell className="text-muted-foreground text-sm">
-                  {scr.yodeckPlayerName || "-"}
-                </TableCell>
-                <TableCell>{getLocationCity(scr.locationId)}</TableCell>
-                <TableCell>{getLocationName(scr.locationId)}</TableCell>
-                <TableCell>
-                  <Badge variant={getStatusColor(scr.status) as any}>
-                    {getStatusLabel(scr.status)}
-                  </Badge>
-                </TableCell>
-                <TableCell className="text-sm max-w-[200px] truncate" title={
-                  scr.yodeckContentCount === null || scr.yodeckContentCount === undefined
-                    ? "Onbekend"
-                    : scr.yodeckContentCount === 0
-                    ? "Leeg"
-                    : (scr.yodeckContentSummary?.topItems?.join(" • ") || `${scr.yodeckContentCount} items`)
-                }>
-                  {scr.yodeckContentCount === null || scr.yodeckContentCount === undefined ? (
-                    <span className="text-muted-foreground">Onbekend</span>
-                  ) : scr.yodeckContentCount === 0 ? (
-                    <span className="text-orange-500">Leeg</span>
-                  ) : (
-                    <span className="text-green-600">
-                      {scr.yodeckContentSummary?.topItems?.slice(0, 2).join(" • ") || `${scr.yodeckContentCount} items`}
-                    </span>
-                  )}
-                </TableCell>
-                <TableCell className="text-center">
-                  <Badge variant="outline">{getActivePlacementsCount(scr.id)}</Badge>
-                </TableCell>
-                <TableCell className="text-right">
-                  <Button variant="outline" size="sm" asChild data-testid={`button-open-${scr.id}`}>
-                    <Link href={`/screens/${scr.id}`}>
-                      Open
-                    </Link>
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
+          <TableBody className={getRowClasses()}>
+            {filteredScreens.map((scr) => {
+              const loc = getLocation(scr.locationId);
+              const displayName = getScreenDisplayName(scr, loc);
+              const placementCount = getActivePlacementsCount(scr.id);
+              
+              const summary = scr.yodeckContentSummary as { topItems?: string[] } | null;
+              const contentItems = summary?.topItems || [];
+              const firstContentItem = contentItems[0] || null;
+              const contentTooltip = contentItems.length > 0 
+                ? contentItems.join(" • ") 
+                : (scr.yodeckContentCount === 0 ? "Leeg" : "Onbekend");
+              
+              return (
+                <TableRow key={scr.id} data-testid={`screen-row-${scr.id}`}>
+                  {/* Scherm column: name + EVZ-ID + YDK subtitle */}
+                  <TableCell className={getCellPadding()}>
+                    <div className="flex items-center gap-2">
+                      <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">{displayName}</div>
+                        <div className="text-xs text-muted-foreground flex items-center gap-2">
+                          {scr.screenId && <span>{scr.screenId}</span>}
+                          {scr.yodeckPlayerId && <span>• YDK-{scr.yodeckPlayerId}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  </TableCell>
+                  
+                  {/* Locatie / Bedrijf */}
+                  <TableCell className={getCellPadding()}>
+                    <div className="min-w-0">
+                      <div className="truncate">{loc?.name || "-"}</div>
+                      {loc?.city && (
+                        <div className="text-xs text-muted-foreground">{loc.city}</div>
+                      )}
+                    </div>
+                  </TableCell>
+                  
+                  {/* Status */}
+                  <TableCell className={getCellPadding()}>
+                    <Badge 
+                      variant={scr.status === "online" ? "default" : "destructive"}
+                      className="font-medium"
+                    >
+                      {scr.status === "online" ? "Online" : "Offline"}
+                    </Badge>
+                  </TableCell>
+                  
+                  {/* Content */}
+                  <TableCell className={getCellPadding()}>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="max-w-[180px] truncate cursor-default">
+                            {scr.yodeckContentCount === null || scr.yodeckContentCount === undefined ? (
+                              <span className="text-muted-foreground">Onbekend</span>
+                            ) : scr.yodeckContentCount === 0 ? (
+                              <span className="text-orange-500">Leeg</span>
+                            ) : firstContentItem ? (
+                              <span className="text-muted-foreground">
+                                media: {firstContentItem}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">{scr.yodeckContentCount} items</span>
+                            )}
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="max-w-[300px]">
+                          <p className="text-sm">{contentTooltip}</p>
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </TableCell>
+                  
+                  {/* Actieve plaatsingen */}
+                  <TableCell className={`${getCellPadding()} text-center`}>
+                    <Badge 
+                      variant={placementCount > 0 ? "secondary" : "outline"}
+                      className={placementCount === 0 ? "text-muted-foreground" : ""}
+                    >
+                      {placementCount}
+                    </Badge>
+                  </TableCell>
+                  
+                  {/* Actie */}
+                  <TableCell className={`${getCellPadding()} text-right`}>
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="h-7 px-2 text-xs"
+                      asChild 
+                      data-testid={`button-open-${scr.id}`}
+                    >
+                      <Link href={`/screens/${scr.id}`}>
+                        Open
+                      </Link>
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
             {filteredScreens.length === 0 && (
               <TableRow>
-                <TableCell colSpan={8} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
                   Geen schermen gevonden
                 </TableCell>
               </TableRow>

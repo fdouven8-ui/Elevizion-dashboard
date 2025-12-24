@@ -1,0 +1,124 @@
+JE BENT REPLIT AI AGENT IN MIJN DASHBOARD (React + TS + Vite).
+WE GAAN DE PAGINA “Schermen” VERFIJNEN.
+
+========================
+DOEL VAN DEZE WIJZIGING
+========================
+- De Schermen-lijst overzichtelijker maken
+- Meer focus op schermNAAM i.p.v. Yodeck code
+- Mogelijkheid toevoegen om rij-dichtheid (row height) aan te passen
+- Minder visuele ruis, sneller scanbaar
+
+========================
+A) INFORMATIE-STRUCTUUR AANPASSEN
+========================
+
+HUIDIGE KOLOMMEN:
+Screen ID | Yodeck Naam | Plaats | Locatie/Bedrijf | Status | Content | Actieve plaatsingen | Actie
+
+NIEUWE LOGISCHE STRUCTUUR:
+1. Scherm
+2. Locatie / Bedrijf
+3. Status
+4. Content
+5. Actieve plaatsingen
+6. Actie
+
+DETAILS:
+- Kolom “Scherm”:
+  - Grote tekst: scherm.displayName (bv “Test” of “Basil’s Barber Shop Maasbracht”)
+  - Kleine grijze subtekst eronder: Yodeck: YDK-xxxxx
+  - Verwijder aparte “Screen ID” kolom volledig
+
+- Kolom “Plaats”:
+  - Alleen tonen als er echte data is
+  - Anders verbergen (of combineren met Locatie)
+
+- Kolom “Content”:
+  - Toon alleen eerste item (truncate, max 1 regel)
+  - Tooltip bij hover met volledige contentlijst
+  - Prefix behouden: “media: …”
+
+========================
+B) RIJ-HOOGTE (ROW DENSITY) TOGGLE
+========================
+
+Voeg rechtsboven boven de tabel een toggle toe:
+- Label: “Weergave”
+- Opties (segmented control of dropdown):
+  - Compact
+  - Normaal (default)
+  - Ruim
+
+IMPLEMENTATIE:
+- Maak state: rowDensity = "compact" | "normal" | "comfortable"
+- Koppel dit aan table row classes:
+
+Compact:
+- padding-y: 6px
+- font-size: text-sm
+- line-height: tight
+
+Normaal:
+- padding-y: 10–12px
+- font-size: text-sm
+
+Ruim:
+- padding-y: 16px
+- font-size: text-base
+
+Gebruik conditionele classNames op <tr> en <td>.
+
+========================
+C) VISUELE OPSCHONING
+========================
+
+- Status badge:
+  - Online = groen
+  - Offline = rood
+  - Iets groter en meer links uitgelijnd
+
+- Actieve plaatsingen:
+  - Maak hiervan een pill/badge
+  - “0” blijft zichtbaar maar subtiel
+
+- Actie kolom:
+  - Houd alleen knop “Open”
+  - Maak hem primary-outline i.p.v. zware knop
+
+- Verwijder onnodige borders waar mogelijk
+- Houd consistent spacing met andere pagina’s
+
+========================
+D) FILTERS LICHT VERFIJNEN (NIET GROTE REFACTOR)
+========================
+
+- Filters blijven bovenaan
+- Maak filter-card iets compacter:
+  - Minder hoogte
+  - Minder padding
+- Teller “2 / 2 schermen” mag blijven, maar kleiner rechts
+
+========================
+E) TECHNISCHE AANPAK
+========================
+
+- Zoek component:
+  - waarschijnlijk: src/pages/Schermen.tsx of ScreenListPage.tsx
+- Pas alleen frontend aan (geen backend nodig)
+- Voeg eventueel helper toe:
+  - getScreenDisplayName(screen)
+
+========================
+ACCEPTATIECRITERIA
+========================
+- Ik kan schakelen tussen compacte en ruime rijen
+- Schermnaam is dominant, YDK-code secundair
+- Lijst is sneller scanbaar
+- Geen functionaliteit kwijt
+- Build & typescript zijn groen
+
+VOER DIT NU UIT.
+NA AFRONDING:
+- Geef kort aan welke files zijn aangepast
+- Geen uitleg, alleen resultaat
