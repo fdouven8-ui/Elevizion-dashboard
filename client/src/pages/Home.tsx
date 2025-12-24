@@ -20,10 +20,13 @@ import {
   ListMusic,
   Clock,
   ImageOff,
+  X,
+  Info,
+  LinkIcon,
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
-import { useState } from "react";
+import React, { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
 import { nl } from "date-fns/locale";
 
@@ -72,6 +75,164 @@ interface ActionItem {
   sourceName?: string;
   lastFetchedAt?: string;
   mediaItems?: ClassifiedMediaItem[];
+}
+
+// Herbruikbare KPI Card component
+interface KpiCardProps {
+  id: string;
+  title: string;
+  value: number;
+  subtitle?: string;
+  icon: React.ComponentType<{ className?: string }>;
+  iconColor: string;
+  iconBg: string;
+  accentBg: string;
+  link?: string;
+  isWarning?: boolean;
+  isLoading?: boolean;
+  onClick?: () => void;
+  isActive?: boolean;
+  hasDetails?: boolean;
+}
+
+function KpiCard({ 
+  id, title, value, subtitle, icon: Icon, iconColor, iconBg, accentBg, 
+  link, isWarning, isLoading, onClick, isActive, hasDetails 
+}: KpiCardProps) {
+  const content = (
+    <div 
+      className={`bg-card rounded-lg shadow-sm transition-all hover:shadow-md hover:scale-[1.02] border overflow-hidden ${
+        isWarning ? 'border-amber-300 bg-amber-50/30' : 'border-border'
+      } ${isActive ? 'ring-2 ring-primary ring-offset-2' : ''} ${onClick || hasDetails ? 'cursor-pointer' : ''}`}
+      data-testid={`kpi-${id}`}
+      onClick={onClick}
+    >
+      <div className={`h-1 ${accentBg}`} />
+      <div className="p-4">
+        {isLoading ? (
+          <Skeleton className="h-14 w-full" />
+        ) : (
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="text-xs text-muted-foreground font-medium mb-1 truncate">{title}</p>
+              <div className="flex items-baseline gap-1">
+                <span className="text-2xl font-bold">{value}</span>
+                {subtitle && <span className="text-sm text-muted-foreground">{subtitle}</span>}
+              </div>
+              {hasDetails && (
+                <p className="text-[10px] text-primary mt-1 flex items-center gap-0.5">
+                  <Info className="h-3 w-3" />
+                  Bekijk details
+                </p>
+              )}
+            </div>
+            <div className={`p-2 rounded-full ${iconBg} flex-shrink-0`}>
+              <Icon className={`h-5 w-5 ${iconColor}`} />
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  if (link && !onClick) {
+    return <Link href={link}>{content}</Link>;
+  }
+  return content;
+}
+
+// Ads Detail Panel
+interface AdsDetailPanelProps {
+  stats: ControlRoomStats | undefined;
+  onClose: () => void;
+}
+
+function AdsDetailPanel({ stats, onClose }: AdsDetailPanelProps) {
+  const linkedAds = (stats?.adsTotal || 0) - (stats?.adsUnlinked || 0);
+  
+  return (
+    <Card className="animate-in slide-in-from-top-2 duration-300">
+      <CardHeader className="pb-2">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base font-medium flex items-center gap-2">
+            <Target className="h-4 w-4 text-blue-600" />
+            Ads Details
+          </CardTitle>
+          <Button variant="ghost" size="sm" onClick={onClose} className="h-8 w-8 p-0" data-testid="button-close-ads-detail">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Link href="/placements?status=active">
+            <div className="p-3 rounded-lg border hover:bg-muted/50 transition-colors cursor-pointer">
+              <div className="flex items-center gap-2 mb-1">
+                <Target className="h-4 w-4 text-blue-600" />
+                <span className="text-xs text-muted-foreground">Actieve placements</span>
+              </div>
+              <span className="text-xl font-bold">{stats?.activePlacements || 0}</span>
+            </div>
+          </Link>
+          
+          <div className="p-3 rounded-lg border bg-orange-50/50">
+            <div className="flex items-center gap-2 mb-1">
+              <Target className="h-4 w-4 text-orange-600" />
+              <span className="text-xs text-muted-foreground">Ads op schermen</span>
+            </div>
+            <span className="text-xl font-bold">{stats?.adsTotal || 0}</span>
+          </div>
+          
+          <div className="p-3 rounded-lg border bg-emerald-50/50">
+            <div className="flex items-center gap-2 mb-1">
+              <LinkIcon className="h-4 w-4 text-emerald-600" />
+              <span className="text-xs text-muted-foreground">Ads gekoppeld</span>
+            </div>
+            <span className="text-xl font-bold">{linkedAds}</span>
+          </div>
+          
+          <div className={`p-3 rounded-lg border ${(stats?.adsUnlinked || 0) > 0 ? 'bg-amber-50 border-amber-200' : ''}`}>
+            <div className="flex items-center gap-2 mb-1">
+              <ImageOff className="h-4 w-4 text-amber-600" />
+              <span className="text-xs text-muted-foreground">Ads niet gekoppeld</span>
+            </div>
+            <span className={`text-xl font-bold ${(stats?.adsUnlinked || 0) > 0 ? 'text-amber-600' : ''}`}>
+              {stats?.adsUnlinked || 0}
+            </span>
+          </div>
+          
+          <div className="p-3 rounded-lg border">
+            <div className="flex items-center gap-2 mb-1">
+              <Monitor className="h-4 w-4 text-slate-600" />
+              <span className="text-xs text-muted-foreground">Overig content</span>
+            </div>
+            <span className="text-xl font-bold">{stats?.nonAdsTotal || 0}</span>
+          </div>
+          
+          <div className="p-3 rounded-lg border">
+            <div className="flex items-center gap-2 mb-1">
+              <Monitor className="h-4 w-4 text-emerald-600" />
+              <span className="text-xs text-muted-foreground">Schermen met content</span>
+            </div>
+            <span className="text-xl font-bold">{stats?.screensWithYodeckContent || 0}</span>
+          </div>
+          
+          <div className="p-3 rounded-lg border">
+            <div className="flex items-center gap-2 mb-1">
+              <Monitor className="h-4 w-4 text-slate-400" />
+              <span className="text-xs text-muted-foreground">Schermen leeg</span>
+            </div>
+            <span className="text-xl font-bold">{stats?.screensYodeckEmpty || 0}</span>
+          </div>
+        </div>
+        
+        <p className="text-xs text-muted-foreground mt-3 flex items-center gap-1">
+          <Info className="h-3 w-3" />
+          Data wordt elke 15 minuten gesynchroniseerd met Yodeck
+        </p>
+      </CardContent>
+    </Card>
+  );
 }
 
 function YodeckContentPreview({ item }: { item: ActionItem }) {
@@ -214,6 +375,8 @@ function YodeckContentPreview({ item }: { item: ActionItem }) {
 }
 
 export default function Home() {
+  const [selectedMetric, setSelectedMetric] = useState<'adsOnline' | null>(null);
+  
   const { data: stats, isLoading: statsLoading } = useQuery<ControlRoomStats>({
     queryKey: ["/api/control-room/stats"],
     queryFn: async () => {
@@ -246,7 +409,23 @@ export default function Home() {
     refetchInterval: 30000,
   });
 
-  const kpiTiles = [
+  // Handle ESC key to close detail panel
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && selectedMetric) {
+        setSelectedMetric(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedMetric]);
+
+  const toggleAdsDetail = () => {
+    setSelectedMetric(prev => prev === 'adsOnline' ? null : 'adsOnline');
+  };
+
+  // Alleen 4 hoofd-KPI's in de top rij
+  const mainKpiTiles = [
     {
       id: "online",
       title: "Schermen online",
@@ -276,49 +455,17 @@ export default function Home() {
       iconColor: "text-blue-600",
       iconBg: "bg-blue-50",
       accentBg: "bg-blue-500",
-      link: "/placements?status=active",
+      hasDetails: true, // Klikbaar voor detail-weergave
     },
     {
       id: "advertisers",
-      title: "Actief betalende adverteerders",
+      title: "Betalende adverteerders",
       value: stats?.payingAdvertisers || 0,
       icon: Users,
       iconColor: "text-purple-600",
       iconBg: "bg-purple-50",
       accentBg: "bg-purple-500",
       link: "/advertisers?filter=paying",
-    },
-    {
-      id: "yodeck-ads",
-      title: "Ads op schermen",
-      value: stats?.adsTotal || 0,
-      icon: Target,
-      iconColor: "text-orange-600",
-      iconBg: "bg-orange-50",
-      accentBg: "bg-orange-500",
-      link: "/screens",
-    },
-    {
-      id: "unlinked-ads",
-      title: "Ads niet gekoppeld",
-      value: stats?.adsUnlinked || 0,
-      subtitle: stats?.adsTotal ? `/ ${stats.adsTotal}` : undefined,
-      icon: ImageOff,
-      iconColor: "text-amber-600",
-      iconBg: "bg-amber-50",
-      accentBg: "bg-amber-500",
-      link: "/screens",
-      isWarning: (stats?.adsUnlinked || 0) > 0,
-    },
-    {
-      id: "non-ads",
-      title: "Overig content",
-      value: stats?.nonAdsTotal || 0,
-      icon: Monitor,
-      iconColor: "text-slate-600",
-      iconBg: "bg-slate-50",
-      accentBg: "bg-slate-400",
-      link: "/screens",
     },
   ];
 
@@ -370,42 +517,32 @@ export default function Home() {
         <p className="text-muted-foreground">Overzicht van je Elevizion netwerk</p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-        {kpiTiles.map((tile) => (
-          <Link key={tile.id} href={tile.link}>
-            <div 
-              className={`bg-card rounded-lg shadow-sm cursor-pointer transition-all hover:shadow-md hover:scale-[1.02] border overflow-hidden ${
-                (tile as any).isWarning ? 'border-amber-300 bg-amber-50/30' : 'border-border'
-              }`}
-              data-testid={`kpi-${tile.id}`}
-            >
-              <div className={`h-1 ${tile.accentBg}`} />
-              <div className="p-4">
-                {statsLoading ? (
-                  <Skeleton className="h-14 w-full" />
-                ) : (
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs text-muted-foreground font-medium mb-1 truncate">{tile.title}</p>
-                      <div className="flex items-baseline gap-1">
-                        <span className="text-2xl font-bold">
-                          {tile.value}
-                        </span>
-                        {tile.subtitle && (
-                          <span className="text-sm text-muted-foreground">{tile.subtitle}</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className={`p-2 rounded-full ${tile.iconBg} flex-shrink-0`}>
-                      <tile.icon className={`h-5 w-5 ${tile.iconColor}`} />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </Link>
+      {/* Compacte KPI rij - 4 hoofd-KPI's */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {mainKpiTiles.map((tile) => (
+          <KpiCard
+            key={tile.id}
+            id={tile.id}
+            title={tile.title}
+            value={tile.value}
+            subtitle={tile.subtitle}
+            icon={tile.icon}
+            iconColor={tile.iconColor}
+            iconBg={tile.iconBg}
+            accentBg={tile.accentBg}
+            link={tile.link}
+            isLoading={statsLoading}
+            onClick={tile.hasDetails ? toggleAdsDetail : undefined}
+            isActive={tile.id === 'ads' && selectedMetric === 'adsOnline'}
+            hasDetails={tile.hasDetails}
+          />
         ))}
       </div>
+
+      {/* Ads Detail Panel - toon bij klik op "Ads online" */}
+      {selectedMetric === 'adsOnline' && (
+        <AdsDetailPanel stats={stats} onClose={() => setSelectedMetric(null)} />
+      )}
 
       {/* Lightweight Action Overview */}
       <Card>

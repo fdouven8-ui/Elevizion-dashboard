@@ -18,7 +18,7 @@ Elevizion Dashboard is an OPS-first internal operations control room for digital
 - **Forms**: React Hook Form with Zod validation.
 - **UI/UX**: Pages-based structure, sidebar layout, breadcrumb navigation, Dutch language UI.
 - **UI/UX Decisions**:
-    - **Home page (`/dashboard`)**: Owner-focused overview with 4 KPI tiles (Screens online/offline, Ads online, Paying advertisers) and an "Actie Overzicht" for operational items (offline screens, screens without placements, paused placements).
+    - **Home page (`/dashboard`)**: Owner-focused overview with 4 compact main KPI tiles (Screens online/offline, Ads online, Paying advertisers). "Ads online" is clickable and expands a detail panel showing: Actieve placements, Ads op schermen, Ads gekoppeld, Ads niet gekoppeld, Overig content, Schermen met/leeg content. Uses reusable `KpiCard` component with support for onClick, isActive, hasDetails props. "Actie Overzicht" section below shows operational items.
     - **Onboarding**: Quick wizards for screens, advertisers, and ad placements.
     - **Modules**: Dedicated sections for Schermen, Ads & Plaatsingen, Adverteerders, Instellingen.
     - **Screens module**: City-first organization with "Plaats" as primary filter.
