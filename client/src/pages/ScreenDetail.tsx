@@ -864,6 +864,7 @@ interface MediaItemDisplay {
   name: string;
   type?: string;
   duration?: number;
+  category?: 'ad' | 'non_ad';
 }
 
 interface ContentSummaryData {
@@ -984,32 +985,62 @@ function YodeckContentCard({ screen }: { screen: any }) {
               <span className="font-medium">{contentCount ?? "-"}</span>
             </div>
 
-            {contentSummary?.mediaItems && contentSummary.mediaItems.length > 0 && (
-              <div className="mt-4">
-                <p className="text-sm font-medium mb-2">Media items:</p>
-                <div className="space-y-1 max-h-48 overflow-y-auto">
-                  {contentSummary.mediaItems.map((item, index) => (
-                    <div
-                      key={item.id || index}
-                      className="flex items-center justify-between text-sm py-1.5 px-2 rounded bg-muted/50"
-                      data-testid={`media-item-${item.id}`}
-                    >
-                      <div className="flex items-center gap-2">
-                        {item.type === "video" ? (
-                          <Video className="h-4 w-4 text-muted-foreground" />
-                        ) : (
-                          <Image className="h-4 w-4 text-muted-foreground" />
-                        )}
-                        <span className="truncate max-w-[200px]">{item.name}</span>
-                      </div>
-                      {item.duration && item.duration > 0 && (
-                        <span className="text-muted-foreground text-xs">{item.duration}s</span>
-                      )}
+            {contentSummary?.mediaItems && contentSummary.mediaItems.length > 0 && (() => {
+              // Use server-provided category, fallback to 'ad' if not provided
+              const classifiedItems = contentSummary.mediaItems.map(item => ({
+                ...item,
+                category: item.category || 'ad'
+              }));
+              const adsCount = classifiedItems.filter(i => i.category === 'ad').length;
+              const nonAdsCount = classifiedItems.filter(i => i.category === 'non_ad').length;
+              
+              return (
+                <div className="mt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-medium">Media items:</p>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Badge variant="outline" className="bg-orange-50 text-orange-600 border-orange-200">
+                        {adsCount} Ads
+                      </Badge>
+                      <Badge variant="outline" className="bg-blue-50 text-blue-600 border-blue-200">
+                        {nonAdsCount} Overig
+                      </Badge>
                     </div>
-                  ))}
+                  </div>
+                  <div className="space-y-1 max-h-60 overflow-y-auto">
+                    {classifiedItems.map((item, index) => (
+                      <div
+                        key={item.id || index}
+                        className="flex items-center justify-between text-sm py-1.5 px-2 rounded bg-muted/50"
+                        data-testid={`media-item-${item.id}`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Badge 
+                            variant="outline" 
+                            className={`h-5 text-[10px] px-1 ${
+                              item.category === 'ad' 
+                                ? 'bg-orange-50 text-orange-600 border-orange-200' 
+                                : 'bg-blue-50 text-blue-600 border-blue-200'
+                            }`}
+                          >
+                            {item.category === 'ad' ? 'AD' : 'INFO'}
+                          </Badge>
+                          {item.type === "video" ? (
+                            <Video className="h-4 w-4 text-muted-foreground" />
+                          ) : (
+                            <Image className="h-4 w-4 text-muted-foreground" />
+                          )}
+                          <span className="truncate max-w-[180px]">{item.name}</span>
+                        </div>
+                        {item.duration && item.duration > 0 && (
+                          <span className="text-muted-foreground text-xs">{item.duration}s</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             <div className="text-xs text-muted-foreground pt-2 border-t">
               Laatst gesynchroniseerd: {formatLastFetched()}

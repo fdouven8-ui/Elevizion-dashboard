@@ -79,6 +79,36 @@ function setCache<T>(key: string, data: T): void {
 }
 
 // ============================================================================
+// YODECK SYNC MUTEX (prevent concurrent syncs)
+// ============================================================================
+let yodeckSyncInProgress = false;
+let yodeckSyncLastStarted: Date | null = null;
+const SYNC_MIN_INTERVAL_MS = 30_000; // 30 seconds minimum between syncs
+
+function canStartYodeckSync(): { ok: boolean; reason?: string } {
+  if (yodeckSyncInProgress) {
+    return { ok: false, reason: "Sync al bezig, probeer later opnieuw" };
+  }
+  if (yodeckSyncLastStarted) {
+    const elapsed = Date.now() - yodeckSyncLastStarted.getTime();
+    if (elapsed < SYNC_MIN_INTERVAL_MS) {
+      const waitSecs = Math.ceil((SYNC_MIN_INTERVAL_MS - elapsed) / 1000);
+      return { ok: false, reason: `Te snel, wacht nog ${waitSecs} seconden` };
+    }
+  }
+  return { ok: true };
+}
+
+function startYodeckSync() {
+  yodeckSyncInProgress = true;
+  yodeckSyncLastStarted = new Date();
+}
+
+function endYodeckSync() {
+  yodeckSyncInProgress = false;
+}
+
+// ============================================================================
 // MEMORY LOGGING (every 60 seconds)
 // ============================================================================
 function logMemoryUsage() {
@@ -3196,6 +3226,14 @@ export async function registerRoutes(
 
   // POST /api/sync/yodeck/run - Full sync with distinctItemCount per screen
   app.post("/api/sync/yodeck/run", requirePermission("manage_integrations"), async (req, res) => {
+    // Rate limit check
+    const canSync = canStartYodeckSync();
+    if (!canSync.ok) {
+      return res.status(429).json({ ok: false, error: canSync.reason });
+    }
+    
+    startYodeckSync();
+    
     try {
       const onlyOnline = Boolean(req.body?.onlyOnline);
       
@@ -3203,6 +3241,7 @@ export async function registerRoutes(
       const client = await getYodeckClient();
       
       if (!client) {
+        endYodeckSync();
         return res.status(400).json({ 
           ok: false, 
           error: "Missing YODECK_AUTH_TOKEN env var",
@@ -3323,6 +3362,7 @@ export async function registerRoutes(
       const contentUnknown = results.filter(r => r.status === "unknown_source").length;
       const contentError = results.filter(r => r.status === "error").length;
 
+      endYodeckSync();
       return res.json({
         ok: true,
         stats: {
@@ -3340,6 +3380,7 @@ export async function registerRoutes(
         },
       });
     } catch (error: any) {
+      endYodeckSync();
       res.status(500).json({ 
         ok: false, 
         error: error?.message ?? String(error),

@@ -44,11 +44,13 @@ interface ControlRoomStats {
   nonAdsTotal: number;
 }
 
-interface MediaItem {
+interface ClassifiedMediaItem {
+  id: number;
   name: string;
   type: string;
   mediaType?: string;
   duration?: number;
+  category: 'ad' | 'non_ad';
 }
 
 interface ActionItem {
@@ -60,27 +62,25 @@ interface ActionItem {
   link: string;
   statusText?: string;
   contentCount?: number;
+  adsCount?: number;
+  nonAdsCount?: number;
+  adsUnlinkedCount?: number;
+  topAds?: string[];
+  topNonAds?: string[];
   topItems?: string[];
   sourceType?: string;
   sourceName?: string;
   lastFetchedAt?: string;
-  mediaItems?: MediaItem[];
+  mediaItems?: ClassifiedMediaItem[];
 }
 
 function YodeckContentPreview({ item }: { item: ActionItem }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const topItems = item.topItems || [];
   const mediaItems = item.mediaItems || [];
+  const topAds = item.topAds || [];
+  const topNonAds = item.topNonAds || [];
   const contentCount = item.contentCount || 0;
-  const hasMore = contentCount > topItems.length && mediaItems.length > topItems.length;
   
-  const formatMediaName = (name: string) => {
-    if (name.startsWith("media: ")) {
-      return name.replace("media: ", "");
-    }
-    return name;
-  };
-
   const formatDuration = (seconds?: number) => {
     if (!seconds || seconds < 0) return null;
     if (seconds < 60) return `${seconds}s`;
@@ -88,6 +88,12 @@ function YodeckContentPreview({ item }: { item: ActionItem }) {
     const secs = seconds % 60;
     return secs > 0 ? `${mins}m${secs}s` : `${mins}m`;
   };
+
+  // Derive counts from mediaItems array for consistency with expanded view
+  const ads = mediaItems.filter(m => m.category === 'ad');
+  const nonAds = mediaItems.filter(m => m.category === 'non_ad');
+  const adsCount = ads.length;
+  const nonAdsCount = nonAds.length;
 
   return (
     <div className="mt-2 text-xs" onClick={(e) => e.preventDefault()}>
@@ -108,48 +114,99 @@ function YodeckContentPreview({ item }: { item: ActionItem }) {
       </div>
       
       <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-        <div className="space-y-0.5 text-muted-foreground">
-          {topItems.map((topItem, idx) => (
-            <div key={idx} className="flex items-center gap-1 truncate">
-              <span className="text-muted-foreground/60">•</span>
-              <span className="truncate">{formatMediaName(topItem)}</span>
+        {/* Top Ads */}
+        {topAds.length > 0 && (
+          <div className="mb-2">
+            <div className="flex items-center gap-1 text-muted-foreground font-medium mb-1">
+              <Target className="h-3 w-3 text-orange-500" />
+              <span>Ads ({adsCount})</span>
             </div>
-          ))}
-        </div>
-        
-        {hasMore && (
-          <>
-            <CollapsibleContent className="space-y-0.5 text-muted-foreground mt-0.5">
-              {mediaItems.slice(topItems.length).map((media, idx) => (
+            <div className="space-y-0.5 text-muted-foreground pl-4">
+              {topAds.slice(0, 3).map((name, idx) => (
                 <div key={idx} className="flex items-center gap-1 truncate">
-                  <span className="text-muted-foreground/60">•</span>
-                  <span className="truncate">{media.name}</span>
-                  {media.duration && media.duration > 0 && (
-                    <Badge variant="secondary" className="h-4 text-[10px] px-1">
-                      {formatDuration(media.duration)}
-                    </Badge>
-                  )}
+                  <Badge variant="outline" className="h-4 text-[10px] px-1 bg-orange-50 text-orange-600 border-orange-200">AD</Badge>
+                  <span className="truncate">{name}</span>
                 </div>
               ))}
-            </CollapsibleContent>
-            
-            <CollapsibleTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-5 px-1 mt-1 text-xs text-primary hover:text-primary"
-              >
-                <ChevronDown className={`h-3 w-3 mr-0.5 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
-                {isExpanded ? "Minder tonen" : `Toon alle ${contentCount} items`}
-              </Button>
-            </CollapsibleTrigger>
-          </>
+              {adsCount > 3 && !isExpanded && (
+                <span className="text-muted-foreground/70 italic">+{adsCount - 3} meer ads</span>
+              )}
+            </div>
+          </div>
         )}
         
-        {!hasMore && contentCount > topItems.length && (
-          <p className="mt-1 text-muted-foreground/70 italic">
-            +{contentCount - topItems.length} meer items (zie details)
-          </p>
+        {/* Top Non-Ads */}
+        {topNonAds.length > 0 && (
+          <div className="mb-2">
+            <div className="flex items-center gap-1 text-muted-foreground font-medium mb-1">
+              <Monitor className="h-3 w-3 text-blue-500" />
+              <span>Overig ({nonAdsCount})</span>
+            </div>
+            <div className="space-y-0.5 text-muted-foreground pl-4">
+              {topNonAds.slice(0, 3).map((name, idx) => (
+                <div key={idx} className="flex items-center gap-1 truncate">
+                  <Badge variant="outline" className="h-4 text-[10px] px-1 bg-blue-50 text-blue-600 border-blue-200">INFO</Badge>
+                  <span className="truncate">{name}</span>
+                </div>
+              ))}
+              {nonAdsCount > 3 && !isExpanded && (
+                <span className="text-muted-foreground/70 italic">+{nonAdsCount - 3} meer items</span>
+              )}
+            </div>
+          </div>
+        )}
+        
+        {/* Expanded: Show all media items with badges */}
+        <CollapsibleContent className="space-y-2 mt-2 border-t pt-2">
+          {ads.length > 0 && (
+            <div>
+              <div className="text-muted-foreground font-medium mb-1">Alle Ads ({ads.length})</div>
+              <div className="space-y-0.5 pl-2">
+                {ads.map((media, idx) => (
+                  <div key={idx} className="flex items-center gap-1 truncate">
+                    <Badge variant="outline" className="h-4 text-[10px] px-1 bg-orange-50 text-orange-600 border-orange-200">AD</Badge>
+                    <span className="truncate">{media.name}</span>
+                    {media.duration && media.duration > 0 && (
+                      <Badge variant="secondary" className="h-4 text-[10px] px-1">
+                        {formatDuration(media.duration)}
+                      </Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {nonAds.length > 0 && (
+            <div>
+              <div className="text-muted-foreground font-medium mb-1">Alle Overig ({nonAds.length})</div>
+              <div className="space-y-0.5 pl-2">
+                {nonAds.map((media, idx) => (
+                  <div key={idx} className="flex items-center gap-1 truncate">
+                    <Badge variant="outline" className="h-4 text-[10px] px-1 bg-blue-50 text-blue-600 border-blue-200">INFO</Badge>
+                    <span className="truncate">{media.name}</span>
+                    {media.duration && media.duration > 0 && (
+                      <Badge variant="secondary" className="h-4 text-[10px] px-1">
+                        {formatDuration(media.duration)}
+                      </Badge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CollapsibleContent>
+        
+        {contentCount > 0 && (
+          <CollapsibleTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 px-1 mt-1 text-xs text-primary hover:text-primary"
+            >
+              <ChevronDown className={`h-3 w-3 mr-0.5 transition-transform ${isExpanded ? "rotate-180" : ""}`} />
+              {isExpanded ? "Minder tonen" : `Toon alle ${contentCount} items`}
+            </Button>
+          </CollapsibleTrigger>
         )}
       </Collapsible>
     </div>
