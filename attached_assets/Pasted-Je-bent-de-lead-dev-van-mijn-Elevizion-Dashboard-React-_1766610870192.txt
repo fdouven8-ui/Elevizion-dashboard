@@ -1,0 +1,51 @@
+Je bent de lead dev van mijn Elevizion Dashboard (React+TS+Vite frontend, Express+Drizzle+Postgres backend).
+Probleem: Home toont “Ads Details” met losse KPI’s (schermen leeg/met content etc) en “plaatsingen” blijft 0, terwijl Yodeck wél ads/content afspeelt. Ads die nog NIET gekoppeld zijn draaien wel al op een scherm, maar vallen nergens onder “plaatsingen”. Ik wil dat Home alleen high-level KPI’s toont en dat “wat draait er op dit scherm” + ad-lijsten naar de Screen detail pagina gaan. Ook moeten de backend stats/plaatsingen kloppen.
+
+DOEL (UX/Functioneel)
+1) HOME pagina:
+   - Toon alleen kern-KPI’s:
+     A) Schermen online / offline / totaal
+     B) Ads op schermen (totaal “running ads” uit Yodeck content)
+     C) Ads niet gekoppeld (running maar geen mapping/placement)
+     D) Actieve plaatsingen (gekoppelde placements)
+     E) Betalende adverteerders
+   - Verwijder “Ads Details” blok of maak het super compact (geen “Schermen leeg/met content/overig content” op Home).
+   - Geen lists met “top ads/overig content” op Home. Dat hoort bij het scherm zelf.
+
+2) SCREEN detail pagina (/screens/:id):
+   - Sectie “Wat draait er op dit scherm?” moet altijd gevuld worden vanuit YodeckContentSummary.mediaItems.
+   - Label ieder item als:
+     - AD (gekoppeld) → heeft match naar interne Ad / Placement
+     - AD (niet gekoppeld) → draait wel, maar geen match (dus vereist koppelen)
+     - Overig content → non-ad
+   - Toon counts op deze pagina:
+     - Ads draaiend (totaal)
+     - Ads gekoppeld vs niet gekoppeld
+     - Overig content
+   - Voeg “Koppelen” CTA bij items die “AD (niet gekoppeld)” zijn (link naar bestaande flow of stub button).
+
+3) PLAATSINGEN (concept) moet kloppen:
+   - Een ad die draait maar nog niet gekoppeld = “observed placement” (running/unlinked).
+   - Een ad die gekoppeld is = echte placement.
+   - Home KPI “Actieve plaatsingen” = alleen gekoppelde placements.
+   - Home KPI “Ads op schermen” = alle draaiende ads (gekoppeld + niet gekoppeld).
+   - Home KPI “Ads niet gekoppeld” = draaiende ads zonder match.
+
+BACKEND FIX (belangrijk)
+A) Maak een betrouwbare bron voor “wat draait er nu op scherm X”:
+   - We hebben al per screen: yodeckContentSummary.mediaItems met (id, name, type, duration) en in sommige endpoints ook category (ad/non_ad).
+   - Zorg dat de sync job (/api/sync/yodeck/run + auto-run) bij iedere sync:
+     1) mediaItems normaliseert
+     2) classificeert (ad vs non_ad)
+     3) upsert opslaat in DB als “observed_content” of “observed_placements” per screen.
+
+B) Voeg DB model toe (Drizzle) als die nog niet bestaat:
+   Tabel: screen_observed_items (of observed_placements)
+   - id (uuid)
+   - screenId (fk screens.id)
+   - yodeckMediaId (int)
+   - name (text)
+   - kind (enum: 'ad'|'non_ad')
+   - matchedAdId (uuid nullable)  // interne ad tabel
+   - matchedPlacementId (uuid nullable) // interne placement tabel
+   - last

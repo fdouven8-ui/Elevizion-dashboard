@@ -424,38 +424,49 @@ export default function Home() {
     setSelectedMetric(prev => prev === 'adsOnline' ? null : 'adsOnline');
   };
 
-  // Alleen 4 hoofd-KPI's in de top rij
+  // 5 kern-KPI's: Schermen, Ads op schermen, Ads niet gekoppeld, Plaatsingen, Adverteerders
   const mainKpiTiles = [
     {
-      id: "online",
-      title: "Schermen online",
+      id: "screens",
+      title: "Schermen",
       value: stats?.screensOnline || 0,
-      subtitle: `/ ${stats?.screensTotal || 0}`,
-      icon: Wifi,
+      subtitle: `/ ${stats?.screensTotal || 0} online`,
+      icon: Monitor,
       iconColor: "text-emerald-600",
       iconBg: "bg-emerald-50",
       accentBg: "bg-emerald-500",
-      link: "/screens?status=online",
+      link: "/screens",
+      isWarning: (stats?.screensOffline || 0) > 0,
     },
     {
-      id: "offline",
-      title: "Schermen offline",
-      value: stats?.screensOffline || 0,
-      icon: WifiOff,
-      iconColor: "text-slate-500",
-      iconBg: "bg-slate-100",
-      accentBg: "bg-slate-400",
-      link: "/screens?status=offline",
+      id: "ads-running",
+      title: "Ads op schermen",
+      value: stats?.adsTotal || 0,
+      icon: Target,
+      iconColor: "text-orange-600",
+      iconBg: "bg-orange-50",
+      accentBg: "bg-orange-500",
+      link: "/screens",
     },
     {
-      id: "ads",
-      title: "Ads online",
+      id: "ads-unlinked",
+      title: "Ads niet gekoppeld",
+      value: stats?.adsUnlinked || 0,
+      icon: ImageOff,
+      iconColor: "text-amber-600",
+      iconBg: "bg-amber-50",
+      accentBg: "bg-amber-500",
+      isWarning: (stats?.adsUnlinked || 0) > 0,
+    },
+    {
+      id: "placements",
+      title: "Actieve plaatsingen",
       value: stats?.activePlacements || 0,
       icon: Target,
       iconColor: "text-blue-600",
       iconBg: "bg-blue-50",
       accentBg: "bg-blue-500",
-      hasDetails: true, // Klikbaar voor detail-weergave
+      link: "/placements?status=active",
     },
     {
       id: "advertisers",
@@ -517,8 +528,8 @@ export default function Home() {
         <p className="text-muted-foreground">Overzicht van je Elevizion netwerk</p>
       </div>
 
-      {/* Compacte KPI rij - 4 hoofd-KPI's */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* Compacte KPI rij - 5 kern-KPI's */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         {mainKpiTiles.map((tile) => (
           <KpiCard
             key={tile.id}
@@ -532,15 +543,13 @@ export default function Home() {
             accentBg={tile.accentBg}
             link={tile.link}
             isLoading={statsLoading}
-            onClick={tile.hasDetails ? toggleAdsDetail : undefined}
-            isActive={tile.id === 'ads' && selectedMetric === 'adsOnline'}
-            hasDetails={tile.hasDetails}
+            isWarning={tile.isWarning}
           />
         ))}
       </div>
 
-      {/* Ads Detail Panel - toon bij klik op "Ads online" */}
-      {selectedMetric === 'adsOnline' && (
+      {/* Verwijderd: Ads Detail Panel - details worden nu op Screen detail pagina getoond */}
+      {false && selectedMetric === 'adsOnline' && (
         <AdsDetailPanel stats={stats} onClose={() => setSelectedMetric(null)} />
       )}
 

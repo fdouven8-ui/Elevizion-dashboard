@@ -501,89 +501,130 @@ export default function ScreenDetail() {
       </Card>
 
       {/* D) Detected Content from Yodeck (Inferred Placements) */}
-      <Card data-testid="detected-content-card">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Play className="h-5 w-5" />
-            Gedetecteerde content
-          </CardTitle>
-          <div className="flex items-center gap-2">
-            {currentContent.length > 0 && (
-              <>
-                <Badge variant="default" className="bg-green-600">
-                  {currentContent.filter(c => c.category === 'ad').length} ads
-                </Badge>
-                <Badge variant="secondary">
-                  {currentContent.filter(c => c.category === 'non_ad').length} overig
-                </Badge>
-              </>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {currentContent.length === 0 ? (
-            <div className="text-center py-6 text-muted-foreground">
-              <Play className="h-10 w-10 mx-auto mb-3 opacity-50" />
-              <p>Nog geen content gedetecteerd</p>
-              <p className="text-sm mt-1">Sync het scherm om content te laden</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Naam</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Categorie</TableHead>
-                  <TableHead>Duur</TableHead>
-                  <TableHead>Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {currentContent.map((item) => (
-                  <TableRow key={item.id} data-testid={`content-row-${item.id}`}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        {item.mediaType?.includes("video") ? (
-                          <Video className="h-4 w-4 text-muted-foreground" />
-                        ) : item.mediaType?.includes("image") ? (
-                          <Image className="h-4 w-4 text-muted-foreground" />
-                        ) : (
-                          <FileText className="h-4 w-4 text-muted-foreground" />
-                        )}
-                        <span className="truncate max-w-[200px]">{item.name}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm text-muted-foreground">
-                        {item.mediaType || "Onbekend"}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      {item.category === 'ad' ? (
-                        <Badge variant="default" className="bg-blue-600">Advertentie</Badge>
-                      ) : (
-                        <Badge variant="secondary">Overig</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {item.duration ? `${item.duration}s` : "-"}
-                    </TableCell>
-                    <TableCell>
-                      {item.linkedAdvertiserId || item.linkedPlacementId ? (
-                        <Badge variant="default" className="bg-green-600">Gekoppeld</Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-amber-600 border-amber-300">
-                          Niet gekoppeld
-                        </Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
+      {(() => {
+        const adsRunning = currentContent.filter(c => c.category === 'ad');
+        const adsLinked = adsRunning.filter(c => c.linkedAdvertiserId || c.linkedPlacementId);
+        const adsUnlinked = adsRunning.filter(c => !c.linkedAdvertiserId && !c.linkedPlacementId);
+        const nonAds = currentContent.filter(c => c.category === 'non_ad');
+        
+        return (
+          <Card data-testid="detected-content-card">
+            <CardHeader className="flex flex-row items-center justify-between pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Play className="h-5 w-5" />
+                Wat draait er op dit scherm?
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {currentContent.length === 0 ? (
+                <div className="text-center py-6 text-muted-foreground">
+                  <Play className="h-10 w-10 mx-auto mb-3 opacity-50" />
+                  <p>Nog geen content gedetecteerd</p>
+                  <p className="text-sm mt-1">Sync het scherm om content te laden</p>
+                </div>
+              ) : (
+                <>
+                  {/* Summary counts */}
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                    <div className="p-3 rounded-lg border bg-orange-50/50">
+                      <div className="text-xs text-muted-foreground mb-1">Ads draaiend</div>
+                      <div className="text-xl font-bold text-orange-600">{adsRunning.length}</div>
+                    </div>
+                    <div className="p-3 rounded-lg border bg-green-50/50">
+                      <div className="text-xs text-muted-foreground mb-1">Ads gekoppeld</div>
+                      <div className="text-xl font-bold text-green-600">{adsLinked.length}</div>
+                    </div>
+                    <div className={`p-3 rounded-lg border ${adsUnlinked.length > 0 ? 'bg-amber-50 border-amber-200' : ''}`}>
+                      <div className="text-xs text-muted-foreground mb-1">Ads niet gekoppeld</div>
+                      <div className={`text-xl font-bold ${adsUnlinked.length > 0 ? 'text-amber-600' : ''}`}>{adsUnlinked.length}</div>
+                    </div>
+                    <div className="p-3 rounded-lg border">
+                      <div className="text-xs text-muted-foreground mb-1">Overig content</div>
+                      <div className="text-xl font-bold">{nonAds.length}</div>
+                    </div>
+                  </div>
+                  
+                  {/* Content table */}
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Content</TableHead>
+                        <TableHead>Label</TableHead>
+                        <TableHead>Duur</TableHead>
+                        <TableHead className="text-right">Actie</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {currentContent.map((item) => {
+                        const isAd = item.category === 'ad';
+                        const isLinked = item.linkedAdvertiserId || item.linkedPlacementId;
+                        
+                        let label: string;
+                        let labelStyle: string;
+                        if (!isAd) {
+                          label = "Overig content";
+                          labelStyle = "bg-slate-100 text-slate-600";
+                        } else if (isLinked) {
+                          label = "AD (gekoppeld)";
+                          labelStyle = "bg-green-100 text-green-700 border-green-200";
+                        } else {
+                          label = "AD (niet gekoppeld)";
+                          labelStyle = "bg-amber-100 text-amber-700 border-amber-200";
+                        }
+                        
+                        return (
+                          <TableRow key={item.id} data-testid={`content-row-${item.id}`}>
+                            <TableCell className="font-medium">
+                              <div className="flex items-center gap-2">
+                                {item.mediaType?.includes("video") ? (
+                                  <Video className="h-4 w-4 text-muted-foreground" />
+                                ) : item.mediaType?.includes("image") ? (
+                                  <Image className="h-4 w-4 text-muted-foreground" />
+                                ) : (
+                                  <FileText className="h-4 w-4 text-muted-foreground" />
+                                )}
+                                <span className="truncate max-w-[250px]">{item.name}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className={labelStyle}>
+                                {label}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {item.duration && item.duration > 0 ? `${item.duration}s` : "-"}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              {isAd && !isLinked && (
+                                <Button 
+                                  variant="outline" 
+                                  size="sm"
+                                  className="text-amber-600 border-amber-300 hover:bg-amber-50"
+                                  data-testid={`button-link-${item.id}`}
+                                  asChild
+                                >
+                                  <Link href={`/onboarding/placement?mediaId=${item.yodeckMediaId}&screenId=${screen.id}`}>
+                                    Koppelen
+                                  </Link>
+                                </Button>
+                              )}
+                              {isAd && isLinked && (
+                                <Badge variant="default" className="bg-green-600">
+                                  Gekoppeld
+                                </Badge>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* E) Statistics Section (Accordion) */}
       <ScreenStatistics screenId={screen.id} yodeckPlayerId={screen.yodeckPlayerId} openInYodeck={openInYodeck} />
