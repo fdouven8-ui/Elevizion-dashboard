@@ -243,13 +243,51 @@ export async function registerRoutes(
 
   app.get("/api/screens", async (_req, res) => {
     const screens = await storage.getScreens();
-    res.json(screens);
+    
+    // Enrich mediaItems with category if missing (for backward compatibility with old data)
+    const enrichedScreens = screens.map(screen => {
+      const summary = screen.yodeckContentSummary as any;
+      if (summary?.mediaItems && Array.isArray(summary.mediaItems)) {
+        // Classify all items at once for efficiency
+        const result = classifyMediaItems(summary.mediaItems);
+        const categoryMap = new Map(result.classifiedMediaItems.map(c => [c.id, c.category]));
+        
+        const enrichedMediaItems = summary.mediaItems.map((m: any) => {
+          if (m.category) return m; // Already has category
+          return { ...m, category: categoryMap.get(m.id) || 'ad' };
+        });
+        return {
+          ...screen,
+          yodeckContentSummary: { ...summary, mediaItems: enrichedMediaItems },
+        };
+      }
+      return screen;
+    });
+    
+    res.json(enrichedScreens);
   });
 
   app.get("/api/screens/:id", async (req, res) => {
     const screen = await storage.getScreen(req.params.id);
     if (!screen) return res.status(404).json({ message: "Screen not found" });
-    res.json(screen);
+    
+    // Enrich mediaItems with category if missing (for backward compatibility)
+    const summary = screen.yodeckContentSummary as any;
+    if (summary?.mediaItems && Array.isArray(summary.mediaItems)) {
+      const result = classifyMediaItems(summary.mediaItems);
+      const categoryMap = new Map(result.classifiedMediaItems.map(c => [c.id, c.category]));
+      
+      const enrichedMediaItems = summary.mediaItems.map((m: any) => {
+        if (m.category) return m;
+        return { ...m, category: categoryMap.get(m.id) || 'ad' };
+      });
+      res.json({
+        ...screen,
+        yodeckContentSummary: { ...summary, mediaItems: enrichedMediaItems },
+      });
+    } else {
+      res.json(screen);
+    }
   });
 
   // Debug endpoint for Yodeck content per screen

@@ -1,0 +1,80 @@
+We hebben een Elevizion Dashboard (Express + Drizzle/Postgres, React/Vite). Frontend is oké, maar KPI’s (“Ads online”, “Ads op schermen”, “Ads gekoppeld/niet gekoppeld”, “Overig content”) blijven 0 terwijl /api/control-room/actions wél content toont met adsCount/nonAdsCount en mediaItems incl. category. Logs tonen:
+
+GET /api/control-room/stats -> adsTotal=0, nonAdsTotal=0, adsUnlinked=0
+
+GET /api/control-room/actions -> contentCount=6, adsCount=3, nonAdsCount=3, adsUnlinkedCount=3 en mediaItems met category
+
+GET /api/screens -> yodeckContentSummary.mediaItems ZONDER category (alleen id,name,type,duration)
+
+Doel:
+
+KPI’s moeten de échte Yodeck content reflecteren: adsTotal/nonAdsTotal/adsUnlinked/schermenMetContent/schermenLeeg etc.
+
+“Ads Details” panel moet dezelfde cijfers tonen als actions.
+
+Wat je moet doen (backend fix, geen UI focus):
+A) Zoek waar yodeck content wordt gesynct en opgeslagen in yodeckContentSummary (in screens tabel). Zorg dat mediaItems daar altijd category bevat (ad/non_ad) en indien mogelijk isLinked of linkedAdId.
+
+Tijdens sync: bepaal category:
+
+Als mediaItem in Ads-table (of mapping tabel) bestaat -> category="ad" en linked=true
+
+Anders als het een media item is maar geen ad mapping -> category="ad" en linked=false (unlinked ad)
+
+Als het een “info/non-ad” item is -> category="non_ad"
+
+Als je geen echte Ads-table match hebt: gebruik de category die al in actions wordt berekend (zelfde functie hergebruiken) zodat screens endpoint en stats dezelfde bron gebruiken.
+
+B) Fix /api/control-room/stats zodat die NIET afhankelijk is van een category-loze screens payload.
+
+Maak 1 centrale helper computeContentMetricsFromScreens(screens) die:
+
+voor elk screen: leest screen.yodeckContentSummary.mediaItems
+
+telt:
+
+adsTotal = som(mediaItems where category==="ad")
+
+nonAdsTotal = som(mediaItems where category==="non_ad")
+
+adsUnlinked = som(mediaItems where category==="ad" && linked===false) (of: ad en geen mapping)
+
+screensWithYodeckContent = count(screens where yodeckContentStatus==="has_content" && uniqueMediaCount>0)
+
+screensYodeckEmpty = count(screens where yodeckContentStatus==="empty" || uniqueMediaCount===0)
+
+en houdt bestaande stats zoals screensOnline/offline intact.
+
+Gebruik dezelfde helper ook in /api/control-room/actions zodat cijfers consistent zijn.
+
+C) Fix /api/screens response: voeg category (en liefst linked) toe aan yodeckContentSummary.mediaItems zodat frontend details per scherm klopt.
+
+D) Voeg debug logging toe (tijdelijk) in stats route:
+
+log 1 screen voorbeeld: uniqueMediaCount + eerste 3 mediaItems + categories
+
+log eindtotalen adsTotal/nonAdsTotal/adsUnlinked
+
+Verwijder/disable dit na verificatie.
+
+Acceptance criteria:
+
+Als actions zegt “6 items (3 ads, 3 overig) • 3 nog niet gekoppeld”, dan moet /api/control-room/stats minimaal adsTotal=3, nonAdsTotal=3, adsUnlinked=3 laten zien.
+
+“Ads online” kaart en “Ads Details” tonen dezelfde totals.
+
+/api/screens bevat mediaItems met category zodat schermdetailpagina’s later correct zijn.
+
+Ga nu in de codebase:
+
+Vind routes/controllers voor: /api/control-room/stats, /api/control-room/actions, yodeck sync (waarschijnlijk /api/sync/yodeck/* of service).
+
+Implementeer bovenstaande zonder breaking changes. Schrijf eventueel een kleine migratie/backfill: voor bestaande screens zonder category, recompute categories bij het opvragen (fallback) totdat de volgende sync het opslaat.
+
+Laat daarna zien:
+
+Welke files je hebt aangepast
+
+De kern-diff (belangrijkste functies)
+
+Een voorbeeld van nieuwe /api/control-room/stats output voor de huidige dat

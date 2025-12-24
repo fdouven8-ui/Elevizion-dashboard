@@ -115,6 +115,7 @@ export interface MediaItem {
   type?: string;
   duration?: number;
   thumbnailUrl?: string;
+  category?: string; // 'ad' or 'non_ad'
 }
 
 export interface ContentSummary {
@@ -1129,7 +1130,9 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
       const contentCount = uniqueMediaCount > 0 ? uniqueMediaCount : items.length;
       const summary = buildSummary(items);
       
-      // Log media items if found
+      // Enrich media items with category for both storage and summary
+      const enrichedMediaItems: Array<{id: number; name: string; type: string; duration?: number; category: string}> = [];
+      
       if (mediaItems.length > 0) {
         debugLog(`[Yodeck] ${screen.screenId}: Found ${mediaItems.length} unique media items in playlists`);
         mediaItems.slice(0, 5).forEach((m, i) => {
@@ -1140,6 +1143,16 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
         for (const media of mediaItems) {
           const mediaType = media.type || 'unknown';
           const category = classifyMediaItem(media.name, mediaType);
+          
+          // Add enriched media item with category
+          enrichedMediaItems.push({
+            id: media.id,
+            name: media.name,
+            type: media.type || 'media',
+            duration: media.duration,
+            category,
+          });
+          
           // Generate normalizedKey with fallback for empty/emoji-only names
           let normalizedKey = media.name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').substring(0, 100);
           if (!normalizedKey || normalizedKey.length === 0) {
@@ -1235,20 +1248,20 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
 
       debugLog(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): ${contentCount} items, status=${status}${screenshotFallbackUsed ? " (screenshot fallback)" : ""}`);
 
-      // Save to DB - include media items for detailed content tracking
+      // Save to DB - include enriched media items (with category) for detailed content tracking
       const contentSummary: ContentSummary = {
         items: screenshotFallbackUsed && items.length === 0 
           ? [{ type: "other" as const, name: "Screenshot OK (content detected via fallback)" }]
           : items,
         topItems: screenshotFallbackUsed && items.length === 0
           ? ["Screenshot OK (fallback)"]
-          : mediaItems.length > 0
-            ? mediaItems.slice(0, 5).map(m => `${m.type || "media"}: ${m.name}`)
+          : enrichedMediaItems.length > 0
+            ? enrichedMediaItems.slice(0, 5).map(m => `${m.type || "media"}: ${m.name}`)
             : items.slice(0, 5).map(i => `${i.type}: ${i.name}`),
         lastFetchedAt: new Date().toISOString(),
-        mediaItems: mediaItems.length > 0 ? mediaItems : undefined,
-        uniqueMediaCount: mediaItems.length > 0 ? mediaItems.length : undefined,
-        mediaIds: mediaItems.length > 0 ? mediaItems.map(m => m.id) : undefined,
+        mediaItems: enrichedMediaItems.length > 0 ? enrichedMediaItems : undefined,
+        uniqueMediaCount: enrichedMediaItems.length > 0 ? enrichedMediaItems.length : undefined,
+        mediaIds: enrichedMediaItems.length > 0 ? enrichedMediaItems.map(m => m.id) : undefined,
         sourceType: contentResult.sourceType,
         sourceId: contentResult.sourceId,
         sourceName: contentResult.sourceName,
@@ -1279,9 +1292,9 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
         contentCount: finalContentCount,
         summary: finalSummary,
         items: finalItems,
-        mediaIds: mediaItems.map(m => m.id),
-        mediaItems: mediaItems,
-        uniqueMediaCount: mediaItems.length,
+        mediaIds: enrichedMediaItems.map(m => m.id),
+        mediaItems: enrichedMediaItems,
+        uniqueMediaCount: enrichedMediaItems.length,
         sourceType: contentResult.sourceType,
         sourceId: contentResult.sourceId,
         sourceName: contentResult.sourceName,
