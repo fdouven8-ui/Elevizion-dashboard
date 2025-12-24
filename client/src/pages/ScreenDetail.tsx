@@ -596,17 +596,16 @@ export default function ScreenDetail() {
                             </TableCell>
                             <TableCell className="text-right">
                               {isAd && !isLinked && (
-                                <Button 
-                                  variant="outline" 
-                                  size="sm"
-                                  className="text-amber-600 border-amber-300 hover:bg-amber-50"
-                                  data-testid={`button-link-${item.id}`}
-                                  asChild
-                                >
-                                  <Link href={`/onboarding/placement?mediaId=${item.yodeckMediaId}&screenId=${screen.id}`}>
+                                <Link href={`/onboarding/placement?mediaId=${item.yodeckMediaId}&screenId=${screen.id}`}>
+                                  <Button 
+                                    variant="outline" 
+                                    size="sm"
+                                    className="text-amber-600 border-amber-300 hover:bg-amber-50"
+                                    data-testid={`button-link-${item.id}`}
+                                  >
                                     Koppelen
-                                  </Link>
-                                </Button>
+                                  </Button>
+                                </Link>
                               )}
                               {isAd && isLinked && (
                                 <Badge variant="default" className="bg-green-600">

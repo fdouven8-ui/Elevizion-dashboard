@@ -427,15 +427,25 @@ export default function Home() {
   // 5 kern-KPI's: Schermen, Ads op schermen, Ads niet gekoppeld, Plaatsingen, Adverteerders
   const mainKpiTiles = [
     {
-      id: "screens",
-      title: "Schermen",
+      id: "screens-online",
+      title: "Schermen online",
       value: stats?.screensOnline || 0,
-      subtitle: `/ ${stats?.screensTotal || 0} online`,
-      icon: Monitor,
+      subtitle: `/ ${stats?.screensTotal || 0}`,
+      icon: Wifi,
       iconColor: "text-emerald-600",
       iconBg: "bg-emerald-50",
       accentBg: "bg-emerald-500",
-      link: "/screens",
+      link: "/screens?status=online",
+    },
+    {
+      id: "screens-offline",
+      title: "Schermen offline",
+      value: stats?.screensOffline || 0,
+      icon: WifiOff,
+      iconColor: "text-red-600",
+      iconBg: "bg-red-50",
+      accentBg: "bg-red-500",
+      link: "/screens?status=offline",
       isWarning: (stats?.screensOffline || 0) > 0,
     },
     {
@@ -528,8 +538,8 @@ export default function Home() {
         <p className="text-muted-foreground">Overzicht van je Elevizion netwerk</p>
       </div>
 
-      {/* Compacte KPI rij - 5 kern-KPI's */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+      {/* Compacte KPI rij - 6 kern-KPI's */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
         {mainKpiTiles.map((tile) => (
           <KpiCard
             key={tile.id}
