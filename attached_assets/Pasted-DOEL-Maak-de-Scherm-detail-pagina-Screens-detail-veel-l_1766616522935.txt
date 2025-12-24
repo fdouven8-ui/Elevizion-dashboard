@@ -1,0 +1,85 @@
+DOEL
+Maak de “Scherm detail” pagina (Screens > detail) veel logischer en rustiger. Het huidige scherm is te “alles-op-1-pagina” en toont te veel Yodeck/technische info. We willen: duidelijke header met scherm-NAAM, acties logisch gegroepeerd, en de content opgesplitst in tabs (Overzicht / Content / Plaatsingen / Contact). Yodeck codes alleen klein als secundaire info.
+
+WAT JE MOET DOEN (IMPLEMENTATIE)
+1) Schermnaam tonen (geen YDK-xxxx als titel)
+- In de UI: toon bovenaan als H1: screen.displayName (of screen.name).
+- Als er geen naam is: fallback naar locatie/bedrijfnaam, anders “Scherm EVZ-xxx”, en pas als laatste fallback “YDK-xxxxx”.
+- Toon Yodeck code klein/grijs eronder als “Yodeck: YDK-591896”.
+- LET OP: in lijsten/labels overal de naam tonen, niet de yodeckCode.
+
+2) Nieuwe pagina-structuur met tabs (Shadcn Tabs)
+- Header (sticky/clean):
+  - Links: status icoon + H1 (schermnaam) + badge (Online/Offline) + “Laatst gezien …”
+  - Rechts: acties als knoppen:
+    - Primary: “Plaats Ad”
+    - Secondary: “Synchroniseren”
+    - Ghost: “Open in Yodeck”
+    - Ghost: “Contact locatie”
+- Onder header: Tabs met 4 tabs:
+  A) Overzicht
+     - 3 compacte cards/rows:
+       - Status (Online/Offline, lastSeen, player health)
+       - Actieve plaatsingen (aantal) + knop “Bekijk plaatsingen”
+       - Content samenvatting (playlist naam, aantal items, ads count, info count)
+  B) Content
+     - Toon playlist info + “Ads / Overig” toggle chips
+     - Zoekveld om items te filteren (titel)
+     - Lijst met items (met type badge AD/INFO, duur rechts)
+     - Geen dubbele “Bron/Aantal items” lege regels; alleen wat relevant is
+  C) Plaatsingen
+     - Tabel met alle plaatsingen die op dit scherm draaien (ook als er ads zijn die (nog) niet gekoppeld zijn -> toon “Niet gekoppeld” in status)
+     - Kolommen: Ad | Adverteerder | Status | Start/Eind | Actie
+  D) Contact
+     - Locatie/contactgegevens (adres, contactpersoon, tel, email)
+     - “Bewerken” CTA als je dat al ondersteunt; anders alleen read-only
+
+3) Hergebruik data die je al hebt
+- Je haalt screen data al uit backend (Drizzle/Express). Voeg/gebruik één veld “displayName” voor screens.
+- Als in jouw DB al “name” bestaat: gebruik die.
+- Als alleen Yodeck import bestaat: map yodeckScreen.name -> displayName bij import/sync en sla op.
+
+4) Code aanpak (waar te zoeken)
+- Zoek de route/page component voor scherm detail (waarschijnlijk iets als):
+  - frontend/src/pages/screens/[id].tsx
+  - of frontend/src/pages/Screens/ScreenDetail.tsx
+  - of frontend/src/routes/screens/$id.tsx
+- Zoek de UI componenten voor cards/lists in deze pagina.
+- Voeg shadcn Tabs + Input toe (als nog niet aanwezig):
+  - import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+  - import { Input } from "@/components/ui/input";
+  - import { Button } from "@/components/ui/button";
+  - import { Badge } from "@/components/ui/badge";
+
+5) Exacte UI details
+- Titelregel: “{displayName}” (dik)
+- Subregel: “Yodeck: {yodeckCode} • EVZ: {SCREEN_ID}” (klein/grijs) indien beschikbaar
+- In Content tab:
+  - bovenaan: search input placeholder: “Zoek content…”
+  - chips: “Alles”, “Alleen Ads”, “Alleen Overig”
+  - default: Alles
+- In Plaatsingen tab:
+  - voeg bovenaan search: “Zoek op ad / adverteerder…”
+  - filter badges (Actief / Niet gekoppeld / Offline scherm)
+
+6) Kleine opschoning
+- Verwijder/verminder grote “Yodeck Content” card op Overzicht. Die hoort in Content tab.
+- Locatie & Contact card hoort in Contact tab.
+- Zorg dat de pagina niet mega lang is: tab content scrollt, header blijft rustig.
+
+DELIVERABLE
+- Commit/aanpassing in de bestaande ScreenDetail page + eventuele kleine helper componenten:
+  - ScreenHeader.tsx
+  - ScreenContentList.tsx
+  - ScreenPlacementsTable.tsx
+- Voeg eventueel een util toe:
+  - getScreenDisplayName(screen): string
+
+START NU
+- Pas de Screen Detail pagina aan volgens bovenstaande structuur.
+- Gebruik de bestaande styles/spacing (cards, rounded, shadows) zodat het consistent blijft.
+- Geen nieuwe routes nodig, alleen betere layout en naam-mapping.
+
+EXTRA BELANGRIJK
+- Overal waar nu “YDK-xxxxx” prominent staat: vervang door displayName.
+- YDK-code alleen nog secundair (klein).
