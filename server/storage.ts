@@ -50,6 +50,7 @@ import type {
   Template, InsertTemplate,
   TemplateVersion, InsertTemplateVersion,
   YodeckCreative, InsertYodeckCreative,
+  YodeckMediaLink, InsertYodeckMediaLink,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -307,6 +308,12 @@ export interface IStorage {
   }): Promise<YodeckCreative>;
   updateYodeckCreative(id: string, data: Partial<YodeckCreative>): Promise<YodeckCreative | undefined>;
   getYodeckCreativeStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number }>;
+  
+  // Yodeck Media Links
+  getYodeckMediaLinks(): Promise<YodeckMediaLink[]>;
+  getYodeckMediaLink(yodeckMediaId: number): Promise<YodeckMediaLink | undefined>;
+  upsertYodeckMediaLink(data: { yodeckMediaId: number; name: string; normalizedKey: string; mediaType?: string; category: string; duration?: number }): Promise<YodeckMediaLink>;
+  getYodeckMediaLinkStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -1590,6 +1597,62 @@ export class DatabaseStorage implements IStorage {
     const all = await db.select().from(schema.yodeckCreatives);
     const ads = all.filter(c => c.category === 'ad');
     const unlinked = ads.filter(c => !c.advertiserId);
+    const nonAds = all.filter(c => c.category === 'non_ad');
+    return {
+      totalAds: ads.length,
+      unlinkedAds: unlinked.length,
+      totalNonAds: nonAds.length
+    };
+  }
+
+  // ============================================================================
+  // YODECK MEDIA LINKS
+  // ============================================================================
+
+  async getYodeckMediaLinks(): Promise<YodeckMediaLink[]> {
+    return db.select().from(schema.yodeckMediaLinks);
+  }
+
+  async getYodeckMediaLink(yodeckMediaId: number): Promise<YodeckMediaLink | undefined> {
+    const [link] = await db.select().from(schema.yodeckMediaLinks)
+      .where(eq(schema.yodeckMediaLinks.yodeckMediaId, yodeckMediaId))
+      .limit(1);
+    return link;
+  }
+
+  async upsertYodeckMediaLink(data: { yodeckMediaId: number; name: string; normalizedKey: string; mediaType?: string; category: string; duration?: number }): Promise<YodeckMediaLink> {
+    const existing = await this.getYodeckMediaLink(data.yodeckMediaId);
+    if (existing) {
+      const [updated] = await db.update(schema.yodeckMediaLinks)
+        .set({
+          name: data.name,
+          normalizedKey: data.normalizedKey,
+          mediaType: data.mediaType || null,
+          category: data.category,
+          duration: data.duration || null,
+          lastSeenAt: new Date(),
+          updatedAt: new Date()
+        })
+        .where(eq(schema.yodeckMediaLinks.yodeckMediaId, data.yodeckMediaId))
+        .returning();
+      return updated;
+    }
+    const [link] = await db.insert(schema.yodeckMediaLinks).values({
+      yodeckMediaId: data.yodeckMediaId,
+      name: data.name,
+      normalizedKey: data.normalizedKey,
+      mediaType: data.mediaType || null,
+      category: data.category,
+      duration: data.duration || null,
+      lastSeenAt: new Date(),
+    }).returning();
+    return link;
+  }
+
+  async getYodeckMediaLinkStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number }> {
+    const all = await db.select().from(schema.yodeckMediaLinks);
+    const ads = all.filter(c => c.category === 'ad');
+    const unlinked = ads.filter(c => !c.advertiserId && !c.placementId);
     const nonAds = all.filter(c => c.category === 'non_ad');
     return {
       totalAds: ads.length,

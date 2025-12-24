@@ -1128,3 +1128,39 @@ export type InsertTask = z.infer<typeof insertTaskSchema>;
 
 export type TaskAttachment = typeof taskAttachments.$inferSelect;
 export type InsertTaskAttachment = z.infer<typeof insertTaskAttachmentSchema>;
+
+// ============================================================================
+// YODECK MEDIA LINKS (Ad linking readiness for Moneybird)
+// ============================================================================
+
+/**
+ * YodeckMediaLinks - Track detected Yodeck media items for future linking
+ * This allows us to track which media items are ads vs non-ads and link them
+ * to advertisers/placements when ready for Moneybird integration
+ */
+export const yodeckMediaLinks = pgTable("yodeck_media_links", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  yodeckMediaId: integer("yodeck_media_id").notNull().unique(), // Yodeck media ID
+  name: text("name").notNull(), // Original media name
+  normalizedKey: text("normalized_key").notNull(), // Slug version for matching
+  mediaType: text("media_type"), // video, image, app, etc.
+  category: text("category").notNull().default("ad"), // ad, non_ad
+  duration: integer("duration"), // Duration in seconds
+  // Linking fields (null until linked)
+  advertiserId: varchar("advertiser_id").references(() => advertisers.id),
+  placementId: varchar("placement_id").references(() => placements.id),
+  // Tracking
+  lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
+  screenCount: integer("screen_count").default(1), // How many screens show this
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const insertYodeckMediaLinkSchema = createInsertSchema(yodeckMediaLinks).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type YodeckMediaLink = typeof yodeckMediaLinks.$inferSelect;
+export type InsertYodeckMediaLink = z.infer<typeof insertYodeckMediaLinkSchema>;

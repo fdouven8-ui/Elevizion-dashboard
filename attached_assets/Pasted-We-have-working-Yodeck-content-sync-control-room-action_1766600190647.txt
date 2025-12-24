@@ -1,0 +1,59 @@
+We have working Yodeck content sync: control-room/actions shows contentCount, mediaItems, and now ad/non_ad split + unlinked counts. Good.
+
+Now fix stability and make the feature complete WITHOUT touching Moneybird/Dropbox Sign (only Yodeck).
+
+GOALS
+1) Prevent frequent SIGTERM crashes in Replit by reducing memory/CPU and removing unnecessary repeated work.
+2) Ensure control-room endpoints NEVER call Yodeck directly; they must read from DB only.
+3) Keep Yodeck sync as:
+   - manual trigger endpoint /api/integrations/yodeck/sync (already exists)
+   - scheduled background sync (e.g. every 15 min) that is lightweight, caches playlist/media fetches per run.
+4) Improve ad vs non-ad classification and expose KPIs:
+   - /api/control-room/stats should include: adsTotal, adsUnlinked, nonAdsTotal
+   - /api/control-room/actions unmanaged_content action should include: adsCount, nonAdsCount, adsUnlinkedCount, topAds, topNonAds, and mediaItems[].category
+5) Add “linking readiness” for later Moneybird integration:
+   - For each detected ad media item, compute a normalized key (e.g. slug of name) and store it.
+   - Determine "linked" if there is an existing Placement OR a mapping table entry (create a new table `creative_links` or `yodeck_media_links`) that links yodeckMediaId -> advertiserId/placementId (advertiser/placement can be null for now, but store row so we can link later).
+   - adsUnlinkedCount counts ads with no link row OR link row exists but advertiserId/placementId is null.
+
+STABILITY / PERFORMANCE CHANGES
+A) Deduplicate Yodeck API calls during one sync run:
+   - Cache playlist details by playlistId in-memory Map for that run.
+   - Cache media details by mediaId in-memory Map for that run.
+   - Do NOT fetch the same playlist twice for multiple screens if they share it.
+B) Reduce logging:
+   - Replace per-media log spam with a single summary line per screen.
+   - Keep a debug flag (env DEBUG_YODECK=true) to enable verbose logs.
+C) Ensure Express polling endpoints are fast:
+   - /api/control-room/stats and /api/control-room/actions should only query Postgres (Drizzle/storage).
+   - No fetch() to Yodeck inside these endpoints.
+D) Add graceful shutdown handlers:
+   - process.on('SIGTERM'/'SIGINT') close server and DB pool cleanly.
+E) Add a lightweight periodic memory log only if DEBUG_MEMORY=true, otherwise disable.
+
+AD CLASSIFICATION RULES (simple heuristic, adjustable):
+- category = "non_ad" if name contains any of: "NOS", "nieuws", "weer", "weather", "buienradar", "rss", "klok", "clock", "sport" (case-insensitive)
+- category = "ad" otherwise
+- Store category in yodeckContentSummary.mediaItems[].category and persist to screens table JSON.
+
+DB / STORAGE
+- If no suitable table exists, add new table:
+  `yodeck_media_links` with columns:
+    id (uuid), yodeckMediaId (int), normalizedKey (text), advertiserId (uuid nullable), placementId (uuid nullable), createdAt, updatedAt.
+- During sync, upsert rows for all detected ad media items with advertiserId/placementId null initially.
+- adsTotal = total count of mediaItems where category="ad" across all screens (dedupe by yodeckMediaId).
+- nonAdsTotal similarly.
+- adsUnlinked = count of ad media items with no link OR link exists but advertiserId/placementId null.
+
+UI DATA
+- For unmanaged_content action payload, include:
+  adsCount/nonAdsCount per screen
+  adsUnlinkedCount per screen
+  topAds/topNonAds arrays (names only)
+  mediaItems include {id,name,type,duration,category,normalizedKey,linked:boolean}
+
+DELIVERABLES
+- Provide code changes with file paths (backend routes, yodeck integration module, db schema/migrations, storage methods).
+- Ensure TypeScript types updated.
+- Ensure existing functionality remains working.
+- Do not add Moneybird logic now.
