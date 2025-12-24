@@ -84,6 +84,7 @@ export interface ScreenContentResult {
   items?: ContentItem[];
   error?: string;
   mediaIds?: number[];
+  mediaItems?: MediaItem[];
   uniqueMediaCount?: number;
   sourceType?: string;
   sourceId?: number;
@@ -983,12 +984,26 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
         const ageMs = now.getTime() - lastFetched.getTime();
         if (ageMs < CONTENT_CACHE_DURATION_MS) {
           debugLog(`[Yodeck] Content for ${yodeckName} (${screen.screenId}): cached (${Math.round(ageMs / 1000)}s ago)`);
+          
+          // Extract full data from cached contentSummary for aggregation
+          const cachedSummary = screen.yodeckContentSummary as ContentSummary | null;
+          const cachedMediaIds = cachedSummary?.mediaIds || [];
+          const cachedMediaItems = cachedSummary?.mediaItems || [];
+          const cachedItems = cachedSummary?.items || [];
+          
           return {
             screenId: screen.screenId,
             yodeckName,
             status: (screen.yodeckContentStatus as ContentStatus) || "unknown",
             contentCount: screen.yodeckContentCount,
-            summary: screen.yodeckContentSummary ? buildSummary((screen.yodeckContentSummary as ContentSummary).items || []) : null,
+            summary: cachedSummary ? buildSummary(cachedItems) : null,
+            items: cachedItems,
+            mediaIds: cachedMediaIds,
+            mediaItems: cachedMediaItems,
+            uniqueMediaCount: cachedSummary?.uniqueMediaCount || cachedMediaItems.length,
+            sourceType: cachedSummary?.sourceType,
+            sourceId: cachedSummary?.sourceId,
+            sourceName: cachedSummary?.sourceName,
             skipped: true,
           };
         }
@@ -1244,6 +1259,7 @@ export async function syncAllScreensContent(force: boolean = false): Promise<Syn
         summary: finalSummary,
         items: finalItems,
         mediaIds: mediaItems.map(m => m.id),
+        mediaItems: mediaItems,
         uniqueMediaCount: mediaItems.length,
         sourceType: contentResult.sourceType,
         sourceId: contentResult.sourceId,

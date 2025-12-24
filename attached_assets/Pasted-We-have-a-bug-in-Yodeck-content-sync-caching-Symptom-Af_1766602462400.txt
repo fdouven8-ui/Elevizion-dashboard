@@ -1,0 +1,42 @@
+We have a bug in Yodeck content sync caching.
+
+Symptom:
+After a successful sync we have correct yodeckContentSummary + mediaItems saved on screens and control-room/actions shows contentCount, adsCount/nonAdsCount etc.
+But on later sync runs the logs show:
+- "[YodeckContent] Sync complete: 2 screens (2 cached)"
+- response has "skipped": 2
+- "[YodeckContent] Totals: 0 unique media, 0 total assignments"
+
+So when cache is used, we incorrectly skip aggregation/totals and possibly skip DB updates / response population.
+
+TASK:
+Fix the caching logic so that cached results are treated as full results:
+1) When a screen uses cached content, still include its contentSummary (including mediaItems, mediaIds, sourceType/sourceName, lastFetchedAt, uniqueMediaCount) in the per-screen results array used for:
+   - returning API response
+   - calculating totals (unique media, total assignments)
+   - calculating ads/non_ads stats (adsTotal, nonAdsTotal, adsUnlinked)
+2) Totals must be computed from ALL processed screens (cached + freshly fetched). "skipped" should only mean "not fetched from Yodeck this run", NOT "excluded from totals".
+3) Ensure the DB screen record keeps correct:
+   - yodeckContentStatus
+   - yodeckContentCount
+   - yodeckContentSummary
+   - yodeckContentLastFetchedAt
+   even on cached runs (either no-op update is fine, but the returned data + totals must remain correct).
+4) Ensure control-room stats and actions keep showing:
+   - contentCount, topItems
+   - adsCount, nonAdsCount, adsUnlinkedCount
+   - topAds/topNonAds
+   - mediaItems with category: "ad" or "non_ad"
+5) Keep Moneybird disabled for now. Do NOT require any env secrets for Yodeck (API key comes from integrations.encryptedCredentials). No new config UI required.
+
+Implementation guidance:
+- Identify the function that does the Yodeck content detail sync (likely something like syncAllScreensContent / fetchYodeckContentForScreen / caching block).
+- The cache should return a normalized object with the same shape as fresh fetch result (e.g. { ok, screenId, contentSummary, mediaItems, counts, adsCount, nonAdsCount, ... }).
+- When cache-hit: push that normalized result into the results list and add its mediaIds/mediaItems into aggregation sets/counters.
+- Only increment skipped counter; do not bypass aggregation or totals.
+- Add a unit-style console log to confirm: when 2 cached screens, Totals still show 6 unique media and 12 total assignments (based on current sample).
+
+After code changes:
+- Run /api/integrations/yodeck/sync twice and confirm the second run (cached) still returns non-zero totals and the dashboard still shows correct content + ad/non-ad counts.
+
+Please implement the fix, point me to the modified files, and include the key code diff sections.
