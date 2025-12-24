@@ -9,14 +9,21 @@
   "orientation": "any",
   "icons": [
     {
+      "src": "/app-icon.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
+      "src": "/app-icon.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any"
+    },
+    {
       "src": "/favicon.png",
       "sizes": "64x64",
       "type": "image/png"
-    },
-    {
-      "src": "/icon-192.svg",
-      "sizes": "192x192",
-      "type": "image/svg+xml"
     }
   ]
 }
