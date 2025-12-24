@@ -558,8 +558,11 @@ export async function registerRoutes(
       // Filter to only show ads (not non_ad content)
       const ads = mediaLinks.filter(m => m.category === 'ad');
       
+      // Get locations for name lookup
+      const locations = await storage.getLocations();
+      
       // Build a map of which screens each ad is playing on
-      const adScreenMap: Record<number, Array<{ screenId: string; screenDisplayId: string; screenName: string; locationName: string }>> = {};
+      const adScreenMap: Record<number, Array<{ screenId: string; screenDisplayId: string; screenName: string; locationName: string; isOnline: boolean }>> = {};
       for (const item of screenContentItems) {
         if (item.category === 'ad' && item.isActive) {
           const screen = screens.find(s => s.id === item.screenId);
@@ -567,11 +570,13 @@ export async function registerRoutes(
             if (!adScreenMap[item.yodeckMediaId]) {
               adScreenMap[item.yodeckMediaId] = [];
             }
+            const location = locations.find(l => l.id === screen.locationId);
             adScreenMap[item.yodeckMediaId].push({
               screenId: item.screenId,
               screenDisplayId: screen.screenId, // EVZ-001 format
               screenName: screen.name,
-              locationName: screen.locationId, // We'll resolve this in the frontend or add location lookup
+              locationName: location?.name || screen.name,
+              isOnline: screen.status === 'online',
             });
           }
         }

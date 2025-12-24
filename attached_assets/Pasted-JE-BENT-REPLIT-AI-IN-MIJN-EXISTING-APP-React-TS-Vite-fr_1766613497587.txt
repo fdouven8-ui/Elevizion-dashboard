@@ -1,0 +1,63 @@
+JE BENT REPLIT AI IN MIJN EXISTING APP (React + TS + Vite frontend, Express + Drizzle + Postgres backend).
+DOEL: In “Ads & Plaatsingen” moet ik kunnen zoeken + filteren in de tabel, en bij “Schermen” wil ik NIET de Yodeck-code (YDK-xxxxx) zien maar de schermnaam die bij dat scherm hoort.
+
+CONTEXT:
+- Pagina: Ads & Plaatsingen (Plaatsingen)
+- Er is al een tabel “Alle Ads” met kolommen: Ad Naam, Adverteerder, Schermen, Status, Actie
+- Data komt uit backend + (import) Yodeck.
+- We hebben schermen in ons systeem (met SCREEN_ID zoals EVZ-001) en die zijn gekoppeld aan Yodeck identifiers.
+
+WAT JE MOET BOUWEN (FRONTEND):
+1) Zoekbalk + filters boven de tabel (direct boven de tabs of boven de tabel header).
+   - Zoekveld (placeholder: “Zoek op adnaam, adverteerder, schermnaam…”)
+   - Filterchips / dropdowns:
+     a) Status: [Alle, Gekoppeld, Niet gekoppeld, Op offline schermen]
+     b) Adverteerder: dropdown (Alle + unieke adverteerders uit dataset)
+     c) Scherm: dropdown (Alle + unieke schermnamen uit dataset)
+   - Optioneel: “Reset filters” knop.
+
+2) Filtering gedrag:
+   - Zoeken filtert case-insensitive op:
+     - ad.name
+     - advertiser.name (of label)
+     - screenName (de naam die we gaan tonen)
+   - Statusfilter:
+     - “Gekoppeld” = ad heeft 1+ plaatsingen
+     - “Niet gekoppeld” = 0 plaatsingen
+     - “Op offline schermen” = heeft plaatsing op scherm waarvan status offline is
+   - Adverteerderfilter: match op advertiserId/naam
+   - Schermfilter: match als ad op dat scherm draait (of scherm in “schermen” lijst van de ad)
+   - Laat tabs (Alle/Gekoppeld/Niet gekoppeld) blijven werken, maar laat ze als “preset” op statusfilter werken (dus tab switch = zet statusfilter).
+   - Voeg debounced search toe (±250ms) zodat typen smooth is.
+
+3) Tabel rendering:
+   - In de kolom “Schermen”: toon “Schermnaam” (bv. “Basil’s Barber Shop Maasbracht”) i.p.v. “YDK-591895”.
+   - Als schermnaam onbekend: toon fallback “Onbekend scherm (YDK-xxxxx)” en log dit NIET als error (alleen rustig fallback).
+   - Als er meerdere schermen zijn: toon chips met schermnamen, max 2 zichtbaar + “+N” (tooltip/popover met volledige lijst).
+
+WAT JE MOET BOUWEN (BACKEND / DATA):
+4) Zorg dat frontend een mapping kan maken: yodeckScreenId -> screenName
+   Kies 1 van deze twee (maak het gewoon werkend, liefst optie A):
+   A) Update bestaande API response voor ads/plaatsingen zodat elke “screen” entry al screenName bevat.
+      - Bijvoorbeeld in placements/ad response: screens: [{ yodeckId, screenId, name, isOnline }]
+   B) Voeg endpoint toe: GET /api/screens met minimaal:
+      [{ id, screenId (EVZ-001), name, yodeckScreenId, statusOnline }]
+      En maak in frontend een map: const screenNameByYodeckId = new Map(...)
+      Daarna render je name op basis van yodeckId.
+
+5) Belangrijk:
+   - Gebruik centrale identifier SCREEN_ID in ons systeem waar mogelijk.
+   - Als een ad “niet gekoppeld” is, kan hij nog steeds “schermen” tonen vanuit yodeck import; dan moet je alsnog de naam tonen via mapping als die bestaat.
+   - Geen grote refactor: alleen deze pagina + benodigde endpoints/queries.
+   - Houd UI stijl consistent met bestaande cards/chips/inputs.
+
+ACCEPTATIECRITERIA:
+- Ik kan in 1 seconde een specifieke ad vinden via search.
+- Ik kan filteren op status/adverteerder/scherm en combinaties daarvan.
+- Ik zie nergens meer “YDK-xxxxx” in de tabel (alleen als fallback “Onbekend scherm (YDK-xxxxx)”).
+- Alles compileert, lint/types ok.
+
+LEVERING:
+- Pas de juiste frontend file(s) aan (AdsPlaatsingen page/component).
+- Pas backend routes/queries aan waar nodig.
+- Laat na implementatie kort weten welke bestanden je hebt aangepast en welke endpoint(s) erbij/gewijzigd zijn.

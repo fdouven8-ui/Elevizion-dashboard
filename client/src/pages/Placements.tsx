@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -54,9 +54,11 @@ interface AdViewItem {
   placementId: string | null;
   status: 'linked' | 'unlinked';
   screensCount: number;
-  screens: Array<{ screenId: string; screenDisplayId: string; screenName: string; locationName: string }>;
+  screens: Array<{ screenId: string; screenDisplayId: string; screenName: string; locationName: string; isOnline: boolean }>;
   lastSeenAt: string;
   updatedAt: string;
+  // Computed for filtering
+  hasOfflineScreen?: boolean;
 }
 
 interface AdsViewResponse {
@@ -118,6 +120,20 @@ interface Contract {
   status: string;
 }
 
+// Debounce hook
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+  
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedValue(value);
+    }, delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+  
+  return debouncedValue;
+}
+
 export default function Placements() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -127,11 +143,17 @@ export default function Placements() {
   const [locationFilter, setLocationFilter] = useState<string>("");
   const [advertiserFilter, setAdvertiserFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [adsStatusFilter, setAdsStatusFilter] = useState<"all" | "linked" | "unlinked">("all");
+  const [adsStatusFilter, setAdsStatusFilter] = useState<"all" | "linked" | "unlinked" | "offline">("all");
   const [cityPopoverOpen, setCityPopoverOpen] = useState(false);
   const [locationPopoverOpen, setLocationPopoverOpen] = useState(false);
   const [advertiserPopoverOpen, setAdvertiserPopoverOpen] = useState(false);
   const [isAddOpen, setIsAddOpen] = useState(false);
+  
+  // Ads tab specific filters
+  const [adsSearchTerm, setAdsSearchTerm] = useState("");
+  const [adsAdvertiserFilter, setAdsAdvertiserFilter] = useState<string>("");
+  const [adsScreenFilter, setAdsScreenFilter] = useState<string>("");
+  const debouncedAdsSearch = useDebounce(adsSearchTerm, 250);
 
   // Ads View query
   const { data: adsViewData, isLoading: adsViewLoading } = useQuery<AdsViewResponse>({
@@ -337,11 +359,72 @@ export default function Placements() {
   const selectedAdvertiserName = advertiserFilter ? getAdvertiser(advertiserFilter)?.companyName || getAdvertiser(advertiserFilter)?.name || "" : "";
 
   // Filter ads based on status filter
+  // Get unique advertisers from ads data
+  const adsUniqueAdvertisers = useMemo(() => {
+    if (!adsViewData?.items) return [];
+    const names = adsViewData.items
+      .map(ad => ad.advertiserName)
+      .filter((name): name is string => !!name);
+    return Array.from(new Set(names)).sort();
+  }, [adsViewData?.items]);
+
+  // Get unique screen names from ads data
+  const adsUniqueScreens = useMemo(() => {
+    if (!adsViewData?.items) return [];
+    const names = adsViewData.items
+      .flatMap(ad => ad.screens.map(s => s.screenName))
+      .filter((name): name is string => !!name);
+    return Array.from(new Set(names)).sort();
+  }, [adsViewData?.items]);
+
+  // Count ads on offline screens
+  const adsOnOfflineCount = useMemo(() => {
+    if (!adsViewData?.items) return 0;
+    return adsViewData.items.filter(ad => 
+      ad.screens.some(s => !s.isOnline)
+    ).length;
+  }, [adsViewData?.items]);
+
+  // Reset ads filters
+  const resetAdsFilters = () => {
+    setAdsSearchTerm("");
+    setAdsAdvertiserFilter("");
+    setAdsScreenFilter("");
+    setAdsStatusFilter("all");
+  };
+
+  const hasAdsFilters = adsSearchTerm || adsAdvertiserFilter || adsScreenFilter || adsStatusFilter !== "all";
+
   const filteredAds = useMemo(() => {
     if (!adsViewData?.items) return [];
-    if (adsStatusFilter === "all") return adsViewData.items;
-    return adsViewData.items.filter(ad => ad.status === adsStatusFilter);
-  }, [adsViewData?.items, adsStatusFilter]);
+    
+    return adsViewData.items.filter(ad => {
+      // Search filter (debounced)
+      if (debouncedAdsSearch) {
+        const search = debouncedAdsSearch.toLowerCase();
+        const matchesName = ad.name.toLowerCase().includes(search);
+        const matchesAdvertiser = ad.advertiserName?.toLowerCase().includes(search) ?? false;
+        const matchesScreen = ad.screens.some(s => 
+          s.screenName.toLowerCase().includes(search) ||
+          s.locationName.toLowerCase().includes(search)
+        );
+        if (!matchesName && !matchesAdvertiser && !matchesScreen) return false;
+      }
+      
+      // Status filter
+      if (adsStatusFilter === "linked" && ad.status !== "linked") return false;
+      if (adsStatusFilter === "unlinked" && ad.status !== "unlinked") return false;
+      if (adsStatusFilter === "offline" && !ad.screens.some(s => !s.isOnline)) return false;
+      
+      // Advertiser filter
+      if (adsAdvertiserFilter && ad.advertiserName !== adsAdvertiserFilter) return false;
+      
+      // Screen filter
+      if (adsScreenFilter && !ad.screens.some(s => s.screenName === adsScreenFilter)) return false;
+      
+      return true;
+    });
+  }, [adsViewData?.items, debouncedAdsSearch, adsStatusFilter, adsAdvertiserFilter, adsScreenFilter]);
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -478,34 +561,92 @@ export default function Placements() {
 
         {/* ADS VIEW TAB */}
         <TabsContent value="ads" className="mt-4 space-y-4">
-          {/* Ads filter chips */}
-          <div className="flex items-center gap-2">
-            <Button
-              variant={adsStatusFilter === "all" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setAdsStatusFilter("all")}
-              data-testid="filter-ads-all"
-            >
-              Alle ({adsViewData?.summary.total ?? 0})
-            </Button>
-            <Button
-              variant={adsStatusFilter === "linked" ? "default" : "outline"}
-              size="sm"
-              onClick={() => setAdsStatusFilter("linked")}
-              data-testid="filter-ads-linked"
-            >
-              Gekoppeld ({adsViewData?.summary.linked ?? 0})
-            </Button>
-            <Button
-              variant={adsStatusFilter === "unlinked" ? "default" : "outline"}
-              size="sm"
-              className={adsStatusFilter === "unlinked" ? "" : (adsViewData?.summary.unlinked ?? 0) > 0 ? "text-amber-600 border-amber-300" : ""}
-              onClick={() => setAdsStatusFilter("unlinked")}
-              data-testid="filter-ads-unlinked"
-            >
-              Niet Gekoppeld ({adsViewData?.summary.unlinked ?? 0})
-            </Button>
-          </div>
+          {/* Ads Filters - Search + Dropdowns */}
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <div className="flex items-center gap-2 mb-3">
+                <Filter className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm font-medium">Filters</span>
+                {hasAdsFilters && (
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="h-6 px-2 text-xs"
+                    onClick={resetAdsFilters}
+                    data-testid="button-reset-ads-filters"
+                  >
+                    <X className="h-3 w-3 mr-1" />
+                    Wissen
+                  </Button>
+                )}
+                <Badge variant="secondary" className="ml-auto">
+                  {filteredAds.length} / {adsViewData?.summary.total ?? 0} ads
+                </Badge>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {/* Search */}
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">Zoeken</Label>
+                  <Input
+                    placeholder="Zoek op adnaam, adverteerder, schermnaam..."
+                    value={adsSearchTerm}
+                    onChange={(e) => setAdsSearchTerm(e.target.value)}
+                    className="h-9"
+                    data-testid="input-ads-search"
+                  />
+                </div>
+
+                {/* Status filter */}
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">Status</Label>
+                  <Select value={adsStatusFilter} onValueChange={(v) => setAdsStatusFilter(v as typeof adsStatusFilter)}>
+                    <SelectTrigger className="h-9" data-testid="filter-ads-status">
+                      <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Alle ({adsViewData?.summary.total ?? 0})</SelectItem>
+                      <SelectItem value="linked">Gekoppeld ({adsViewData?.summary.linked ?? 0})</SelectItem>
+                      <SelectItem value="unlinked">Niet gekoppeld ({adsViewData?.summary.unlinked ?? 0})</SelectItem>
+                      <SelectItem value="offline">Op offline schermen ({adsOnOfflineCount})</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Advertiser filter */}
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">Adverteerder</Label>
+                  <Select value={adsAdvertiserFilter} onValueChange={setAdsAdvertiserFilter}>
+                    <SelectTrigger className="h-9" data-testid="filter-ads-advertiser">
+                      <SelectValue placeholder="Alle adverteerders" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Alle adverteerders</SelectItem>
+                      {adsUniqueAdvertisers.map(name => (
+                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Screen filter */}
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground">Scherm</Label>
+                  <Select value={adsScreenFilter} onValueChange={setAdsScreenFilter}>
+                    <SelectTrigger className="h-9" data-testid="filter-ads-screen">
+                      <SelectValue placeholder="Alle schermen" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Alle schermen</SelectItem>
+                      {adsUniqueScreens.map(name => (
+                        <SelectItem key={name} value={name}>{name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Ads Table */}
           <Card>
@@ -559,16 +700,42 @@ export default function Placements() {
                         </TableCell>
                         <TableCell>
                           {ad.screensCount > 0 ? (
-                            <div className="flex flex-col gap-1">
+                            <div className="flex flex-wrap gap-1">
                               {ad.screens.slice(0, 2).map((s, idx) => (
                                 <Link key={idx} href={`/screens/${s.screenId}`}>
-                                  <Badge variant="outline" className="cursor-pointer hover:bg-muted">
-                                    {s.screenDisplayId}
+                                  <Badge 
+                                    variant="outline" 
+                                    className={`cursor-pointer hover:bg-muted ${!s.isOnline ? "border-destructive text-destructive" : ""}`}
+                                    title={`${s.screenDisplayId} - ${s.locationName}`}
+                                  >
+                                    {s.screenName || `Onbekend scherm (${s.screenDisplayId})`}
+                                    {!s.isOnline && <WifiOff className="h-3 w-3 ml-1" />}
                                   </Badge>
                                 </Link>
                               ))}
                               {ad.screensCount > 2 && (
-                                <span className="text-xs text-muted-foreground">+{ad.screensCount - 2} meer</span>
+                                <Popover>
+                                  <PopoverTrigger asChild>
+                                    <Badge variant="secondary" className="cursor-pointer">
+                                      +{ad.screensCount - 2} meer
+                                    </Badge>
+                                  </PopoverTrigger>
+                                  <PopoverContent className="w-64 p-2">
+                                    <div className="space-y-1">
+                                      {ad.screens.slice(2).map((s, idx) => (
+                                        <Link key={idx} href={`/screens/${s.screenId}`}>
+                                          <Badge 
+                                            variant="outline" 
+                                            className={`cursor-pointer hover:bg-muted w-full justify-start ${!s.isOnline ? "border-destructive text-destructive" : ""}`}
+                                          >
+                                            {s.screenName || `Onbekend scherm (${s.screenDisplayId})`}
+                                            {!s.isOnline && <WifiOff className="h-3 w-3 ml-1" />}
+                                          </Badge>
+                                        </Link>
+                                      ))}
+                                    </div>
+                                  </PopoverContent>
+                                </Popover>
                               )}
                             </div>
                           ) : (
