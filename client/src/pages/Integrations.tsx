@@ -11,6 +11,33 @@ interface IntegrationStatus {
   moneybird: { isConfigured: boolean };
 }
 
+interface MoneybirdStatus {
+  configured: boolean;
+  connected: boolean;
+  hasApiToken: boolean;
+  hasAdministrationId: boolean;
+  administrationId: string | null;
+  lastSyncAt: string | null;
+  lastSyncItemsProcessed: number | null;
+  stats: {
+    totalContacts: number;
+    linkedContacts: number;
+    totalInvoices: number;
+    openInvoices: number;
+    paidInvoices: number;
+    totalUnpaid: string;
+  };
+}
+
+interface MoneybirdSyncResult {
+  ok: boolean;
+  message: string;
+  contacts?: { total: number; created: number; updated: number };
+  invoices?: { total: number; created: number; updated: number };
+  payments?: { synced: number };
+  duration?: number;
+}
+
 interface YodeckConfigStatus {
   configured: boolean;
 }
@@ -47,6 +74,16 @@ async function testMoneybird() {
   return res.json();
 }
 
+async function fetchMoneybirdStatus(): Promise<MoneybirdStatus> {
+  const res = await fetch("/api/integrations/moneybird/status", { credentials: "include" });
+  return res.json();
+}
+
+async function syncMoneybird(): Promise<MoneybirdSyncResult> {
+  const res = await fetch("/api/sync/moneybird/run", { method: "POST", credentials: "include" });
+  return res.json();
+}
+
 async function syncYodeck() {
   const res = await fetch("/api/integrations/yodeck/sync", { method: "POST" });
   return res.json();
@@ -63,8 +100,10 @@ export default function Integrations() {
   const [testingYodeck, setTestingYodeck] = useState(false);
   const [testingMoneybird, setTestingMoneybird] = useState(false);
   const [syncingYodeck, setSyncingYodeck] = useState(false);
+  const [syncingMoneybird, setSyncingMoneybird] = useState(false);
   const [runningSyncYodeck, setRunningSyncYodeck] = useState(false);
   const [syncRunResult, setSyncRunResult] = useState<any>(null);
+  const [moneybirdSyncResult, setMoneybirdSyncResult] = useState<MoneybirdSyncResult | null>(null);
   const [showGetFallback, setShowGetFallback] = useState(false);
   const [yodeckTestResult, setYodeckTestResult] = useState<YodeckTestResult | null>(null);
 
@@ -79,7 +118,14 @@ export default function Integrations() {
     refetchInterval: 10000,
   });
 
+  const { data: moneybirdStatus, refetch: refetchMoneybirdStatus } = useQuery({
+    queryKey: ["moneybird-status"],
+    queryFn: fetchMoneybirdStatus,
+    refetchInterval: 30000,
+  });
+
   const yodeckConfigured = yodeckConfig?.configured ?? status?.yodeck?.isConfigured ?? false;
+  const moneybirdConfigured = moneybirdStatus?.configured ?? status?.moneybird?.isConfigured ?? false;
 
   const handleTestYodeck = async () => {
     setTestingYodeck(true);
@@ -115,10 +161,33 @@ export default function Integrations() {
         description: result.message,
         variant: result.success ? "default" : "destructive",
       });
+      refetchMoneybirdStatus();
     } catch (error) {
       toast({ title: "Fout", description: "Kan verbinding niet testen", variant: "destructive" });
     }
     setTestingMoneybird(false);
+  };
+
+  const handleSyncMoneybird = async () => {
+    setSyncingMoneybird(true);
+    setMoneybirdSyncResult(null);
+    toast({ title: "Synchroniseren...", description: "Contacten en facturen worden opgehaald van Moneybird" });
+    try {
+      const result = await syncMoneybird();
+      setMoneybirdSyncResult(result);
+      if (result.ok) {
+        toast({ 
+          title: "Synchronisatie Voltooid", 
+          description: `${result.contacts?.total || 0} contacten, ${result.invoices?.total || 0} facturen gesynchroniseerd` 
+        });
+        refetchMoneybirdStatus();
+      } else {
+        toast({ title: "Synchronisatie Mislukt", description: result.message, variant: "destructive" });
+      }
+    } catch (error) {
+      toast({ title: "Fout", description: "Kan niet synchroniseren met Moneybird", variant: "destructive" });
+    }
+    setSyncingMoneybird(false);
   };
 
   const handleSyncYodeck = async () => {
@@ -292,8 +361,8 @@ export default function Integrations() {
           <CardHeader>
             <CardTitle className="flex items-center gap-3">
               Moneybird
-              <Badge variant={status?.moneybird.isConfigured ? "default" : "secondary"}>
-                {status?.moneybird.isConfigured ? (
+              <Badge variant={moneybirdConfigured ? "default" : "secondary"} data-testid="badge-moneybird-status">
+                {moneybirdConfigured ? (
                   <><Check className="h-3 w-3 mr-1" /> Geconfigureerd</>
                 ) : (
                   <><X className="h-3 w-3 mr-1" /> Niet Geconfigureerd</>
@@ -301,13 +370,41 @@ export default function Integrations() {
               </Badge>
             </CardTitle>
             <CardDescription>
-              Verbind Moneybird om automatisch facturen en betalingen te synchroniseren.
+              Verbind Moneybird om automatisch contacten, facturen en betalingen te synchroniseren.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="text-sm text-muted-foreground">
-              {status?.moneybird.isConfigured ? (
-                <p>Uw Moneybird API is geconfigureerd. U kunt de verbinding testen of facturen aanmaken.</p>
+              {moneybirdConfigured ? (
+                <div className="space-y-3">
+                  <p>Uw Moneybird API is geconfigureerd. U kunt de verbinding testen of gegevens synchroniseren.</p>
+                  
+                  {moneybirdStatus?.stats && (
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 p-3 bg-muted/50 rounded-md">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Contacten</p>
+                        <p className="font-semibold" data-testid="text-moneybird-contacts">{moneybirdStatus.stats.totalContacts}</p>
+                        <p className="text-xs text-muted-foreground">{moneybirdStatus.stats.linkedContacts} gekoppeld</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Facturen</p>
+                        <p className="font-semibold" data-testid="text-moneybird-invoices">{moneybirdStatus.stats.totalInvoices}</p>
+                        <p className="text-xs text-muted-foreground">{moneybirdStatus.stats.openInvoices} open, {moneybirdStatus.stats.paidInvoices} betaald</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">Openstaand</p>
+                        <p className="font-semibold" data-testid="text-moneybird-unpaid">€{moneybirdStatus.stats.totalUnpaid}</p>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {moneybirdStatus?.lastSyncAt && (
+                    <p className="text-xs text-muted-foreground">
+                      Laatste sync: {new Date(moneybirdStatus.lastSyncAt).toLocaleString("nl-NL")}
+                      {moneybirdStatus.lastSyncItemsProcessed && ` (${moneybirdStatus.lastSyncItemsProcessed} items)`}
+                    </p>
+                  )}
+                </div>
               ) : (
                 <div className="space-y-2">
                   <p>Om Moneybird te verbinden, voeg deze omgevingsvariabelen toe:</p>
@@ -319,16 +416,49 @@ export default function Integrations() {
                 </div>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <Button 
                 variant="outline" 
                 onClick={handleTestMoneybird}
-                disabled={!status?.moneybird.isConfigured || testingMoneybird}
+                disabled={!moneybirdConfigured || testingMoneybird}
+                data-testid="button-test-moneybird"
               >
                 {testingMoneybird && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                Verbinding Testen
+                Test Verbinding
+              </Button>
+              <Button 
+                onClick={handleSyncMoneybird}
+                disabled={!moneybirdConfigured || syncingMoneybird}
+                data-testid="button-sync-moneybird"
+              >
+                {syncingMoneybird ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-4 w-4 mr-2" />
+                )}
+                Sync Nu
               </Button>
             </div>
+            {moneybirdSyncResult && (
+              <div className={`p-3 rounded-md text-sm ${moneybirdSyncResult.ok ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
+                {moneybirdSyncResult.ok ? (
+                  <div className="space-y-1">
+                    <p className="text-green-700 font-medium">Synchronisatie voltooid</p>
+                    <p className="text-xs text-green-600">
+                      Contacten: {moneybirdSyncResult.contacts?.total} ({moneybirdSyncResult.contacts?.created} nieuw, {moneybirdSyncResult.contacts?.updated} bijgewerkt)
+                    </p>
+                    <p className="text-xs text-green-600">
+                      Facturen: {moneybirdSyncResult.invoices?.total} ({moneybirdSyncResult.invoices?.created} nieuw, {moneybirdSyncResult.invoices?.updated} bijgewerkt)
+                    </p>
+                    <p className="text-xs text-green-600">
+                      Betalingen: {moneybirdSyncResult.payments?.synced} gesynchroniseerd
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-red-700">{moneybirdSyncResult.message}</p>
+                )}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

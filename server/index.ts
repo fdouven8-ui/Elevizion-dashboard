@@ -115,71 +115,87 @@ async function runMoneybirdBackgroundSync() {
     
     client.setAdministrationId(administrationId);
     
-    // Sync contacts
+    // Sync contacts with per-item error handling
     const contacts = await client.getAllContacts();
     let contactsProcessed = 0;
+    let contactErrors = 0;
     
     for (const contact of contacts) {
-      await storage.upsertMoneybirdContact({
-        moneybirdId: contact.id,
-        companyName: contact.company_name || null,
-        firstname: contact.firstname || null,
-        lastname: contact.lastname || null,
-        email: contact.email || null,
-        phone: contact.phone || null,
-        address1: contact.address1 || null,
-        address2: contact.address2 || null,
-        zipcode: contact.zipcode || null,
-        city: contact.city || null,
-        country: contact.country || null,
-        chamberOfCommerce: contact.chamber_of_commerce || null,
-        taxNumber: contact.tax_number || null,
-        sepaActive: contact.sepa_active || false,
-        sepaIban: contact.sepa_iban || null,
-        sepaIbanAccountName: contact.sepa_iban_account_name || null,
-        sepaMandateId: contact.sepa_mandate_id || null,
-        sepaMandateDate: contact.sepa_mandate_date || null,
-        customerId: contact.customer_id || null,
-        lastSyncedAt: new Date(),
-      });
-      contactsProcessed++;
+      try {
+        await storage.upsertMoneybirdContact({
+          moneybirdId: contact.id,
+          companyName: contact.company_name || null,
+          firstname: contact.firstname || null,
+          lastname: contact.lastname || null,
+          email: contact.email || null,
+          phone: contact.phone || null,
+          address1: contact.address1 || null,
+          address2: contact.address2 || null,
+          zipcode: contact.zipcode || null,
+          city: contact.city || null,
+          country: contact.country || null,
+          chamberOfCommerce: contact.chamber_of_commerce || null,
+          taxNumber: contact.tax_number || null,
+          sepaActive: contact.sepa_active || false,
+          sepaIban: contact.sepa_iban || null,
+          sepaIbanAccountName: contact.sepa_iban_account_name || null,
+          sepaMandateId: contact.sepa_mandate_id || null,
+          sepaMandateDate: contact.sepa_mandate_date || null,
+          customerId: contact.customer_id || null,
+          lastSyncedAt: new Date(),
+        });
+        contactsProcessed++;
+      } catch (err: any) {
+        contactErrors++;
+        console.error(`[Moneybird Sync] Failed to sync contact ${contact.id}: ${err.message}`);
+      }
     }
     
-    // Sync invoices
+    // Sync invoices with per-item error handling
     const invoices = await client.getAllSalesInvoices();
     let invoicesProcessed = 0;
+    let invoiceErrors = 0;
     
     for (const invoice of invoices) {
-      await storage.upsertMoneybirdInvoice({
-        moneybirdId: invoice.id,
-        moneybirdContactId: invoice.contact_id,
-        invoiceId: invoice.invoice_id || null,
-        reference: invoice.reference || null,
-        invoiceDate: invoice.invoice_date || null,
-        dueDate: invoice.due_date || null,
-        state: invoice.state || null,
-        totalPriceExclTax: invoice.total_price_excl_tax || null,
-        totalPriceInclTax: invoice.total_price_incl_tax || null,
-        totalUnpaid: invoice.total_unpaid || null,
-        currency: invoice.currency || "EUR",
-        paidAt: invoice.paid_at ? new Date(invoice.paid_at) : null,
-        url: invoice.url || null,
-        lastSyncedAt: new Date(),
-      });
-      invoicesProcessed++;
-      
-      // Sync payments
-      if (invoice.payments && invoice.payments.length > 0) {
-        for (const payment of invoice.payments) {
-          await storage.upsertMoneybirdPayment({
-            moneybirdId: payment.id,
-            moneybirdInvoiceId: invoice.id,
-            paymentDate: payment.payment_date || null,
-            price: payment.price || null,
-            priceCurrency: invoice.currency || "EUR",
-            lastSyncedAt: new Date(),
-          });
+      try {
+        await storage.upsertMoneybirdInvoice({
+          moneybirdId: invoice.id,
+          moneybirdContactId: invoice.contact_id,
+          invoiceId: invoice.invoice_id || null,
+          reference: invoice.reference || null,
+          invoiceDate: invoice.invoice_date || null,
+          dueDate: invoice.due_date || null,
+          state: invoice.state || null,
+          totalPriceExclTax: invoice.total_price_excl_tax || null,
+          totalPriceInclTax: invoice.total_price_incl_tax || null,
+          totalUnpaid: invoice.total_unpaid || null,
+          currency: invoice.currency || "EUR",
+          paidAt: invoice.paid_at ? new Date(invoice.paid_at) : null,
+          url: invoice.url || null,
+          lastSyncedAt: new Date(),
+        });
+        invoicesProcessed++;
+        
+        // Sync payments
+        if (invoice.payments && invoice.payments.length > 0) {
+          for (const payment of invoice.payments) {
+            try {
+              await storage.upsertMoneybirdPayment({
+                moneybirdId: payment.id,
+                moneybirdInvoiceId: invoice.id,
+                paymentDate: payment.payment_date || null,
+                price: payment.price || null,
+                priceCurrency: invoice.currency || "EUR",
+                lastSyncedAt: new Date(),
+              });
+            } catch (paymentErr: any) {
+              console.error(`[Moneybird Sync] Failed to sync payment ${payment.id}: ${paymentErr.message}`);
+            }
+          }
         }
+      } catch (err: any) {
+        invoiceErrors++;
+        console.error(`[Moneybird Sync] Failed to sync invoice ${invoice.id}: ${err.message}`);
       }
     }
     
@@ -193,7 +209,8 @@ async function runMoneybirdBackgroundSync() {
       status: "connected",
     });
     
-    console.log(`[Moneybird Sync] Completed in ${duration}ms: ${contactsProcessed} contacts, ${invoicesProcessed} invoices`);
+    const errorCount = contactErrors + invoiceErrors;
+    console.log(`[Moneybird Sync] Completed in ${duration}ms: ${contactsProcessed} contacts, ${invoicesProcessed} invoices${errorCount > 0 ? ` (${errorCount} errors)` : ''}`);
   } catch (err: any) {
     console.error("[Moneybird Sync] Scheduled sync failed:", err.message);
   }

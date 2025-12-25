@@ -88,4 +88,15 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
   - **POST /api/sync/yodeck/run**: Per-screen distinctItemCount, breakdown (playlistsResolved/Failed, mediaItems, widgetItems, unknownItems), stats (screensTotal, screensOnline, screensWithYodeckContent, screensYodeckEmpty, contentUnknown, contentError)
   - **GET /api/yodeck/content/summary**: topItems (top 5 media), mediaItems (sorted by name with mediaType), totals (totalScreens, screensWithContent/Empty/Unknown/Error, top10Media)
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact sync, and SEPA Direct Debit.
+  - **Auth**: `MONEYBIRD_API_TOKEN` (personal access token) + `MONEYBIRD_ADMINISTRATION_ID`
+  - **Client**: `server/services/moneybirdClient.ts` with pagination, rate limiting (1000 req/5min), and 5-minute TTL cache
+  - **Database Tables**: `moneybird_contacts`, `moneybird_invoices`, `moneybird_payments` for synced data
+  - **Scheduled Sync**: 30-minute background sync with per-item error handling (partial failures don't abort)
+  - **API Endpoints**:
+    - **GET /api/integrations/moneybird/status**: Config status and sync stats
+    - **POST /api/sync/moneybird/run**: Manual sync trigger (contacts, invoices, payments)
+    - **GET /api/moneybird/contacts**: List synced contacts
+    - **GET /api/moneybird/invoices**: List synced invoices
+    - **POST /api/moneybird/contacts/:id/link**: Link contact to advertiser
+  - **Permissions**: `manage_integrations` for sync/config, `view_finance` for reading data
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests.

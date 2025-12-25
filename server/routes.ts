@@ -1590,7 +1590,7 @@ export async function registerRoutes(
   // ============================================================================
 
   // Moneybird config status
-  app.get("/api/integrations/moneybird/status", isAuthenticated, async (_req, res) => {
+  app.get("/api/integrations/moneybird/status", requirePermission("manage_integrations"), async (_req, res) => {
     try {
       const hasApiToken = Boolean(process.env.MONEYBIRD_API_TOKEN?.trim());
       const hasAdminId = Boolean(process.env.MONEYBIRD_ADMINISTRATION_ID?.trim());
@@ -1613,7 +1613,7 @@ export async function registerRoutes(
   });
 
   // Get Moneybird administrations (for selecting which one to use)
-  app.get("/api/integrations/moneybird/administrations", isAuthenticated, async (_req, res) => {
+  app.get("/api/integrations/moneybird/administrations", requirePermission("manage_integrations"), async (_req, res) => {
     try {
       const { getMoneybirdClient } = await import("./services/moneybirdClient");
       const client = await getMoneybirdClient();
@@ -1630,7 +1630,7 @@ export async function registerRoutes(
   });
 
   // Select Moneybird administration
-  app.post("/api/integrations/moneybird/select-administration", isAuthenticated, async (req, res) => {
+  app.post("/api/integrations/moneybird/select-administration", requirePermission("manage_integrations"), async (req, res) => {
     try {
       const { administrationId } = req.body;
       if (!administrationId) {
@@ -1651,7 +1651,7 @@ export async function registerRoutes(
   });
 
   // Sync Moneybird contacts and invoices
-  app.post("/api/sync/moneybird/run", isAuthenticated, async (_req, res) => {
+  app.post("/api/sync/moneybird/run", requirePermission("manage_integrations"), async (_req, res) => {
     const startTime = Date.now();
     console.log("[Moneybird Sync] Starting sync...");
     
@@ -1812,7 +1812,7 @@ export async function registerRoutes(
   });
 
   // Get synced Moneybird contacts
-  app.get("/api/moneybird/contacts", isAuthenticated, async (_req, res) => {
+  app.get("/api/moneybird/contacts", requirePermission("view_finance"), async (_req, res) => {
     try {
       const contacts = await storage.getMoneybirdContacts();
       res.json(contacts);
@@ -1822,7 +1822,7 @@ export async function registerRoutes(
   });
 
   // Get synced Moneybird invoices
-  app.get("/api/moneybird/invoices", isAuthenticated, async (_req, res) => {
+  app.get("/api/moneybird/invoices", requirePermission("view_finance"), async (_req, res) => {
     try {
       const invoices = await storage.getMoneybirdInvoices();
       res.json(invoices);
@@ -1832,7 +1832,7 @@ export async function registerRoutes(
   });
 
   // Get invoices for a specific contact
-  app.get("/api/moneybird/contacts/:contactId/invoices", isAuthenticated, async (req, res) => {
+  app.get("/api/moneybird/contacts/:contactId/invoices", requirePermission("view_finance"), async (req, res) => {
     try {
       const { contactId } = req.params;
       const contact = await storage.getMoneybirdContact(contactId);
@@ -1847,7 +1847,7 @@ export async function registerRoutes(
   });
 
   // Link Moneybird contact to advertiser
-  app.post("/api/moneybird/contacts/:contactId/link", isAuthenticated, async (req, res) => {
+  app.post("/api/moneybird/contacts/:contactId/link", requirePermission("manage_integrations"), async (req, res) => {
     try {
       const { contactId } = req.params;
       const { advertiserId } = req.body;
@@ -1868,7 +1868,7 @@ export async function registerRoutes(
   });
 
   // Get Moneybird stats
-  app.get("/api/moneybird/stats", isAuthenticated, async (_req, res) => {
+  app.get("/api/moneybird/stats", requirePermission("view_finance"), async (_req, res) => {
     try {
       const stats = await storage.getMoneybirdStats();
       res.json(stats);
