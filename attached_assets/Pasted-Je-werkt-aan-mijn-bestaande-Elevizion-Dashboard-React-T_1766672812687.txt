@@ -1,0 +1,83 @@
+Je werkt aan mijn bestaande Elevizion Dashboard (React + TS + Vite frontend, Express + Drizzle ORM + PostgreSQL backend). Yodeck sync werkt al (scheduled sync + opslag in DB). Ik wil nu Moneybird integratie toevoegen.
+
+BELANGRIJK:
+- NIET opnieuw bouwen. Alleen uitbreiden van de huidige structuur, routes, services en database schema.
+- Hou SCREEN_ID (EVZ-001 format) als centrale identifier overal.
+- Uiteindelijk moeten Yodeck data + Moneybird data aan elkaar gekoppeld zijn zodat ik per scherm kan zien: klant, contract, facturen/mandaat status en welke ads/plaatsingen er op dat scherm draaien.
+
+CONTEXT / HUIDIGE STATUS:
+- Yodeck geeft screens terug en content assignments worden al gesynct en opgeslagen.
+- Er is al een backend met routes en scheduled jobs.
+- Er is PostgreSQL + Drizzle ORM.
+- Ik heb Moneybird account + API token, maar nog geen factuur templates, SEPA, BTW-nummer, KVK of zakelijke rekening. Ik wil nu al het dashboard werkend krijgen met Moneybird API (zonder te blokkeren op KVK/BTW/SEPA).
+
+DOEL (MVP → daarna uitbreiden):
+1) Moneybird connectie werkend krijgen:
+   - Voeg een Moneybird integratie-module toe (services + routes).
+   - Sla configuratie veilig op via environment variables (geen secrets in code).
+   - Ik wil alleen straks API token(s) en administration_id hoeven invullen.
+
+2) Administrations ophalen & kiezen:
+   - Endpoint: GET /api/integrations/moneybird/status (toont: connected ja/nee, gekozen administration, laatste sync).
+   - Endpoint: GET /api/integrations/moneybird/administrations (lijst administrations ophalen met token).
+   - Endpoint: POST /api/integrations/moneybird/select-administration (sla gekozen administration_id op in DB of config tabel).
+
+3) Data ophalen en syncen (read-only eerst):
+   - Sync contacts (klanten), sales_invoices, documents, eventueel payments.
+   - Maak een scheduled sync job zoals bij Yodeck (bv elke 30-60 min) + handmatige trigger:
+     POST /api/sync/moneybird/run
+   - Log dezelfde stijl als Yodeck: totals, errors, duur, aantallen.
+
+4) Database uitbreiding (Drizzle + migrations):
+   Maak tabellen/kolommen die minimaal nodig zijn, zonder te veel complexiteit:
+   - moneybird_administration (id, name, last_sync_at, status)
+   - moneybird_contact (moneybird_contact_id, name, email, company_name, etc.)
+   - moneybird_invoice (moneybird_invoice_id, contact_id, invoice_number, state, total_price, total_unpaid, due_date, created_at, updated_at)
+   - optioneel: moneybird_payment (payment_id, invoice_id, amount, date)
+   - Koppeltabel/velden voor link met interne entities:
+     * screens (bestaat al) krijgt: customer_id (intern) of direct moneybird_contact_id als foreign key.
+     * of maak mapping: screen_customer_map (screen_id, moneybird_contact_id, confidence, created_at)
+
+5) Koppelen Yodeck + Moneybird:
+   - SCREEN_ID blijft de sleutel.
+   - Bouw in de UI een simpele “Koppelen aan klant” flow:
+     * Op Scherm detailpagina: dropdown/search Moneybird contact → “Link to this screen”
+     * Sla mapping op in DB.
+   - Daarna moet je in het scherm-overzicht kunnen tonen:
+     SCREEN_ID | locatie/naam (Yodeck) | gekoppelde klant (Moneybird) | openstaand bedrag / status laatste factuur.
+
+6) Geen SEPA/BTW blokkade:
+   - Alles moet kunnen draaien zonder SEPA mandaten of BTW nummer.
+   - Facturen aanmaken/SEPA komt later. Nu focussen op ophalen + koppelen.
+   - Zet structuur alvast klaar voor later (feature flags / TODO), maar implementeer nu alleen read en mapping.
+
+7) Frontend toevoegingen (minimal impact, bestaande UI stijl):
+   - Nieuwe settings pagina: “Integraties → Moneybird”
+     * Connect status
+     * Administrations lijst + select
+     * Button “Run sync”
+     * Laat laatste sync + aantallen zien.
+   - Bij “Schermen”:
+     * kolom “Klant” + status badge (gekoppeld/niet gekoppeld)
+     * scherm detail: contact select + factuur overzicht (laatste 3 invoices, state, openstaand, due date)
+
+8) Error handling & rate limits:
+   - Fatsoenlijke try/catch, duidelijke errors terug naar UI.
+   - Respecteer paging van Moneybird endpoints.
+   - Log naar console in dezelfde structuur als Yodeck sync logs.
+
+9) Deliverables:
+   - Werkende Moneybird integratie (connect/status/admin select/sync contacts+invoices)
+   - DB migrations + Drizzle schema updates
+   - UI pagina’s + screen-to-contact mapping
+   - Documenteer in README kort welke ENV vars ik moet invullen.
+
+ENV VARS (ik vul die later zelf in):
+- MONEYBIRD_API_TOKEN=
+- MONEYBIRD_ADMINISTRATION_ID= (na selecteren kan dit ook in DB, maar support beide)
+- (optioneel) MONEYBIRD_SYNC_INTERVAL_MINUTES=
+
+Start nu met:
+- Codebase scannen (bestaande integratie structuur voor Yodeck copy pattern)
+- Nieuwe Moneybird service + routes + db schema + minimal UI
+- Zorg dat de app compileert en bestaande Yodeck flow blijft werken.
