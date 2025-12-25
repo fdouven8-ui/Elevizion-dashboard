@@ -81,6 +81,7 @@ export const locations = pgTable("locations", {
   revenueSharePercent: decimal("revenue_share_percent", { precision: 5, scale: 2 }).notNull().default("10.00"),
   minimumPayoutAmount: decimal("minimum_payout_amount", { precision: 10, scale: 2 }).notNull().default("25.00"),
   bankAccountIban: text("bank_account_iban"),
+  moneybirdContactId: text("moneybird_contact_id").unique(), // Link to Moneybird contact for master data
   status: text("status").notNull().default("active"), // active, paused, terminated
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -130,6 +131,8 @@ export const screens = pgTable("screens", {
   status: text("status").notNull().default("unknown"), // online, offline, unknown
   lastSeenAt: timestamp("last_seen_at"),
   isActive: boolean("is_active").notNull().default(true),
+  matchConfidence: text("match_confidence"), // auto_exact, auto_fuzzy, manual, null=unmapped
+  matchReason: text("match_reason"), // Explanation of match (e.g., "Exact name match: Basil's Barber Shop")
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

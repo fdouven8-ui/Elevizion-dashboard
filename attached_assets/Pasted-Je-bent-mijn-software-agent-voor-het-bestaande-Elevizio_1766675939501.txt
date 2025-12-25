@@ -1,0 +1,115 @@
+Je bent mijn software agent voor het bestaande Elevizion Dashboard (React+TS+Vite frontend, Express backend, Drizzle ORM + PostgreSQL). Het Yodeck-gedeelte werkt al (screens + content sync), en Moneybird test/sync werkt ook al (credentials configured + sync endpoint geeft success). 
+
+BELANGRIJK: Bouw NIET alles opnieuw. Werk verder op de bestaande structuur/routes/DB-tabellen en breid dit uit. Alles moet stabiel blijven werken zoals nu.
+
+DOEL
+1) Moneybird wordt de “bron van waarheid” voor:
+   - Adverteerders (contacten/companies)
+   - Locaties (zaken waar scherm hangt) inclusief adres/kvk/btw/email/telefoon/contactpersoon
+   - Contract/facturatie-gegevens (later; nu focus op basisgegevens + mapping)
+2) Yodeck blijft de bron voor:
+   - Schermen (players), status online/offline, content summary
+3) Dashboard moet Moneybird + Yodeck aan elkaar koppelen zodat elke screen en locatie compleet wordt met adres/contactgegevens.
+   - Voorbeeld: Basil’s Barber Shop Maasbracht heeft een screen in Yodeck, maar mist nu adres/contact in ons systeem. Die moeten we uit Moneybird kunnen importeren en koppelen.
+
+WAT ER AL IS (context uit logs)
+- /api/integrations laat yodeck connected/active zien.
+- moneybird is connected en sync endpoint werkt (POST /api/integrations/moneybird/sync => success).
+- Er bestaat al een “Default (Yodeck Import)” locatie waar screens nu aan hangen.
+- Screens hebben yodeckPlayerName zoals “Basil's Barber Shop Maasbracht”.
+
+OPDRACHT: IMPLEMENTEER “Moneybird Master Data Sync + Mapping + Auto-enrichment”
+A) DATA MODEL / DB (Drizzle)
+1) Voeg velden toe (of maak tabellen als ze er nog niet zijn) om Moneybird master data op te slaan:
+   - advertisers: moneybirdContactId (unique), companyName, contactPerson, email, phone, iban(optional), vatNumber(optional), chamberOfCommerce(optional), address fields (street, zipcode, city, country), notes
+   - locations: moneybirdContactId (unique, optional), name, address fields, contactName, email, phone, revenueSharePercent (bestaat al), minimumPayoutAmount (bestaat al), bankAccountIban
+2) Voeg mapping/links toe:
+   - screens.locationId bestaat al. We moeten screens naar locations kunnen mappen.
+   - Voeg aan screens extra mapping-velden toe:
+     - moneybirdContactId (nullable) OF moneybirdLocationId (nullable) afhankelijk van jouw model-keuze
+     - matchConfidence (nullable: “auto_exact”, “auto_fuzzy”, “manual”)
+     - matchReason (nullable tekst)
+3) Maak een tabel “integration_mappings” (of vergelijkbaar) als dat beter past:
+   - serviceA (yodeck), serviceB (moneybird)
+   - yodeckPlayerId / yodeckUuid
+   - moneybirdContactId
+   - locationId (intern)
+   - status (active/inactive)
+   - createdAt/updatedAt
+
+B) MONEYBIRD SYNC SERVICE (backend)
+1) Breid de huidige Moneybird sync uit zodat we minimaal ophalen:
+   - Contacts (bedrijven/personen) + hun adresgegevens + contactdetails
+   - (Optioneel later) invoices/estimates/subscriptions – NU NIET verplicht, eerst master data.
+2) Upsert-logica:
+   - Als moneybirdContactId al bestaat: update velden
+   - Anders: insert nieuw
+3) Logging:
+   - Log aantallen: fetched, inserted, updated, errors
+   - Zet lastSyncItemsProcessed correct (nu staat 0; moet aantal verwerkte contacts worden)
+
+C) AUTO-MATCHING (Moneybird -> Locations/Screens)
+We willen Basil’s screen automatisch aan een Moneybird contact/locatie koppelen zonder handwerk, maar met veilige fallback.
+1) Matching regels:
+   - Exact match op naam:
+     - screen.yodeckPlayerName (bv “Basil's Barber Shop Maasbracht”) vergelijken met moneybird contact/company name
+   - Fuzzy match (lightweight, geen zware libs): normalize(lowercase, remove punctuation, remove “’s”, trim city words)
+   - Als meerdere matches: markeer als “needs_review”
+2) Als match gevonden:
+   - Maak/Update location record met adres/contact uit Moneybird
+   - Koppel screen.locationId naar die location
+   - Sla mapping op (matchConfidence + matchReason)
+3) Als geen match:
+   - Laat screen op Default (Yodeck Import) locatie staan
+   - Zet matchStatus op “unmapped”
+
+D) MANUAL REVIEW UI (frontend)
+Breid bestaande UI uit (NIET opnieuw ontwerpen):
+1) Nieuwe pagina of sectie: “Koppelingen” of “Mapping”
+   - Lijst van unmapped screens (yodeckPlayerName) met dropdown om Moneybird contact te kiezen
+   - Toon match suggesties (top 3) met confidence label
+2) Acties:
+   - “Koppel” (POST /api/mappings/link) -> koppelt screen aan moneybirdContactId + maakt/updated location
+   - “Ontkoppel” (POST /api/mappings/unlink)
+3) Bij Locations detail:
+   - Toon Moneybird gegevens (adres/email/telefoon) en label “bron: Moneybird”
+   - Toon of locatie gekoppeld is aan Moneybird contactId
+
+E) API ROUTES (Express)
+Maak/actualiseer routes (gebruik bestaande auth/permissions pattern):
+- GET /api/moneybird/contacts (paginated) of /api/advertisers?source=moneybird
+- POST /api/integrations/moneybird/sync (bestaat al) -> uitbreiden met echte verwerking
+- GET /api/mappings/screens (unmapped + suggestions)
+- POST /api/mappings/link { screenId, moneybirdContactId } -> updates screen + location + mapping
+- POST /api/mappings/unlink { screenId } -> zet screen terug naar defaultLocationId + mapping inactive
+
+F) EDGE CASES / BELANGRIJK
+- Ik heb nog geen KVK/BTW/SEPA ingericht; dat is OK. Het systeem moet werken zonder die velden.
+- Gebruik nullable velden en valideer defensief.
+- Zorg dat sync idempotent is (meerdere keren draaien zonder rommel).
+- Zorg dat bestaande Yodeck sync NIET stuk gaat.
+- Zorg dat status/metrics in /api/sync/status “moneybird” nu echte aantallen laat zien.
+
+G) ACCEPTANCE CRITERIA (moet je testen)
+1) Na Moneybird sync:
+   - DB bevat Moneybird contacts (minstens 1 test contact)
+   - /api/sync/status toont moneybird status connected + itemsProcessed > 0
+2) Auto-match:
+   - Als er een Moneybird contact bestaat dat lijkt op “Basil's Barber Shop Maasbracht”, dan wordt die screen automatisch gekoppeld of komt als suggestie #1.
+3) UI:
+   - Ik kan een unmapped screen handmatig koppelen aan een Moneybird contact
+   - Daarna zie ik bij de Location het adres/email/telefoon correct ingevuld.
+4) Logs:
+   - Geen secrets loggen (geen token in logs), alleen “len” of masked.
+
+LEVEREN
+- Alleen de benodigde files aanpassen/toevoegen. Geef duidelijke commits/changes.
+- Houd code consistent met bestaande projectstructuur (services, routes, drizzle schema, validators).
+- Voeg korte README-sectie toe: “Moneybird mapping flow”.
+
+Begin met: 
+1) DB schema update + migration
+2) Moneybird contacts sync + upsert
+3) Matching engine + mapping endpoints
+4) UI mapping scherm
+5) Update sync/status metrics
