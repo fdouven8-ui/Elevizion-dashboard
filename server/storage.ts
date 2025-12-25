@@ -1929,6 +1929,204 @@ export class DatabaseStorage implements IStorage {
       totalUnpaid: totalUnpaid.toFixed(2)
     };
   }
+
+  // ============================================================================
+  // SCREEN <-> MONEYBIRD MAPPING METHODS
+  // ============================================================================
+
+  async getUnmappedScreens(): Promise<Array<Screen & { locationName: string }>> {
+    const results = await db.select({
+      screen: schema.screens,
+      locationName: schema.locations.name
+    })
+      .from(schema.screens)
+      .leftJoin(schema.locations, eq(schema.screens.locationId, schema.locations.id))
+      .where(sql`${schema.screens.matchConfidence} IS NULL`);
+    
+    return results.map(r => ({
+      ...r.screen,
+      locationName: r.locationName || "Onbekend"
+    }));
+  }
+
+  async getScreensWithMappingStatus(): Promise<Array<{
+    screen: Screen;
+    locationName: string;
+    mappedContactName: string | null;
+    mappedContactId: string | null;
+  }>> {
+    const screens = await db.select({
+      screen: schema.screens,
+      locationName: schema.locations.name,
+      moneybirdContactId: schema.locations.moneybirdContactId
+    })
+      .from(schema.screens)
+      .leftJoin(schema.locations, eq(schema.screens.locationId, schema.locations.id))
+      .where(eq(schema.screens.isActive, true));
+
+    const results = [];
+    for (const row of screens) {
+      let mappedContactName = null;
+      if (row.moneybirdContactId) {
+        const contact = await this.getMoneybirdContactByMoneybirdId(row.moneybirdContactId);
+        if (contact) {
+          mappedContactName = contact.companyName || 
+            [contact.firstname, contact.lastname].filter(Boolean).join(" ") || null;
+        }
+      }
+      results.push({
+        screen: row.screen,
+        locationName: row.locationName || "Onbekend",
+        mappedContactName,
+        mappedContactId: row.moneybirdContactId
+      });
+    }
+    return results;
+  }
+
+  async linkScreenToMoneybirdContact(
+    screenId: string, 
+    moneybirdContactId: string,
+    confidence: "auto_exact" | "auto_fuzzy" | "manual",
+    reason: string
+  ): Promise<{ screen: Screen; location: Location }> {
+    const screen = await this.getScreen(screenId);
+    if (!screen) {
+      throw new Error("Screen niet gevonden");
+    }
+
+    const contact = await this.getMoneybirdContactByMoneybirdId(moneybirdContactId);
+    if (!contact) {
+      throw new Error("Moneybird contact niet gevonden");
+    }
+
+    // Get or create location from Moneybird contact
+    let location = await this.getLocationByMoneybirdContactId(moneybirdContactId);
+    
+    if (!location) {
+      // Create new location from Moneybird contact
+      const contactName = contact.companyName || 
+        [contact.firstname, contact.lastname].filter(Boolean).join(" ") || 
+        "Onbekend";
+      
+      const address = [contact.address1, contact.address2].filter(Boolean).join(", ") || "";
+      
+      const [newLocation] = await db.insert(schema.locations).values({
+        name: contactName,
+        address: address || "Adres onbekend",
+        street: contact.address1 || null,
+        zipcode: contact.zipcode || null,
+        city: contact.city || null,
+        contactName: [contact.firstname, contact.lastname].filter(Boolean).join(" ") || contactName,
+        email: contact.email || "onbekend@example.com",
+        phone: contact.phone || null,
+        moneybirdContactId: moneybirdContactId,
+        status: "active"
+      }).returning();
+      
+      location = newLocation;
+    }
+
+    // Update screen with mapping info and location
+    const [updatedScreen] = await db.update(schema.screens)
+      .set({
+        locationId: location.id,
+        matchConfidence: confidence,
+        matchReason: reason,
+        updatedAt: new Date()
+      })
+      .where(eq(schema.screens.id, screenId))
+      .returning();
+
+    return { screen: updatedScreen, location };
+  }
+
+  async unlinkScreen(screenId: string, defaultLocationId: string): Promise<Screen> {
+    const [updated] = await db.update(schema.screens)
+      .set({
+        locationId: defaultLocationId,
+        matchConfidence: null,
+        matchReason: null,
+        updatedAt: new Date()
+      })
+      .where(eq(schema.screens.id, screenId))
+      .returning();
+    
+    return updated;
+  }
+
+  async getLocationByMoneybirdContactId(moneybirdContactId: string): Promise<Location | undefined> {
+    const [location] = await db.select()
+      .from(schema.locations)
+      .where(eq(schema.locations.moneybirdContactId, moneybirdContactId));
+    return location;
+  }
+
+  async updateLocationFromMoneybirdContact(locationId: string, contact: MoneybirdContact): Promise<Location> {
+    const contactName = contact.companyName || 
+      [contact.firstname, contact.lastname].filter(Boolean).join(" ") || 
+      "Onbekend";
+    
+    const address = [contact.address1, contact.address2].filter(Boolean).join(", ") || "";
+
+    const [updated] = await db.update(schema.locations)
+      .set({
+        name: contactName,
+        address: address || "Adres onbekend",
+        street: contact.address1 || null,
+        zipcode: contact.zipcode || null,
+        city: contact.city || null,
+        contactName: [contact.firstname, contact.lastname].filter(Boolean).join(" ") || contactName,
+        email: contact.email || undefined,
+        phone: contact.phone || null,
+        moneybirdContactId: contact.moneybirdId,
+        updatedAt: new Date()
+      })
+      .where(eq(schema.locations.id, locationId))
+      .returning();
+    
+    return updated;
+  }
+
+  async getDefaultLocation(): Promise<Location | undefined> {
+    const [location] = await db.select()
+      .from(schema.locations)
+      .where(sql`${schema.locations.name} ILIKE '%default%' OR ${schema.locations.name} ILIKE '%yodeck import%'`)
+      .limit(1);
+    return location;
+  }
+
+  async getMappingStats(): Promise<{
+    totalScreens: number;
+    mappedScreens: number;
+    unmappedScreens: number;
+    autoMapped: number;
+    manualMapped: number;
+    needsReview: number;
+  }> {
+    const screens = await db.select({
+      matchConfidence: schema.screens.matchConfidence
+    })
+      .from(schema.screens)
+      .where(eq(schema.screens.isActive, true));
+
+    const total = screens.length;
+    const mapped = screens.filter(s => s.matchConfidence !== null).length;
+    const unmapped = screens.filter(s => s.matchConfidence === null).length;
+    const autoExact = screens.filter(s => s.matchConfidence === "auto_exact").length;
+    const autoFuzzy = screens.filter(s => s.matchConfidence === "auto_fuzzy").length;
+    const manual = screens.filter(s => s.matchConfidence === "manual").length;
+    const needsReview = screens.filter(s => s.matchConfidence === "needs_review").length;
+
+    return {
+      totalScreens: total,
+      mappedScreens: mapped,
+      unmappedScreens: unmapped,
+      autoMapped: autoExact + autoFuzzy,
+      manualMapped: manual,
+      needsReview
+    };
+  }
 }
 
 export const storage = new DatabaseStorage();

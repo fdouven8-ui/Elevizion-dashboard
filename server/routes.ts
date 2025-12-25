@@ -5389,5 +5389,206 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================================
+  // SCREEN <-> MONEYBIRD MAPPING ROUTES
+  // ============================================================================
+
+  // Get screens with mapping status and suggestions
+  app.get("/api/mappings/screens", requirePermission("manage_integrations"), async (_req, res) => {
+    try {
+      const { findMatchesForScreen, getBestAutoMatch } = await import("./services/screenMatcher");
+      
+      const screensWithStatus = await storage.getScreensWithMappingStatus();
+      const contacts = await storage.getMoneybirdContacts();
+      const mappingStats = await storage.getMappingStats();
+      
+      const results = screensWithStatus.map(row => {
+        const screenName = row.screen.yodeckPlayerName || row.screen.name;
+        const suggestions = findMatchesForScreen(row.screen.name, row.screen.yodeckPlayerName, contacts);
+        const bestMatch = getBestAutoMatch(suggestions);
+        
+        let status: "unmapped" | "auto_mapped" | "manually_mapped" | "needs_review" = "unmapped";
+        if (row.screen.matchConfidence === "manual") {
+          status = "manually_mapped";
+        } else if (row.screen.matchConfidence === "auto_exact" || row.screen.matchConfidence === "auto_fuzzy") {
+          status = "auto_mapped";
+        } else if (row.screen.matchConfidence === "needs_review") {
+          status = "needs_review";
+        }
+        
+        return {
+          screen: {
+            id: row.screen.id,
+            screenId: row.screen.screenId,
+            name: row.screen.name,
+            yodeckPlayerName: row.screen.yodeckPlayerName,
+            locationId: row.screen.locationId,
+            locationName: row.locationName
+          },
+          currentMatch: row.mappedContactId ? {
+            confidence: row.screen.matchConfidence,
+            reason: row.screen.matchReason,
+            moneybirdContactId: row.mappedContactId,
+            contactName: row.mappedContactName
+          } : null,
+          suggestions,
+          bestAutoMatch: bestMatch,
+          status
+        };
+      });
+      
+      res.json({
+        screens: results,
+        stats: mappingStats,
+        contactsCount: contacts.length
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Link screen to Moneybird contact
+  app.post("/api/mappings/link", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { screenId, moneybirdContactId, isManual } = req.body;
+      
+      if (!screenId || !moneybirdContactId) {
+        return res.status(400).json({ message: "screenId en moneybirdContactId zijn vereist" });
+      }
+      
+      const contact = await storage.getMoneybirdContactByMoneybirdId(moneybirdContactId);
+      if (!contact) {
+        return res.status(404).json({ message: "Moneybird contact niet gevonden" });
+      }
+      
+      const contactName = contact.companyName || 
+        [contact.firstname, contact.lastname].filter(Boolean).join(" ") || 
+        "Onbekend";
+      
+      const confidence = isManual ? "manual" : "auto_exact";
+      const reason = isManual 
+        ? `Handmatig gekoppeld aan: "${contactName}"`
+        : `Automatisch gekoppeld aan: "${contactName}"`;
+      
+      const result = await storage.linkScreenToMoneybirdContact(
+        screenId, 
+        moneybirdContactId,
+        confidence,
+        reason
+      );
+      
+      res.json({
+        ok: true,
+        message: `Screen gekoppeld aan ${contactName}`,
+        screen: result.screen,
+        location: result.location
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Unlink screen from Moneybird contact
+  app.post("/api/mappings/unlink", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { screenId } = req.body;
+      
+      if (!screenId) {
+        return res.status(400).json({ message: "screenId is vereist" });
+      }
+      
+      const defaultLocation = await storage.getDefaultLocation();
+      if (!defaultLocation) {
+        return res.status(500).json({ message: "Geen default locatie gevonden" });
+      }
+      
+      const screen = await storage.unlinkScreen(screenId, defaultLocation.id);
+      
+      res.json({
+        ok: true,
+        message: "Screen ontkoppeld van Moneybird contact",
+        screen
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Auto-match all screens
+  app.post("/api/mappings/auto-match", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { findMatchesForScreen, getBestAutoMatch } = await import("./services/screenMatcher");
+      
+      const unmappedScreens = await storage.getUnmappedScreens();
+      const contacts = await storage.getMoneybirdContacts();
+      
+      let matched = 0;
+      let needsReview = 0;
+      let noMatch = 0;
+      const results: Array<{
+        screenId: string;
+        screenName: string;
+        action: "matched" | "needs_review" | "no_match";
+        contactName?: string;
+        confidence?: string;
+      }> = [];
+      
+      for (const screen of unmappedScreens) {
+        const suggestions = findMatchesForScreen(screen.name, screen.yodeckPlayerName, contacts);
+        const bestMatch = getBestAutoMatch(suggestions);
+        
+        if (bestMatch) {
+          await storage.linkScreenToMoneybirdContact(
+            screen.id,
+            bestMatch.moneybirdContactId,
+            bestMatch.confidence as "auto_exact" | "auto_fuzzy",
+            bestMatch.reason
+          );
+          matched++;
+          results.push({
+            screenId: screen.screenId,
+            screenName: screen.yodeckPlayerName || screen.name,
+            action: "matched",
+            contactName: bestMatch.contactName,
+            confidence: bestMatch.confidence
+          });
+        } else if (suggestions.length > 0) {
+          needsReview++;
+          results.push({
+            screenId: screen.screenId,
+            screenName: screen.yodeckPlayerName || screen.name,
+            action: "needs_review"
+          });
+        } else {
+          noMatch++;
+          results.push({
+            screenId: screen.screenId,
+            screenName: screen.yodeckPlayerName || screen.name,
+            action: "no_match"
+          });
+        }
+      }
+      
+      res.json({
+        ok: true,
+        message: `Auto-matching voltooid: ${matched} gekoppeld, ${needsReview} review nodig, ${noMatch} geen match`,
+        summary: { matched, needsReview, noMatch },
+        results
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get mapping stats
+  app.get("/api/mappings/stats", requirePermission("view_screens"), async (_req, res) => {
+    try {
+      const stats = await storage.getMappingStats();
+      res.json(stats);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   return httpServer;
 }
