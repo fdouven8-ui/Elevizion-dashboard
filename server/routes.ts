@@ -1585,6 +1585,300 @@ export async function registerRoutes(
     res.json(result);
   });
 
+  // ============================================================================
+  // MONEYBIRD INTEGRATION ROUTES
+  // ============================================================================
+
+  // Moneybird config status
+  app.get("/api/integrations/moneybird/status", isAuthenticated, async (_req, res) => {
+    try {
+      const hasApiToken = Boolean(process.env.MONEYBIRD_API_TOKEN?.trim());
+      const hasAdminId = Boolean(process.env.MONEYBIRD_ADMINISTRATION_ID?.trim());
+      const config = await storage.getIntegrationConfig("moneybird");
+      const stats = await storage.getMoneybirdStats();
+
+      res.json({
+        configured: hasApiToken && hasAdminId,
+        connected: config?.status === "connected" || config?.status === "active",
+        hasApiToken,
+        hasAdministrationId: hasAdminId,
+        administrationId: hasAdminId ? process.env.MONEYBIRD_ADMINISTRATION_ID : null,
+        lastSyncAt: config?.lastSyncAt,
+        lastSyncItemsProcessed: config?.lastSyncItemsProcessed,
+        stats,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get Moneybird administrations (for selecting which one to use)
+  app.get("/api/integrations/moneybird/administrations", isAuthenticated, async (_req, res) => {
+    try {
+      const { getMoneybirdClient } = await import("./services/moneybirdClient");
+      const client = await getMoneybirdClient();
+      
+      if (!client) {
+        return res.status(400).json({ message: "Moneybird API token niet geconfigureerd" });
+      }
+
+      const administrations = await client.getAdministrations();
+      res.json(administrations);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Select Moneybird administration
+  app.post("/api/integrations/moneybird/select-administration", isAuthenticated, async (req, res) => {
+    try {
+      const { administrationId } = req.body;
+      if (!administrationId) {
+        return res.status(400).json({ message: "administrationId is vereist" });
+      }
+
+      // Store in integration config
+      await storage.upsertIntegrationConfig("moneybird", {
+        isEnabled: true,
+        settings: { administrationId },
+        status: "connected",
+      });
+
+      res.json({ success: true, message: "Administratie geselecteerd" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Sync Moneybird contacts and invoices
+  app.post("/api/sync/moneybird/run", isAuthenticated, async (_req, res) => {
+    const startTime = Date.now();
+    console.log("[Moneybird Sync] Starting sync...");
+    
+    try {
+      const { getMoneybirdClient } = await import("./services/moneybirdClient");
+      const client = await getMoneybirdClient();
+      
+      if (!client) {
+        return res.status(400).json({ 
+          ok: false, 
+          message: "Moneybird API token niet geconfigureerd. Stel MONEYBIRD_API_TOKEN in." 
+        });
+      }
+
+      const administrationId = process.env.MONEYBIRD_ADMINISTRATION_ID;
+      if (!administrationId) {
+        return res.status(400).json({ 
+          ok: false, 
+          message: "Geen administratie geselecteerd. Stel MONEYBIRD_ADMINISTRATION_ID in." 
+        });
+      }
+
+      client.setAdministrationId(administrationId);
+
+      // Sync contacts
+      console.log("[Moneybird Sync] Fetching contacts...");
+      const contacts = await client.getAllContacts();
+      let contactsCreated = 0;
+      let contactsUpdated = 0;
+
+      for (const contact of contacts) {
+        const existing = await storage.getMoneybirdContactByMoneybirdId(contact.id);
+        await storage.upsertMoneybirdContact({
+          moneybirdId: contact.id,
+          companyName: contact.company_name || null,
+          firstname: contact.firstname || null,
+          lastname: contact.lastname || null,
+          email: contact.email || null,
+          phone: contact.phone || null,
+          address1: contact.address1 || null,
+          address2: contact.address2 || null,
+          zipcode: contact.zipcode || null,
+          city: contact.city || null,
+          country: contact.country || null,
+          chamberOfCommerce: contact.chamber_of_commerce || null,
+          taxNumber: contact.tax_number || null,
+          sepaActive: contact.sepa_active || false,
+          sepaIban: contact.sepa_iban || null,
+          sepaIbanAccountName: contact.sepa_iban_account_name || null,
+          sepaMandateId: contact.sepa_mandate_id || null,
+          sepaMandateDate: contact.sepa_mandate_date || null,
+          customerId: contact.customer_id || null,
+          lastSyncedAt: new Date(),
+        });
+        if (existing) {
+          contactsUpdated++;
+        } else {
+          contactsCreated++;
+        }
+      }
+
+      console.log(`[Moneybird Sync] Contacts: ${contactsCreated} created, ${contactsUpdated} updated`);
+
+      // Sync invoices
+      console.log("[Moneybird Sync] Fetching invoices...");
+      const invoices = await client.getAllSalesInvoices();
+      let invoicesCreated = 0;
+      let invoicesUpdated = 0;
+      let paymentsCreated = 0;
+
+      for (const invoice of invoices) {
+        const existing = await storage.getMoneybirdInvoiceByMoneybirdId(invoice.id);
+        await storage.upsertMoneybirdInvoice({
+          moneybirdId: invoice.id,
+          moneybirdContactId: invoice.contact_id,
+          invoiceId: invoice.invoice_id || null,
+          reference: invoice.reference || null,
+          invoiceDate: invoice.invoice_date || null,
+          dueDate: invoice.due_date || null,
+          state: invoice.state || null,
+          totalPriceExclTax: invoice.total_price_excl_tax || null,
+          totalPriceInclTax: invoice.total_price_incl_tax || null,
+          totalUnpaid: invoice.total_unpaid || null,
+          currency: invoice.currency || "EUR",
+          paidAt: invoice.paid_at ? new Date(invoice.paid_at) : null,
+          url: invoice.url || null,
+          lastSyncedAt: new Date(),
+        });
+        if (existing) {
+          invoicesUpdated++;
+        } else {
+          invoicesCreated++;
+        }
+
+        // Sync payments for this invoice
+        if (invoice.payments && invoice.payments.length > 0) {
+          for (const payment of invoice.payments) {
+            await storage.upsertMoneybirdPayment({
+              moneybirdId: payment.id,
+              moneybirdInvoiceId: invoice.id,
+              paymentDate: payment.payment_date || null,
+              price: payment.price || null,
+              priceCurrency: invoice.currency || "EUR",
+              lastSyncedAt: new Date(),
+            });
+            paymentsCreated++;
+          }
+        }
+      }
+
+      console.log(`[Moneybird Sync] Invoices: ${invoicesCreated} created, ${invoicesUpdated} updated`);
+      console.log(`[Moneybird Sync] Payments: ${paymentsCreated} synced`);
+
+      const duration = Date.now() - startTime;
+
+      // Update integration config
+      await storage.upsertIntegrationConfig("moneybird", {
+        isEnabled: true,
+        lastSyncAt: new Date(),
+        lastSyncItemsProcessed: contacts.length + invoices.length,
+        status: "connected",
+      });
+
+      // Log the sync
+      await storage.createIntegrationLog({
+        service: "moneybird",
+        action: "sync",
+        status: "success",
+        responseData: {
+          contacts: { created: contactsCreated, updated: contactsUpdated },
+          invoices: { created: invoicesCreated, updated: invoicesUpdated },
+          payments: { synced: paymentsCreated },
+        },
+        durationMs: duration,
+      });
+
+      res.json({
+        ok: true,
+        message: `Sync voltooid in ${duration}ms`,
+        contacts: { total: contacts.length, created: contactsCreated, updated: contactsUpdated },
+        invoices: { total: invoices.length, created: invoicesCreated, updated: invoicesUpdated },
+        payments: { synced: paymentsCreated },
+        duration,
+      });
+    } catch (error: any) {
+      console.error("[Moneybird Sync] Error:", error.message);
+      
+      await storage.createIntegrationLog({
+        service: "moneybird",
+        action: "sync",
+        status: "error",
+        errorMessage: error.message,
+        durationMs: Date.now() - startTime,
+      });
+
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  // Get synced Moneybird contacts
+  app.get("/api/moneybird/contacts", isAuthenticated, async (_req, res) => {
+    try {
+      const contacts = await storage.getMoneybirdContacts();
+      res.json(contacts);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get synced Moneybird invoices
+  app.get("/api/moneybird/invoices", isAuthenticated, async (_req, res) => {
+    try {
+      const invoices = await storage.getMoneybirdInvoices();
+      res.json(invoices);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get invoices for a specific contact
+  app.get("/api/moneybird/contacts/:contactId/invoices", isAuthenticated, async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      const contact = await storage.getMoneybirdContact(contactId);
+      if (!contact) {
+        return res.status(404).json({ message: "Contact niet gevonden" });
+      }
+      const invoices = await storage.getMoneybirdInvoicesByContact(contact.moneybirdId);
+      res.json(invoices);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Link Moneybird contact to advertiser
+  app.post("/api/moneybird/contacts/:contactId/link", isAuthenticated, async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      const { advertiserId } = req.body;
+
+      if (!advertiserId) {
+        return res.status(400).json({ message: "advertiserId is vereist" });
+      }
+
+      const result = await storage.linkMoneybirdContactToAdvertiser(contactId, advertiserId);
+      if (!result) {
+        return res.status(404).json({ message: "Contact niet gevonden" });
+      }
+
+      res.json({ success: true, contact: result });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get Moneybird stats
+  app.get("/api/moneybird/stats", isAuthenticated, async (_req, res) => {
+    try {
+      const stats = await storage.getMoneybirdStats();
+      res.json(stats);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  console.log("[routes] Moneybird routes registered");
+
   // Yodeck sync - TWO-STEP: 1) sync screens, 2) fetch content details per screen
   app.post("/api/integrations/yodeck/sync", async (_req, res) => {
     try {

@@ -52,6 +52,9 @@ import type {
   YodeckCreative, InsertYodeckCreative,
   YodeckMediaLink, InsertYodeckMediaLink,
   ScreenContentItem, InsertScreenContentItem,
+  MoneybirdContact, InsertMoneybirdContact,
+  MoneybirdInvoice, InsertMoneybirdInvoice,
+  MoneybirdPayment, InsertMoneybirdPayment,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -1784,6 +1787,146 @@ export class DatabaseStorage implements IStorage {
       unlinkedAds: unlinked.length,
       totalNonAds: nonAds.length,
       activeScreensWithContent: uniqueScreens.size
+    };
+  }
+
+  // ============================================================================
+  // MONEYBIRD INTEGRATION
+  // ============================================================================
+
+  async getMoneybirdContacts(): Promise<MoneybirdContact[]> {
+    return await db.select().from(schema.moneybirdContacts).orderBy(schema.moneybirdContacts.companyName);
+  }
+
+  async getMoneybirdContact(id: string): Promise<MoneybirdContact | undefined> {
+    const [contact] = await db.select().from(schema.moneybirdContacts).where(eq(schema.moneybirdContacts.id, id));
+    return contact;
+  }
+
+  async getMoneybirdContactByMoneybirdId(moneybirdId: string): Promise<MoneybirdContact | undefined> {
+    const [contact] = await db.select().from(schema.moneybirdContacts).where(eq(schema.moneybirdContacts.moneybirdId, moneybirdId));
+    return contact;
+  }
+
+  async upsertMoneybirdContact(data: InsertMoneybirdContact): Promise<MoneybirdContact> {
+    const existing = await this.getMoneybirdContactByMoneybirdId(data.moneybirdId);
+    if (existing) {
+      const [updated] = await db.update(schema.moneybirdContacts)
+        .set({ ...data, updatedAt: new Date(), lastSyncedAt: new Date() })
+        .where(eq(schema.moneybirdContacts.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(schema.moneybirdContacts).values(data).returning();
+    return created;
+  }
+
+  async linkMoneybirdContactToAdvertiser(moneybirdContactId: string, advertiserId: string): Promise<MoneybirdContact | undefined> {
+    const [updated] = await db.update(schema.moneybirdContacts)
+      .set({ advertiserId, updatedAt: new Date() })
+      .where(eq(schema.moneybirdContacts.id, moneybirdContactId))
+      .returning();
+    
+    // Also update the advertiser with the Moneybird contact ID
+    if (updated) {
+      const contact = await this.getMoneybirdContact(moneybirdContactId);
+      if (contact) {
+        await db.update(schema.advertisers)
+          .set({ moneybirdContactId: contact.moneybirdId, updatedAt: new Date() })
+          .where(eq(schema.advertisers.id, advertiserId));
+      }
+    }
+    return updated;
+  }
+
+  async getMoneybirdInvoices(): Promise<MoneybirdInvoice[]> {
+    return await db.select().from(schema.moneybirdInvoices).orderBy(desc(schema.moneybirdInvoices.invoiceDate));
+  }
+
+  async getMoneybirdInvoicesByContact(moneybirdContactId: string): Promise<MoneybirdInvoice[]> {
+    return await db.select()
+      .from(schema.moneybirdInvoices)
+      .where(eq(schema.moneybirdInvoices.moneybirdContactId, moneybirdContactId))
+      .orderBy(desc(schema.moneybirdInvoices.invoiceDate));
+  }
+
+  async getMoneybirdInvoice(id: string): Promise<MoneybirdInvoice | undefined> {
+    const [invoice] = await db.select().from(schema.moneybirdInvoices).where(eq(schema.moneybirdInvoices.id, id));
+    return invoice;
+  }
+
+  async getMoneybirdInvoiceByMoneybirdId(moneybirdId: string): Promise<MoneybirdInvoice | undefined> {
+    const [invoice] = await db.select().from(schema.moneybirdInvoices).where(eq(schema.moneybirdInvoices.moneybirdId, moneybirdId));
+    return invoice;
+  }
+
+  async upsertMoneybirdInvoice(data: InsertMoneybirdInvoice): Promise<MoneybirdInvoice> {
+    const existing = await this.getMoneybirdInvoiceByMoneybirdId(data.moneybirdId);
+    if (existing) {
+      const [updated] = await db.update(schema.moneybirdInvoices)
+        .set({ ...data, updatedAt: new Date(), lastSyncedAt: new Date() })
+        .where(eq(schema.moneybirdInvoices.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(schema.moneybirdInvoices).values(data).returning();
+    return created;
+  }
+
+  async getMoneybirdPayments(): Promise<MoneybirdPayment[]> {
+    return await db.select().from(schema.moneybirdPayments).orderBy(desc(schema.moneybirdPayments.paymentDate));
+  }
+
+  async getMoneybirdPaymentsByInvoice(moneybirdInvoiceId: string): Promise<MoneybirdPayment[]> {
+    return await db.select()
+      .from(schema.moneybirdPayments)
+      .where(eq(schema.moneybirdPayments.moneybirdInvoiceId, moneybirdInvoiceId))
+      .orderBy(desc(schema.moneybirdPayments.paymentDate));
+  }
+
+  async upsertMoneybirdPayment(data: InsertMoneybirdPayment): Promise<MoneybirdPayment> {
+    const [existing] = await db.select()
+      .from(schema.moneybirdPayments)
+      .where(eq(schema.moneybirdPayments.moneybirdId, data.moneybirdId));
+    
+    if (existing) {
+      const [updated] = await db.update(schema.moneybirdPayments)
+        .set({ ...data, lastSyncedAt: new Date() })
+        .where(eq(schema.moneybirdPayments.id, existing.id))
+        .returning();
+      return updated;
+    }
+    const [created] = await db.insert(schema.moneybirdPayments).values(data).returning();
+    return created;
+  }
+
+  async getMoneybirdStats(): Promise<{ 
+    totalContacts: number; 
+    linkedContacts: number; 
+    totalInvoices: number; 
+    openInvoices: number; 
+    paidInvoices: number;
+    totalUnpaid: string;
+  }> {
+    const contacts = await this.getMoneybirdContacts();
+    const invoices = await this.getMoneybirdInvoices();
+    
+    const linkedContacts = contacts.filter(c => c.advertiserId).length;
+    const openInvoices = invoices.filter(i => i.state === 'open' || i.state === 'late' || i.state === 'reminded').length;
+    const paidInvoices = invoices.filter(i => i.state === 'paid').length;
+    
+    const totalUnpaid = invoices.reduce((sum, inv) => {
+      const unpaid = parseFloat(inv.totalUnpaid || '0');
+      return sum + unpaid;
+    }, 0);
+
+    return {
+      totalContacts: contacts.length,
+      linkedContacts,
+      totalInvoices: invoices.length,
+      openInvoices,
+      paidInvoices,
+      totalUnpaid: totalUnpaid.toFixed(2)
     };
   }
 }

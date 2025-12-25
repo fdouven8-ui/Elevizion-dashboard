@@ -1201,3 +1201,109 @@ export const insertScreenContentItemSchema = createInsertSchema(screenContentIte
 
 export type ScreenContentItem = typeof screenContentItems.$inferSelect;
 export type InsertScreenContentItem = z.infer<typeof insertScreenContentItemSchema>;
+
+// ============================================================================
+// MONEYBIRD INTEGRATION
+// ============================================================================
+
+/**
+ * MoneybirdContacts - Synced contacts from Moneybird
+ * These are customers/advertisers in the Moneybird administration
+ */
+export const moneybirdContacts = pgTable("moneybird_contacts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  moneybirdId: text("moneybird_id").notNull().unique(), // Moneybird contact ID
+  companyName: text("company_name"),
+  firstname: text("firstname"),
+  lastname: text("lastname"),
+  email: text("email"),
+  phone: text("phone"),
+  address1: text("address1"),
+  address2: text("address2"),
+  zipcode: text("zipcode"),
+  city: text("city"),
+  country: text("country"),
+  chamberOfCommerce: text("chamber_of_commerce"), // KvK nummer
+  taxNumber: text("tax_number"), // BTW nummer
+  sepaActive: boolean("sepa_active").default(false),
+  sepaIban: text("sepa_iban"),
+  sepaIbanAccountName: text("sepa_iban_account_name"),
+  sepaMandateId: text("sepa_mandate_id"),
+  sepaMandateDate: date("sepa_mandate_date"),
+  customerId: text("customer_id"), // Moneybird customer ID
+  // Link to internal advertiser
+  advertiserId: varchar("advertiser_id").references(() => advertisers.id),
+  // Sync tracking
+  lastSyncedAt: timestamp("last_synced_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * MoneybirdInvoices - Synced invoices from Moneybird
+ */
+export const moneybirdInvoices = pgTable("moneybird_invoices", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  moneybirdId: text("moneybird_id").notNull().unique(), // Moneybird invoice ID
+  moneybirdContactId: text("moneybird_contact_id").notNull(), // Moneybird contact ID
+  invoiceId: text("invoice_id"), // User-visible invoice number like 2024-0001
+  reference: text("reference"),
+  invoiceDate: date("invoice_date"),
+  dueDate: date("due_date"),
+  state: text("state"), // draft, open, scheduled, pending_payment, late, reminded, paid, uncollectible
+  totalPriceExclTax: decimal("total_price_excl_tax", { precision: 12, scale: 2 }),
+  totalPriceInclTax: decimal("total_price_incl_tax", { precision: 12, scale: 2 }),
+  totalUnpaid: decimal("total_unpaid", { precision: 12, scale: 2 }),
+  currency: text("currency").default("EUR"),
+  paidAt: timestamp("paid_at"),
+  url: text("url"), // Direct link to invoice in Moneybird
+  // Link to internal invoice
+  internalInvoiceId: varchar("internal_invoice_id").references(() => invoices.id),
+  // Sync tracking
+  lastSyncedAt: timestamp("last_synced_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * MoneybirdPayments - Synced payments from Moneybird
+ */
+export const moneybirdPayments = pgTable("moneybird_payments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  moneybirdId: text("moneybird_id").notNull().unique(), // Moneybird payment ID
+  moneybirdInvoiceId: text("moneybird_invoice_id").notNull(), // Moneybird invoice ID
+  paymentDate: date("payment_date"),
+  price: decimal("price", { precision: 12, scale: 2 }),
+  priceCurrency: text("price_currency").default("EUR"),
+  // Sync tracking
+  lastSyncedAt: timestamp("last_synced_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Moneybird Insert Schemas
+export const insertMoneybirdContactSchema = createInsertSchema(moneybirdContacts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMoneybirdInvoiceSchema = createInsertSchema(moneybirdInvoices).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMoneybirdPaymentSchema = createInsertSchema(moneybirdPayments).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Moneybird Types
+export type MoneybirdContact = typeof moneybirdContacts.$inferSelect;
+export type InsertMoneybirdContact = z.infer<typeof insertMoneybirdContactSchema>;
+
+export type MoneybirdInvoice = typeof moneybirdInvoices.$inferSelect;
+export type InsertMoneybirdInvoice = z.infer<typeof insertMoneybirdInvoiceSchema>;
+
+export type MoneybirdPayment = typeof moneybirdPayments.$inferSelect;
+export type InsertMoneybirdPayment = z.infer<typeof insertMoneybirdPaymentSchema>;
