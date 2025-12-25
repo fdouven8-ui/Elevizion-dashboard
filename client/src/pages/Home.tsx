@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ExpandableCard } from "@/components/ui/expandable-card";
+import { ExpandableKpiCard } from "@/components/ui/expandable-kpi-card";
 import { 
   Wifi,
   WifiOff,
@@ -138,103 +139,113 @@ export default function Home() {
         <p className="text-muted-foreground">Overzicht van je Elevizion netwerk</p>
       </div>
 
-      {/* KPI Cards - 3 samengevoegde kaarten */}
+      {/* KPI Cards - 3 uitklapbare kaarten */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         
-        {/* SCHERMEN (samengevoegd) */}
-        <Link href="/screens">
-          <Card className="hover:shadow-md transition-all hover:scale-[1.01] cursor-pointer h-full" data-testid="kpi-schermen">
-            <div className="h-1 bg-emerald-500" />
-            <CardContent className="pt-4 pb-4">
-              {statsLoading ? (
-                <Skeleton className="h-16 w-full" />
-              ) : (
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-xs text-muted-foreground font-medium mb-1">Schermen</p>
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-2xl font-bold text-emerald-600">{screensOnline}</span>
-                      <span className="text-lg text-muted-foreground">/ {screensTotal}</span>
-                      <span className="text-sm text-muted-foreground">online</span>
-                    </div>
-                    {screensOffline > 0 && (
-                      <div className="flex items-center gap-1 mt-2">
-                        <WifiOff className="h-3 w-3 text-red-500" />
-                        <span className="text-sm text-red-600 font-medium">{screensOffline} offline</span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="p-2 rounded-full bg-emerald-50 flex-shrink-0">
-                    <Wifi className="h-5 w-5 text-emerald-600" />
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </Link>
-
-        {/* PLAATSINGEN & ADS (samengevoegd) */}
-        <Card className={`h-full ${adsUnlinked > 0 ? 'border-amber-300' : ''}`} data-testid="kpi-plaatsingen-ads">
-          <div className="h-1 bg-blue-500" />
-          <CardContent className="pt-4 pb-4">
-            {statsLoading ? (
-              <Skeleton className="h-16 w-full" />
-            ) : (
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <p className="text-xs text-muted-foreground font-medium mb-1">Plaatsingen & Ads</p>
-                  <div className="flex items-baseline gap-2 mb-2">
-                    <span className="text-2xl font-bold">{activePlacements}</span>
-                    <span className="text-sm text-muted-foreground">actieve plaatsingen</span>
-                  </div>
-                  <div className="space-y-0.5 text-sm">
-                    <div className="text-muted-foreground">
-                      Ads totaal: <span className="font-medium text-foreground">{adsTotal}</span>
-                    </div>
-                    {adsUnlinked > 0 && (
-                      <div className="text-amber-600">
-                        Niet gekoppeld: <span className="font-medium">{adsUnlinked}</span>
-                      </div>
-                    )}
-                  </div>
-                  <Link href="/placements">
-                    <Button variant="outline" size="sm" className="mt-3" data-testid="button-bekijk-details">
-                      Bekijk details
-                      <ChevronRight className="h-4 w-4 ml-1" />
-                    </Button>
-                  </Link>
-                </div>
-                <div className="p-2 rounded-full bg-blue-50 flex-shrink-0">
-                  <Target className="h-5 w-5 text-blue-600" />
-                </div>
+        {/* SCHERMEN (uitklapbaar) */}
+        {statsLoading ? (
+          <Card><CardContent className="pt-4"><Skeleton className="h-16 w-full" /></CardContent></Card>
+        ) : (
+          <ExpandableKpiCard
+            title="Schermen"
+            icon={<Wifi className="h-5 w-5 text-emerald-600" />}
+            mainValue={
+              <div className="flex items-baseline gap-2">
+                <span className="text-emerald-600">{screensOnline}</span>
+                <span className="text-lg text-muted-foreground font-normal">/ {screensTotal}</span>
               </div>
-            )}
-          </CardContent>
-        </Card>
+            }
+            summary={screensOffline > 0 ? `${screensOffline} offline` : "Alles online"}
+            accentColor="bg-emerald-500"
+            data-testid="kpi-schermen"
+          >
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Online</span>
+                <span className="font-medium text-emerald-600">{screensOnline}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Offline</span>
+                <span className={`font-medium ${screensOffline > 0 ? 'text-red-600' : ''}`}>{screensOffline}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Totaal</span>
+                <span className="font-medium">{screensTotal}</span>
+              </div>
+              <Link href="/screens">
+                <Button variant="outline" size="sm" className="w-full mt-2" data-testid="link-schermen">
+                  Bekijk schermen
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </Link>
+            </div>
+          </ExpandableKpiCard>
+        )}
 
-        {/* BETALENDE ADVERTEERDERS */}
-        <Link href="/advertisers?filter=paying">
-          <Card className="hover:shadow-md transition-all hover:scale-[1.01] cursor-pointer h-full" data-testid="kpi-adverteerders">
-            <div className="h-1 bg-purple-500" />
-            <CardContent className="pt-4 pb-4">
-              {statsLoading ? (
-                <Skeleton className="h-16 w-full" />
-              ) : (
-                <div className="flex items-start justify-between">
-                  <div>
-                    <p className="text-xs text-muted-foreground font-medium mb-1">Betalende adverteerders</p>
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-2xl font-bold">{payingAdvertisers}</span>
-                    </div>
-                  </div>
-                  <div className="p-2 rounded-full bg-purple-50 flex-shrink-0">
-                    <Users className="h-5 w-5 text-purple-600" />
-                  </div>
+        {/* PLAATSINGEN & ADS (uitklapbaar) */}
+        {statsLoading ? (
+          <Card><CardContent className="pt-4"><Skeleton className="h-16 w-full" /></CardContent></Card>
+        ) : (
+          <ExpandableKpiCard
+            title="Plaatsingen & Ads"
+            icon={<Target className="h-5 w-5 text-blue-600" />}
+            mainValue={activePlacements}
+            summary={adsUnlinked > 0 ? `${adsUnlinked} ads niet gekoppeld` : `${adsTotal} ads totaal`}
+            accentColor="bg-blue-500"
+            className={adsUnlinked > 0 ? 'border-amber-300' : ''}
+            data-testid="kpi-plaatsingen-ads"
+          >
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Actieve plaatsingen</span>
+                <span className="font-medium">{activePlacements}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Ads totaal</span>
+                <span className="font-medium">{adsTotal}</span>
+              </div>
+              {adsUnlinked > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-amber-600">Niet gekoppeld</span>
+                  <span className="font-medium text-amber-600">{adsUnlinked}</span>
                 </div>
               )}
-            </CardContent>
-          </Card>
-        </Link>
+              <Link href="/placements">
+                <Button variant="outline" size="sm" className="w-full mt-2" data-testid="button-bekijk-details">
+                  Bekijk plaatsingen
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </Link>
+            </div>
+          </ExpandableKpiCard>
+        )}
+
+        {/* BETALENDE ADVERTEERDERS (uitklapbaar) */}
+        {statsLoading ? (
+          <Card><CardContent className="pt-4"><Skeleton className="h-16 w-full" /></CardContent></Card>
+        ) : (
+          <ExpandableKpiCard
+            title="Betalende adverteerders"
+            icon={<Users className="h-5 w-5 text-purple-600" />}
+            mainValue={payingAdvertisers}
+            summary="Actieve klanten"
+            accentColor="bg-purple-500"
+            data-testid="kpi-adverteerders"
+          >
+            <div className="space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Betalend</span>
+                <span className="font-medium">{payingAdvertisers}</span>
+              </div>
+              <Link href="/advertisers?filter=paying">
+                <Button variant="outline" size="sm" className="w-full mt-2" data-testid="link-adverteerders">
+                  Bekijk adverteerders
+                  <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </Link>
+            </div>
+          </ExpandableKpiCard>
+        )}
       </div>
 
       {/* Acties & Alerts Panel */}
