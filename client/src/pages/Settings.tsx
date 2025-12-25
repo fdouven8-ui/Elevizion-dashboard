@@ -1272,7 +1272,13 @@ export default function Settings() {
     queryFn: async () => {
       try {
         const res = await apiRequest("GET", "/api/finance/overdue");
-        return res.json();
+        const data = await res.json();
+        // Handle new response format with moneybird/internal structure
+        if (data && typeof data === 'object' && 'internal' in data) {
+          return data.internal || [];
+        }
+        // Fallback for old array format
+        return Array.isArray(data) ? data : [];
       } catch {
         return [];
       }
