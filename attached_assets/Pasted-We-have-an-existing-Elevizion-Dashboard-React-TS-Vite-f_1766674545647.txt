@@ -1,0 +1,68 @@
+We have an existing Elevizion Dashboard (React + TS + Vite frontend, Express backend, Drizzle ORM + PostgreSQL). 
+Yodeck integration is already working and syncing screens + content summaries. 
+DO NOT rebuild the project from scratch. Extend the current integration framework.
+
+Goal: Implement Moneybird integration so I only need to paste my Moneybird API token (personal access token / PAT) and everything else is guided (administration selection, tests, sync).
+
+Current state from logs:
+- /api/sync/status returns yodeck connected, moneybird not_configured
+- /api/integrations/secrets/status expects moneybird: { access_token: false, admin_id: false }
+So build around "access_token + administration_id" and fix any UI label that incorrectly asks for "client_id".
+
+Requirements (step-by-step):
+1) Integration settings UI:
+   - Replace/avoid asking for "client_id" unless OAuth is explicitly enabled.
+   - Default flow must support Moneybird Personal Access Token:
+     Fields:
+       - moneybird_access_token (required)
+       - administration_id (required, but should be selectable)
+   - Add a "Connect" / "Test connection" button:
+     - Uses access token to call Moneybird API and fetch administrations
+     - Show a dropdown to select the administration
+     - Save access_token + administration_id securely (use existing encryption/secret storage pattern like Yodeck)
+
+2) Backend:
+   - Create Moneybird client wrapper with base URL, Authorization Bearer token, error handling, rate limit friendly retries (simple backoff).
+   - Endpoints:
+     - GET /api/integrations/moneybird/admins  -> returns administrations list (id + name)
+     - POST /api/integrations/moneybird/test   -> validates token + administration_id
+     - POST /api/sync/moneybird/run            -> manual sync trigger
+   - Scheduled sync:
+     - If configured, run every 15 minutes like Yodeck sync
+     - If not configured, keep current behavior: "[Moneybird Sync] Skipped - not configured"
+
+3) Data model & mapping (CRITICAL):
+   - Do not break existing tables. Add minimal new tables/columns.
+   - Store and link:
+     - Moneybird contacts (at least id, company_name/name, email, updated_at)
+     - Invoices (id, contact_id, state, total, due_date, pdf_url if available, updated_at)
+     - Optional: subscriptions/contracts if used in Moneybird
+   - Add linkage so Yodeck + Moneybird data can be connected:
+     - Our core identifier across the app is SCREEN_ID (EVZ-001 format) OR existing screenId.
+     - Each advertiser/customer in our system should be linkable to a Moneybird contact:
+       Add fields like advertisers.moneybird_contact_id (nullable) and/or locations.moneybird_contact_id.
+     - Each contract/invoice in our system should be linkable to a Moneybird invoice:
+       Add fields like invoices.moneybird_invoice_id (nullable).
+   - Create a UI mapping screen:
+     - Show list of internal Advertisers/Locations and allow selecting a Moneybird Contact to link (autocomplete/search).
+     - After linking, finance views should be able to show moneybird invoice status per advertiser.
+
+4) Sync logic:
+   - On sync: pull Moneybird contacts + invoices (at least recent 90 days or updated_since).
+   - Upsert into DB.
+   - Compute KPIs:
+     - unpaidInvoiceCount + unpaidAmount
+     - overdue list for /api/finance/overdue
+   - Make sure API responses used by the dashboard (e.g., /api/dashboard/kpis) incorporate Moneybird data once configured.
+
+5) DX / Setup:
+   - Add env var support for token in dev, but store encrypted in DB for production.
+   - Add clear logs:
+     - [Moneybird] Connected (administration: X)
+     - [Moneybird Sync] fetched contacts=N invoices=N updated=N
+     - Log 401/403 as "token invalid" not generic error
+
+Deliverables:
+- Working Moneybird PAT integration without requiring OAuth client_id.
+- Minimal changes, extend existing codebase.
+- Yodeck + Moneybird are linkable through advertiser/location and invoice relationships, so we can later correlate “which ads/screens belong to which paying customer”.

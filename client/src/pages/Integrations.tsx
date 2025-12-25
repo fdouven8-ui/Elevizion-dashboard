@@ -1,10 +1,11 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Check, X, RefreshCw, Loader2 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, X, RefreshCw, Loader2, Link2, Unlink } from "lucide-react";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface IntegrationStatus {
   yodeck: { isConfigured: boolean };
@@ -40,6 +41,24 @@ interface MoneybirdSyncResult {
 
 interface YodeckConfigStatus {
   configured: boolean;
+}
+
+interface Advertiser {
+  id: string;
+  companyName: string;
+  contactName: string | null;
+  email: string | null;
+  moneybirdContactId: string | null;
+}
+
+interface MoneybirdContact {
+  id: string;
+  moneybirdId: string;
+  companyName: string | null;
+  firstname: string | null;
+  lastname: string | null;
+  email: string | null;
+  advertiserId: string | null;
 }
 
 interface YodeckTestResult {
@@ -89,6 +108,26 @@ async function syncYodeck() {
   return res.json();
 }
 
+async function fetchAdvertisers(): Promise<Advertiser[]> {
+  const res = await fetch("/api/advertisers", { credentials: "include" });
+  return res.json();
+}
+
+async function fetchMoneybirdContacts(): Promise<MoneybirdContact[]> {
+  const res = await fetch("/api/moneybird/contacts", { credentials: "include" });
+  return res.json();
+}
+
+async function linkAdvertiserToContact(advertiserId: string, moneybirdContactId: string): Promise<void> {
+  const res = await fetch(`/api/moneybird/contacts/${moneybirdContactId}/link`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ advertiserId }),
+  });
+  if (!res.ok) throw new Error("Koppelen mislukt");
+}
+
 async function runYodeckSync() {
   const res = await fetch("/api/sync/yodeck/run", { method: "POST", credentials: "include" });
   return res.json();
@@ -122,6 +161,33 @@ export default function Integrations() {
     queryKey: ["moneybird-status"],
     queryFn: fetchMoneybirdStatus,
     refetchInterval: 30000,
+  });
+
+  const { data: advertisers } = useQuery({
+    queryKey: ["advertisers"],
+    queryFn: fetchAdvertisers,
+  });
+
+  const { data: moneybirdContacts, refetch: refetchContacts } = useQuery({
+    queryKey: ["moneybird-contacts"],
+    queryFn: fetchMoneybirdContacts,
+    enabled: !!moneybirdStatus?.configured,
+  });
+
+  const [selectedMappings, setSelectedMappings] = useState<Record<string, string>>({});
+
+  const linkMutation = useMutation({
+    mutationFn: ({ advertiserId, contactId }: { advertiserId: string; contactId: string }) =>
+      linkAdvertiserToContact(advertiserId, contactId),
+    onSuccess: () => {
+      toast({ title: "Gekoppeld", description: "Adverteerder is gekoppeld aan Moneybird contact" });
+      refetchContacts();
+      queryClient.invalidateQueries({ queryKey: ["advertisers"] });
+      queryClient.invalidateQueries({ queryKey: ["moneybird-status"] });
+    },
+    onError: () => {
+      toast({ title: "Fout", description: "Koppelen mislukt", variant: "destructive" });
+    },
   });
 
   const yodeckConfigured = yodeckConfig?.configured ?? status?.yodeck?.isConfigured ?? false;
@@ -461,6 +527,94 @@ export default function Integrations() {
             )}
           </CardContent>
         </Card>
+
+        {moneybirdConfigured && moneybirdContacts && moneybirdContacts.length > 0 && (
+          <Card className="md:col-span-2">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-3">
+                <Link2 className="h-5 w-5" />
+                Adverteerder Koppelingen
+              </CardTitle>
+              <CardDescription>
+                Koppel uw adverteerders aan Moneybird contacten om facturen en betalingen te synchroniseren.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {advertisers?.map((advertiser) => {
+                  const linkedContact = moneybirdContacts?.find(c => c.advertiserId === advertiser.id);
+                  const availableContacts = moneybirdContacts?.filter(c => !c.advertiserId || c.advertiserId === advertiser.id) || [];
+                  
+                  return (
+                    <div key={advertiser.id} className="flex items-center gap-4 p-3 border rounded-lg" data-testid={`mapping-row-${advertiser.id}`}>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium truncate" data-testid={`text-advertiser-name-${advertiser.id}`}>{advertiser.companyName}</p>
+                        <p className="text-xs text-muted-foreground truncate">{advertiser.email || advertiser.contactName || "Geen contact"}</p>
+                      </div>
+                      
+                      <div className="flex items-center gap-2">
+                        {linkedContact ? (
+                          <div className="flex items-center gap-2">
+                            <Badge variant="default" className="whitespace-nowrap" data-testid={`badge-linked-${advertiser.id}`}>
+                              <Check className="h-3 w-3 mr-1" />
+                              {linkedContact.companyName || `${linkedContact.firstname || ''} ${linkedContact.lastname || ''}`.trim() || linkedContact.email}
+                            </Badge>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <Select
+                              value={selectedMappings[advertiser.id] || ""}
+                              onValueChange={(value) => setSelectedMappings(prev => ({ ...prev, [advertiser.id]: value }))}
+                            >
+                              <SelectTrigger className="w-[200px]" data-testid={`select-contact-${advertiser.id}`}>
+                                <SelectValue placeholder="Selecteer contact..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {availableContacts.map((contact) => (
+                                  <SelectItem key={contact.id} value={contact.id}>
+                                    {contact.companyName || `${contact.firstname || ''} ${contact.lastname || ''}`.trim() || contact.email || contact.moneybirdId}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Button
+                              size="sm"
+                              disabled={!selectedMappings[advertiser.id] || linkMutation.isPending}
+                              onClick={() => {
+                                const contactId = selectedMappings[advertiser.id];
+                                if (contactId) {
+                                  linkMutation.mutate({ advertiserId: advertiser.id, contactId });
+                                  setSelectedMappings(prev => {
+                                    const next = { ...prev };
+                                    delete next[advertiser.id];
+                                    return next;
+                                  });
+                                }
+                              }}
+                              data-testid={`button-link-${advertiser.id}`}
+                            >
+                              {linkMutation.isPending ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <Link2 className="h-4 w-4" />
+                              )}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                
+                {(!advertisers || advertisers.length === 0) && (
+                  <p className="text-sm text-muted-foreground text-center py-4">
+                    Geen adverteerders gevonden om te koppelen.
+                  </p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   );

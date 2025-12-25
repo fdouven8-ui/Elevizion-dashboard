@@ -5320,9 +5320,70 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/finance/overdue", async (_req, res) => {
+  app.get("/api/finance/overdue", requirePermission("view_finance"), async (_req, res) => {
     try {
-      res.json([]);
+      // Get Moneybird invoices that are overdue
+      const moneybirdInvoices = await storage.getMoneybirdInvoices();
+      const today = new Date();
+      
+      const overdueItems = moneybirdInvoices
+        .filter(inv => {
+          // Check if invoice is open and past due date
+          if (inv.state !== "open" && inv.state !== "late") return false;
+          if (!inv.dueDate) return false;
+          const dueDate = new Date(inv.dueDate);
+          return dueDate < today;
+        })
+        .map(inv => {
+          const daysOverdue = Math.floor((today.getTime() - new Date(inv.dueDate!).getTime()) / (1000 * 60 * 60 * 24));
+          return {
+            id: inv.id,
+            moneybirdInvoiceId: inv.moneybirdId,
+            invoiceNumber: inv.invoiceId || inv.reference || inv.moneybirdId,
+            moneybirdContactId: inv.moneybirdContactId,
+            totalAmount: inv.totalPriceInclTax,
+            unpaidAmount: inv.totalUnpaid,
+            dueDate: inv.dueDate,
+            daysOverdue,
+            state: inv.state,
+            url: inv.url,
+          };
+        })
+        .sort((a, b) => b.daysOverdue - a.daysOverdue);
+
+      // Also get internal invoices that are overdue
+      const internalInvoices = await storage.getInvoices();
+      const overdueInternal = internalInvoices
+        .filter(inv => {
+          if (inv.status === "paid") return false;
+          if (!inv.dueDate) return false;
+          const dueDate = new Date(inv.dueDate);
+          return dueDate < today;
+        })
+        .map(inv => {
+          const daysOverdue = Math.floor((today.getTime() - new Date(inv.dueDate!).getTime()) / (1000 * 60 * 60 * 24));
+          return {
+            id: inv.id,
+            type: "internal" as const,
+            invoiceNumber: inv.invoiceNumber,
+            advertiserId: inv.advertiserId,
+            totalAmount: inv.amountIncVat,
+            dueDate: inv.dueDate,
+            daysOverdue,
+            status: inv.status,
+          };
+        });
+
+      res.json({
+        moneybird: overdueItems,
+        internal: overdueInternal,
+        summary: {
+          moneybirdCount: overdueItems.length,
+          moneybirdTotal: overdueItems.reduce((sum, i) => sum + parseFloat(i.unpaidAmount || "0"), 0),
+          internalCount: overdueInternal.length,
+          internalTotal: overdueInternal.reduce((sum, i) => sum + parseFloat(String(i.totalAmount || 0)), 0),
+        },
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
