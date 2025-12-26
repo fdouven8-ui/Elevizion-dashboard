@@ -114,9 +114,9 @@ export default function LocationDetail() {
     return (
       <div className="space-y-6">
         <Button variant="ghost" size="sm" asChild>
-          <Link href="/screens">
+          <Link href="/locations">
             <ArrowLeft className="h-4 w-4 mr-2" />
-            Terug naar Schermen
+            Terug naar Locaties
           </Link>
         </Button>
         <Card>
@@ -137,9 +137,9 @@ export default function LocationDetail() {
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <Button variant="ghost" size="sm" asChild data-testid="button-back">
-        <Link href="/screens">
+        <Link href="/locations">
           <ArrowLeft className="h-4 w-4 mr-2" />
-          Terug naar Schermen
+          Terug naar Locaties
         </Link>
       </Button>
 

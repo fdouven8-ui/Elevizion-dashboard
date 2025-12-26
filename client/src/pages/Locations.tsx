@@ -148,9 +148,11 @@ export default function Locations() {
                           <Link href={`/locations/${loc.id}`}>Details Bekijken</Link>
                         </DropdownMenuItem>
                         {!loc.moneybirdContactId && (
-                          <DropdownMenuItem>
-                            <Link2 className="h-4 w-4 mr-2" />
-                            Koppel Moneybird contact
+                          <DropdownMenuItem asChild>
+                            <Link href={`/locations/${loc.id}`}>
+                              <Link2 className="h-4 w-4 mr-2" />
+                              Koppel Moneybird contact
+                            </Link>
                           </DropdownMenuItem>
                         )}
                       </DropdownMenuContent>

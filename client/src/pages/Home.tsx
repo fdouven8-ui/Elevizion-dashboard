@@ -394,7 +394,7 @@ export default function Home() {
                     {locationsWithoutMoneybird > 0 ? (
                       <>
                         <Badge variant="outline" className="text-orange-600 border-orange-600">{locationsWithoutMoneybird}</Badge>
-                        <Link href="/screens">
+                        <Link href="/locations">
                           <Button variant="ghost" size="sm">
                             <ChevronRight className="h-4 w-4" />
                           </Button>
@@ -424,7 +424,7 @@ export default function Home() {
                     {locationsAddressIncomplete > 0 ? (
                       <>
                         <Badge variant="outline" className="text-orange-600 border-orange-600">{locationsAddressIncomplete}</Badge>
-                        <Link href="/screens">
+                        <Link href="/locations">
                           <Button variant="ghost" size="sm">
                             <ChevronRight className="h-4 w-4" />
                           </Button>
