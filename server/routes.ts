@@ -1911,19 +1911,25 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Moneybird contact niet gevonden" });
       }
 
-      // Update location with Moneybird contact ID
-      const updated = await storage.updateLocation(id, {
-        moneybirdContactId: contact.moneybirdId,
-        // Optionally sync address from Moneybird
-        address: contact.address1 || location.address,
-        city: contact.city || location.city,
-        zipcode: contact.zipcode || location.zipcode,
+      // Use the dedicated function that properly syncs all Moneybird data
+      console.log(`[Moneybird Link] Linking location ${id} to contact ${contact.moneybirdId}:`, {
+        companyName: contact.companyName,
+        firstname: contact.firstname,
+        lastname: contact.lastname,
+        address: contact.address1,
+        city: contact.city,
+        zipcode: contact.zipcode,
+        email: contact.email,
+        phone: contact.phone,
       });
+
+      const updated = await storage.updateLocationFromMoneybirdContact(id, contact);
 
       res.json({ 
         success: true, 
         message: "Locatie gekoppeld aan Moneybird contact",
-        location: updated 
+        location: updated,
+        syncedFields: ['name', 'address', 'street', 'zipcode', 'city', 'contactName', 'email', 'phone', 'moneybirdContactId'],
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });

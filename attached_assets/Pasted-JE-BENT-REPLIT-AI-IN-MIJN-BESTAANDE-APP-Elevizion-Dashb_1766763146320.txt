@@ -1,0 +1,109 @@
+JE BENT REPLIT AI IN MIJN BESTAANDE APP (Elevizion Dashboard).
+NIET OPNIEUW BOUWEN. UITBREIDEN OP HUIDIGE STRUCTUUR/DB/API/ROUTES/COMPONENTEN.
+Doel: Moneybird wordt de “single source of truth” voor klantgegevens (naam/adres/contact/IBAN), en dat koppelt aan Yodeck screens + advertenties/contracten.
+
+HUIDIGE PROBLEMEN (MOET JE FIXEN):
+- Er is een “Default (Yodeck Import)” locatie waarin meerdere screens samenkomen. Dit klopt niet: in 99% van de gevallen is 1 screen = 1 locatie.
+- Het aparte menu “Ontbrekende gegevens / Koppelingen” is verwarrend. Koppelen moet in de normale flow (Schermen/Locaties/Adverteerders) gebeuren.
+- Koppelen aan Moneybird contact lijkt niet te “apply’en”: na selecteren blijft adres/gegevens leeg.
+- Screen “Test” en “Basil’s Barber Shop Maasbracht” staan op één locatie, maar moeten elk een eigen locatie hebben.
+- Locatienaam “Default” is niet bruikbaar; naam moet vanuit Yodeck screen naam komen (of Moneybird contact naam zodra gekoppeld).
+
+EINDVISIE (BELANGRIJK):
+- Moneybird contact = bron voor: bedrijfsnaam, adres, postcode, plaats, email, telefoon, contactpersoon, IBAN (indien aanwezig).
+- Deze gegevens moeten automatisch landen op:
+  1) Location (schermlocatie / partnerlocatie)
+  2) Advertiser (adverteerder)
+- Yodeck blijft bron voor: screen status, yodeck ids, content info.
+- Dashboard koppelt alles: Screen ↔ Location ↔ MoneybirdContact ↔ Advertisers ↔ Placements ↔ Finance.
+
+DATA MODEL AANPASSINGEN (MINIMAAL, MAAR CORRECT):
+1) Introduceer in DB (of bevestig dat het bestaat):
+   - locations.moneybirdContactId (nullable) + locations.moneybirdContactSnapshot (json) + locations.lastMoneybirdSyncAt
+   - advertisers.moneybirdContactId (nullable) + advertisers.moneybirdContactSnapshot (json) + advertisers.lastMoneybirdSyncAt
+   - screens.locationId blijft, maar fix mapping (1 screen -> 1 location default)
+2) Maak een tabel moneybird_contacts (of hergebruik als die er al is):
+   - id (uuid intern), moneybirdId (string/number), name, address fields, email, phone, zipcode, city, country, iban, updatedAt, rawJson
+   - index op moneybirdId
+
+SYNC LOGICA (MOET ROBUUST):
+A) Moneybird Sync:
+- Haal contacts op uit Moneybird en upsert in moneybird_contacts.
+- Sla rawJson op (zodat we later extra velden kunnen gebruiken zonder schema breken).
+- Toon in UI hoeveel contacts gevonden.
+
+B) Yodeck Sync (bestaat al):
+- Bij screens import: STOP met alles onder “Default (Yodeck Import)” zetten.
+- Nieuwe regel:
+  - Als screen nog geen location heeft: maak automatisch een location aan met:
+    name = screen.yodeckPlayerName (of screen.name)
+    status = active
+    address = onbekend (tot Moneybird gekoppeld)
+  - Koppel screen.locationId aan die nieuwe location.
+  - Alleen als je expliciet detecteert dat er al 2 screens op exact dezelfde fysieke locatie horen (zelfde MoneybirdContactId later), dan mag 2 screens op 1 location. Maar default = 1:1.
+
+KOPPELEN (FUNCTIONEEL MOET DIT WERKEN):
+- Implement “linkMoneybirdContactToLocation(locationId, moneybirdContactId)”:
+  - zet locations.moneybirdContactId
+  - vul location velden (naam/adres/email/telefoon/contactName) met Moneybird data
+  - sla snapshot json op
+  - markeer “linked”
+- Implement “linkMoneybirdContactToAdvertiser(advertiserId, moneybirdContactId)” idem.
+- Zorg dat na koppelen de UI direct de ingevulde gegevens laat zien (geen stale cache).
+
+AUTO-MATCH (MAG, MAAR EENVOUDIG EN BETROUWBAAR):
+- Auto-match locaties op:
+  - exact match: location.name == moneybird_contact.name (case-insensitive)
+  - of bevat-match: “Basil’s Barber Shop” in contact name
+  - eventueel postcode+straat match als location al iets heeft
+- Laat altijd een “review” step (toon suggestie + knop Koppelen), maar geen apart menu.
+
+UI/UX AANPASSINGEN (BELANGRIJK: geen nieuw hoofdmenu “Ontbrekende gegevens”):
+1) Verwijder of verberg het aparte menu item “Ontbrekende gegevens / Koppelingen”.
+2) Verwerk “koppelen” in bestaande pagina’s:
+   - Schermen (lijst): voeg kolom/badge “Moneybird” (Gekoppeld / Ontbreekt)
+     + toon bedrijfsnaam/adres zodra gekoppeld
+     + knop “Koppelen” per screen (opent modal)
+   - Locaties (lijst + detail): idem, maar logisch: locatie is gekoppeld aan Moneybird contact.
+   - Advertisers (lijst + detail): koppel adverteerder aan Moneybird contact.
+3) Maak 1 universele “MoneybirdLinkModal” component:
+   - dropdown/search door moneybird_contacts
+   - toont preview (naam, adres, email, tel) vóór opslaan
+   - knop “Koppelen”
+   - optioneel knop “Nieuwe contact aanmaken” (later, nu niet verplicht)
+4) In Screen detail: toon:
+   - Yodeck info (status/content)
+   - Location block (naam/adres)
+   - Moneybird block (gekoppeld contact) + “Wijzig koppeling”
+   - Als screen = “Basil’s Barber Shop” maar location = Default: fix automatisch met migratie.
+
+MIGRATIE / OPSCHONEN (MOET JE DIRECT DOEN):
+- Detecteer “Default (Yodeck Import)” location:
+  - Voor elk screen dat daaraan hangt: maak eigen location aan en verplaats screen.
+  - Laat Default bestaan alleen als leeg of als echte multi-screen locatie (maar dat is later).
+- Zorg dat “Test” en “Basil’s Barber Shop Maasbracht” elk een eigen location krijgen.
+- Zet location.name gelijk aan screen naam als er nog geen Moneybird koppeling is.
+
+ACCEPTANCE CRITERIA (MOET HALEN):
+- Na Moneybird sync: ik zie moneybird contacts in dropdown/modals.
+- Elk Yodeck screen heeft standaard een eigen location (1:1).
+- In Schermen overzicht zie ik per screen of Moneybird gekoppeld is + bedrijfsnaam/adres zodra gekoppeld.
+- Koppelen knop werkt: selecteer contact -> save -> locatie gegevens vullen direct.
+- Geen apart menu “Ontbrekende gegevens”; alles zit in Schermen/Locaties/Advertisers.
+- “Default (Yodeck Import)” veroorzaakt niet meer dat meerdere screens op 1 locatie staan.
+
+WERKWIJZE:
+- Gebruik bestaande routes/services waar mogelijk.
+- Voeg alleen de minimale nieuwe endpoints toe:
+  - GET /api/moneybird/contacts (of bestaand) voor UI dropdown
+  - POST /api/locations/:id/link-moneybird
+  - POST /api/advertisers/:id/link-moneybird
+- Update frontend waar nodig (React/TS) zonder redesign van hele app.
+- Voeg logregels toe bij koppelen (success + ids) zodat ik kan debuggen.
+
+START NU MET:
+1) Database migratie + opschonen Default locatie
+2) Moneybird contacts endpoint voor UI
+3) Link endpoints + write-through (velden invullen)
+4) UI: Schermen en Locaties voorzien van badges + modal koppelen
+5) Testflow: ik maak 1 Moneybird contact “Bouwservice Douven (Sittard)” en koppel aan screen “Test” -> adres zichtbaar in schermen/locaties.
