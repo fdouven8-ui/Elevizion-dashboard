@@ -1,0 +1,122 @@
+JE BENT REPLIT AGENT + SENIOR FULL-STACK ENGINEER VOOR HET BESTAANDE “Elevizion Dashboard”.
+BELANGRIJK: NIET OPNIEUW BOUWEN. ALLES UITBREIDEN/REPAREREN OP BASIS VAN DE HUIDIGE CODEBASE (React+TS+Vite frontend, Express backend, Drizzle ORM + Postgres). Houd bestaande routes/DB waar mogelijk, maar fix de datalaag en UI zodat Moneybird↔Yodeck koppeling écht werkt.
+
+DOEL (waarom):
+Alle “brondata” voor bedrijven/locaties/adverteerders komt uit Moneybird (contacten + adres + personen). Yodeck levert screens + player info + content. Ons dashboard is de “single source of truth” die deze twee werelden aan elkaar koppelt en alles juist toont.
+
+HUIDIGE PROBLEMEN (moet je expliciet oplossen):
+1) Yodeck import maakt 1 “Default (Yodeck Import)” locatie en hangt ALLE screens daaronder → fout. Basil’s Barber Shop en Test zijn 2 verschillende locaties, maar staan nu samen.
+2) “Locatie” en “Scherm” zijn in 99% van de gevallen hetzelfde (1 scherm per locatie). Alleen uitzonderlijk meerdere schermen per locatie.
+3) Moneybird-contact koppelen werkt niet goed:
+   - Na koppelen worden adres/contactvelden niet gevuld of niet opgeslagen
+   - UI blijft “Niet gekoppeld / Ontbreekt / Onvolledig”
+   - Het systeem toont soms 0 Moneybird contacten terwijl er wel 1 is gesynct
+4) Het aparte menu “Ontbrekende gegevens / Koppelingen” is verwarrend. Dit moet NIET als losse hoofd-navigatie. Koppelen moet logisch geïntegreerd worden in Schermen/Locaties (en later Advertisers) met duidelijke status-badges + inline fixes.
+5) “Default (Yodeck Import)” als naam is niet bruikbaar. Locatie/schermnaam moet kloppen.
+
+WAT IK WIL (functioneel):
+A) Datamodel en flow “1 scherm = 1 locatie” als default
+- Elke Yodeck screen krijgt bij import automatisch een eigen Location record (tenzij je expliciet detecteert dat het 2e scherm op exact dezelfde locatie hoort, maar dat is optioneel en later).
+- De Location naam wordt standaard gelijk aan de Yodeck screen naam (bijv. “Basil’s Barber Shop Maasbracht”).
+- Screen.locationId wijst naar die unieke locatie.
+- Geen globale “Default (Yodeck Import)” meer voor nieuwe imports. Bestaande data migreren: splits de huidige Default-locatie op in meerdere locaties (1 per screen) en verplaats screens correct.
+
+B) Moneybird als bron voor contactgegevens (locaties en adverteerders)
+- We syncen Moneybird Contacts (en liefst ook Contact Persons + Addresses als Moneybird dat levert).
+- Voor een “Locatie/Scherm” koppelen we aan precies 1 Moneybird Contact (de host-locatie/partner).
+- Zodra gekoppeld: vul en bewaar lokaal in DB:
+  - bedrijf/naam, adres (straat, huisnr, postcode, plaats, land), contactpersoon, email, tel
+  - moneybirdContactId + eventueel moneybirdContactPersonId
+- UI moet daarna direct “gekoppeld” tonen en adressen tonen (geen “Onbekend/Onvolledig” meer als MB data wel bestaat).
+
+C) Koppeling UI moet simpel en logisch
+- Verwijder “Ontbrekende gegevens” als aparte menu entry in de sidebar.
+- In plaats daarvan:
+  1) In “Schermen” lijst:
+     - Toon per screen een badge: “Moneybird gekoppeld” / “Koppeling nodig”
+     - Als “Koppeling nodig”: knop “Koppelen” opent een modal/drawer met:
+       - Moneybird contact dropdown + search
+       - “Opslaan”
+       - Daarna direct refresh van scherm/locatie
+  2) In “Locatie detail”:
+     - Bovenaan duidelijke status chips
+     - Sectie “Moneybird koppeling” met dropdown + opslaan
+     - Adres/contactsecties lezen live uit lokale DB velden (die gevuld worden na koppeling)
+- Geen pagina waar je eerst moet “snappen” wat koppelen is. Het moet gewoon vanuit scherm/locatie kunnen.
+
+D) Auto-match (handig maar niet verplicht om te werken)
+- Voeg een simpele auto-match toe in de modal of als knop in Schermen:
+  - Match Moneybird contact op basis van naam-similarity (case-insensitive) tussen Yodeck screen name en Moneybird contact company_name/name
+  - Toon suggestie (“Wij denken: Basil’s Barber Shop Maasbracht → Moneybird contact X”) met 1 klik bevestigen.
+- Maar: handmatige koppeling moet altijd werken, ook zonder suggesties.
+
+E) Technische eisen / betrouwbaarheid
+- Maak een “source of truth” mapping tabel in DB:
+  - location.moneybirdContactId (nullable)
+  - advertiser.moneybirdContactId (later)
+  - eventueel screen.moneybirdContactId NIET nodig als screen via location loopt
+- Zorg dat sync idempotent is:
+  - Moneybird sync update/insert op moneybirdContactId
+  - Yodeck sync update/insert op yodeckUuid/playerId
+- Voeg server-side validation + logging toe:
+  - Bij “koppelen”: log welke locationId, moneybirdContactId, en welke velden gevuld zijn.
+  - Als Moneybird contact geen adres heeft: toon “adres ontbreekt in Moneybird” (niet “bug”).
+- Fix caching/304 issues indien nodig: als backend 304 stuurt maar data is veranderd, corrigeer ETags of cache headers voor deze endpoints.
+
+CONCRETE DELIVERABLES (wat je moet aanpassen in code):
+1) DB / Drizzle migrations
+- Nieuwe velden in locations:
+  - moneybirdContactId (string)
+  - moneybirdContactPersonId (string, nullable)
+  - companyName, street, zipcode, city, country, email, phone, contactName (nullable)
+  - (of netjes genormaliseerd in address tabel; kies wat past bij huidige schema, maar maak het werkend)
+- Data migration script:
+  - Neem de bestaande Default (Yodeck Import) locatie
+  - Maak voor elke screen die eraan hangt een nieuwe locatie aan (naam = screen.name)
+  - Update screen.locationId naar die nieuwe locatie
+  - Laat Default-locatie achter als leeg of markeer inactive (of verwijder als veilig)
+
+2) Backend routes (Express)
+- Moneybird:
+  - GET /api/moneybird/contacts (of bestaande endpoint) moet contacts returnen (niet leeg als er 1 is)
+  - POST /api/locations/:id/link-moneybird { moneybirdContactId }:
+    - haal contact details uit lokale moneybird_contacts tabel (of direct via API als je dat zo doet)
+    - schrijf fields naar locations
+    - return updated location
+- Yodeck:
+  - Sync moet bij import per screen een locatie aanmaken als die nog niet bestaat (of als die nu nog op Default staat)
+  - Zorg dat locationId per screen uniek wordt
+
+3) Frontend (React)
+- Sidebar: verwijder “Ontbrekende gegevens” menu item.
+- Schermen tabel:
+  - kolom “Locatie/bedrijf” toont nu echte location naam (niet Default voor alles)
+  - status-badge “Koppeling nodig” + knop “Koppelen” (modal)
+- Locatie detail:
+  - dropdown + knop “Koppelen” die echt werkt (call route, refresh state)
+  - adres/contact cards tonen waarden uit location fields
+- UX:
+  - Na koppelen: toast “Gekoppeld aan Moneybird: {contactName}” en UI update zonder hard refresh.
+
+ACCEPTANCE CRITERIA (moet waar zijn na jouw werk):
+- In Schermen staan Test en Basil’s ieder op hun eigen locatie (niet beide “Default”).
+- Ik kan in Schermen bij Test → “Koppelen” → Moneybird contact “Bouwservice Douven (Sittard)” kiezen → opslaan.
+- Daarna toont de locatie en het scherm correct het adres/contact (als dit in Moneybird bij dat contact staat).
+- “Koppeling nodig” badge verdwijnt voor dat scherm/locatie.
+- Geen aparte pagina nodig om “ontbrekende gegevens” te fixen; alles via Schermen/Locaties.
+- Moneybird contacts lijst toont echt wat er gesynct is (minimaal 1 contact zichtbaar).
+
+WERKWIJZE (hoe je dit aanpakt):
+- Eerst: scan bestaande schema’s + routes + huidige moneybird sync implementatie om te zien waar het stukloopt (waarom contacts soms 0 tonen).
+- Daarna: maak migrations + data migration
+- Daarna: fix yodeck sync zodat het per screen locatie aanmaakt/kiest
+- Daarna: fix link endpoint + frontend modal
+- Daarna: smoke test met de huidige 2 screens en 1 Moneybird contact.
+
+LET OP:
+- Houd het klein en clean: geen mega refactor tenzij nodig.
+- Gebruik bestaande componenten/styling.
+- Maak het “werkend” boven “perfect”.
+- Schrijf waar nodig korte inline comments en logregels zodat ik kan debuggen.
+
+GA NU AAN DE SLAG EN PAS DE CODEBASE AAN ZODAT DIT ALLES WERKT. IK WIL DAARNA ALLEEN NOG IN DE UI CONTACTEN AANMAKEN IN MONEYBIRD EN KOPPELEN IN HET DASHBOARD.
