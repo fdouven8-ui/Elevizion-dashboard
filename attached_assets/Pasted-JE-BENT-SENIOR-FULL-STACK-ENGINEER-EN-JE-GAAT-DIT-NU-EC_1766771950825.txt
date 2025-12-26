@@ -1,0 +1,175 @@
+JE BENT SENIOR FULL-STACK ENGINEER EN JE GAAT DIT NU ECHT OPLOSSEN. NIET “BIJNA”. 
+Context: Elevizion Dashboard (React+TS+Vite, Express, Drizzle ORM, PostgreSQL). Integraties met Yodeck en Moneybird zijn online, maar de KOPPELING/RELATIES zijn fout.
+
+HET PROBLEEM (heel concreet)
+- De app behandelt “Locatie” en “Scherm” als aparte dingen, waardoor 2 schermen op 1 “locatie” kunnen eindigen terwijl dat conceptueel NIET klopt voor ons.
+- In ons business-model is het vrijwel altijd: 1 locatie = 1 scherm. “Locatie” is dus gewoon het scherm waar het hangt (hetzelfde object).
+- Daardoor zie je nu: bij Locations staat “Schermen op deze locatie: Test + Basil’s …” en dat is fout. Dit moet NIET kunnen, tenzij expliciet “multi-screen locatie” is aangezet (edge-case).
+- Moneybird contact + adres gegevens komen al door, maar worden nu op de verkeerde plek “opgehangen”, omdat de kernentiteit verkeerd gemodelleerd is.
+
+DE NIEUWE REGEL (SOURCE OF TRUTH + DATAMODEL)
+1) We hebben 1 centrale entiteit: “Site” (of noem het “Location” maar dan is het 1-op-1 met screen).
+   - Een Site representeert: de fysieke plek + het scherm dat daar hangt.
+   - Een Site heeft EXACT 1 scherm (default), en alleen als multiScreen=true mag er meer.
+2) Moneybird is SOURCE OF TRUTH voor:
+   - contactpersoon/bedrijfsnaam, adres, postcode, plaats, email, telefoon, evt. btw-nummer, kvk (wat beschikbaar is)
+3) Yodeck is SOURCE OF TRUTH voor:
+   - yodeck_screen_id/device_id, status (online/offline), last_seen, current content/playlist info (indien beschikbaar)
+4) Adverteerders zijn OOK Moneybird contacten, maar een ander type relatie:
+   - Moneybird Contact kan “ROLE = SITE_OWNER” (locatiehouder) en/of “ROLE = ADVERTISER” hebben.
+   - Dus 1 Moneybird contact kan beide rollen hebben.
+
+BELANGRIJK: MATCHING / KOPPELEN
+- We moeten “Site” kunnen koppelen aan:
+  A) Yodeck screen (verplicht)
+  B) Moneybird contact (locatiehouder) (verplicht voor facturatie & contact)
+- De koppeling moet SUPER simpel in UI: 
+  - Op Site detail: knop “Koppel Moneybird contact” → zoek/select contact → save.
+  - Op import/sync: als er al een mapping bestaat, NOOIT opnieuw naar “Default (Yodeck Import)” terugvallen.
+- We hebben een mapping tabel nodig zodat dit stabiel blijft.
+
+DB / DRIZZLE: WAT JE MOET BOUWEN
+1) Introduceer nieuwe tabellen (of refactor bestaand) met deze minimale structuur:
+
+TABLE sites (
+  id uuid pk,
+  code text unique not null,        -- EVZ-001 etc (centrale identifier)
+  display_name text not null,       -- wat we in UI tonen (meestal Moneybird company_name)
+  moneybird_contact_id text null,   -- Moneybird contact id (string)
+  yodeck_screen_id text null,       -- Yodeck screen id (string)
+  multi_screen boolean default false,
+  created_at, updated_at
+)
+
+TABLE site_contact_snapshot (
+  site_id fk,
+  company_name text,
+  contact_name text,
+  email text,
+  phone text,
+  address1 text,
+  address2 text,
+  postcode text,
+  city text,
+  country text,
+  raw_moneybird jsonb,
+  synced_at timestamp
+)
+
+TABLE site_yodeck_snapshot (
+  site_id fk,
+  screen_name text,
+  status text,          -- online/offline/unknown
+  last_seen timestamp,
+  raw_yodeck jsonb,
+  synced_at timestamp
+)
+
+TABLE moneybird_contacts_cache (
+  moneybird_contact_id text pk,
+  company_name text,
+  email text,
+  phone text,
+  address jsonb,
+  raw jsonb,
+  updated_at timestamp
+)
+
+TABLE yodeck_screens_cache (
+  yodeck_screen_id text pk,
+  name text,
+  status text,
+  last_seen timestamp,
+  raw jsonb,
+  updated_at timestamp
+)
+
+OPTIONEEL (maar liefst):
+TABLE contact_roles (
+  moneybird_contact_id text,
+  role text check(role in ('SITE_OWNER','ADVERTISER')),
+  primary key (moneybird_contact_id, role)
+)
+
+2) MIGRATIE/REFRACTOR:
+- Vervang huidige “locations” logica: Locations page moet Sites tonen.
+- Schermen page toont ook Sites (zelfde dataset) maar met focus op yodeck status/content.
+- “Schermen op deze locatie”-kaart verdwijnt (of wordt “Deze site heeft 1 scherm”).
+- Als je multi_screen ondersteunt: dan komt die kaart alleen terug bij multi_screen=true.
+
+SYNC LOGICA (kritisch; fix de “Default (Yodeck Import)” valkuil)
+Je gaat 2 sync jobs bouwen:
+A) syncMoneybirdContacts(): vult moneybird_contacts_cache
+B) syncYodeckScreens(): vult yodeck_screens_cache
+C) reconcileSites(): maakt/updated sites + snapshots op basis van mappings
+
+RECONCILE RULES:
+1) Als site.moneybird_contact_id is gezet:
+   - Neem company_name uit Moneybird en zet site.display_name = company_name (tenzij handmatig override flag bestaat; anders altijd)
+   - Vul site_contact_snapshot vanuit cache
+2) Als site.yodeck_screen_id is gezet:
+   - Neem yodeck screen name/status/last_seen en vul site_yodeck_snapshot
+3) Nooit sites “samenvoegen” alleen op basis van dezelfde stad/postcode.
+   - Alleen via expliciete mapping of via exact match heuristiek met hoge zekerheid.
+4) Heuristiek voor auto-link (alleen als mapping leeg is):
+   - Als yodeck screen name exact gelijk is aan moneybird company_name → voorstel/auto-link (config)
+   - Of als yodeck screen name bevat company_name (case-insensitive) → voorstel (niet auto)
+   - Anders: geen auto-link. Toon in UI “Niet gekoppeld”.
+
+EEN KEIHARDE VALIDATIE:
+- Standaard: 1 site = 1 yodeck_screen_id uniek.
+- En 1 site = 1 moneybird_contact_id (locatiehouder) uniek.
+- Als multi_screen=false mag een moneybird_contact_id niet aan meerdere sites hangen.
+- Dit voorkomt precies het probleem dat Basil + Test op 1 locatie hangen.
+
+API ENDPOINTS DIE JE MOET MAKEN/UPDATEN
+- GET /api/sites?search=&status=&linkedMoneybird=&linkedYodeck=
+- GET /api/sites/:id (inclusief snapshots)
+- POST /api/sites (maak site / import)
+- PATCH /api/sites/:id/link-moneybird { moneybird_contact_id }
+- PATCH /api/sites/:id/link-yodeck { yodeck_screen_id }
+- POST /api/sync/moneybird/run
+- POST /api/sync/yodeck/run
+- POST /api/sync/reconcile/run  (of reconcile automatisch na elke sync)
+
+FRONTEND (UX; simpel en duidelijk)
+1) “Locaties” menu-item:
+- Toon Sites tabel: Naam (display_name), Plaats, Status (online/offline), Moneybird gekoppeld ✓/✗, Yodeck gekoppeld ✓/✗
+- Klik open → tabs: Overzicht | Contact | Scherm
+  - Contact tab: toon Moneybird velden + knop “Koppel Moneybird contact”
+  - Scherm tab: toon Yodeck info + knop “Koppel Yodeck scherm” + “Open in Yodeck”
+2) “Schermen” menu-item:
+- Zelfde Sites dataset maar kolommen gericht op content/status
+- Belangrijk: toon NOOIT meer “Default (Yodeck Import)” als er moneybird mapping bestaat.
+3) Koppelen flow:
+- Modal met search in moneybird_contacts_cache (typeahead)
+- Modal met search in yodeck_screens_cache
+- Na koppelen: direct reconcile + refresh UI.
+
+AFSPRAAK OVER NAMEN (belangrijk voor jouw verwarring)
+- “Test” is een yodeck screen naam (oude placeholder).
+- Als Moneybird contact = Bouwservice Douven gekoppeld is aan die site, dan moet display_name in UI “Bouwservice Douven” worden (dus “Test” verdwijnt als hoofdnaam).
+- Yodeck naam mag in “Scherm tab” nog zichtbaar zijn als “Yodeck device name”, maar niet als hoofdnaam in de lijst.
+
+TESTS / CHECKS (minimaal)
+- Unit: reconcileSites() mag nooit 2 sites linken aan dezelfde yodeck_screen_id.
+- Unit: multi_screen=false → moneybird_contact_id uniek over sites.
+- E2E: Basil’s Barber Shop en Bouwservice Douven worden 2 verschillende sites met eigen moneybird_contact_id (of Basil nog “niet gekoppeld”), en staan NOOIT samen onder 1 site.
+
+DELIVERABLES (wat je nu moet opleveren in code)
+- Drizzle migrations + schema updates
+- Implementatie caches + sync handlers + reconcile
+- UI refactor: Locations en Screens gebruiken sites
+- Modals voor koppelen
+- Fix bestaande data: maak migration script dat bestaande “locations + screens” omzet naar sites:
+  - Voor elk bestaand screen: maak site met code EVZ-xxx, set yodeck_screen_id
+  - Als er al moneybird link bestond: set moneybird_contact_id
+  - Daarna reconcile run.
+
+WERKWIJZE
+- Zoek eerst in code waar “locations” en “screens” tables/queries zitten.
+- Maak nieuwe “sites” layer en pas routes/components aan.
+- Zorg dat bestaande routes niet breken: maak tijdelijke alias routes indien nodig.
+- Voeg logs toe zodat we zien waarom iets niet gekoppeld wordt.
+
+GA NU AAN DE SLAG EN IMPLEMENTEER DIT. GEEN ALGEMENE UITLEG, MAAR ECHTE CODE-CHANGES + MIGRATIONS + UI FIX.

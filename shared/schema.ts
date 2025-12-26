@@ -104,6 +104,115 @@ export const screenGroups = pgTable("screen_groups", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+// ============================================================================
+// SITES - UNIFIED ENTITY (1 site = 1 screen in 99% of cases)
+// ============================================================================
+
+/**
+ * Sites - The central entity combining screen + location + business info
+ * 
+ * BUSINESS RULE: 1 Site = 1 physical screen location
+ * - multiScreen=false (default): yodeck_screen_id AND moneybird_contact_id are unique per site
+ * - multiScreen=true: multiple sites can share same moneybird_contact_id (rare edge case)
+ * 
+ * Data comes from:
+ * - Moneybird: company name, contact, address (SOURCE OF TRUTH for customer data)
+ * - Yodeck: device status, online/offline, content (SOURCE OF TRUTH for device data)
+ */
+export const sites = pgTable("sites", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(), // EVZ-001 format - central identifier
+  displayName: text("display_name").notNull(), // UI display name (from Moneybird company or manual)
+  moneybirdContactId: text("moneybird_contact_id"), // Link to Moneybird contact
+  yodeckScreenId: text("yodeck_screen_id").unique(), // Link to Yodeck screen (always unique)
+  multiScreen: boolean("multi_screen").default(false), // If true, allows shared moneybird_contact_id
+  status: text("status").notNull().default("active"), // active, offline, paused, terminated
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * SiteContactSnapshot - Cached Moneybird contact data per site
+ * Updated during reconcileSites() from moneybird_contacts_cache
+ */
+export const siteContactSnapshot = pgTable("site_contact_snapshot", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  siteId: varchar("site_id").notNull().references(() => sites.id, { onDelete: "cascade" }),
+  companyName: text("company_name"),
+  contactName: text("contact_name"),
+  email: text("email"),
+  phone: text("phone"),
+  address1: text("address1"),
+  address2: text("address2"),
+  postcode: text("postcode"),
+  city: text("city"),
+  country: text("country"),
+  vatNumber: text("vat_number"),
+  kvkNumber: text("kvk_number"),
+  rawMoneybird: jsonb("raw_moneybird"), // Full Moneybird contact data
+  syncedAt: timestamp("synced_at").notNull().defaultNow(),
+});
+
+/**
+ * SiteYodeckSnapshot - Cached Yodeck screen data per site
+ * Updated during reconcileSites() from yodeck_screens_cache
+ */
+export const siteYodeckSnapshot = pgTable("site_yodeck_snapshot", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  siteId: varchar("site_id").notNull().references(() => sites.id, { onDelete: "cascade" }),
+  screenName: text("screen_name"),
+  status: text("status"), // online, offline, unknown
+  lastSeen: timestamp("last_seen"),
+  screenshotUrl: text("screenshot_url"),
+  contentStatus: text("content_status"), // empty, has_content, unknown
+  contentCount: integer("content_count"),
+  rawYodeck: jsonb("raw_yodeck"), // Full Yodeck player data
+  syncedAt: timestamp("synced_at").notNull().defaultNow(),
+});
+
+/**
+ * MoneybirdContactsCache - Synced Moneybird contacts for linking
+ * Filled by syncMoneybirdContacts(), used for UI search/select
+ */
+export const moneybirdContactsCache = pgTable("moneybird_contacts_cache", {
+  moneybirdContactId: text("moneybird_contact_id").primaryKey(),
+  companyName: text("company_name"),
+  contactName: text("contact_name"),
+  email: text("email"),
+  phone: text("phone"),
+  address: jsonb("address"), // { street, postcode, city, country }
+  raw: jsonb("raw"), // Full Moneybird API response
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * YodeckScreensCache - Synced Yodeck screens for linking
+ * Filled by syncYodeckScreens(), used for UI search/select
+ */
+export const yodeckScreensCache = pgTable("yodeck_screens_cache", {
+  yodeckScreenId: text("yodeck_screen_id").primaryKey(),
+  name: text("name"),
+  uuid: text("uuid"),
+  status: text("status"), // online, offline, unknown
+  lastSeen: timestamp("last_seen"),
+  screenshotUrl: text("screenshot_url"),
+  raw: jsonb("raw"), // Full Yodeck API response
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * ContactRoles - Track Moneybird contact roles (SITE_OWNER, ADVERTISER)
+ * A single Moneybird contact can have multiple roles
+ */
+export const contactRoles = pgTable("contact_roles", {
+  moneybirdContactId: text("moneybird_contact_id").notNull(),
+  role: text("role").notNull(), // SITE_OWNER, ADVERTISER
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("contact_roles_pk").on(table.moneybirdContactId, table.role),
+]);
+
 /**
  * LocationGroups - For rare multi-screen locations (2+ screens at same physical location)
  * Only used when isMultiScreenLocation=true on screens
@@ -1346,3 +1455,61 @@ export type InsertMoneybirdInvoice = z.infer<typeof insertMoneybirdInvoiceSchema
 
 export type MoneybirdPayment = typeof moneybirdPayments.$inferSelect;
 export type InsertMoneybirdPayment = z.infer<typeof insertMoneybirdPaymentSchema>;
+
+// ============================================================================
+// SITES SCHEMAS AND TYPES
+// ============================================================================
+
+// Sites Insert Schema
+export const insertSiteSchema = createInsertSchema(sites).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertSiteContactSnapshotSchema = createInsertSchema(siteContactSnapshot).omit({
+  id: true,
+  syncedAt: true,
+});
+
+export const insertSiteYodeckSnapshotSchema = createInsertSchema(siteYodeckSnapshot).omit({
+  id: true,
+  syncedAt: true,
+});
+
+export const insertMoneybirdContactsCacheSchema = createInsertSchema(moneybirdContactsCache).omit({
+  updatedAt: true,
+});
+
+export const insertYodeckScreensCacheSchema = createInsertSchema(yodeckScreensCache).omit({
+  updatedAt: true,
+});
+
+export const insertContactRoleSchema = createInsertSchema(contactRoles).omit({
+  createdAt: true,
+});
+
+// Sites Types
+export type Site = typeof sites.$inferSelect;
+export type InsertSite = z.infer<typeof insertSiteSchema>;
+
+export type SiteContactSnapshot = typeof siteContactSnapshot.$inferSelect;
+export type InsertSiteContactSnapshot = z.infer<typeof insertSiteContactSnapshotSchema>;
+
+export type SiteYodeckSnapshot = typeof siteYodeckSnapshot.$inferSelect;
+export type InsertSiteYodeckSnapshot = z.infer<typeof insertSiteYodeckSnapshotSchema>;
+
+export type MoneybirdContactCache = typeof moneybirdContactsCache.$inferSelect;
+export type InsertMoneybirdContactCache = z.infer<typeof insertMoneybirdContactsCacheSchema>;
+
+export type YodeckScreenCache = typeof yodeckScreensCache.$inferSelect;
+export type InsertYodeckScreenCache = z.infer<typeof insertYodeckScreensCacheSchema>;
+
+export type ContactRole = typeof contactRoles.$inferSelect;
+export type InsertContactRole = z.infer<typeof insertContactRoleSchema>;
+
+// Combined Site with snapshots (for API responses)
+export type SiteWithSnapshots = Site & {
+  contactSnapshot?: SiteContactSnapshot | null;
+  yodeckSnapshot?: SiteYodeckSnapshot | null;
+};
