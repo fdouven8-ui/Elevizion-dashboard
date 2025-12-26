@@ -26,6 +26,7 @@ import {
   insertSurveySupplySchema,
   insertTaskSchema,
   insertTaskAttachmentSchema,
+  insertSiteSchema,
 } from "@shared/schema";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import {
@@ -235,6 +236,146 @@ export async function registerRoutes(
   app.delete("/api/locations/:id", async (req, res) => {
     await storage.deleteLocation(req.params.id);
     res.status(204).send();
+  });
+
+  // ============================================================================
+  // SITES (Unified entity: 1 site = 1 screen location)
+  // ============================================================================
+
+  app.get("/api/sites", async (_req, res) => {
+    try {
+      const sites = await storage.getSitesWithSnapshots();
+      res.json(sites);
+    } catch (error: any) {
+      console.error("[Sites API] Error fetching sites:", error);
+      res.status(500).json({ message: "Error fetching sites" });
+    }
+  });
+
+  app.get("/api/sites/:id", async (req, res) => {
+    try {
+      const site = await storage.getSiteWithSnapshots(req.params.id);
+      if (!site) return res.status(404).json({ message: "Site not found" });
+      res.json(site);
+    } catch (error: any) {
+      console.error("[Sites API] Error fetching site:", error);
+      res.status(500).json({ message: "Error fetching site" });
+    }
+  });
+
+  app.post("/api/sites", async (req, res) => {
+    try {
+      const data = insertSiteSchema.parse(req.body);
+      const site = await storage.createSite(data);
+      res.status(201).json(site);
+    } catch (error: any) {
+      console.error("[Sites API] Error creating site:", error);
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/sites/:id", async (req, res) => {
+    try {
+      const site = await storage.updateSite(req.params.id, req.body);
+      if (!site) return res.status(404).json({ message: "Site not found" });
+      res.json(site);
+    } catch (error: any) {
+      console.error("[Sites API] Error updating site:", error);
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.delete("/api/sites/:id", async (req, res) => {
+    try {
+      await storage.deleteSite(req.params.id);
+      res.status(204).send();
+    } catch (error: any) {
+      console.error("[Sites API] Error deleting site:", error);
+      res.status(500).json({ message: "Error deleting site" });
+    }
+  });
+
+  app.post("/api/sites/:id/link-moneybird", async (req, res) => {
+    try {
+      const { moneybirdContactId } = req.body;
+      if (!moneybirdContactId) {
+        return res.status(400).json({ message: "moneybirdContactId is required" });
+      }
+      
+      const site = await storage.linkSiteToMoneybird(req.params.id, moneybirdContactId);
+      if (!site) return res.status(404).json({ message: "Site not found" });
+      
+      const cachedContact = await storage.getMoneybirdContactCache(moneybirdContactId);
+      if (cachedContact) {
+        const addressData = cachedContact.address as any || {};
+        await storage.upsertSiteContactSnapshot(site.id, {
+          companyName: cachedContact.companyName,
+          contactName: cachedContact.contactName,
+          email: cachedContact.email,
+          phone: cachedContact.phone,
+          address1: addressData.street || null,
+          postcode: addressData.postcode || null,
+          city: addressData.city || null,
+          country: addressData.country || null,
+          rawMoneybird: cachedContact.raw as object,
+        });
+      }
+      
+      const updatedSite = await storage.getSiteWithSnapshots(site.id);
+      res.json(updatedSite);
+    } catch (error: any) {
+      console.error("[Sites API] Error linking to Moneybird:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/sites/:id/link-yodeck", async (req, res) => {
+    try {
+      const { yodeckScreenId } = req.body;
+      if (!yodeckScreenId) {
+        return res.status(400).json({ message: "yodeckScreenId is required" });
+      }
+      
+      const site = await storage.linkSiteToYodeck(req.params.id, yodeckScreenId);
+      if (!site) return res.status(404).json({ message: "Site not found" });
+      
+      const cachedScreen = await storage.getYodeckScreenCache(yodeckScreenId);
+      if (cachedScreen) {
+        await storage.upsertSiteYodeckSnapshot(site.id, {
+          screenName: cachedScreen.name,
+          status: cachedScreen.status,
+          lastSeen: cachedScreen.lastSeen,
+          screenshotUrl: cachedScreen.screenshotUrl,
+          rawYodeck: cachedScreen.raw as object,
+        });
+      }
+      
+      const updatedSite = await storage.getSiteWithSnapshots(site.id);
+      res.json(updatedSite);
+    } catch (error: any) {
+      console.error("[Sites API] Error linking to Yodeck:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/moneybird/contacts-cache", async (_req, res) => {
+    try {
+      const contacts = await storage.getMoneybirdContactsCache();
+      res.json(contacts);
+    } catch (error: any) {
+      console.error("[Sites API] Error fetching Moneybird contacts cache:", error);
+      res.status(500).json({ message: "Error fetching contacts cache" });
+    }
+  });
+
+  app.get("/api/yodeck/screens-cache", async (_req, res) => {
+    try {
+      const screens = await storage.getYodeckScreensCache();
+      res.json(screens);
+    } catch (error: any) {
+      console.error("[Sites API] Error fetching Yodeck screens cache:", error);
+      res.status(500).json({ message: "Error fetching screens cache" });
+    }
   });
 
   // ============================================================================
