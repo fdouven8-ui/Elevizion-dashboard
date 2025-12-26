@@ -2,7 +2,7 @@ import { useAppData } from "@/hooks/use-app-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, MoreHorizontal, CheckCircle, AlertCircle } from "lucide-react";
+import { Plus, Search, MoreHorizontal, CheckCircle, AlertCircle, MapPin, Link2, RefreshCw, ExternalLink } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -75,59 +75,90 @@ export default function Locations() {
             <TableRow>
               <TableHead>Naam</TableHead>
               <TableHead>Adres</TableHead>
-              <TableHead>Contactpersoon</TableHead>
+              <TableHead>Adres status</TableHead>
               <TableHead>Moneybird</TableHead>
-              <TableHead className="text-right">Omzetdeling %</TableHead>
+              <TableHead>Contactpersoon</TableHead>
               <TableHead className="w-[50px]"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredLocations.map((loc) => (
-              <TableRow key={loc.id}>
-                <TableCell className="font-medium">
-                  <Link href={`/locations/${loc.id}`} className="hover:underline">
-                    {loc.name}
-                  </Link>
-                </TableCell>
-                <TableCell className="text-muted-foreground">{loc.address}</TableCell>
-                <TableCell>
-                  <div className="flex flex-col">
-                    <span>{loc.contactName}</span>
-                    <span className="text-xs text-muted-foreground">{loc.email}</span>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  {loc.moneybirdContactId ? (
-                    <Badge variant="outline" className="text-green-600 border-green-600">
-                      <CheckCircle className="h-3 w-3 mr-1" />
-                      Gekoppeld
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="text-orange-600 border-orange-600">
-                      <AlertCircle className="h-3 w-3 mr-1" />
-                      Ontbreekt
-                    </Badge>
-                  )}
-                </TableCell>
-                <TableCell className="text-right font-mono">{loc.revenueSharePercent}%</TableCell>
-                <TableCell>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" className="h-8 w-8 p-0">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>Acties</DropdownMenuLabel>
-                      <DropdownMenuItem asChild>
-                        <Link href={`/locations/${loc.id}`}>Details Bekijken</Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem>Instellingen Bewerken</DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableCell>
-              </TableRow>
-            ))}
+            {filteredLocations.map((loc) => {
+              const hasAddress = Boolean(loc.address && loc.address.trim());
+              const hasCity = Boolean(loc.city && loc.city.trim());
+              const hasZipcode = Boolean(loc.zipcode && loc.zipcode.trim());
+              const addressComplete = hasAddress && hasCity && hasZipcode;
+              
+              return (
+                <TableRow key={loc.id}>
+                  <TableCell className="font-medium">
+                    <Link href={`/locations/${loc.id}`} className="hover:underline">
+                      {loc.name}
+                    </Link>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">
+                    <div className="flex flex-col">
+                      <span>{loc.address || "-"}</span>
+                      {(loc.zipcode || loc.city) && (
+                        <span className="text-xs">{[loc.zipcode, loc.city].filter(Boolean).join(" ")}</span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    {addressComplete ? (
+                      <Badge variant="outline" className="text-green-600 border-green-600">
+                        <CheckCircle className="h-3 w-3 mr-1" />
+                        Compleet
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-orange-600 border-orange-600">
+                        <MapPin className="h-3 w-3 mr-1" />
+                        Onvolledig
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    {loc.moneybirdContactId ? (
+                      <Badge variant="outline" className="text-green-600 border-green-600">
+                        <CheckCircle className="h-3 w-3 mr-1" />
+                        Gekoppeld
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-orange-600 border-orange-600">
+                        <AlertCircle className="h-3 w-3 mr-1" />
+                        Ontbreekt
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex flex-col">
+                      <span>{loc.contactName || "-"}</span>
+                      <span className="text-xs text-muted-foreground">{loc.email || ""}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" className="h-8 w-8 p-0">
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuLabel>Acties</DropdownMenuLabel>
+                        <DropdownMenuItem asChild>
+                          <Link href={`/locations/${loc.id}`}>Details Bekijken</Link>
+                        </DropdownMenuItem>
+                        {!loc.moneybirdContactId && (
+                          <DropdownMenuItem>
+                            <Link2 className="h-4 w-4 mr-2" />
+                            Koppel Moneybird contact
+                          </DropdownMenuItem>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
             {filteredLocations.length === 0 && (
               <TableRow>
                 <TableCell colSpan={6} className="h-24 text-center">
