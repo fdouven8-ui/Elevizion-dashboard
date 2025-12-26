@@ -112,8 +112,12 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
 - **Navigation**:
   - "Locaties" menu item in sidebar with Building2 icon
   - `/locations` overview page with Moneybird status badges (Gekoppeld/Ontbreekt) and address completeness badges
-  - `/locations/:id` detail page for Moneybird contact linking with address display
-  - Home dashboard "Data Compleetheid" widget with actionable links and Resolve Wizard button
+  - `/locations/:id` detail page for Moneybird contact linking with address display (read-only from Moneybird)
+  - Home dashboard "Data Compleetheid" widget with actionable links to Schermen/Locaties pages
+- **Screens Page UX Improvements**:
+  - Banner showing "X schermen zonder Moneybird koppeling" with filter button
+  - Inline "Koppel" dropdown per screen row for direct Moneybird contact linking
+  - Filter state via URL query param `?moneybird=missing` for deep linking from Home
 
 ## Moneybird Setup
 

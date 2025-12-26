@@ -1,7 +1,9 @@
 import { useAppData } from "@/hooks/use-app-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink, AlertCircle, CheckCircle } from "lucide-react";
+import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink, AlertCircle, CheckCircle, Link2 } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
 import {
   Table,
   TableBody,
@@ -64,26 +66,74 @@ function getScreenDisplayName(screen: any, location: any): string {
   return "Onbekend scherm";
 }
 
+interface MoneybirdContact {
+  id: string;
+  moneybirdId: string;
+  companyName: string | null;
+  firstname: string | null;
+  lastname: string | null;
+  city: string | null;
+}
+
 export default function Screens() {
   const { screens, locations, placements } = useAppData();
   const [location, setLocation] = useLocation();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [rowDensity, setRowDensity] = useState<RowDensity>("normal");
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const urlParams = new URLSearchParams(location.split('?')[1] || '');
   const initialStatus = urlParams.get('status');
+  const initialMoneybirdFilter = urlParams.get('moneybird') === 'missing';
+
+  const { data: moneybirdContacts = [] } = useQuery<MoneybirdContact[]>({
+    queryKey: ["/api/moneybird/contacts"],
+  });
+
+  const linkLocationMutation = useMutation({
+    mutationFn: async ({ locationId, moneybirdContactId }: { locationId: string; moneybirdContactId: string }) => {
+      const response = await fetch(`/api/locations/${locationId}/link-moneybird`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ moneybirdContactId }),
+      });
+      if (!response.ok) throw new Error("Koppeling mislukt");
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["locations"] });
+      toast({ title: "Moneybird gekoppeld", description: "Locatie is gekoppeld aan Moneybird contact" });
+    },
+    onError: () => {
+      toast({ title: "Fout", description: "Koppeling mislukt", variant: "destructive" });
+    },
+  });
 
   const [cityFilter, setCityFilter] = useState<string>("");
   const [locationFilter, setLocationFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string[]>(
     initialStatus ? [initialStatus] : []
   );
+  const [moneybirdMissingFilter, setMoneybirdMissingFilter] = useState(initialMoneybirdFilter);
   const [minPlacements, setMinPlacements] = useState<string>("");
   const [maxPlacements, setMaxPlacements] = useState<string>("");
   const [cityPopoverOpen, setCityPopoverOpen] = useState(false);
   const [locationPopoverOpen, setLocationPopoverOpen] = useState(false);
   const [searchInput, setSearchInput] = useState<string>("");
   const [searchQuery, setSearchQuery] = useState<string>("");
+  const [linkPopoverOpen, setLinkPopoverOpen] = useState<string | null>(null);
+  const [linkSearch, setLinkSearch] = useState("");
+
+  const screensWithoutMoneybird = useMemo(() => {
+    return screens.filter(scr => {
+      const loc = locations.find(l => l.id === scr.locationId);
+      return !loc?.moneybirdContactId;
+    });
+  }, [screens, locations]);
+
+  const screensWithoutMoneybirdCount = screensWithoutMoneybird.length;
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -125,6 +175,10 @@ export default function Screens() {
         return false;
       }
 
+      if (moneybirdMissingFilter && loc?.moneybirdContactId) {
+        return false;
+      }
+
       const placementCount = getActivePlacementsCount(scr.id);
       const minVal = minPlacements ? parseInt(minPlacements, 10) : NaN;
       const maxVal = maxPlacements ? parseInt(maxPlacements, 10) : NaN;
@@ -161,7 +215,7 @@ export default function Screens() {
 
       return true;
     });
-  }, [screens, cityFilter, locationFilter, statusFilter, minPlacements, maxPlacements, placements, locations, searchQuery]);
+  }, [screens, cityFilter, locationFilter, statusFilter, moneybirdMissingFilter, minPlacements, maxPlacements, placements, locations, searchQuery]);
 
   const filteredLocations = useMemo(() => {
     if (!cityFilter) return locations;
@@ -183,12 +237,13 @@ export default function Screens() {
     setCityFilter("");
     setLocationFilter("");
     setStatusFilter([]);
+    setMoneybirdMissingFilter(false);
     setMinPlacements("");
     setMaxPlacements("");
     setSearchInput("");
   };
 
-  const hasActiveFilters = cityFilter || locationFilter || statusFilter.length > 0 || minPlacements || maxPlacements || searchInput;
+  const hasActiveFilters = cityFilter || locationFilter || statusFilter.length > 0 || moneybirdMissingFilter || minPlacements || maxPlacements || searchInput;
 
   const getRowClasses = () => {
     switch (rowDensity) {
@@ -233,6 +288,55 @@ export default function Screens() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* Moneybird koppeling banner */}
+      {screensWithoutMoneybirdCount > 0 && !moneybirdMissingFilter && (
+        <div 
+          className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-3 flex items-center justify-between"
+          data-testid="moneybird-missing-banner"
+        >
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-orange-500" />
+            <span className="text-sm text-orange-700">
+              <strong>{screensWithoutMoneybirdCount} schermen</strong> zonder Moneybird koppeling
+            </span>
+          </div>
+          <Button 
+            variant="outline" 
+            size="sm"
+            className="border-orange-300 text-orange-700 hover:bg-orange-100"
+            onClick={() => setMoneybirdMissingFilter(true)}
+            data-testid="button-filter-moneybird-missing"
+          >
+            <Filter className="h-3 w-3 mr-1" />
+            Toon alleen deze
+          </Button>
+        </div>
+      )}
+
+      {moneybirdMissingFilter && (
+        <div 
+          className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 flex items-center justify-between"
+          data-testid="moneybird-filter-active"
+        >
+          <div className="flex items-center gap-2">
+            <Filter className="h-4 w-4 text-blue-500" />
+            <span className="text-sm text-blue-700">
+              Filter actief: alleen schermen zonder Moneybird koppeling ({filteredScreens.length})
+            </span>
+          </div>
+          <Button 
+            variant="outline" 
+            size="sm"
+            className="border-blue-300 text-blue-700 hover:bg-blue-100"
+            onClick={() => setMoneybirdMissingFilter(false)}
+            data-testid="button-clear-moneybird-filter"
+          >
+            <X className="h-3 w-3 mr-1" />
+            Filter wissen
+          </Button>
+        </div>
+      )}
 
       {/* Compact Filters */}
       <Card className="border-muted">
@@ -505,20 +609,90 @@ export default function Screens() {
                   </TableCell>
                   
                   {/* Locatie / Bedrijf */}
-                  <TableCell className={getCellPadding()}>
-                    <div className="min-w-0">
-                      <div className="truncate flex items-center gap-1">
-                        {loc?.name || <span className="text-orange-500">Geen locatie</span>}
-                        {loc && (
-                          loc.moneybirdContactId ? (
-                            <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
-                          ) : (
-                            <AlertCircle className="h-3 w-3 text-orange-500 shrink-0" />
-                          )
+                  <TableCell className={getCellPadding()} onClick={(e) => e.stopPropagation()}>
+                    <div className="min-w-0 flex items-center gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="truncate flex items-center gap-1">
+                          {loc?.name || <span className="text-orange-500">Geen locatie</span>}
+                          {loc && (
+                            loc.moneybirdContactId ? (
+                              <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
+                            ) : (
+                              <AlertCircle className="h-3 w-3 text-orange-500 shrink-0" />
+                            )
+                          )}
+                        </div>
+                        {loc?.city && (
+                          <div className="text-xs text-muted-foreground">{loc.city}</div>
                         )}
                       </div>
-                      {loc?.city && (
-                        <div className="text-xs text-muted-foreground">{loc.city}</div>
+                      {loc && !loc.moneybirdContactId && (
+                        <Popover 
+                          open={linkPopoverOpen === loc.id} 
+                          onOpenChange={(open) => {
+                            setLinkPopoverOpen(open ? loc.id : null);
+                            if (!open) setLinkSearch("");
+                          }}
+                        >
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-xs text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                              data-testid={`button-link-moneybird-${loc.id}`}
+                            >
+                              <Link2 className="h-3 w-3 mr-1" />
+                              Koppel
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-[280px] p-0" align="start">
+                            <Command>
+                              <CommandInput 
+                                placeholder="Zoek Moneybird contact..." 
+                                value={linkSearch}
+                                onValueChange={setLinkSearch}
+                              />
+                              <CommandList>
+                                <CommandEmpty>Geen contact gevonden</CommandEmpty>
+                                <CommandGroup>
+                                  {moneybirdContacts
+                                    .filter(c => {
+                                      if (!linkSearch) return true;
+                                      const search = linkSearch.toLowerCase();
+                                      const name = (c.companyName || `${c.firstname || ''} ${c.lastname || ''}`).toLowerCase();
+                                      const city = (c.city || '').toLowerCase();
+                                      return name.includes(search) || city.includes(search);
+                                    })
+                                    .slice(0, 10)
+                                    .map((contact) => (
+                                      <CommandItem
+                                        key={contact.id}
+                                        value={contact.companyName || `${contact.firstname} ${contact.lastname}`}
+                                        onSelect={() => {
+                                          linkLocationMutation.mutate({
+                                            locationId: loc.id,
+                                            moneybirdContactId: contact.moneybirdId,
+                                          });
+                                          setLinkPopoverOpen(null);
+                                          setLinkSearch("");
+                                        }}
+                                        className="cursor-pointer"
+                                      >
+                                        <div className="flex flex-col">
+                                          <span className="font-medium text-sm">
+                                            {contact.companyName || `${contact.firstname || ''} ${contact.lastname || ''}`}
+                                          </span>
+                                          {contact.city && (
+                                            <span className="text-xs text-muted-foreground">{contact.city}</span>
+                                          )}
+                                        </div>
+                                      </CommandItem>
+                                    ))}
+                                </CommandGroup>
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
                       )}
                     </div>
                   </TableCell>
