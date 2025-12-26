@@ -58,6 +58,7 @@ export const advertisers = pgTable("advertisers", {
   sepaMandateReference: text("sepa_mandate_reference"), // Mandaat kenmerk (bijv. ELEVIZ-2024-001)
   sepaMandateDate: date("sepa_mandate_date"), // Datum ondertekening machtiging
   moneybirdContactId: text("moneybird_contact_id"), // Synced from Moneybird
+  moneybirdContactSnapshot: jsonb("moneybird_contact_snapshot"), // Cached Moneybird contact data for fast UI loading
   status: text("status").notNull().default("active"), // active, paused, churned
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
@@ -138,7 +139,9 @@ export const screens = pgTable("screens", {
   matchConfidence: text("match_confidence"), // auto_exact, auto_fuzzy, manual, null=unmapped
   matchReason: text("match_reason"), // Explanation of match (e.g., "Exact name match: Basil's Barber Shop")
   moneybirdContactId: text("moneybird_contact_id"), // Direct link to Moneybird contact (alternative to location-based linking)
+  moneybirdContactSnapshot: jsonb("moneybird_contact_snapshot"), // Cached Moneybird contact data for fast UI loading
   moneybirdSyncStatus: text("moneybird_sync_status").default("unlinked"), // linked, unlinked, stale
+  effectiveName: text("effective_name"), // Calculated display name: Moneybird > Yodeck > screenId fallback
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

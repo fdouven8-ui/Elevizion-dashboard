@@ -1824,9 +1824,25 @@ export async function registerRoutes(
   });
 
   // Get synced Moneybird contacts
-  app.get("/api/moneybird/contacts", requirePermission("view_finance"), async (_req, res) => {
+  app.get("/api/moneybird/contacts", requirePermission("view_finance"), async (req, res) => {
     try {
-      const contacts = await storage.getMoneybirdContacts();
+      const query = (req.query.query as string)?.toLowerCase() || "";
+      let contacts = await storage.getMoneybirdContacts();
+      
+      // Filter by search query if provided
+      if (query) {
+        contacts = contacts.filter(c => {
+          const companyName = (c.companyName || "").toLowerCase();
+          const fullName = `${c.firstname || ""} ${c.lastname || ""}`.toLowerCase();
+          const email = (c.email || "").toLowerCase();
+          const city = (c.city || "").toLowerCase();
+          return companyName.includes(query) || 
+                 fullName.includes(query) || 
+                 email.includes(query) || 
+                 city.includes(query);
+        });
+      }
+      
       res.json(contacts);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -1911,16 +1927,39 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Moneybird contact niet gevonden" });
       }
 
-      console.log(`[Moneybird Link] Linking screen ${id} (${screen.screenId}) to contact ${contact.moneybirdId}:`, {
+      // Build contact snapshot for fast UI loading
+      const contactSnapshot = {
         companyName: contact.companyName,
         firstname: contact.firstname,
         lastname: contact.lastname,
+        email: contact.email,
+        phone: contact.phone,
+        address1: contact.address1,
+        address2: contact.address2,
+        zipcode: contact.zipcode,
+        city: contact.city,
+        country: contact.country,
+        chamberOfCommerce: contact.chamberOfCommerce,
+        taxNumber: contact.taxNumber,
+        syncedAt: new Date().toISOString(),
+      };
+
+      // Calculate effective name: Moneybird > Yodeck > screenId
+      const moneybirdDisplayName = contact.companyName || 
+        `${contact.firstname || ''} ${contact.lastname || ''}`.trim() || null;
+      const effectiveName = moneybirdDisplayName || screen.yodeckPlayerName || screen.name || screen.screenId;
+
+      console.log(`[Moneybird Link] Linking screen ${id} (${screen.screenId}) to contact ${contact.moneybirdId}:`, {
+        companyName: contact.companyName,
+        effectiveName,
       });
 
-      // Update screen with Moneybird contact ID
+      // Update screen with Moneybird contact ID, snapshot, and effective name
       const updated = await storage.updateScreen(id, {
         moneybirdContactId: contact.moneybirdId,
+        moneybirdContactSnapshot: contactSnapshot,
         moneybirdSyncStatus: "linked",
+        effectiveName,
       });
 
       // Also update the location if it exists and is a placeholder
@@ -1958,9 +1997,14 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Scherm niet gevonden" });
       }
 
+      // Calculate effective name without Moneybird: Yodeck > name > screenId
+      const effectiveName = screen.yodeckPlayerName || screen.name || screen.screenId;
+
       const updated = await storage.updateScreen(id, {
         moneybirdContactId: null,
+        moneybirdContactSnapshot: null,
         moneybirdSyncStatus: "unlinked",
+        effectiveName,
       });
 
       res.json({ 
@@ -1969,6 +2013,70 @@ export async function registerRoutes(
         screen: updated,
       });
     } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Sync screen data from Moneybird (refresh contact info)
+  app.post("/api/screens/:id/sync", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const screen = await storage.getScreen(id);
+      if (!screen) {
+        return res.status(404).json({ message: "Scherm niet gevonden" });
+      }
+
+      if (!screen.moneybirdContactId) {
+        return res.status(400).json({ message: "Scherm is niet gekoppeld aan Moneybird" });
+      }
+
+      // Fetch fresh contact data from Moneybird
+      const contact = await storage.getMoneybirdContactByMoneybirdId(screen.moneybirdContactId);
+      if (!contact) {
+        // Contact no longer exists in Moneybird - mark as stale
+        await storage.updateScreen(id, { moneybirdSyncStatus: "stale" });
+        return res.status(404).json({ message: "Moneybird contact niet meer gevonden - mogelijk verwijderd" });
+      }
+
+      // Build fresh contact snapshot
+      const contactSnapshot = {
+        companyName: contact.companyName,
+        firstname: contact.firstname,
+        lastname: contact.lastname,
+        email: contact.email,
+        phone: contact.phone,
+        address1: contact.address1,
+        address2: contact.address2,
+        zipcode: contact.zipcode,
+        city: contact.city,
+        country: contact.country,
+        chamberOfCommerce: contact.chamberOfCommerce,
+        taxNumber: contact.taxNumber,
+        syncedAt: new Date().toISOString(),
+      };
+
+      // Recalculate effective name
+      const moneybirdDisplayName = contact.companyName || 
+        `${contact.firstname || ''} ${contact.lastname || ''}`.trim() || null;
+      const effectiveName = moneybirdDisplayName || screen.yodeckPlayerName || screen.name || screen.screenId;
+
+      const updated = await storage.updateScreen(id, {
+        moneybirdContactSnapshot: contactSnapshot,
+        moneybirdSyncStatus: "linked",
+        effectiveName,
+      });
+
+      console.log(`[Moneybird Sync] Synced screen ${id} (${screen.screenId}) with contact ${contact.moneybirdId}`);
+
+      res.json({ 
+        success: true, 
+        message: "Scherm gesynchroniseerd met Moneybird",
+        screen: updated,
+        contact: contactSnapshot,
+      });
+    } catch (error: any) {
+      console.error("[Moneybird Sync] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });

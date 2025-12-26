@@ -62,16 +62,40 @@ interface ScreenContentItem {
   lastSeenAt: string | null;
 }
 
+interface MoneybirdContactSnapshot {
+  companyName?: string | null;
+  firstname?: string | null;
+  lastname?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  address1?: string | null;
+  address2?: string | null;
+  zipcode?: string | null;
+  city?: string | null;
+  country?: string | null;
+  chamberOfCommerce?: string | null;
+  taxNumber?: string | null;
+  syncedAt?: string | null;
+}
+
 interface ScreenWithContent {
   id: string;
   screenId: string;
   name: string;
+  effectiveName?: string | null;
   yodeckPlayerId?: string;
+  moneybirdContactId?: string | null;
+  moneybirdContactSnapshot?: MoneybirdContactSnapshot | null;
+  moneybirdSyncStatus?: string | null;
   currentContent?: ScreenContentItem[];
   [key: string]: any;
 }
 
 function getScreenDisplayName(screen: any, location: any): string {
+  // Priority: effectiveName (from Moneybird) > yodeckPlayerName > name > location name > screenId
+  if (screen?.effectiveName && screen.effectiveName.trim()) {
+    return screen.effectiveName;
+  }
   if (screen?.name && screen.name.trim()) {
     return screen.name;
   }
@@ -673,9 +697,10 @@ export default function ScreenDetail() {
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
                 <MapPin className="h-5 w-5" />
-                Locatie & Contactgegevens
-                {location && (
-                  location.moneybirdContactId ? (
+                Contactgegevens
+                {(() => {
+                  const isLinked = screenDetail?.moneybirdContactId || location?.moneybirdContactId;
+                  return isLinked ? (
                     <Badge variant="outline" className="text-green-600 border-green-600 ml-2">
                       <CheckCircle className="h-3 w-3 mr-1" />
                       Moneybird gekoppeld
@@ -685,93 +710,155 @@ export default function ScreenDetail() {
                       <AlertCircle className="h-3 w-3 mr-1" />
                       Moneybird ontbreekt
                     </Badge>
-                  )
+                  );
+                })()}
+                {screenDetail?.moneybirdContactId && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto"
+                    onClick={() => {
+                      apiRequest("POST", `/api/screens/${screenId}/sync`)
+                        .then(() => {
+                          queryClient.invalidateQueries({ queryKey: [`/api/screens/${screenId}`] });
+                          toast({ title: "Gesynchroniseerd", description: "Contact data bijgewerkt vanuit Moneybird" });
+                        })
+                        .catch(() => {
+                          toast({ title: "Fout", description: "Synchronisatie mislukt", variant: "destructive" });
+                        });
+                    }}
+                    data-testid="button-sync-moneybird"
+                  >
+                    <RefreshCw className="h-4 w-4 mr-1" />
+                    Synchroniseren
+                  </Button>
                 )}
               </CardTitle>
             </CardHeader>
             <CardContent>
-              {!location ? (
-                <p className="text-muted-foreground">Geen locatie gekoppeld aan dit scherm.</p>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Location Name */}
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground mb-1">Locatienaam</p>
-                    <p className="text-lg font-medium">{location.name}</p>
-                  </div>
+              {(() => {
+                // Use screen-level snapshot if available, otherwise fall back to location
+                const snapshot = screenDetail?.moneybirdContactSnapshot as MoneybirdContactSnapshot | null;
+                const hasSnapshot = snapshot && (snapshot.companyName || snapshot.firstname || snapshot.email);
+                
+                // Display name from snapshot or location
+                const displayName = snapshot?.companyName || 
+                  (snapshot?.firstname && snapshot?.lastname ? `${snapshot.firstname} ${snapshot.lastname}` : null) ||
+                  location?.name || "-";
+                  
+                // Contact person from snapshot
+                const contactPerson = snapshot?.firstname && snapshot?.lastname 
+                  ? `${snapshot.firstname} ${snapshot.lastname}` 
+                  : (location?.contactName || null);
+                  
+                // Email - filter out placeholder values
+                const email = snapshot?.email || location?.email;
+                const validEmail = email && !email.includes("noreply@") && !email.includes("example.com") ? email : null;
+                
+                // Phone
+                const phone = snapshot?.phone || location?.phone || null;
+                
+                // Address from snapshot or location
+                const address = snapshot?.address1 || location?.address || null;
+                const zipcode = snapshot?.zipcode || location?.zipcode || null;
+                const city = snapshot?.city || location?.city || null;
+                
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Business/Location Name */}
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground mb-1">Bedrijfsnaam / Locatie</p>
+                      <p className="text-lg font-medium">{displayName}</p>
+                      {hasSnapshot && (
+                        <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                          <Database className="h-3 w-3" />
+                          Bron: Moneybird
+                          {snapshot?.syncedAt && (
+                            <span className="ml-1 text-muted-foreground">
+                              • {formatDistanceToNow(new Date(snapshot.syncedAt), { addSuffix: true, locale: nl })}
+                            </span>
+                          )}
+                        </p>
+                      )}
+                    </div>
 
-                  {/* Address */}
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground mb-1">Adres</p>
-                    <p className="text-sm">{location.address || "-"}</p>
-                    {location.zipcode && location.city && (
-                      <p className="text-sm">{location.zipcode} {location.city}</p>
-                    )}
-                    {!location.zipcode && location.city && (
-                      <p className="text-sm">{location.city}</p>
-                    )}
-                    {location.moneybirdContactId && (
-                      <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
-                        <Database className="h-3 w-3" />
-                        Bron: Moneybird
-                      </p>
-                    )}
-                  </div>
-                  
-                  {/* Contact Person */}
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground mb-1">Contactpersoon</p>
-                    <div className="flex items-center gap-2">
-                      <User className="h-4 w-4 text-muted-foreground" />
-                      <p className="text-sm">{location.contactName || "-"}</p>
-                    </div>
-                  </div>
-                  
-                  {/* Phone */}
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground mb-1">Telefoon</p>
-                    <div className="flex items-center gap-2">
-                      <Phone className="h-4 w-4 text-muted-foreground" />
-                      {location.phone ? (
-                        <a 
-                          href={`tel:${location.phone}`} 
-                          className="text-sm text-primary hover:underline"
-                        >
-                          {location.phone}
-                        </a>
+                    {/* Address */}
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground mb-1">Adres</p>
+                      {address || zipcode || city ? (
+                        <>
+                          {address && <p className="text-sm">{address}</p>}
+                          {(zipcode || city) && (
+                            <p className="text-sm">{[zipcode, city].filter(Boolean).join(" ")}</p>
+                          )}
+                        </>
                       ) : (
-                        <p className="text-sm text-muted-foreground">-</p>
+                        <p className="text-sm text-muted-foreground">Niet ingesteld</p>
                       )}
                     </div>
-                  </div>
-                  
-                  {/* Email */}
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground mb-1">Email</p>
-                    <div className="flex items-center gap-2">
-                      <Mail className="h-4 w-4 text-muted-foreground" />
-                      {location.email ? (
-                        <a 
-                          href={`mailto:${location.email}`} 
-                          className="text-sm text-primary hover:underline truncate"
-                        >
-                          {location.email}
-                        </a>
-                      ) : (
-                        <p className="text-sm text-muted-foreground">-</p>
-                      )}
+                    
+                    {/* Contact Person */}
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground mb-1">Contactpersoon</p>
+                      <div className="flex items-center gap-2">
+                        <User className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-sm">{contactPerson || <span className="text-muted-foreground">Niet ingesteld</span>}</p>
+                      </div>
                     </div>
-                  </div>
-                  
-                  {/* Notes */}
-                  {location.notes && (
-                    <div className="md:col-span-2">
-                      <p className="text-sm font-medium text-muted-foreground mb-1">Notities</p>
-                      <p className="text-sm bg-muted/50 rounded p-3">{location.notes}</p>
+                    
+                    {/* Phone */}
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground mb-1">Telefoon</p>
+                      <div className="flex items-center gap-2">
+                        <Phone className="h-4 w-4 text-muted-foreground" />
+                        {phone ? (
+                          <a href={`tel:${phone}`} className="text-sm text-primary hover:underline">
+                            {phone}
+                          </a>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Niet ingesteld</p>
+                        )}
+                      </div>
                     </div>
-                  )}
-                </div>
-              )}
+                    
+                    {/* Email */}
+                    <div>
+                      <p className="text-sm font-medium text-muted-foreground mb-1">Email</p>
+                      <div className="flex items-center gap-2">
+                        <Mail className="h-4 w-4 text-muted-foreground" />
+                        {validEmail ? (
+                          <a href={`mailto:${validEmail}`} className="text-sm text-primary hover:underline truncate">
+                            {validEmail}
+                          </a>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Niet ingesteld</p>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* KvK/BTW from snapshot */}
+                    {(snapshot?.chamberOfCommerce || snapshot?.taxNumber) && (
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">KvK / BTW</p>
+                        {snapshot.chamberOfCommerce && (
+                          <p className="text-sm">KvK: {snapshot.chamberOfCommerce}</p>
+                        )}
+                        {snapshot.taxNumber && (
+                          <p className="text-sm">BTW: {snapshot.taxNumber}</p>
+                        )}
+                      </div>
+                    )}
+                    
+                    {/* Notes */}
+                    {location?.notes && (
+                      <div className="md:col-span-2">
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Notities</p>
+                        <p className="text-sm bg-muted/50 rounded p-3">{location.notes}</p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </CardContent>
           </Card>
         </TabsContent>

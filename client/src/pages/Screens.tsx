@@ -54,6 +54,10 @@ import {
 type RowDensity = "compact" | "normal" | "comfortable";
 
 function getScreenDisplayName(screen: any, location: any): string {
+  // Priority: effectiveName (from Moneybird) > yodeckPlayerName > name > location name > screenId
+  if (screen?.effectiveName && screen.effectiveName.trim()) {
+    return screen.effectiveName;
+  }
   if (screen?.name && screen.name.trim()) {
     return screen.name;
   }

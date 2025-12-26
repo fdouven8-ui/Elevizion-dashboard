@@ -1,0 +1,258 @@
+Je werkt aan Elevizion Dashboard (React + TS + Vite frontend, Express backend, Drizzle ORM + Postgres).
+Integraties met Yodeck en Moneybird zijn al “online” (tokens/keys werken), maar de koppeling en datavulling is fout.
+
+Doel (heel concreet)
+
+We willen 1 simpele waarheid:
+
+Moneybird is de bron (source of truth) voor alle contactgegevens (bedrijfsnaam, contactpersoon, e-mail, telefoon, adres, btw/kvk indien beschikbaar).
+
+Yodeck is de bron voor scherm/device data (device id, online/offline status, laatst gezien, playlists/content info, en eventueel de display name als we dat willen syncen).
+
+In de app moet een scherm (en meestal ook locatie) gekoppeld kunnen worden aan een Moneybird contact, zodat alle velden direct automatisch worden ingevuld en blijven kloppen.
+
+Dit moet óók werken voor Adverteerders (die zijn óók Moneybird contacts).
+
+Probleem nu
+
+Schermen zijn “gekoppeld” aan Moneybird maar in de UI blijven velden leeg of default (zoals Default (Yodeck Import) en noreply@example.com).
+
+Schermnaam klopt niet.
+
+Contact-tab toont “Moneybird ontbreekt” of toont geen echte contactdata.
+
+Als ik iets in Moneybird wijzig, moet het in de app mee veranderen.
+
+Optioneel: als we schermnaam in de app aanpassen, moet dat ook naar Yodeck kunnen (indien mogelijk via API).
+
+1) Data-model / Database (Drizzle)
+
+Maak/controleer dat deze velden bestaan (of voeg toe met migratie):
+
+Tabel: screens
+
+id (uuid)
+
+screen_id (EVZ-001 format, intern)
+
+yodeck_device_id (string, uniek)
+
+yodeck_name (string)
+
+effective_name (string) ← naam die we tonen in UI
+
+moneybird_contact_id (string, nullable)
+
+moneybird_contact_snapshot (jsonb, nullable) ← laatste contactdata cache
+
+status_online (bool)
+
+last_seen_at (timestamp)
+
+Tabel: advertisers
+
+id (uuid)
+
+moneybird_contact_id (string, uniek/nullable)
+
+effective_name (string)
+
+moneybird_contact_snapshot (jsonb)
+
+evt. extra velden (facturatie instellingen later)
+
+Belangrijk concept
+
+We willen geen losse “locatie” en “scherm” als dubbele waarheid.
+Screen = locatie in 95%. Als er later 2 schermen op 1 locatie komen, dan lossen we dat op met één location entity, maar NU bouwen we het simpel: contact hoort bij het scherm.
+
+2) Moneybird mapping (veldnamen)
+
+Als een screen/adverteerder gekoppeld is aan moneybird_contact_id, vul dan automatisch in UI met:
+
+Bedrijfsnaam: contact.company_name of contact.firstname+lastname
+
+Contactpersoon: contact.firstname lastname (indien aanwezig)
+
+Email: contact.email (of primaire email uit contact)
+
+Telefoon: contact.phone
+
+Adres: combineer street/number + zipcode + city + country (wat Moneybird levert)
+
+Extra: kvk/btw indien beschikbaar
+
+Sla dit op in moneybird_contact_snapshot zodat UI direct snel laadt.
+
+3) API endpoints die je moet bouwen/fixen (Express)
+Moneybird search + detail
+
+GET /api/moneybird/contacts?query=...
+Retourneer lijst met {id, displayName, email, phone, addressShort}
+
+GET /api/moneybird/contacts/:id
+Retourneer volledige contactdata
+
+Link/unlink screen ↔ Moneybird contact
+
+POST /api/screens/:screenId/link-moneybird body: { moneybird_contact_id }
+Acties:
+
+contact ophalen uit Moneybird
+
+screens.moneybird_contact_id zetten
+
+moneybird_contact_snapshot opslaan
+
+effective_name updaten naar Moneybird bedrijfsnaam (tenzij user override gebruikt)
+
+Return updated screen
+
+POST /api/screens/:screenId/unlink-moneybird
+Zet moneybird_contact_id=null en snapshot null (of behoud snapshot maar markeer “stale”)
+
+Force refresh / sync
+
+POST /api/screens/:screenId/sync
+Trekt opnieuw:
+
+device data uit Yodeck (status, name, last_seen)
+
+contact data uit Moneybird (als gekoppeld)
+
+update effective_name op basis van regels hieronder
+
+Zelfde voor advertisers
+
+POST /api/advertisers/:id/link-moneybird
+
+POST /api/advertisers/:id/sync
+
+GET /api/advertisers moet ook laten zien “missing moneybird link”
+
+4) Naam-regels (super belangrijk, zodat het niet “default” blijft)
+
+We gebruiken deze prioriteit:
+
+Als Moneybird gekoppeld is: effective_name = Moneybird display name
+
+Anders: effective_name = yodeck_name
+
+Anders: fallback EVZ-XXX of “Onbekend scherm”
+
+Geen Default (Yodeck Import) meer tonen als “locatie”. Dat was import placeholder.
+
+5) UI / UX (React)
+In Schermen overzicht
+
+Toon badge “Moneybird ontbreekt” bij screens zonder moneybird_contact_id
+
+Klik “Koppel” opent modal:
+
+Zoekveld (type-ahead) → /api/moneybird/contacts?query=
+
+Select contact → bevestigen → call link endpoint
+
+Na koppelen: lijst update direct, contactvelden zichtbaar.
+
+In Screen detail > Contact tab
+
+Toon echte velden uit snapshot:
+
+Locatienaam/Bedrijfsnaam (effective_name)
+
+Contactpersoon
+
+Email
+
+Telefoon
+
+Adres
+
+Toon duidelijke status:
+
+✅ “Moneybird gekoppeld” + knop “Synchroniseren”
+
+❌ “Moneybird ontbreekt” + knop “Koppel contact”
+
+Verwijder placeholders zoals noreply@example.com → nooit tonen, liever “Niet ingesteld”.
+
+Adverteerders pagina
+
+Exact dezelfde flow:
+
+“Koppel aan Moneybird contact”
+
+“Synchroniseren”
+
+Toon contact details
+
+6) Synchronisatie (achtergrond + handmatig)
+Handmatig
+
+Knop “Synchroniseren” moet écht:
+
+Moneybird contact opnieuw ophalen
+
+Snapshot overschrijven
+
+Namen herberekenen
+
+UI refresh
+
+Automatisch (lightweight)
+
+Maak een cron/job (bv elke 15 min) of queue:
+
+sync alleen screens die:
+
+online status changed (Yodeck)
+
+of moneybird_contact_id hebben maar snapshot ouder dan 24 uur
+
+Zorg voor rate limit / caching.
+
+7) Yodeck update van naam (optioneel maar graag)
+
+Als Yodeck API het toelaat:
+
+Als Moneybird gekoppeld wordt en effective_name wijzigt, zet dan ook display/device naam in Yodeck naar dezelfde naam.
+
+Als dit niet kan: log het duidelijk en laat de app wel intern kloppen.
+
+8) Debugging & logging (must)
+
+Ik wil dat je:
+
+Elke link/sync actie logt (server logs) met screen_id, yodeck_device_id, moneybird_contact_id
+
+Bij mislukte mapping: return duidelijke error + UI toast
+
+9) Acceptatiecriteria (testen in de UI)
+
+Wanneer ik “Test” scherm open:
+
+Ik koppel het aan Moneybird contact “Basil’s Barber Shop Maasbracht”
+
+Binnen 1 seconde zie ik in Contact tab:
+
+Bedrijfsnaam correct
+
+Email/telefoon/adres correct
+
+In Schermen lijst zie ik:
+
+Geen “Moneybird ontbreekt” meer
+
+Schermnaam is aangepast naar Moneybird naam (effective_name)
+
+Als ik in Moneybird email wijzig en ik klik “Synchroniseren”:
+
+UI toont de nieuwe email
+
+Zelfde flow werkt bij Adverteerders.
+
+10) Levering
+
+Pas de bestaande code aan (niet opnieuw beginnen), voeg migraties toe, en commit changes in logische stappen.
+Zorg dat alles typesafe is (TS), en dat de UI geen default placeholders meer toont.
