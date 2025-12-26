@@ -97,10 +97,10 @@ function getScreenDisplayName(screen: any, location: any): string {
   if (screen?.effectiveName && screen.effectiveName.trim()) {
     return screen.effectiveName;
   }
-  // Check Moneybird snapshot company name
-  const snapshot = screen?.moneybirdContactSnapshot as { company?: string } | null;
-  if (snapshot?.company && snapshot.company.trim()) {
-    return snapshot.company;
+  // Check Moneybird snapshot company name (schema uses 'companyName')
+  const snapshot = screen?.moneybirdContactSnapshot as { companyName?: string } | null;
+  if (snapshot?.companyName && snapshot.companyName.trim()) {
+    return snapshot.companyName;
   }
   // Use Yodeck player name (device name)
   if (screen?.yodeckPlayerName && screen.yodeckPlayerName.trim()) {
