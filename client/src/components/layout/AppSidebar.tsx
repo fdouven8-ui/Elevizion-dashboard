@@ -21,7 +21,6 @@ import {
   LogIn,
   Rocket,
   Euro,
-  Link2,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -41,7 +40,6 @@ const menuItems: MenuItem[] = [
   { title: "Schermen", url: "/screens", icon: Monitor, requiredPermissions: [PERMISSIONS.VIEW_SCREENS] },
   { title: "Adverteerders", url: "/advertisers", icon: Users, requiredPermissions: [PERMISSIONS.VIEW_ADVERTISERS] },
   { title: "Plaatsingen", url: "/placements", icon: Target, requiredPermissions: [PERMISSIONS.VIEW_PLACEMENTS] },
-  { title: "Ontbrekende gegevens", url: "/koppelingen", icon: Link2, requiredPermissions: [PERMISSIONS.MANAGE_INTEGRATIONS] },
   { title: "Financieel", url: "/finance", icon: Euro, requiredPermissions: [PERMISSIONS.VIEW_FINANCE] },
   { title: "Instellingen", url: "/settings", icon: Settings, requiredPermissions: [PERMISSIONS.MANAGE_USERS, PERMISSIONS.EDIT_SYSTEM_SETTINGS, PERMISSIONS.MANAGE_TEMPLATES, PERMISSIONS.MANAGE_INTEGRATIONS], anyPermission: true },
 ];
