@@ -103,7 +103,17 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
     - **GET /api/ontbrekende-gegevens**: Overview of missing data (screens without location, locations without Moneybird)
   - **Permissions**: `manage_integrations` for sync/config, `view_finance` for reading data
   - **Location/Advertiser Linking**: Locations and advertisers have `moneybirdContactId` fields for linking to Moneybird contacts
-  - **"Ontbrekende gegevens" Page**: Dashboard page showing screens/locations needing Moneybird linking with direct action buttons
+  - **Auto-match Service**: `POST /api/locations/auto-match-moneybird` finds matching Moneybird contacts based on name/city similarity with confidence scores (0.92+ auto-links, 0.5+ suggests)
+  - **Resolve Wizard**: `ResolveWizard.tsx` component steps through unlinked locations/advertisers for manual Moneybird linking
+- **Yodeck Sync Improvements**:
+  - Each new screen automatically gets its own placeholder location (1 screen = 1 location default)
+  - Locations have `isPlaceholder` (auto-created) and `source` (manual/yodeck) fields
+  - Placeholder locations need Moneybird linking to populate address/contact details
+- **Navigation**:
+  - "Locaties" menu item in sidebar with Building2 icon
+  - `/locations` overview page with Moneybird status badges (Gekoppeld/Ontbreekt) and address completeness badges
+  - `/locations/:id` detail page for Moneybird contact linking with address display
+  - Home dashboard "Data Compleetheid" widget with actionable links and Resolve Wizard button
 
 ## Moneybird Setup
 

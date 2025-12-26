@@ -1,0 +1,99 @@
+Je werkt in een bestaand project (Elevizion Dashboard) dat al Yodeck-sync en Moneybird integratie heeft. NIET opnieuw bouwen. Alleen uitbreiden en corrigeren.
+
+DOEL (belangrijk):
+- Moneybird is de “single source of truth” voor: contactgegevens, adressen, bedrijven (locaties/venues) en adverteerders.
+- Yodeck is de “single source of truth” voor: scherm status (online/offline), player info, content summary, screenshots.
+- Het dashboard moet deze data automatisch koppelen en logisch tonen, zonder apart verwarrend menu “Ontbrekende gegevens”.
+
+HUIDIG PROBLEEM:
+1) Yodeck import zet meerdere schermen op 1 “Default (Yodeck Import)” locatie, waardoor Test en Basil’s Barber Shop Maasbracht op dezelfde locatie staan. Dat klopt niet.
+2) Er is nu een apart menu “Ontbrekende gegevens / Koppelingen” wat verwarrend is.
+3) In de praktijk is het bijna altijd: 1 scherm = 1 locatie. Alleen uitzonderlijk 2 schermen op 1 locatie.
+
+WAT JE MOET DOEN (concreet):
+
+A) DATAMODEL / DB (Drizzle + Postgres)
+1) Maak “Location” leidend voor adres/contact/venue info, maar ondersteun ook 1->N screens.
+2) Voeg aan Location toe:
+   - moneybirdContactId (string) + moneybirdContactName (string optioneel cache)
+   - address fields (street, zipcode, city, etc.) die we lokaal cachen vanuit Moneybird
+   - contactPersonName/email/phone (cache vanuit Moneybird indien beschikbaar)
+   - status flags: dataCompleteness (enum/score) + missingFields array (json)
+3) Voeg aan Advertiser toe:
+   - moneybirdContactId (string) + cache fields (name, address, email, phone)
+4) Voeg aan Screen toe:
+   - primaryLocationId blijft, maar zorg dat Screen altijd exact 1 locatie heeft.
+   - optioneel: moneybirdContactId direct op Screen mag NIET leidend zijn; koppeling loopt via Location.
+
+B) YODECK SYNC FIX (belangrijk)
+Doel: bij Yodeck import mogen schermen niet standaard allemaal in dezelfde Default-locatie eindigen.
+1) Pas de Yodeck screen sync aan:
+   - Als een Yodeck screen nieuw is en er is geen expliciete mapping:
+     -> Maak automatisch een nieuwe Location aan per screen:
+        name = yodeckPlayerName (bv. “Basil's Barber Shop Maasbracht”)
+        source = "yodeck"
+        isPlaceholder = true
+        address = onbekend (nulls)
+     -> Koppel dat screen aan die nieuw aangemaakte Location.
+   - Alleen als er al bestaande Location mapping bestaat (bv. eerder handmatig gekoppeld), gebruik die.
+2) Zorg dat het bestaande “Default (Yodeck Import)” alleen nog bestaat als fallback, maar niet standaard gebruikt wordt voor nieuwe screens.
+3) Resultaat: Test krijgt eigen Location “Test” (placeholder) en Basil krijgt eigen Location “Basil’s Barber Shop Maasbracht” (placeholder), tenzij later samengevoegd.
+
+C) MONEYBIRD SYNC (uitbreiden, niet herschrijven)
+1) Zorg dat “Sync Moneybird” contacten ophaalt en in DB opslaat (MoneybirdContacts tabel of bestaande structuur).
+2) Bouw een “Link/Match” service:
+   - Auto-match locaties <-> moneybird contact op basis van:
+     a) exact/near match op naam (case-insensitive, trim, remove punctuation)
+     b) match op city/zipcode (als aanwezig)
+     c) eventueel match op email/phone (als beschikbaar)
+   - Geef per match een confidence score (0-100) en bewaar suggestedMoneybirdContactId op Location.
+3) Wanneer een Location gekoppeld wordt aan moneybirdContactId:
+   - Vul/cach alle adres- en contactvelden vanuit Moneybird in Location.
+   - Zet isPlaceholder=false.
+4) Zelfde mechanisme voor Advertisers: advertiser <-> moneybird contact.
+
+D) UI/UX: haal “Ontbrekende gegevens” uit het menu
+Ik wil GEEN apart menu-item “Ontbrekende gegevens / Koppelingen”.
+Vervang dit door:
+1) Op “Schermen” overzicht:
+   - Toon per screen een badge:
+     - “✅ Compleet” als location gekoppeld + adres ok
+     - “⚠️ Koppelen aan Moneybird” als location nog geen moneybirdContactId heeft
+     - “⚠️ Adres ontbreekt” als gekoppeld maar missende velden
+   - Voeg een snelle actie knop per rij: “Koppel/Controleer” die naar Location detail pagina gaat.
+2) Op “Locaties” overzicht:
+   - Toon lijst met locaties met status-badges (gekoppeld / niet gekoppeld / incompleet)
+   - Voeg bovenaan een kleine “Data health” tegel: aantal te koppelen + aantal incompleet.
+3) Op “Location detail” pagina (waar je screenshot van stuurde):
+   - Dit wordt dé plek om Moneybird te koppelen en de correctness te zien.
+   - Toon duidelijk:
+     - Moneybird contact dropdown (met search)
+     - Na koppelen: toon contactkaart (naam, adres, email, tel) vanuit Moneybird (read-only, met “laatste sync” timestamp)
+     - Toon “Schermen op deze locatie”: normaal 1. Als 2 of meer: toon waarschuwing + knop “verplaats scherm naar andere locatie”.
+4) Voeg een simpele “Resolve wizard” (modal of page) die automatisch door issues loopt:
+   - Stap 1: locaties zonder Moneybird koppeling (kies contact of “later”)
+   - Stap 2: locaties met missende adresvelden
+   - Stap 3: adverteerders zonder Moneybird koppeling
+   Dit vervangt het oude “Ontbrekende gegevens” menu.
+
+E) BUSINESS LOGICA (belangrijk)
+- Default aanname: 1 scherm = 1 locatie.
+- Als er echt 2 schermen op 1 locatie zijn:
+  - dan koppel je beide screens aan dezelfde Location.
+  - maar dit mag alleen handmatig gebeuren (of via expliciete rule), niet per ongeluk door import.
+- Moneybird data moet uiteindelijk gebruikt worden voor:
+  - facturatie (adverteerders)
+  - payout/revenue share (locaties)
+  - overzicht/CRM (naam/adres/contact)
+- Yodeck data blijft gebruikt voor operationeel (online/offline, content).
+
+F) ACCEPTANCE CRITERIA (checklist)
+1) Na Yodeck sync:
+   - “Test” en “Basil’s Barber Shop Maasbracht” staan elk op een eigen Location (tenzij bewust samengevoegd).
+2) “Ontbrekende gegevens” menu-item is weg.
+3) Ik kan op Location detail een Moneybird contact koppelen en zie daarna adres/contact automatisch gevuld.
+4) In “Schermen” zie ik per screen direct of Moneybird-koppeling ontbreekt, met een klik naar fix.
+5) Auto-match werkt (met confidence) en toont suggesties, maar forceert niets.
+
+Lever dit op in kleine commits/steps en zorg dat bestaande API routes zoveel mogelijk hergebruikt worden. Voeg alleen routes toe als nodig (bv. POST /api/locations/:id/link-moneybird, POST /api/locations/resolve-wizard/next).
+Gebruik bestaande design system/components van de app.

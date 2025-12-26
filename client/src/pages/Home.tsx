@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -5,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ExpandableCard } from "@/components/ui/expandable-card";
 import { ExpandableKpiCard } from "@/components/ui/expandable-kpi-card";
+import { ResolveWizard } from "@/components/ResolveWizard";
 import { 
   Wifi,
   WifiOff,
@@ -18,6 +20,7 @@ import {
   MapPin,
   Monitor,
   Building2,
+  Sparkles,
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -77,6 +80,8 @@ interface ActionItem {
 }
 
 export default function Home() {
+  const [wizardOpen, setWizardOpen] = useState(false);
+  
   const { data: stats, isLoading: statsLoading } = useQuery<ControlRoomStats>({
     queryKey: ["/api/control-room/stats"],
     queryFn: async () => {
@@ -469,10 +474,28 @@ export default function Home() {
                   </div>
                 </div>
               </div>
+              
+              {/* Wizard button */}
+              {(locationsWithoutMoneybird > 0 || locationsAddressIncomplete > 0) && (
+                <div className="pt-3 border-t mt-3">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="w-full"
+                    onClick={() => setWizardOpen(true)}
+                    data-testid="button-resolve-wizard"
+                  >
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Wizard: Koppel aan Moneybird
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
       </div>
+      
+      <ResolveWizard open={wizardOpen} onOpenChange={setWizardOpen} />
     </div>
   );
 }

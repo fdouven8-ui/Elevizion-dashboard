@@ -67,21 +67,25 @@ export const advertisers = pgTable("advertisers", {
 /**
  * Locations - Partner businesses that host screens
  * These earn revenue share based on screen time at their location
+ * isPlaceholder: true means this was auto-created from Yodeck import and needs Moneybird linking
+ * source: where this location came from (manual, yodeck)
  */
 export const locations = pgTable("locations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   name: text("name").notNull(),
-  address: text("address").notNull(),
+  address: text("address"), // Made nullable for placeholder locations
   street: text("street"),
   zipcode: text("zipcode"),
   city: text("city"), // Plaats - used for filtering screens
-  contactName: text("contact_name").notNull(),
-  email: text("email").notNull(),
+  contactName: text("contact_name"), // Made nullable for placeholder locations
+  email: text("email"), // Made nullable for placeholder locations
   phone: text("phone"),
   revenueSharePercent: decimal("revenue_share_percent", { precision: 5, scale: 2 }).notNull().default("10.00"),
   minimumPayoutAmount: decimal("minimum_payout_amount", { precision: 10, scale: 2 }).notNull().default("25.00"),
   bankAccountIban: text("bank_account_iban"),
   moneybirdContactId: text("moneybird_contact_id").unique(), // Link to Moneybird contact for master data
+  isPlaceholder: boolean("is_placeholder").default(false), // Auto-created from Yodeck, needs Moneybird linking
+  source: text("source").default("manual"), // manual, yodeck - where this location came from
   status: text("status").notNull().default("active"), // active, paused, terminated
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),

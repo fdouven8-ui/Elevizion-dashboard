@@ -8,8 +8,38 @@ const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 import { storage } from "./storage";
 import { decryptCredentials } from "./crypto";
 
-// Helper: Get or create default location for screen imports
-// Returns the ID of the first location or creates a minimal "Default" location
+// Helper: Create a unique placeholder location for a new screen
+// Each screen gets its own location by default (1 screen = 1 location)
+// This ensures imported screens don't all end up on the same "Default" location
+async function createPlaceholderLocationForScreen(screenName: string, yodeckUuid: string): Promise<string> {
+  // Use the screen name as the location name, with UUID suffix to ensure uniqueness
+  const baseName = screenName || "Onbekende locatie";
+  const uniqueSuffix = yodeckUuid.substring(0, 8); // First 8 chars of UUID for uniqueness
+  
+  // Create a new unique placeholder location for this screen
+  // Always create fresh - never reuse existing locations to avoid accidental merging
+  const newLocation = await storage.createLocation({
+    name: baseName,
+    address: null,
+    street: null,
+    city: null,
+    zipcode: null,
+    contactName: null,
+    email: null,
+    phone: null,
+    revenueSharePercent: "10.00", // Required default
+    minimumPayoutAmount: "25.00", // Required default
+    status: "active",
+    isPlaceholder: true,
+    source: "yodeck",
+    notes: `Auto-created from Yodeck import (UUID: ${yodeckUuid})`,
+  });
+  
+  console.log(`[Yodeck] Created placeholder location "${baseName}" (${newLocation.id}) for screen "${screenName}"`);
+  return newLocation.id;
+}
+
+// Legacy: Get or create default location (only used as fallback)
 async function getOrCreateDefaultLocationId(): Promise<string> {
   const locations = await storage.getLocations();
   if (locations.length > 0) {
@@ -342,8 +372,8 @@ export async function syncYodeckScreens(): Promise<{
     }
 
     // Upsert screens to database with retry for Neon 57P01 errors
+    // NEW: Each new screen gets its own placeholder location (1 screen = 1 location by default)
     const upsertScreensToDb = async (): Promise<number> => {
-      const defaultLocationId = await getOrCreateDefaultLocationId();
       let updatedCount = 0;
       
       for (const screen of allScreens) {
@@ -365,7 +395,7 @@ export async function syncYodeckScreens(): Promise<{
         // We set content to null here - it will be populated by the content sync step
         
         if (existing) {
-          // Update existing screen - use id-based update since UUID might not be set yet
+          // Update existing screen - keep existing locationId (user may have manually assigned)
           await storage.updateScreen(existing.id, {
             yodeckPlayerId: String(screen.id),
             yodeckUuid: screen.uuid, // Backfill UUID for legacy screens
@@ -374,18 +404,21 @@ export async function syncYodeckScreens(): Promise<{
             yodeckScreenshotUrl: screen.screenshot_url || null,
             status: screen.state?.online ? "online" : "offline",
             lastSeenAt: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
-            locationId: existing.locationId || defaultLocationId,
-            // Content is NOT in list response - keep existing or null
+            // Keep existing locationId - don't overwrite user's choice
           });
           console.log(`[Yodeck] Updated screen ${screenId || screen.name} (UUID: ${screen.uuid})`);
           updatedCount++;
         } else {
-          // Create new screen
+          // Create new screen with its own placeholder location
+          // This ensures each screen gets a unique location (1 screen = 1 location default)
+          const screenName = screen.name || `Yodeck Screen ${screen.id}`;
+          const newLocationId = await createPlaceholderLocationForScreen(screenName, screen.uuid);
+          
           const newScreenId = screenId || `YDK-${screen.id}`;
           await storage.createScreen({
             screenId: newScreenId,
-            name: screen.name || `Yodeck Screen ${screen.id}`,
-            locationId: defaultLocationId,
+            name: screenName,
+            locationId: newLocationId,
             yodeckPlayerId: String(screen.id),
             yodeckPlayerName: screen.name,
             yodeckUuid: screen.uuid,
@@ -399,7 +432,7 @@ export async function syncYodeckScreens(): Promise<{
             yodeckContentSummary: null,
             yodeckContentLastFetchedAt: null,
           });
-          console.log(`[Yodeck] Created new screen ${newScreenId} (UUID: ${screen.uuid})`);
+          console.log(`[Yodeck] Created new screen ${newScreenId} with location "${screenName}" (UUID: ${screen.uuid})`);
           updatedCount++;
         }
       }
