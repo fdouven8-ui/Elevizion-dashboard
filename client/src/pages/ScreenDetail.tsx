@@ -34,7 +34,10 @@ import {
   Search,
   LayoutGrid,
   Building2,
-  Monitor
+  Monitor,
+  CheckCircle,
+  AlertCircle,
+  Database
 } from "lucide-react";
 import { Link, useRoute } from "wouter";
 import { placementsApi } from "@/lib/api";
@@ -671,6 +674,19 @@ export default function ScreenDetail() {
               <CardTitle className="text-lg flex items-center gap-2">
                 <MapPin className="h-5 w-5" />
                 Locatie & Contactgegevens
+                {location && (
+                  location.moneybirdContactId ? (
+                    <Badge variant="outline" className="text-green-600 border-green-600 ml-2">
+                      <CheckCircle className="h-3 w-3 mr-1" />
+                      Moneybird gekoppeld
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-orange-600 border-orange-600 ml-2">
+                      <AlertCircle className="h-3 w-3 mr-1" />
+                      Moneybird ontbreekt
+                    </Badge>
+                  )
+                )}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -688,8 +704,17 @@ export default function ScreenDetail() {
                   <div>
                     <p className="text-sm font-medium text-muted-foreground mb-1">Adres</p>
                     <p className="text-sm">{location.address || "-"}</p>
-                    {location.city && (
+                    {location.zipcode && location.city && (
+                      <p className="text-sm">{location.zipcode} {location.city}</p>
+                    )}
+                    {!location.zipcode && location.city && (
                       <p className="text-sm">{location.city}</p>
+                    )}
+                    {location.moneybirdContactId && (
+                      <p className="text-xs text-green-600 mt-1 flex items-center gap-1">
+                        <Database className="h-3 w-3" />
+                        Bron: Moneybird
+                      </p>
                     )}
                   </div>
                   

@@ -2018,6 +2018,125 @@ export async function registerRoutes(
     }
   });
 
+  // Auto-match locations to Moneybird contacts
+  app.post("/api/locations/auto-match-moneybird", requirePermission("manage_integrations"), async (_req, res) => {
+    try {
+      const locations = await storage.getLocations();
+      const moneybirdContacts = await storage.getMoneybirdContacts();
+      
+      const unlinkedLocations = locations.filter(l => !l.moneybirdContactId);
+      
+      const matches: { locationId: string; locationName: string; contactId: string; contactName: string; matchType: string; score: number }[] = [];
+      const suggestions: { locationId: string; locationName: string; contactId: string; contactName: string; matchType: string; score: number }[] = [];
+      let autoLinked = 0;
+      
+      // Normalize function for matching
+      const normalize = (str: string | null | undefined): string => {
+        if (!str) return "";
+        return str.toLowerCase()
+          .replace(/[^a-z0-9\s]/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+      };
+      
+      // Calculate simple token similarity
+      const tokenSimilarity = (a: string, b: string): number => {
+        const tokensA = normalize(a).split(" ").filter(t => t.length > 2);
+        const tokensB = normalize(b).split(" ").filter(t => t.length > 2);
+        if (tokensA.length === 0 || tokensB.length === 0) return 0;
+        
+        let matches = 0;
+        for (const tokenA of tokensA) {
+          if (tokensB.some(tokenB => tokenB.includes(tokenA) || tokenA.includes(tokenB))) {
+            matches++;
+          }
+        }
+        return matches / Math.max(tokensA.length, tokensB.length);
+      };
+      
+      for (const location of unlinkedLocations) {
+        let bestMatch: { contact: typeof moneybirdContacts[0]; type: string; score: number } | null = null;
+        
+        for (const contact of moneybirdContacts) {
+          const contactName = contact.companyName || 
+            [contact.firstname, contact.lastname].filter(Boolean).join(" ") || 
+            "";
+          
+          // Exact name match (normalized)
+          if (normalize(location.name) === normalize(contactName) && contactName) {
+            bestMatch = { contact, type: "exact_name", score: 1.0 };
+            break;
+          }
+          
+          // Email match
+          if (location.email && contact.email && 
+              normalize(location.email) === normalize(contact.email)) {
+            if (!bestMatch || bestMatch.score < 0.95) {
+              bestMatch = { contact, type: "exact_email", score: 0.95 };
+            }
+          }
+          
+          // City + name token match
+          if (location.city && contact.city && 
+              normalize(location.city) === normalize(contact.city)) {
+            const similarity = tokenSimilarity(location.name, contactName);
+            if (similarity > 0.6 && (!bestMatch || bestMatch.score < similarity * 0.9)) {
+              bestMatch = { contact, type: "city_name_fuzzy", score: similarity * 0.9 };
+            }
+          }
+          
+          // Pure fuzzy name match
+          const nameSimilarity = tokenSimilarity(location.name, contactName);
+          if (nameSimilarity > 0.7 && (!bestMatch || bestMatch.score < nameSimilarity * 0.85)) {
+            bestMatch = { contact, type: "fuzzy_name", score: nameSimilarity * 0.85 };
+          }
+        }
+        
+        if (bestMatch) {
+          const matchInfo = {
+            locationId: location.id,
+            locationName: location.name,
+            contactId: bestMatch.contact.id,
+            contactName: bestMatch.contact.companyName || 
+              [bestMatch.contact.firstname, bestMatch.contact.lastname].filter(Boolean).join(" ") || 
+              "Onbekend",
+            matchType: bestMatch.type,
+            score: bestMatch.score
+          };
+          
+          // Auto-link if score >= 0.92
+          if (bestMatch.score >= 0.92) {
+            await storage.updateLocation(location.id, {
+              moneybirdContactId: bestMatch.contact.moneybirdId,
+              address: bestMatch.contact.address1 || location.address,
+              city: bestMatch.contact.city || location.city,
+              zipcode: bestMatch.contact.zipcode || location.zipcode,
+            });
+            matches.push(matchInfo);
+            autoLinked++;
+          } else if (bestMatch.score >= 0.5) {
+            // Suggest for manual review
+            suggestions.push(matchInfo);
+          }
+        }
+      }
+      
+      console.log(`[Auto-match] ${autoLinked} locaties automatisch gekoppeld, ${suggestions.length} suggesties`);
+      
+      res.json({
+        success: true,
+        autoLinked,
+        matches,
+        suggestions,
+        totalUnlinked: unlinkedLocations.length,
+        totalContacts: moneybirdContacts.length
+      });
+    } catch (error: any) {
+      console.error("[Auto-match] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Get ontbrekende gegevens overview (missing data)
   app.get("/api/ontbrekende-gegevens", requirePermission("view_screens"), async (_req, res) => {
     try {

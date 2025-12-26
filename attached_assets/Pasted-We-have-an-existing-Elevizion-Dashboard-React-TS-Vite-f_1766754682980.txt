@@ -1,0 +1,82 @@
+We have an existing Elevizion Dashboard (React + TS + Vite frontend, Express + Drizzle + Postgres backend) with working Yodeck integration and Moneybird integration now connected (access_token + administration_id configured, sync endpoint exists). 
+
+TASK: Do NOT rebuild the app. Extend the current system in a minimal, consistent way.
+
+GOAL:
+Moneybird should become the single source of truth for contact + address data, and that data must be automatically linked to Yodeck screens via our internal models (Locations, Screens, Advertisers). We need clean UX: no confusing “linking” module as a separate concept. Instead, show “missing data” as actionable statuses inside existing pages.
+
+CURRENT ISSUE:
+The UI page “Koppelingen / Ontbrekende gegevens” is confusing and shows 0 contacts even though we created at least 1 Moneybird contact. We need a solid Moneybird import + mapping flow and then auto-fill locations.
+
+IMPLEMENTATION REQUIREMENTS:
+
+1) Moneybird Sync (Backend)
+- Ensure Moneybird sync actually fetches contacts from Moneybird and stores them locally.
+- Create/verify a DB table: moneybird_contacts
+  Fields: id (uuid), moneybird_contact_id (string), administration_id (string), company_name, firstname, lastname, email, phone, attention, address1, address2, zipcode, city, country, iban, kvk, vat_number, created_at, updated_at, last_synced_at, raw_json (jsonb).
+- Add a robust sync job that:
+  - fetches all contacts (paginate if needed),
+  - upserts by (administration_id + moneybird_contact_id),
+  - logs fetched count + upserted count.
+- Expose endpoint GET /api/moneybird/contacts (with search query and pagination) for UI dropdowns.
+
+2) Link model between Locations and Moneybird contacts
+- Extend existing locations table with:
+  - moneybirdContactId (FK to moneybird_contacts.id) OR store moneybird_contact_id directly, but prefer FK.
+  - dataSource flags (manual vs moneybird)
+- When a location is linked to a Moneybird contact:
+  - auto-fill location fields: name, address, zipcode, city, contactName, email, phone
+  - keep an audit field: lastMoneybirdSyncAt
+- Add endpoint:
+  - POST /api/locations/:id/link-moneybird { moneybirdContactId }
+  - POST /api/locations/auto-match-moneybird (tries to match all locations)
+Matching logic:
+  - primary: exact match on normalized name (location.name vs contact.company_name/firstname+lastname)
+  - secondary: match by email if present
+  - tertiary: fuzzy match (very conservative) using simple token similarity; only auto-link if score is high (e.g. >= 0.92), otherwise suggest only.
+
+3) Screen → Location flow (already exists)
+- Keep screen->location as is.
+- The missing piece: if a screen has a location that becomes linked to Moneybird, the screen detail page should automatically show full address/contact data via the linked location.
+
+4) UX Changes (Frontend)
+- Remove/rename the confusing “Koppelingen” menu entry.
+- Replace it with “Ontbrekende gegevens” (or “Datakwaliteit”) as a dashboard-like page, BUT:
+  - Also surface statuses inside:
+    - Locations list: show badge “Moneybird: gekoppeld / ontbreekt”
+    - Screens list: show badge “Locatie ontbreekt” or “Locatie gekoppeld maar Moneybird ontbreekt”
+- “Ontbrekende gegevens” page should show:
+  - card: Moneybird contacten: X (from local DB after sync)
+  - card: Locaties zonder Moneybird: Y
+  - card: Schermen zonder locatie: Z
+  - CTA buttons:
+    - “Sync Moneybird”
+    - “Auto-match locaties”
+- In the table “Locaties zonder Moneybird”:
+  - Dropdown search that loads from /api/moneybird/contacts
+  - Action “Koppelen” triggers POST /api/locations/:id/link-moneybird
+  - After linking, row disappears and location fields update immediately.
+- Also add a small “Why” tooltip: “Moneybird is bron voor adres + factuurgegevens”.
+
+5) Fix the “0 Moneybird contacts found” situation
+- Add clear logging in backend when sync is executed:
+  - token present?
+  - administration_id present?
+  - contacts fetched count?
+- Ensure the UI is reading contacts from local DB, not directly from Moneybird each time.
+- After I click “Sync Moneybird”, the page must update to show >0 contacts if Moneybird has contacts.
+
+6) Minimal data mapping for now (no VAT/SEPA required yet)
+- We don’t have KVK/VAT/SEPA yet; do not block anything on those fields.
+- Allow contacts without VAT/IBAN.
+- Keep placeholders; only map what exists.
+
+DELIVERABLES:
+- Code changes only where needed (migrations + service + routes + UI updates).
+- Keep existing architecture and styling.
+- Provide a short summary: what tables/fields were added, what endpoints were added/changed, where the UI menu and page changed.
+
+IMPORTANT:
+We ultimately want Yodeck + Moneybird data connected:
+Screen -> Location -> Moneybird Contact.
+So when I open a screen like “Basil’s Barber Shop Maasbracht”, I can see the address and contact details (coming from Moneybird via linked location).

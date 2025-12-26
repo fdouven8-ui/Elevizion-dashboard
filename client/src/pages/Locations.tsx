@@ -1,7 +1,8 @@
 import { useAppData } from "@/hooks/use-app-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, MoreHorizontal } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Plus, Search, MoreHorizontal, CheckCircle, AlertCircle } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -21,6 +22,7 @@ import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
+import { Link } from "wouter";
 import type { Location } from "@shared/schema";
 
 export default function Locations() {
@@ -74,6 +76,7 @@ export default function Locations() {
               <TableHead>Naam</TableHead>
               <TableHead>Adres</TableHead>
               <TableHead>Contactpersoon</TableHead>
+              <TableHead>Moneybird</TableHead>
               <TableHead className="text-right">Omzetdeling %</TableHead>
               <TableHead className="w-[50px]"></TableHead>
             </TableRow>
@@ -81,13 +84,30 @@ export default function Locations() {
           <TableBody>
             {filteredLocations.map((loc) => (
               <TableRow key={loc.id}>
-                <TableCell className="font-medium">{loc.name}</TableCell>
+                <TableCell className="font-medium">
+                  <Link href={`/locations/${loc.id}`} className="hover:underline">
+                    {loc.name}
+                  </Link>
+                </TableCell>
                 <TableCell className="text-muted-foreground">{loc.address}</TableCell>
                 <TableCell>
                   <div className="flex flex-col">
                     <span>{loc.contactName}</span>
                     <span className="text-xs text-muted-foreground">{loc.email}</span>
                   </div>
+                </TableCell>
+                <TableCell>
+                  {loc.moneybirdContactId ? (
+                    <Badge variant="outline" className="text-green-600 border-green-600">
+                      <CheckCircle className="h-3 w-3 mr-1" />
+                      Gekoppeld
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-orange-600 border-orange-600">
+                      <AlertCircle className="h-3 w-3 mr-1" />
+                      Ontbreekt
+                    </Badge>
+                  )}
                 </TableCell>
                 <TableCell className="text-right font-mono">{loc.revenueSharePercent}%</TableCell>
                 <TableCell>
@@ -99,7 +119,9 @@ export default function Locations() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuLabel>Acties</DropdownMenuLabel>
-                      <DropdownMenuItem>Details Bekijken</DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <Link href={`/locations/${loc.id}`}>Details Bekijken</Link>
+                      </DropdownMenuItem>
                       <DropdownMenuItem>Instellingen Bewerken</DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -108,7 +130,7 @@ export default function Locations() {
             ))}
             {filteredLocations.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center">
+                <TableCell colSpan={6} className="h-24 text-center">
                   Geen locaties gevonden.
                 </TableCell>
               </TableRow>

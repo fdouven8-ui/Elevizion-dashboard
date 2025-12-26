@@ -1,7 +1,7 @@
 import { useAppData } from "@/hooks/use-app-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink } from "lucide-react";
+import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink, AlertCircle, CheckCircle } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -507,7 +507,16 @@ export default function Screens() {
                   {/* Locatie / Bedrijf */}
                   <TableCell className={getCellPadding()}>
                     <div className="min-w-0">
-                      <div className="truncate">{loc?.name || "-"}</div>
+                      <div className="truncate flex items-center gap-1">
+                        {loc?.name || <span className="text-orange-500">Geen locatie</span>}
+                        {loc && (
+                          loc.moneybirdContactId ? (
+                            <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
+                          ) : (
+                            <AlertCircle className="h-3 w-3 text-orange-500 shrink-0" />
+                          )
+                        )}
+                      </div>
                       {loc?.city && (
                         <div className="text-xs text-muted-foreground">{loc.city}</div>
                       )}

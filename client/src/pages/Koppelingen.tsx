@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw, Loader2, Link2, Wand2, CheckCircle, AlertTriangle, Monitor, MapPin, Users, Database } from "lucide-react";
+import { RefreshCw, Loader2, Link2, Wand2, CheckCircle, AlertTriangle, Monitor, MapPin, Database, HelpCircle, ExternalLink } from "lucide-react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
@@ -14,6 +14,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Link } from "wouter";
 
 interface OntbrekendeGegevens {
   screensWithoutLocation: number;
@@ -38,6 +45,15 @@ interface MoneybirdContact {
   address1: string | null;
 }
 
+interface AutoMatchResult {
+  success: boolean;
+  autoLinked: number;
+  matches: Array<{ locationId: string; locationName: string; contactId: string; contactName: string; matchType: string; score: number }>;
+  suggestions: Array<{ locationId: string; locationName: string; contactId: string; contactName: string; matchType: string; score: number }>;
+  totalUnlinked: number;
+  totalContacts: number;
+}
+
 async function fetchOntbrekendeGegevens(): Promise<OntbrekendeGegevens> {
   const res = await fetch("/api/ontbrekende-gegevens", { credentials: "include" });
   if (!res.ok) throw new Error("Fout bij ophalen ontbrekende gegevens");
@@ -56,6 +72,15 @@ async function syncMoneybird(): Promise<any> {
     credentials: "include",
   });
   if (!res.ok) throw new Error("Fout bij synchroniseren");
+  return res.json();
+}
+
+async function autoMatchLocations(): Promise<AutoMatchResult> {
+  const res = await fetch("/api/locations/auto-match-moneybird", {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error("Fout bij auto-match");
   return res.json();
 }
 
@@ -82,6 +107,7 @@ export default function Koppelingen() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [selectedContactMap, setSelectedContactMap] = useState<Record<string, string>>({});
+  const [autoMatchResult, setAutoMatchResult] = useState<AutoMatchResult | null>(null);
 
   const { data: gegevens, isLoading, refetch } = useQuery({
     queryKey: ["ontbrekende-gegevens"],
@@ -108,12 +134,40 @@ export default function Koppelingen() {
     },
   });
 
+  const autoMatchMutation = useMutation({
+    mutationFn: autoMatchLocations,
+    onSuccess: (data) => {
+      setAutoMatchResult(data);
+      if (data.autoLinked > 0) {
+        toast({ 
+          title: "Auto-match voltooid", 
+          description: `${data.autoLinked} locaties automatisch gekoppeld` 
+        });
+      } else if (data.suggestions.length > 0) {
+        toast({ 
+          title: "Auto-match voltooid", 
+          description: `Geen automatische koppelingen, ${data.suggestions.length} suggesties gevonden` 
+        });
+      } else {
+        toast({ 
+          title: "Auto-match voltooid", 
+          description: "Geen overeenkomsten gevonden" 
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["ontbrekende-gegevens"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
   const linkMutation = useMutation({
     mutationFn: ({ locationId, moneybirdContactId }: { locationId: string; moneybirdContactId: string }) =>
       linkLocationToMoneybird(locationId, moneybirdContactId),
     onSuccess: (data) => {
       toast({ title: "Succes", description: data.message });
       queryClient.invalidateQueries({ queryKey: ["ontbrekende-gegevens"] });
+      setSelectedContactMap({});
     },
     onError: (error: Error) => {
       toast({ title: "Fout", description: error.message, variant: "destructive" });
@@ -143,11 +197,25 @@ export default function Koppelingen() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Ontbrekende gegevens</h1>
-          <p className="text-muted-foreground">
-            Overzicht van schermen en locaties die nog gekoppeld moeten worden aan Moneybird
-          </p>
+        <div className="flex items-center gap-2">
+          <div>
+            <h1 className="text-2xl font-bold">Ontbrekende gegevens</h1>
+            <p className="text-muted-foreground">
+              Overzicht van schermen en locaties die nog gekoppeld moeten worden
+            </p>
+          </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" className="h-6 w-6">
+                  <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                <p>Moneybird is de bron voor adres- en factuurgegevens. Door locaties te koppelen aan Moneybird contacten worden adresgegevens automatisch gesynchroniseerd.</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         </div>
         <div className="flex gap-2">
           <Button
@@ -160,6 +228,7 @@ export default function Koppelingen() {
             Vernieuwen
           </Button>
           <Button
+            variant="outline"
             onClick={() => syncMutation.mutate()}
             disabled={syncMutation.isPending}
             data-testid="button-sync-moneybird"
@@ -170,6 +239,18 @@ export default function Koppelingen() {
               <Database className="h-4 w-4 mr-2" />
             )}
             Sync Moneybird
+          </Button>
+          <Button
+            onClick={() => autoMatchMutation.mutate()}
+            disabled={autoMatchMutation.isPending || !hasContacts}
+            data-testid="button-auto-match"
+          >
+            {autoMatchMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Wand2 className="h-4 w-4 mr-2" />
+            )}
+            Auto-match locaties
           </Button>
         </div>
       </div>
@@ -225,7 +306,7 @@ export default function Koppelingen() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Users className="h-4 w-4 text-green-500" />
+              <Database className="h-4 w-4 text-green-500" />
               Moneybird contacten
             </CardTitle>
           </CardHeader>
@@ -245,11 +326,61 @@ export default function Koppelingen() {
               <AlertTriangle className="h-5 w-5" />
               Geen Moneybird contacten gevonden
             </CardTitle>
-            <CardDescription>
+            <CardDescription className="text-yellow-600">
               Klik op "Sync Moneybird" om contacten op te halen uit Moneybird. 
-              Zorg dat MONEYBIRD_API_TOKEN en MONEYBIRD_ADMINISTRATION_ID correct zijn ingesteld.
+              Zorg dat MONEYBIRD_API_TOKEN en MONEYBIRD_ADMINISTRATION_ID correct zijn ingesteld in de secrets.
             </CardDescription>
           </CardHeader>
+        </Card>
+      )}
+
+      {/* Auto-match results */}
+      {autoMatchResult && autoMatchResult.suggestions.length > 0 && (
+        <Card className="border-blue-500/50 bg-blue-50/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-blue-700">
+              <Wand2 className="h-5 w-5" />
+              Auto-match suggesties ({autoMatchResult.suggestions.length})
+            </CardTitle>
+            <CardDescription className="text-blue-600">
+              Deze locaties zijn niet automatisch gekoppeld, maar we hebben mogelijke overeenkomsten gevonden.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Locatie</TableHead>
+                  <TableHead>Gesuggereerd contact</TableHead>
+                  <TableHead>Match type</TableHead>
+                  <TableHead>Score</TableHead>
+                  <TableHead>Actie</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {autoMatchResult.suggestions.map((suggestion) => (
+                  <TableRow key={suggestion.locationId}>
+                    <TableCell className="font-medium">{suggestion.locationName}</TableCell>
+                    <TableCell>{suggestion.contactName}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{suggestion.matchType}</Badge>
+                    </TableCell>
+                    <TableCell>{Math.round(suggestion.score * 100)}%</TableCell>
+                    <TableCell>
+                      <Button
+                        size="sm"
+                        onClick={() => linkMutation.mutate({ locationId: suggestion.locationId, moneybirdContactId: suggestion.contactId })}
+                        disabled={linkMutation.isPending}
+                      >
+                        <Link2 className="h-4 w-4 mr-1" />
+                        Koppel
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
         </Card>
       )}
 
@@ -278,7 +409,12 @@ export default function Koppelingen() {
               <TableBody>
                 {gegevens?.details.locationsWithoutMoneybird.map((location) => (
                   <TableRow key={location.id}>
-                    <TableCell className="font-medium">{location.name}</TableCell>
+                    <TableCell className="font-medium">
+                      <Link href={`/locations/${location.id}`} className="hover:underline flex items-center gap-1">
+                        {location.name}
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    </TableCell>
                     <TableCell>{location.city || "-"}</TableCell>
                     <TableCell>
                       <Select
@@ -333,7 +469,7 @@ export default function Koppelingen() {
               Schermen zonder locatie ({gegevens?.screensWithoutLocation})
             </CardTitle>
             <CardDescription>
-              Deze schermen hebben nog geen locatie toegewezen. Wijs een locatie toe via de onboarding wizard of schermdetails.
+              Deze schermen hebben nog geen locatie toegewezen. Wijs een locatie toe via de schermdetails.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -353,14 +489,65 @@ export default function Koppelingen() {
                     </TableCell>
                     <TableCell className="font-medium">{screen.name}</TableCell>
                     <TableCell>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => window.location.href = `/screens/${screen.id}`}
-                        data-testid={`button-view-screen-${screen.id}`}
-                      >
-                        Bekijk scherm
-                      </Button>
+                      <Link href={`/screens/${screen.id}`}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          data-testid={`button-view-screen-${screen.id}`}
+                        >
+                          <ExternalLink className="h-4 w-4 mr-1" />
+                          Bekijk scherm
+                        </Button>
+                      </Link>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Screens with unlinked location */}
+      {(gegevens?.screensWithUnlinkedLocation || 0) > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-orange-500" />
+              Schermen met locatie zonder Moneybird ({gegevens?.screensWithUnlinkedLocation})
+            </CardTitle>
+            <CardDescription>
+              Deze schermen hebben een locatie, maar de locatie is niet gekoppeld aan Moneybird.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>EVZ-ID</TableHead>
+                  <TableHead>Scherm</TableHead>
+                  <TableHead>Locatie</TableHead>
+                  <TableHead>Actie</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {gegevens?.details.screensWithUnlinkedLocation.map((screen) => (
+                  <TableRow key={screen.id}>
+                    <TableCell>
+                      <Badge variant="outline">{screen.screenId}</Badge>
+                    </TableCell>
+                    <TableCell className="font-medium">{screen.name}</TableCell>
+                    <TableCell>{screen.locationName || "-"}</TableCell>
+                    <TableCell>
+                      <Link href={`/locations/${screen.locationId}`}>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                        >
+                          <ExternalLink className="h-4 w-4 mr-1" />
+                          Bekijk locatie
+                        </Button>
+                      </Link>
                     </TableCell>
                   </TableRow>
                 ))}
