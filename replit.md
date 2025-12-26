@@ -35,7 +35,21 @@ Elevizion Dashboard is an OPS-first internal operations control room for digital
 - **Architecture**: Thin controller layer, business logic in storage service.
 
 ### Data Model
-Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placements, ScheduleSnapshots (immutable monthly records), Invoices/Payments, and Payouts/CarryOvers. Monthly snapshots ensure billing accuracy.
+Core entities: Screens (primary entity = SchermLocatie), Advertisers, LocationGroups (for rare multi-screen locations), PackagePlans, Contracts, Placements, ScheduleSnapshots (immutable monthly records), Invoices/Payments, and Payouts/CarryOvers. Monthly snapshots ensure billing accuracy.
+
+**CRITICAL BUSINESS RULE: 1 Screen = 1 Location (99% of cases)**
+- Each screen is treated as its own location ("SchermLocatie" concept)
+- Screens have their own direct Moneybird link (`moneybirdContactId` + `moneybirdContactSnapshot`)
+- NO automatic grouping of screens by shared Moneybird contact
+- Multi-screen locations are explicit exceptions via `isMultiScreenLocation` + `locationGroupId`
+
+**Data Source Separation:**
+- **Yodeck** = device data source: device ID, player name, online/offline status, last_seen, content metadata
+- **Moneybird** = customer data source: company name, contact person, email, phone, address, KvK, BTW
+- Yodeck sync NEVER touches Moneybird fields
+- Moneybird sync NEVER touches Yodeck fields
+
+**Display Name Priority:** Moneybird company > Yodeck device name > screen name > screenId fallback
 
 ### Authentication & Authorization
 - **Provider**: Username/password with bcrypt hashing.

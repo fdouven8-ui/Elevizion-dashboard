@@ -54,16 +54,25 @@ import {
 type RowDensity = "compact" | "normal" | "comfortable";
 
 function getScreenDisplayName(screen: any, location: any): string {
-  // Priority: effectiveName (from Moneybird) > yodeckPlayerName > name > location name > screenId
+  // Priority: effectiveName (from Moneybird) > Moneybird company > Yodeck player name > screen name > screenId
+  // NOTE: Do NOT use location.name as fallback - that causes grouping issues!
   if (screen?.effectiveName && screen.effectiveName.trim()) {
     return screen.effectiveName;
   }
+  // Check Moneybird snapshot company name
+  const snapshot = screen?.moneybirdContactSnapshot as { company?: string } | null;
+  if (snapshot?.company && snapshot.company.trim()) {
+    return snapshot.company;
+  }
+  // Use Yodeck player name (device name)
+  if (screen?.yodeckPlayerName && screen.yodeckPlayerName.trim()) {
+    return screen.yodeckPlayerName;
+  }
+  // Use screen name
   if (screen?.name && screen.name.trim()) {
     return screen.name;
   }
-  if (location?.name && location.name.trim()) {
-    return location.name;
-  }
+  // Final fallback: screenId
   if (screen?.screenId) {
     return `Scherm ${screen.screenId}`;
   }
@@ -134,16 +143,10 @@ export default function Screens() {
   const [linkPopoverOpen, setLinkPopoverOpen] = useState<string | null>(null);
   const [linkSearch, setLinkSearch] = useState("");
 
-  // Check screen-level Moneybird link first, fall back to location-level
+  // Check screen-level Moneybird link only (per-screen linking, no location-based fallback)
   const screensWithoutMoneybird = useMemo(() => {
-    return screens.filter(scr => {
-      // Screen has direct Moneybird link - it's linked
-      if (scr.moneybirdContactId) return false;
-      // Otherwise check location
-      const loc = locations.find(l => l.id === scr.locationId);
-      return !loc?.moneybirdContactId;
-    });
-  }, [screens, locations]);
+    return screens.filter(scr => !scr.moneybirdContactId);
+  }, [screens]);
 
   const screensWithoutMoneybirdCount = screensWithoutMoneybird.length;
 
@@ -155,11 +158,19 @@ export default function Screens() {
   }, [searchInput]);
 
   const uniqueCities = useMemo(() => {
-    const cities = locations
-      .map(loc => loc.city)
+    // Get cities from screen's Moneybird snapshot, screen.city, or location.city (fallback)
+    const cities = screens
+      .map(scr => {
+        const snapshot = scr.moneybirdContactSnapshot as { city?: string } | null;
+        if (snapshot?.city) return snapshot.city;
+        if (scr.city) return scr.city;
+        // Fallback to location city for unlinked screens
+        const loc = locations.find(l => l.id === scr.locationId);
+        return loc?.city;
+      })
       .filter((city): city is string => !!city && city.trim() !== "");
     return Array.from(new Set(cities)).sort();
-  }, [locations]);
+  }, [screens, locations]);
 
   const getActivePlacementsCount = (screenId: string) => {
     return placements.filter(p => 
@@ -167,15 +178,28 @@ export default function Screens() {
     ).length;
   };
 
-  const getLocation = (locationId: string) => {
+  const getLocation = (locationId: string | null) => {
+    if (!locationId) return undefined;
     return locations.find(l => l.id === locationId);
+  };
+
+  // Helper to get screen's city - priority: Moneybird snapshot > screen.city > location.city (fallback for legacy)
+  const getScreenCity = (scr: any): string | undefined => {
+    const snapshot = scr.moneybirdContactSnapshot as { city?: string } | null;
+    if (snapshot?.city) return snapshot.city;
+    if (scr.city) return scr.city;
+    // Fallback to location city for unlinked screens (ensures they remain discoverable)
+    const loc = getLocation(scr.locationId);
+    return loc?.city || undefined;
   };
 
   const filteredScreens = useMemo(() => {
     return screens.filter(scr => {
       const loc = getLocation(scr.locationId);
+      const screenCity = getScreenCity(scr);
 
-      if (cityFilter && loc?.city !== cityFilter) {
+      // City filter: check screen's Moneybird city (NOT location city)
+      if (cityFilter && screenCity !== cityFilter) {
         return false;
       }
 
@@ -187,8 +211,8 @@ export default function Screens() {
         return false;
       }
 
-      // When moneybird-missing filter is active, hide screens that ARE linked (either directly or via location)
-      if (moneybirdMissingFilter && (scr.moneybirdContactId || loc?.moneybirdContactId)) {
+      // Moneybird filter: ONLY check screen-level linking (no location fallback!)
+      if (moneybirdMissingFilter && scr.moneybirdContactId) {
         return false;
       }
 
@@ -207,8 +231,11 @@ export default function Screens() {
         const screenId = (scr.screenId || "").toLowerCase();
         const yodeckIdRaw = (scr.yodeckPlayerId || "").toLowerCase();
         const yodeckIdPrefixed = scr.yodeckPlayerId ? `ydk-${scr.yodeckPlayerId}`.toLowerCase() : "";
-        const city = (loc?.city || "").toLowerCase();
-        const locName = (loc?.name || "").toLowerCase();
+        // Use screen's city from Moneybird snapshot
+        const city = (screenCity || "").toLowerCase();
+        // Get company from snapshot
+        const snapshot = scr.moneybirdContactSnapshot as { company?: string } | null;
+        const company = (snapshot?.company || "").toLowerCase();
         const summary = scr.yodeckContentSummary as { topItems?: string[] } | null;
         const contentStr = (summary?.topItems || []).join(" ").toLowerCase();
         
@@ -218,7 +245,7 @@ export default function Screens() {
           yodeckIdRaw.includes(searchQuery) ||
           yodeckIdPrefixed.includes(searchQuery) ||
           city.includes(searchQuery) ||
-          locName.includes(searchQuery) ||
+          company.includes(searchQuery) ||
           contentStr.includes(searchQuery);
         
         if (!searchMatch) {
@@ -621,25 +648,37 @@ export default function Screens() {
                     </div>
                   </TableCell>
                   
-                  {/* Locatie / Bedrijf */}
+                  {/* Locatie / Bedrijf - Source: Moneybird snapshot (NOT location entity) */}
                   <TableCell className={getCellPadding()} onClick={(e) => e.stopPropagation()}>
-                    <div className="min-w-0 flex items-center gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="truncate flex items-center gap-1">
-                          {loc?.name || <span className="text-orange-500">Geen locatie</span>}
-                          {/* Check screen-level first, then location-level */}
-                          {(scr.moneybirdContactId || loc?.moneybirdContactId) ? (
-                            <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
-                          ) : loc && (
-                            <AlertCircle className="h-3 w-3 text-orange-500 shrink-0" />
-                          )}
-                        </div>
-                        {loc?.city && (
-                          <div className="text-xs text-muted-foreground">{loc.city}</div>
-                        )}
-                      </div>
-                      {/* Show link button only if neither screen nor location is linked */}
-                      {!scr.moneybirdContactId && loc && !loc.moneybirdContactId && (
+                    {(() => {
+                      // Get Moneybird data from screen's snapshot (per-screen, no grouping!)
+                      const snapshot = scr.moneybirdContactSnapshot as { company?: string; city?: string } | null;
+                      const hasMoneybird = Boolean(scr.moneybirdContactId);
+                      const companyName = snapshot?.company;
+                      const cityName = snapshot?.city || scr.city;
+                      
+                      return (
+                        <div className="min-w-0 flex items-center gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="truncate flex items-center gap-1">
+                              {hasMoneybird && companyName ? (
+                                <>
+                                  {companyName}
+                                  <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
+                                </>
+                              ) : (
+                                <>
+                                  <span className="text-orange-500">Niet gekoppeld</span>
+                                  <AlertCircle className="h-3 w-3 text-orange-500 shrink-0" />
+                                </>
+                              )}
+                            </div>
+                            {cityName && (
+                              <div className="text-xs text-muted-foreground">{cityName}</div>
+                            )}
+                          </div>
+                          {/* Show link button only if screen is not linked */}
+                          {!scr.moneybirdContactId && (
                         <Popover 
                           open={linkPopoverOpen === scr.id} 
                           onOpenChange={(open) => {
@@ -706,8 +745,10 @@ export default function Screens() {
                             </Command>
                           </PopoverContent>
                         </Popover>
-                      )}
-                    </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </TableCell>
                   
                   {/* Status */}

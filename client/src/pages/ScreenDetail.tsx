@@ -92,16 +92,25 @@ interface ScreenWithContent {
 }
 
 function getScreenDisplayName(screen: any, location: any): string {
-  // Priority: effectiveName (from Moneybird) > yodeckPlayerName > name > location name > screenId
+  // Priority: effectiveName (from Moneybird) > Moneybird company > Yodeck player name > screen name > screenId
+  // NOTE: Do NOT use location.name as fallback - that causes grouping issues!
   if (screen?.effectiveName && screen.effectiveName.trim()) {
     return screen.effectiveName;
   }
+  // Check Moneybird snapshot company name
+  const snapshot = screen?.moneybirdContactSnapshot as { company?: string } | null;
+  if (snapshot?.company && snapshot.company.trim()) {
+    return snapshot.company;
+  }
+  // Use Yodeck player name (device name)
+  if (screen?.yodeckPlayerName && screen.yodeckPlayerName.trim()) {
+    return screen.yodeckPlayerName;
+  }
+  // Use screen name
   if (screen?.name && screen.name.trim()) {
     return screen.name;
   }
-  if (location?.name && location.name.trim()) {
-    return location.name;
-  }
+  // Final fallback: screenId or yodeckPlayerId
   if (screen?.screenId) {
     return `Scherm ${screen.screenId}`;
   }
