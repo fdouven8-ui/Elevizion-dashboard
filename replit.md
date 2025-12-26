@@ -98,5 +98,39 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
     - **GET /api/moneybird/contacts**: List synced contacts
     - **GET /api/moneybird/invoices**: List synced invoices
     - **POST /api/moneybird/contacts/:id/link**: Link contact to advertiser
+    - **POST /api/locations/:id/link-moneybird**: Link location to Moneybird contact
+    - **POST /api/advertisers/:id/link-moneybird**: Link advertiser to Moneybird contact
+    - **GET /api/ontbrekende-gegevens**: Overview of missing data (screens without location, locations without Moneybird)
   - **Permissions**: `manage_integrations` for sync/config, `view_finance` for reading data
+  - **Location/Advertiser Linking**: Locations and advertisers have `moneybirdContactId` fields for linking to Moneybird contacts
+  - **"Ontbrekende gegevens" Page**: Dashboard page showing screens/locations needing Moneybird linking with direct action buttons
+
+## Moneybird Setup
+
+### Required Secrets
+1. **MONEYBIRD_API_TOKEN**: Personal access token from Moneybird
+   - Get it at: Moneybird > Instellingen > Ontwikkelaars > Personal access tokens
+   - Create a new token with "sales_invoices" and "contacts" scopes
+2. **MONEYBIRD_ADMINISTRATION_ID**: The ID of your Moneybird administration
+   - Find it in the URL when logged into Moneybird: `moneybird.com/123456789/...` (the number is the ID)
+
+### Testing Sync
+1. Set both secrets in Replit Secrets
+2. Navigate to Instellingen > Integraties in the dashboard
+3. Click "Test Moneybird" to verify connection
+4. Click "Sync nu" or use the "Ontbrekende gegevens" page > "Sync Moneybird" button
+5. Check logs for: `[Moneybird Sync] Opgehaald: X contacten`
+
+### Troubleshooting
+- **0 contacten opgehaald**: Check if MONEYBIRD_ADMINISTRATION_ID is correct and the token has access
+- **401 Unauthorized**: Token is invalid or expired, create a new one
+- **403 Forbidden**: Token doesn't have the required scopes (contacts, sales_invoices)
+
+### Linking Flow
+1. Sync Moneybird contacts via "Sync Moneybird" button
+2. Go to "Ontbrekende gegevens" page
+3. For each location without Moneybird: select a contact from dropdown and click link button
+4. Address/city info from Moneybird is automatically synced to the location
+
+## Other Integrations
 - **SendGrid**: Email integration for contract confirmations and SEPA mandate requests.

@@ -1,0 +1,77 @@
+Je werkt in mijn bestaande Elevizion Dashboard codebase (React + TS + Vite frontend, Express backend, Drizzle ORM + PostgreSQL). NIET opnieuw bouwen: alleen uitbreiden op de bestaande structuur, routes, services en DB tabellen.
+
+Status nu:
+- Yodeck integratie werkt en sync’t screens + content.
+- Moneybird integratie is “connected” met admin_id + access_token en sync/test werkt technisch.
+- Probleem: we gebruiken Moneybird data nog niet om locaties/adverteerders te vullen en te koppelen aan Yodeck screens. In UI zie ik “Koppelingen” maar dat is verwarrend en Moneybird contacten blijven 0.
+
+Doel:
+Moneybird wordt de bron van waarheid voor contactgegevens (adres, contactpersoon, email/telefoon, evt kvk/btw), en die info moet automatisch gekoppeld worden aan:
+- Locations (schermlocaties)
+- Advertisers
+En vervolgens moet elk Yodeck screen aan een Location hangen, en die Location kan een Moneybird contact hebben, zodat het dashboard overal correcte gegevens toont (bijv. “Basil’s Barber Shop Maasbracht” heeft een scherm, maar mist nu adres/contact).
+
+Wat je moet doen (stapsgewijs, zonder breaking changes):
+
+A) Backend: Moneybird contacts sync volledig maken
+1) Controleer bestaande moneybird service / routes. Implementeer of fix:
+   - GET /api/moneybird/contacts (intern) of bestaande sync flow
+   - POST /api/integrations/moneybird/sync moet ook contacts ophalen en opslaan
+2) Maak een DB tabel `moneybird_contacts` (Drizzle schema + migration):
+   velden minimaal:
+   - id (uuid pk)
+   - moneybirdContactId (string, unique)
+   - administrationId (string)
+   - companyName, firstName, lastName
+   - email, phone
+   - address1, address2, zipcode, city, country
+   - kvk, vatNumber (nullable)
+   - raw (jsonb) optioneel voor debug
+   - updatedAtMoneybird, lastSyncedAt
+3) Zorg dat sync idempotent is (upsert op moneybirdContactId) en pagination aankan.
+
+B) Koppeling naar bestaande tabellen
+4) Voeg aan `locations` toe: `moneybirdContactId` (nullable, verwijst naar moneybird_contacts.moneybirdContactId of uuid id — kies 1 consistente aanpak).
+5) Voeg aan `advertisers` toe: `moneybirdContactId` (nullable).
+6) Maak API endpoints:
+   - GET /api/moneybird/contacts (lijst voor dropdowns)
+   - POST /api/locations/:id/link-moneybird (body: { moneybirdContactId })
+   - POST /api/advertisers/:id/link-moneybird (body: { moneybirdContactId })
+   - POST /api/screens/:id/link-location (bestaat dit al? anders toevoegen)
+
+C) Auto-match logica (belangrijk)
+7) Implementeer “auto-match” functie:
+   - Voor elk screen zonder location.moneybirdContactId:
+     match op normalized name:
+       screen.yodeckPlayerName of screen.name ↔ moneybird_contacts.companyName (case-insensitive, remove punctuation)
+   - Score-based suggestions (top 3) teruggeven.
+8) Endpoint: POST /api/linking/auto-match
+   - doet NIET meteen hard koppelen zonder controle tenzij confidence hoog is (bv exact match).
+   - geeft resultaat terug: matchedCount + suggestedCount + lijst met voorgestelde links.
+
+D) UI/UX: maak het minder verwarrend
+9) Verwerk koppelen op logische plekken:
+   - In “Schermen” detail: toon Location + Moneybird contact (dropdown + status)
+   - In “Onboarding” wizard: stap “Kies Moneybird contact voor locatie” met auto-suggest
+10) De huidige pagina “Koppelingen” hernoemen/omvormen naar “Ontbrekende gegevens” (takenlijst):
+   - Alleen tonen wat nog mist: “X schermen zonder locatie” / “Y locaties zonder Moneybird contact”
+   - Duidelijke CTA knoppen: “Auto-match” en per item “Kies contact”
+   - Verwijder/verminder verwarrende KPI card “Moneybird contacten 0” door die te baseren op DB count na sync.
+
+E) Debug & logs
+11) Voeg duidelijke logs toe aan moneybird sync:
+   - hoeveel contacten opgehaald, hoeveel upserts
+   - welke administrationId gebruikt
+   - als 0 contacten: log waarschuwing met mogelijke oorzaken (lege administratie / verkeerde admin_id / scope)
+12) Zorg dat secrets veilig blijven (geen tokens loggen).
+
+Constraints:
+- Ik wil straks alleen nog mijn Moneybird token + admin_id invullen in secrets, en daarna moet de data automatisch binnenkomen en gekoppeld kunnen worden.
+- Geen complete refactor. Bouw door op wat er al is.
+- Alles moet uiteindelijk Yodeck data + Moneybird data aan elkaar koppelen via Location/Advertiser structuur.
+
+Lever op:
+- migrations + Drizzle schema updates
+- backend routes + services
+- UI updates (Onboarding/Schermen + vereenvoudigde takenlijst pagina)
+- korte README sectie: “Moneybird setup” met welke secrets nodig zijn en hoe je sync test.

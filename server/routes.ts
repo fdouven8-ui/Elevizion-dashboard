@@ -1677,8 +1677,20 @@ export async function registerRoutes(
       client.setAdministrationId(administrationId);
 
       // Sync contacts
-      console.log("[Moneybird Sync] Fetching contacts...");
+      console.log("[Moneybird Sync] Fetching contacts from administration:", administrationId);
       const contacts = await client.getAllContacts();
+      
+      // Warn if no contacts found
+      if (contacts.length === 0) {
+        console.warn("[Moneybird Sync] WARNING: 0 contacten opgehaald!");
+        console.warn("[Moneybird Sync] Mogelijke oorzaken:");
+        console.warn("  - Lege administratie in Moneybird");
+        console.warn("  - Verkeerde MONEYBIRD_ADMINISTRATION_ID:", administrationId);
+        console.warn("  - API token heeft geen toegang tot deze administratie");
+      } else {
+        console.log(`[Moneybird Sync] Opgehaald: ${contacts.length} contacten`);
+      }
+      
       let contactsCreated = 0;
       let contactsUpdated = 0;
 
@@ -1872,6 +1884,187 @@ export async function registerRoutes(
     try {
       const stats = await storage.getMoneybirdStats();
       res.json(stats);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Link location to Moneybird contact
+  app.post("/api/locations/:id/link-moneybird", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { moneybirdContactId } = req.body;
+
+      if (!moneybirdContactId) {
+        return res.status(400).json({ message: "moneybirdContactId is vereist" });
+      }
+
+      // Verify location exists
+      const location = await storage.getLocation(id);
+      if (!location) {
+        return res.status(404).json({ message: "Locatie niet gevonden" });
+      }
+
+      // Verify Moneybird contact exists
+      const contact = await storage.getMoneybirdContact(moneybirdContactId);
+      if (!contact) {
+        return res.status(404).json({ message: "Moneybird contact niet gevonden" });
+      }
+
+      // Update location with Moneybird contact ID
+      const updated = await storage.updateLocation(id, {
+        moneybirdContactId: contact.moneybirdId,
+        // Optionally sync address from Moneybird
+        address: contact.address1 || location.address,
+        city: contact.city || location.city,
+        zipcode: contact.zipcode || location.zipcode,
+      });
+
+      res.json({ 
+        success: true, 
+        message: "Locatie gekoppeld aan Moneybird contact",
+        location: updated 
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Unlink location from Moneybird contact
+  app.post("/api/locations/:id/unlink-moneybird", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const location = await storage.getLocation(id);
+      if (!location) {
+        return res.status(404).json({ message: "Locatie niet gevonden" });
+      }
+
+      const updated = await storage.updateLocation(id, {
+        moneybirdContactId: null,
+      });
+
+      res.json({ 
+        success: true, 
+        message: "Locatie ontkoppeld van Moneybird contact",
+        location: updated 
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Link advertiser to Moneybird contact
+  app.post("/api/advertisers/:id/link-moneybird", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { moneybirdContactId } = req.body;
+
+      if (!moneybirdContactId) {
+        return res.status(400).json({ message: "moneybirdContactId is vereist" });
+      }
+
+      // Verify advertiser exists
+      const advertiser = await storage.getAdvertiser(id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+
+      // Verify Moneybird contact exists
+      const contact = await storage.getMoneybirdContact(moneybirdContactId);
+      if (!contact) {
+        return res.status(404).json({ message: "Moneybird contact niet gevonden" });
+      }
+
+      // Update advertiser with Moneybird contact ID
+      const updated = await storage.updateAdvertiser(id, {
+        moneybirdContactId: contact.moneybirdId,
+        // Optionally sync contact info from Moneybird
+        email: contact.email || advertiser.email,
+        phone: contact.phone || advertiser.phone,
+      });
+
+      res.json({ 
+        success: true, 
+        message: "Adverteerder gekoppeld aan Moneybird contact",
+        advertiser: updated 
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Unlink advertiser from Moneybird contact
+  app.post("/api/advertisers/:id/unlink-moneybird", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const advertiser = await storage.getAdvertiser(id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+
+      const updated = await storage.updateAdvertiser(id, {
+        moneybirdContactId: null,
+      });
+
+      res.json({ 
+        success: true, 
+        message: "Adverteerder ontkoppeld van Moneybird contact",
+        advertiser: updated 
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get ontbrekende gegevens overview (missing data)
+  app.get("/api/ontbrekende-gegevens", requirePermission("view_screens"), async (_req, res) => {
+    try {
+      // Get screens without location linked to Moneybird
+      const screens = await storage.getScreens();
+      const activeScreens = screens.filter((s: any) => s.isActive !== false);
+      const locations = await storage.getLocations();
+      const moneybirdContacts = await storage.getMoneybirdContacts();
+      
+      const screensWithoutLocation = activeScreens.filter((s: any) => !s.locationId);
+      const locationsWithoutMoneybird = locations.filter(l => !l.moneybirdContactId);
+      
+      // Screens where location has no Moneybird contact
+      const screensWithUnlinkedLocation = activeScreens.filter((s: any) => {
+        if (!s.locationId) return false;
+        const loc = locations.find(l => l.id === s.locationId);
+        return loc && !loc.moneybirdContactId;
+      });
+
+      res.json({
+        screensWithoutLocation: screensWithoutLocation.length,
+        locationsWithoutMoneybird: locationsWithoutMoneybird.length,
+        screensWithUnlinkedLocation: screensWithUnlinkedLocation.length,
+        totalMoneybirdContacts: moneybirdContacts.length,
+        details: {
+          screensWithoutLocation: screensWithoutLocation.map((s: any) => ({ 
+            id: s.id, 
+            screenId: s.screenId, 
+            name: s.name 
+          })),
+          locationsWithoutMoneybird: locationsWithoutMoneybird.map(l => ({ 
+            id: l.id, 
+            name: l.name, 
+            city: l.city 
+          })),
+          screensWithUnlinkedLocation: screensWithUnlinkedLocation.map((s: any) => {
+            const loc = locations.find(l => l.id === s.locationId);
+            return { 
+              id: s.id, 
+              screenId: s.screenId, 
+              name: s.name,
+              locationId: s.locationId,
+              locationName: loc?.name 
+            };
+          }),
+        }
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

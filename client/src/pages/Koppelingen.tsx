@@ -1,7 +1,7 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw, Loader2, Link2, Unlink, Wand2, CheckCircle, AlertCircle, HelpCircle } from "lucide-react";
+import { RefreshCw, Loader2, Link2, Wand2, CheckCircle, AlertTriangle, Monitor, MapPin, Users, Database } from "lucide-react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
@@ -15,47 +15,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-interface MatchResult {
-  moneybirdContactId: string;
-  contactName: string;
-  confidence: "auto_exact" | "auto_fuzzy" | "needs_review";
-  score: number;
-  reason: string;
-}
-
-interface ScreenMapping {
-  screen: {
-    id: string;
-    screenId: string;
-    name: string;
-    yodeckPlayerName: string | null;
-    locationId: string;
-    locationName: string;
+interface OntbrekendeGegevens {
+  screensWithoutLocation: number;
+  locationsWithoutMoneybird: number;
+  screensWithUnlinkedLocation: number;
+  totalMoneybirdContacts: number;
+  details: {
+    screensWithoutLocation: Array<{ id: string; screenId: string; name: string }>;
+    locationsWithoutMoneybird: Array<{ id: string; name: string; city: string | null }>;
+    screensWithUnlinkedLocation: Array<{ id: string; screenId: string; name: string; locationId: string; locationName: string | null }>;
   };
-  currentMatch: {
-    confidence: string | null;
-    reason: string | null;
-    moneybirdContactId: string | null;
-    contactName: string | null;
-  } | null;
-  suggestions: MatchResult[];
-  bestAutoMatch: MatchResult | null;
-  status: "unmapped" | "auto_mapped" | "manually_mapped" | "needs_review";
-}
-
-interface MappingStats {
-  totalScreens: number;
-  mappedScreens: number;
-  unmappedScreens: number;
-  autoMapped: number;
-  manualMapped: number;
-  needsReview: number;
-}
-
-interface MappingsResponse {
-  screens: ScreenMapping[];
-  stats: MappingStats;
-  contactsCount: number;
 }
 
 interface MoneybirdContact {
@@ -65,11 +34,13 @@ interface MoneybirdContact {
   firstname: string | null;
   lastname: string | null;
   email: string | null;
+  city: string | null;
+  address1: string | null;
 }
 
-async function fetchMappings(): Promise<MappingsResponse> {
-  const res = await fetch("/api/mappings/screens", { credentials: "include" });
-  if (!res.ok) throw new Error("Fout bij ophalen koppelingen");
+async function fetchOntbrekendeGegevens(): Promise<OntbrekendeGegevens> {
+  const res = await fetch("/api/ontbrekende-gegevens", { credentials: "include" });
+  if (!res.ok) throw new Error("Fout bij ophalen ontbrekende gegevens");
   return res.json();
 }
 
@@ -79,61 +50,32 @@ async function fetchContacts(): Promise<MoneybirdContact[]> {
   return res.json();
 }
 
-async function linkScreen(screenId: string, moneybirdContactId: string, isManual: boolean): Promise<any> {
-  const res = await fetch("/api/mappings/link", {
+async function syncMoneybird(): Promise<any> {
+  const res = await fetch("/api/sync/moneybird/run", {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error("Fout bij synchroniseren");
+  return res.json();
+}
+
+async function linkLocationToMoneybird(locationId: string, moneybirdContactId: string): Promise<any> {
+  const res = await fetch(`/api/locations/${locationId}/link-moneybird`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ screenId, moneybirdContactId, isManual }),
+    body: JSON.stringify({ moneybirdContactId }),
   });
-  if (!res.ok) throw new Error("Fout bij koppelen screen");
+  if (!res.ok) throw new Error("Fout bij koppelen locatie");
   return res.json();
 }
 
-async function unlinkScreen(screenId: string): Promise<any> {
-  const res = await fetch("/api/mappings/unlink", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({ screenId }),
-  });
-  if (!res.ok) throw new Error("Fout bij ontkoppelen screen");
-  return res.json();
-}
-
-async function autoMatchAll(): Promise<any> {
-  const res = await fetch("/api/mappings/auto-match", {
-    method: "POST",
-    credentials: "include",
-  });
-  if (!res.ok) throw new Error("Fout bij automatisch koppelen");
-  return res.json();
-}
-
-function getStatusBadge(status: string) {
-  switch (status) {
-    case "auto_mapped":
-      return <Badge variant="default" className="bg-green-600">Automatisch</Badge>;
-    case "manually_mapped":
-      return <Badge variant="default" className="bg-blue-600">Handmatig</Badge>;
-    case "needs_review":
-      return <Badge variant="secondary" className="bg-yellow-500 text-black">Review nodig</Badge>;
-    default:
-      return <Badge variant="outline">Niet gekoppeld</Badge>;
-  }
-}
-
-function getConfidenceBadge(confidence: string) {
-  switch (confidence) {
-    case "auto_exact":
-      return <Badge variant="outline" className="border-green-500 text-green-600">Exact</Badge>;
-    case "auto_fuzzy":
-      return <Badge variant="outline" className="border-yellow-500 text-yellow-600">Fuzzy</Badge>;
-    case "needs_review":
-      return <Badge variant="outline" className="border-orange-500 text-orange-600">Review</Badge>;
-    default:
-      return null;
-  }
+function getContactDisplayName(contact: MoneybirdContact): string {
+  if (contact.companyName) return contact.companyName;
+  if (contact.firstname && contact.lastname) return `${contact.firstname} ${contact.lastname}`;
+  if (contact.firstname) return contact.firstname;
+  if (contact.lastname) return contact.lastname;
+  return contact.email || "Onbekend";
 }
 
 export default function Koppelingen() {
@@ -141,9 +83,9 @@ export default function Koppelingen() {
   const queryClient = useQueryClient();
   const [selectedContactMap, setSelectedContactMap] = useState<Record<string, string>>({});
 
-  const { data: mappings, isLoading: mappingsLoading, refetch: refetchMappings } = useQuery({
-    queryKey: ["mappings"],
-    queryFn: fetchMappings,
+  const { data: gegevens, isLoading, refetch } = useQuery({
+    queryKey: ["ontbrekende-gegevens"],
+    queryFn: fetchOntbrekendeGegevens,
   });
 
   const { data: contacts } = useQuery({
@@ -151,54 +93,43 @@ export default function Koppelingen() {
     queryFn: fetchContacts,
   });
 
+  const syncMutation = useMutation({
+    mutationFn: syncMoneybird,
+    onSuccess: (data) => {
+      toast({ 
+        title: "Sync voltooid", 
+        description: `${data.contacts?.total || 0} contacten, ${data.invoices?.total || 0} facturen gesynchroniseerd` 
+      });
+      queryClient.invalidateQueries({ queryKey: ["ontbrekende-gegevens"] });
+      queryClient.invalidateQueries({ queryKey: ["moneybird-contacts"] });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
   const linkMutation = useMutation({
-    mutationFn: ({ screenId, moneybirdContactId }: { screenId: string; moneybirdContactId: string }) =>
-      linkScreen(screenId, moneybirdContactId, true),
+    mutationFn: ({ locationId, moneybirdContactId }: { locationId: string; moneybirdContactId: string }) =>
+      linkLocationToMoneybird(locationId, moneybirdContactId),
     onSuccess: (data) => {
       toast({ title: "Succes", description: data.message });
-      queryClient.invalidateQueries({ queryKey: ["mappings"] });
+      queryClient.invalidateQueries({ queryKey: ["ontbrekende-gegevens"] });
     },
     onError: (error: Error) => {
       toast({ title: "Fout", description: error.message, variant: "destructive" });
     },
   });
 
-  const unlinkMutation = useMutation({
-    mutationFn: (screenId: string) => unlinkScreen(screenId),
-    onSuccess: (data) => {
-      toast({ title: "Succes", description: data.message });
-      queryClient.invalidateQueries({ queryKey: ["mappings"] });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Fout", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const autoMatchMutation = useMutation({
-    mutationFn: autoMatchAll,
-    onSuccess: (data) => {
-      toast({ title: "Auto-match voltooid", description: data.message });
-      queryClient.invalidateQueries({ queryKey: ["mappings"] });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Fout", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const handleLinkScreen = (screenId: string) => {
-    const moneybirdContactId = selectedContactMap[screenId];
+  const handleLinkLocation = (locationId: string) => {
+    const moneybirdContactId = selectedContactMap[locationId];
     if (!moneybirdContactId) {
-      toast({ title: "Fout", description: "Selecteer eerst een contact", variant: "destructive" });
+      toast({ title: "Fout", description: "Selecteer eerst een Moneybird contact", variant: "destructive" });
       return;
     }
-    linkMutation.mutate({ screenId, moneybirdContactId });
+    linkMutation.mutate({ locationId, moneybirdContactId });
   };
 
-  const handleSelectSuggestion = (screenId: string, suggestion: MatchResult) => {
-    linkMutation.mutate({ screenId, moneybirdContactId: suggestion.moneybirdContactId });
-  };
-
-  if (mappingsLoading) {
+  if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -206,152 +137,166 @@ export default function Koppelingen() {
     );
   }
 
-  const stats = mappings?.stats;
-  const screens = mappings?.screens || [];
-  const unmappedScreens = screens.filter(s => s.status === "unmapped");
-  const mappedScreens = screens.filter(s => s.status !== "unmapped");
+  const totalIssues = (gegevens?.screensWithoutLocation || 0) + (gegevens?.locationsWithoutMoneybird || 0);
+  const hasContacts = (gegevens?.totalMoneybirdContacts || 0) > 0;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Koppelingen</h1>
+          <h1 className="text-2xl font-bold">Ontbrekende gegevens</h1>
           <p className="text-muted-foreground">
-            Koppel schermen aan Moneybird contacten voor automatische adres- en contactgegevens
+            Overzicht van schermen en locaties die nog gekoppeld moeten worden aan Moneybird
           </p>
         </div>
         <div className="flex gap-2">
           <Button
             variant="outline"
-            onClick={() => refetchMappings()}
-            disabled={mappingsLoading}
-            data-testid="button-refresh-mappings"
+            onClick={() => refetch()}
+            disabled={isLoading}
+            data-testid="button-refresh"
           >
-            <RefreshCw className={`h-4 w-4 mr-2 ${mappingsLoading ? "animate-spin" : ""}`} />
+            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
             Vernieuwen
           </Button>
           <Button
-            onClick={() => autoMatchMutation.mutate()}
-            disabled={autoMatchMutation.isPending || unmappedScreens.length === 0}
-            data-testid="button-auto-match"
+            onClick={() => syncMutation.mutate()}
+            disabled={syncMutation.isPending}
+            data-testid="button-sync-moneybird"
           >
-            {autoMatchMutation.isPending ? (
+            {syncMutation.isPending ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             ) : (
-              <Wand2 className="h-4 w-4 mr-2" />
+              <Database className="h-4 w-4 mr-2" />
             )}
-            Auto-match alle
+            Sync Moneybird
           </Button>
         </div>
       </div>
 
+      {/* Status overview */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Totaal schermen</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-2xl font-bold" data-testid="stat-total-screens">{stats?.totalScreens || 0}</p>
-          </CardContent>
-        </Card>
-        <Card>
+        <Card className={totalIssues === 0 ? "border-green-500/50 bg-green-50/50" : ""}>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <CheckCircle className="h-4 w-4 text-green-500" />
-              Gekoppeld
+              {totalIssues === 0 ? (
+                <CheckCircle className="h-4 w-4 text-green-500" />
+              ) : (
+                <AlertTriangle className="h-4 w-4 text-orange-500" />
+              )}
+              Te doen
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-green-600" data-testid="stat-mapped-screens">{stats?.mappedScreens || 0}</p>
+            <p className={`text-2xl font-bold ${totalIssues === 0 ? "text-green-600" : "text-orange-600"}`} data-testid="stat-total-issues">
+              {totalIssues}
+            </p>
           </CardContent>
         </Card>
+
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <AlertCircle className="h-4 w-4 text-orange-500" />
-              Niet gekoppeld
+              <Monitor className="h-4 w-4 text-blue-500" />
+              Schermen zonder locatie
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-orange-600" data-testid="stat-unmapped-screens">{stats?.unmappedScreens || 0}</p>
+            <p className="text-2xl font-bold" data-testid="stat-screens-no-location">
+              {gegevens?.screensWithoutLocation || 0}
+            </p>
           </CardContent>
         </Card>
+
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <HelpCircle className="h-4 w-4 text-blue-500" />
+              <MapPin className="h-4 w-4 text-purple-500" />
+              Locaties zonder Moneybird
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-2xl font-bold" data-testid="stat-locations-no-moneybird">
+              {gegevens?.locationsWithoutMoneybird || 0}
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <Users className="h-4 w-4 text-green-500" />
               Moneybird contacten
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-blue-600" data-testid="stat-contacts">{mappings?.contactsCount || 0}</p>
+            <p className={`text-2xl font-bold ${hasContacts ? "text-green-600" : "text-gray-400"}`} data-testid="stat-moneybird-contacts">
+              {gegevens?.totalMoneybirdContacts || 0}
+            </p>
           </CardContent>
         </Card>
       </div>
 
-      {unmappedScreens.length > 0 && (
+      {/* Warning if no Moneybird contacts */}
+      {!hasContacts && (
+        <Card className="border-yellow-500/50 bg-yellow-50/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-yellow-700">
+              <AlertTriangle className="h-5 w-5" />
+              Geen Moneybird contacten gevonden
+            </CardTitle>
+            <CardDescription>
+              Klik op "Sync Moneybird" om contacten op te halen uit Moneybird. 
+              Zorg dat MONEYBIRD_API_TOKEN en MONEYBIRD_ADMINISTRATION_ID correct zijn ingesteld.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
+      {/* Locations without Moneybird contact */}
+      {(gegevens?.locationsWithoutMoneybird || 0) > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-orange-500" />
-              Niet-gekoppelde schermen ({unmappedScreens.length})
+              <MapPin className="h-5 w-5 text-purple-500" />
+              Locaties zonder Moneybird koppeling ({gegevens?.locationsWithoutMoneybird})
             </CardTitle>
+            <CardDescription>
+              Koppel deze locaties aan een Moneybird contact voor correcte adres- en factuurgegevens
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Screen ID</TableHead>
-                  <TableHead>Naam (Yodeck)</TableHead>
-                  <TableHead>Suggesties</TableHead>
-                  <TableHead>Koppelen aan</TableHead>
+                  <TableHead>Locatie</TableHead>
+                  <TableHead>Stad</TableHead>
+                  <TableHead>Koppel aan Moneybird contact</TableHead>
                   <TableHead className="w-[100px]">Actie</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {unmappedScreens.map((mapping) => (
-                  <TableRow key={mapping.screen.id} data-testid={`row-unmapped-${mapping.screen.screenId}`}>
-                    <TableCell className="font-mono">{mapping.screen.screenId}</TableCell>
-                    <TableCell>
-                      <div className="font-medium">{mapping.screen.yodeckPlayerName || mapping.screen.name}</div>
-                      <div className="text-xs text-muted-foreground">{mapping.screen.locationName}</div>
-                    </TableCell>
-                    <TableCell>
-                      {mapping.suggestions.length > 0 ? (
-                        <div className="space-y-1">
-                          {mapping.suggestions.slice(0, 3).map((suggestion, idx) => (
-                            <Button
-                              key={suggestion.moneybirdContactId}
-                              variant="ghost"
-                              size="sm"
-                              className="h-auto p-1 text-left justify-start w-full"
-                              onClick={() => handleSelectSuggestion(mapping.screen.id, suggestion)}
-                              data-testid={`button-suggestion-${mapping.screen.screenId}-${idx}`}
-                            >
-                              <div className="flex items-center gap-2">
-                                {getConfidenceBadge(suggestion.confidence)}
-                                <span className="text-sm">{suggestion.contactName}</span>
-                                <span className="text-xs text-muted-foreground">({suggestion.score}%)</span>
-                              </div>
-                            </Button>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">Geen suggesties</span>
-                      )}
-                    </TableCell>
+                {gegevens?.details.locationsWithoutMoneybird.map((location) => (
+                  <TableRow key={location.id}>
+                    <TableCell className="font-medium">{location.name}</TableCell>
+                    <TableCell>{location.city || "-"}</TableCell>
                     <TableCell>
                       <Select
-                        value={selectedContactMap[mapping.screen.id] || ""}
-                        onValueChange={(value) => setSelectedContactMap(prev => ({ ...prev, [mapping.screen.id]: value }))}
+                        value={selectedContactMap[location.id] || ""}
+                        onValueChange={(value) => setSelectedContactMap(prev => ({ ...prev, [location.id]: value }))}
                       >
-                        <SelectTrigger className="w-[200px]" data-testid={`select-contact-${mapping.screen.screenId}`}>
+                        <SelectTrigger className="w-[280px]" data-testid={`select-contact-${location.id}`}>
                           <SelectValue placeholder="Selecteer contact..." />
                         </SelectTrigger>
                         <SelectContent>
                           {contacts?.map((contact) => (
-                            <SelectItem key={contact.moneybirdId} value={contact.moneybirdId}>
-                              {contact.companyName || `${contact.firstname} ${contact.lastname}`.trim() || "Onbekend"}
+                            <SelectItem key={contact.id} value={contact.id}>
+                              <div className="flex flex-col">
+                                <span>{getContactDisplayName(contact)}</span>
+                                {contact.city && (
+                                  <span className="text-xs text-muted-foreground">{contact.city}</span>
+                                )}
+                              </div>
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -360,9 +305,9 @@ export default function Koppelingen() {
                     <TableCell>
                       <Button
                         size="sm"
-                        onClick={() => handleLinkScreen(mapping.screen.id)}
-                        disabled={!selectedContactMap[mapping.screen.id] || linkMutation.isPending}
-                        data-testid={`button-link-${mapping.screen.screenId}`}
+                        onClick={() => handleLinkLocation(location.id)}
+                        disabled={!selectedContactMap[location.id] || linkMutation.isPending}
+                        data-testid={`button-link-${location.id}`}
                       >
                         {linkMutation.isPending ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -379,67 +324,66 @@ export default function Koppelingen() {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <CheckCircle className="h-5 w-5 text-green-500" />
-            Gekoppelde schermen ({mappedScreens.length})
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {mappedScreens.length === 0 ? (
-            <p className="text-muted-foreground text-center py-8">
-              Nog geen schermen gekoppeld aan Moneybird contacten
-            </p>
-          ) : (
+      {/* Screens without location */}
+      {(gegevens?.screensWithoutLocation || 0) > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Monitor className="h-5 w-5 text-blue-500" />
+              Schermen zonder locatie ({gegevens?.screensWithoutLocation})
+            </CardTitle>
+            <CardDescription>
+              Deze schermen hebben nog geen locatie toegewezen. Wijs een locatie toe via de onboarding wizard of schermdetails.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Screen ID</TableHead>
-                  <TableHead>Naam (Yodeck)</TableHead>
-                  <TableHead>Gekoppeld aan</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Reden</TableHead>
-                  <TableHead className="w-[100px]">Actie</TableHead>
+                  <TableHead>EVZ-ID</TableHead>
+                  <TableHead>Naam</TableHead>
+                  <TableHead>Actie</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {mappedScreens.map((mapping) => (
-                  <TableRow key={mapping.screen.id} data-testid={`row-mapped-${mapping.screen.screenId}`}>
-                    <TableCell className="font-mono">{mapping.screen.screenId}</TableCell>
+                {gegevens?.details.screensWithoutLocation.map((screen) => (
+                  <TableRow key={screen.id}>
                     <TableCell>
-                      <div className="font-medium">{mapping.screen.yodeckPlayerName || mapping.screen.name}</div>
-                      <div className="text-xs text-muted-foreground">{mapping.screen.locationName}</div>
+                      <Badge variant="outline">{screen.screenId}</Badge>
                     </TableCell>
-                    <TableCell>
-                      <div className="font-medium">{mapping.currentMatch?.contactName || "-"}</div>
-                    </TableCell>
-                    <TableCell>{getStatusBadge(mapping.status)}</TableCell>
-                    <TableCell>
-                      <span className="text-xs text-muted-foreground">{mapping.currentMatch?.reason || "-"}</span>
-                    </TableCell>
+                    <TableCell className="font-medium">{screen.name}</TableCell>
                     <TableCell>
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
-                        onClick={() => unlinkMutation.mutate(mapping.screen.id)}
-                        disabled={unlinkMutation.isPending}
-                        data-testid={`button-unlink-${mapping.screen.screenId}`}
+                        onClick={() => window.location.href = `/screens/${screen.id}`}
+                        data-testid={`button-view-screen-${screen.id}`}
                       >
-                        {unlinkMutation.isPending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Unlink className="h-4 w-4" />
-                        )}
+                        Bekijk scherm
                       </Button>
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-          )}
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* All done message */}
+      {totalIssues === 0 && hasContacts && (
+        <Card className="border-green-500/50 bg-green-50/50">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-green-700">
+              <CheckCircle className="h-5 w-5" />
+              Alles is gekoppeld!
+            </CardTitle>
+            <CardDescription className="text-green-600">
+              Alle schermen en locaties zijn correct gekoppeld aan Moneybird contacten.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      )}
     </div>
   );
 }
