@@ -84,7 +84,7 @@ export const locations = pgTable("locations", {
   revenueSharePercent: decimal("revenue_share_percent", { precision: 5, scale: 2 }).notNull().default("10.00"),
   minimumPayoutAmount: decimal("minimum_payout_amount", { precision: 10, scale: 2 }).notNull().default("25.00"),
   bankAccountIban: text("bank_account_iban"),
-  moneybirdContactId: text("moneybird_contact_id").unique(), // Link to Moneybird contact for master data
+  moneybirdContactId: text("moneybird_contact_id"), // Link to Moneybird contact (NOT unique - same contact can link to multiple locations)
   isPlaceholder: boolean("is_placeholder").default(false), // Auto-created from Yodeck, needs Moneybird linking
   source: text("source").default("manual"), // manual, yodeck - where this location came from
   status: text("status").notNull().default("active"), // active, paused, terminated
@@ -105,23 +105,47 @@ export const screenGroups = pgTable("screen_groups", {
 });
 
 /**
- * Screens - Digital signage displays at locations
- * Each screen can show multiple ads and syncs with Yodeck
- * screenId is the unique identifier (EVZ-001 format) used everywhere
+ * LocationGroups - For rare multi-screen locations (2+ screens at same physical location)
+ * Only used when isMultiScreenLocation=true on screens
+ */
+export const locationGroups = pgTable("location_groups", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: text("name").notNull(), // e.g., "Basil's - 2 schermen"
+  moneybirdContactId: text("moneybird_contact_id"), // Shared Moneybird contact for the group
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * Screens - Digital signage displays (SchermLocatie = primary entity)
+ * 
+ * BUSINESS RULE: 99% of the time, 1 screen = 1 location
+ * - Each screen has its own Moneybird link (no auto-grouping by shared contact)
+ * - locationId is now OPTIONAL (legacy, kept for backward compatibility)
+ * - isMultiScreenLocation + locationGroupId for rare multi-screen locations
+ * 
+ * DATA SOURCES:
+ * - Moneybird: company name, contact, email, phone, address (master for customer data)
+ * - Yodeck: device ID, online/offline, last_seen, content (master for device data)
+ * 
+ * DISPLAY NAME PRIORITY: Moneybird company > Yodeck device name > screenId fallback
  */
 export const screens = pgTable("screens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   screenId: text("screen_id").notNull().unique(), // EVZ-001 format - MANDATORY
-  locationId: varchar("location_id").notNull().references(() => locations.id),
-  groupId: varchar("group_id").references(() => screenGroups.id),
+  locationId: varchar("location_id").references(() => locations.id), // OPTIONAL - legacy, for backward compat
+  groupId: varchar("group_id").references(() => screenGroups.id), // For bulk operations
+  locationGroupId: varchar("location_group_id").references(() => locationGroups.id), // For multi-screen locations
+  isMultiScreenLocation: boolean("is_multi_screen_location").default(false), // Only true for rare 2+ screens at same location
   name: text("name").notNull(),
+  // === YODECK FIELDS (source: Yodeck API) ===
   yodeckPlayerId: text("yodeck_player_id"), // Linked Yodeck player ID (numeric ID as string)
-  yodeckPlayerName: text("yodeck_player_name"),
+  yodeckPlayerName: text("yodeck_player_name"), // Device name from Yodeck
   yodeckUuid: text("yodeck_uuid").unique(), // Yodeck UUID for upsert matching
   yodeckWorkspaceName: text("yodeck_workspace_name"),
   yodeckScreenshotUrl: text("yodeck_screenshot_url"),
   // Yodeck content tracking - what's playing on the screen
-  // Content status enum: unknown (never synced), empty (API confirmed no content), has_content (verified), likely_has_content (heuristic), error (API failed)
   yodeckContentStatus: text("yodeck_content_status").default("unknown"), // unknown, empty, has_content, likely_has_content, error
   yodeckContentCount: integer("yodeck_content_count"), // Number of items/playlists assigned (0 = empty, >0 = has content)
   yodeckContentSummary: jsonb("yodeck_content_summary"), // { playlists:[], items:[], topItems:[], lastFetchedAt }
@@ -138,10 +162,13 @@ export const screens = pgTable("screens", {
   isActive: boolean("is_active").notNull().default(true),
   matchConfidence: text("match_confidence"), // auto_exact, auto_fuzzy, manual, null=unmapped
   matchReason: text("match_reason"), // Explanation of match (e.g., "Exact name match: Basil's Barber Shop")
-  moneybirdContactId: text("moneybird_contact_id"), // Direct link to Moneybird contact (alternative to location-based linking)
-  moneybirdContactSnapshot: jsonb("moneybird_contact_snapshot"), // Cached Moneybird contact data for fast UI loading
+  // === MONEYBIRD FIELDS (source: Moneybird API) ===
+  moneybirdContactId: text("moneybird_contact_id"), // Direct link to Moneybird contact (per-screen, no auto-grouping!)
+  moneybirdContactSnapshot: jsonb("moneybird_contact_snapshot"), // Cached: { company, firstname, lastname, email, phone, address, city, kvk, btw, syncedAt }
   moneybirdSyncStatus: text("moneybird_sync_status").default("unlinked"), // linked, unlinked, stale
-  effectiveName: text("effective_name"), // Calculated display name: Moneybird > Yodeck > screenId fallback
+  // === COMPUTED/DISPLAY FIELDS ===
+  effectiveName: text("effective_name"), // Calculated: Moneybird company > Yodeck device name > screenId
+  city: text("city"), // Denormalized from Moneybird for filtering/display
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

@@ -1,0 +1,181 @@
+JE BENT MIJN SENIOR FULL-STACK ENGINEER.
+Project: Elevizion Dashboard (React + TS + Vite, Express, Drizzle ORM, Postgres). UI is NL.
+Yodeck + Moneybird integraties zijn online, maar de LINKING/DOMAIN-MODEL is fout: het systeem ziet "Scherm" en "Locatie" te veel als aparte entiteiten waardoor meerdere schermen onder 1 locatie vallen terwijl dat niet klopt.
+
+BELANGRIJK BUSINESS-PRINCIPE
+- 99% van de tijd is het: 1 locatie = 1 scherm. (Alleen uitzonderlijk 2+ schermen op 1 locatie.)
+- Dus de primaire beheer-entiteit is “SchermLocatie” (één object) met:
+  1) Yodeck device data (device id, naam, status, laatst gezien, playlist/content)
+  2) Moneybird relatie (contact/klant + adres/contactgegevens)
+- Moneybird is de bron voor: bedrijfsnaam, contactpersoon, email, telefoon, adres, facturatiegegevens.
+- Yodeck is de bron voor: device id, online/offline, last_seen, content metadata, open-in-yodeck link.
+- De app moet NIET meer automatisch 2 schermen op 1 locatie zetten tenzij expliciet “multi-screen locatie”.
+
+HUIDIGE BUG / GEDRAG (wat misgaat)
+- Bij import/sync koppelt hij schermen aan dezelfde Moneybird contact (bijv. Bouwservice Douven) en behandelt dat als “locatie”.
+- Daardoor komen “Test” en “Basil’s Barber Shop Maasbracht” op één locatie te staan.
+- Terwijl “Bouwservice Douven” eigenlijk de nieuwe naam is van het scherm dat nu “Test” heet (dus: rename/alias probleem).
+- Basil’s moet een eigen Moneybird contact/link hebben (en dus eigen SchermLocatie object).
+
+DOEL
+1) Domeinmodel aanpassen zodat Scherm/Locatie niet los leidt tot foute groepering.
+2) Linking-flow super simpel maken: per scherm kies/zoek Moneybird contact → koppelen → alles vult en blijft synced.
+3) Betrouwbare sync (idempotent) + conflictregels (Moneybird wint voor klantvelden, Yodeck wint voor devicevelden).
+4) Zelfde principe ook voor Adverteerders (Moneybird contact koppelen, facturatie en data consistent).
+
+TECHNISCHE EISEN
+A) DATA MODEL (Drizzle/Postgres) — maak dit concreet en implementeer migrations
+- Introduceer/normaliseer naar deze kern-tabellen:
+
+1) screen_units (of schermen)
+   - id (uuid)
+   - screen_id (EVZ-001) UNIQUE (intern)
+   - yodeck_device_id UNIQUE
+   - yodeck_device_name (laatste bekende)
+   - yodeck_status (online/offline/unknown)
+   - yodeck_last_seen_at
+   - yodeck_open_url
+   - moneybird_contact_id (nullable, indexed)
+   - display_name (wat we in UI tonen; afgeleid: Moneybird bedrijfnaam als gekoppeld, anders Yodeck naam)
+   - place_name / city (denormalized convenience, optioneel)
+   - is_multi_screen_location (bool default false)
+   - location_group_id (nullable) => alleen gebruiken als multi-screen locatie écht nodig is
+   - created_at, updated_at
+
+2) location_groups (alleen voor uitzonderingen: 2+ schermen in 1 zaak)
+   - id uuid
+   - moneybird_contact_id (nullable)
+   - label (bv “Basil’s - 2 schermen”)
+   - created_at, updated_at
+
+REGEL: ALS is_multi_screen_location=false DAN is “locatie” conceptueel gelijk aan screen_unit en UI toont geen losse locatie-entiteit.
+
+3) moneybird_contacts_cache (optioneel maar sterk aanbevolen voor snelheid/zoeken)
+   - moneybird_contact_id UNIQUE
+   - company_name
+   - firstname/lastname
+   - email
+   - phone
+   - address1/address2/postcode/city/country
+   - updated_at (sync timestamp)
+   (Dit is cache; bron blijft Moneybird)
+
+4) advertisers
+   - id uuid
+   - advertiser_id (ADV-001) UNIQUE
+   - moneybird_contact_id UNIQUE/nullable
+   - display_name (Moneybird company_name)
+   - billing_email, iban (als beschikbaar), etc (uit Moneybird)
+   - status, created_at, updated_at
+
+B) LINKING REGELS (kritisch)
+- Stop met het “contact = locatie” misbruik.
+- Een Moneybird contact kan meerdere screen_units hebben, maar dat betekent NIET één locatie. Dat betekent alleen: dezelfde klant bezit meerdere locaties (of je hebt verkeerd gekoppeld).
+- Default aanname: 1 screen_unit = 1 locatie.
+- Alleen als gebruiker expliciet “Multi-screen locatie” aanzet, mogen meerdere screens onder één location_group vallen.
+
+C) MATCHING / AUTO-SUGGEST (maar nooit foute auto-merge)
+We willen wel “suggesties” om snel te koppelen, maar niet automatisch alles samenvoegen.
+- Bij een screen_unit zonder moneybird_contact_id:
+  - toon “Koppel Moneybird contact” knop.
+  - zoek/suggest contact op basis van:
+    1) exacte match op yodeck_device_name ↔ moneybird company_name
+    2) fuzzy match (levenshtein) met threshold, maar alleen als uniek en hoge score
+    3) anders geen auto-suggest, enkel search.
+- NOOIT automatisch meerdere screens in één locatie zetten door gedeelde contact_id.
+
+D) NAAMREGELS (belangrijk voor jouw voorbeeld “Test” → “Bouwservice Douven”)
+- UI display_name voor scherm:
+  - Als moneybird_contact_id aanwezig: display_name = moneybird company_name (of contactperson/bedrijf)
+  - Anders: display_name = yodeck_device_name
+- In screens overzicht wil ik dus dat “Test” automatisch “Bouwservice Douven” wordt zodra gekoppeld.
+- Maar: we moeten de yodeck_device_name NIET overschrijven met Moneybird naam (dat is device label). Alleen tonen we Moneybird naam als display_name.
+- Extra: als ik wél device naam in Yodeck wil aanpassen vanuit dashboard, maak dan een optionele actie “Update Yodeck device name” die expliciet via Yodeck API renamed (los van Moneybird).
+
+E) UI/UX AANPASSINGEN
+1) Schermen lijst:
+   - Kolom “Locatie/Bedrijf” mag niet gebaseerd zijn op aparte locatie-entiteit.
+   - Toon:
+     - Bedrijf/Locatie: (Moneybird company_name + city) indien gekoppeld
+     - Anders: “Niet gekoppeld”
+   - Toon een badge “Moneybird ontbreekt” als moneybird_contact_id null.
+   - Actie per rij: “Koppel” opent modal.
+
+2) Koppel modal:
+   - Search input: zoek in Moneybird contacten (via cache endpoint; fallback live Moneybird search).
+   - Select contact → bevestigen.
+   - Na koppeling: refresh row, en contactgegevens + displaynaam updaten.
+
+3) Scherm detail > tab Contact:
+   - Altijd tonen:
+     - Moneybird gekoppeld: ja/nee + knop “Wijzig koppeling”
+     - Contactgegevens gevuld uit cache (adres/email/telefoon etc)
+     - “Bron: Moneybird” label
+   - Als niet gekoppeld: lege state met CTA “Koppel Moneybird contact”.
+
+4) Adverteerders:
+   - Zelfde koppel flow: advertentie-klant = Moneybird contact.
+   - Adverteerder heeft eigen moneybird_contact_id (uniek per adverteerder).
+   - UI: “Koppel Moneybird” + contactvelden.
+
+F) API ENDPOINTS (Express)
+Implementeer minimaal:
+- GET /api/moneybird/contacts/search?q=
+- POST /api/screens/:id/link-moneybird { moneybird_contact_id }
+- POST /api/screens/:id/unlink-moneybird
+- GET /api/screens (incl computed display_name + moneybird cached fields)
+- GET /api/screens/:id (incl moneybird cached fields + yodeck fields)
+- POST /api/advertisers/:id/link-moneybird
+- GET /api/advertisers (incl moneybird cached)
+- POST /api/sync/yodeck/run (bestaat) => update alleen yodeck velden in screen_units
+- POST /api/sync/moneybird/run => update cache + propagate display fields
+
+Zorg dat link endpoints:
+- Valideren dat moneybird_contact_id bestaat.
+- Idempotent zijn.
+- Bij linking: update screen_units.moneybird_contact_id + update denormalized fields (city/company_name) indien je die gebruikt.
+
+G) SYNC / CONSISTENCY
+- Maak 2 aparte sync jobs:
+  1) Yodeck sync: upsert screen_units op basis van yodeck_device_id.
+     - update yodeck_* velden
+     - als screen_unit niet bestaat: create met yodeck_device_id + yodeck_device_name
+     - NOOIT moneybird_contact_id automatisch zetten.
+  2) Moneybird sync: refresh moneybird_contacts_cache (pull all of delta).
+     - Na refresh: voor alle screen_units/advertisers met moneybird_contact_id: bereken display fields (company_name, city, etc).
+- Conflictregel:
+  - customer/contact velden komen altijd uit Moneybird cache.
+  - device velden komen altijd uit Yodeck.
+- Voeg logging toe per sync en per link actie (zodat we kunnen debuggen).
+
+H) DATA MIGRATIE / FIX VAN HUIDIGE FOUTE GROEPERING
+- Schrijf een one-time migration script:
+  - Als huidige schema een “locations” tabel heeft die gebruikt wordt voor grouping: migreer naar screen_units als primaire.
+  - Voor elke huidige screen:
+    - maak/upgrade screen_units record.
+    - verwijder/ontkoppel automatische grouping die gebaseerd is op moneybird_contact_id.
+  - Houd “location_groups” leeg tenzij een admin expliciet multi-screen instelt.
+- Voorbeeld-case:
+  - “Test” gekoppeld aan Moneybird Bouwservice Douven: display_name moet Bouwservice Douven worden.
+  - “Basil’s Barber Shop Maasbracht” moet NIET onder Bouwservice Douven vallen door dezelfde contact; moet eigen contact (of unlinked) hebben.
+
+I) ACCEPTANCE CRITERIA (wat ik wil zien werken)
+- In Schermen overzicht:
+  - Test → toont “Bouwservice Douven” als naam zodra gekoppeld (display_name)
+  - Basil’s blijft apart (eigen rij met eigen bedrijf/locatie), nooit automatisch op dezelfde locatie.
+- In detail Contact tab:
+  - Moneybird velden zijn correct + consistent.
+- Koppel modal werkt binnen 10 seconden end-to-end.
+- Yodeck sync verandert nooit Moneybird velden.
+- Moneybird sync verandert nooit Yodeck velden.
+- Adverteerders hebben dezelfde koppel-flow.
+
+LEVERING
+- Geef me:
+  1) exacte schema/migration changes (Drizzle migrations)
+  2) backend endpoints + service-layer code
+  3) frontend components (modal + list updates + detail tab)
+  4) tests/smoke checks (minimaal: linking idempotency + no auto grouping)
+  5) korte debug checklist (wat te checken als koppeling “niet lijkt te werken”)
+
+GA NU IMPLEMENTEREN. GEEN ALGEMENE UITLEG; DIRECT CODE WIJZIGINGEN MET BESTANDSNAAM/PAD EN PATCHES.
