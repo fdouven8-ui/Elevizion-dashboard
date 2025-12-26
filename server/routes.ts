@@ -4877,6 +4877,17 @@ export async function registerRoutes(
       // Yodeck media links stats (ads classification from yodeck_media_links table)
       const mediaLinkStats = await storage.getYodeckMediaLinkStats();
       
+      // Location / Moneybird data completeness stats
+      const locations = await storage.getLocations();
+      const locationsTotal = locations.length;
+      const locationsWithMoneybird = locations.filter(l => l.moneybirdContactId).length;
+      const locationsWithoutMoneybird = locationsTotal - locationsWithMoneybird;
+      const locationsAddressComplete = locations.filter(l => 
+        l.address?.trim() && l.zipcode?.trim() && l.city?.trim()
+      ).length;
+      const locationsAddressIncomplete = locationsTotal - locationsAddressComplete;
+      const screensWithoutLocation = screens.filter(s => !s.locationId).length;
+      
       const result = {
         screensOnline,
         screensTotal,
@@ -4896,6 +4907,13 @@ export async function registerRoutes(
         adsTotal: mediaLinkStats.totalAds,
         adsUnlinked: mediaLinkStats.unlinkedAds,
         nonAdsTotal: mediaLinkStats.totalNonAds,
+        // Location / Moneybird data completeness
+        locationsTotal,
+        locationsWithMoneybird,
+        locationsWithoutMoneybird,
+        locationsAddressComplete,
+        locationsAddressIncomplete,
+        screensWithoutLocation,
       };
       setCache("control-room-stats", result);
       res.json(result);

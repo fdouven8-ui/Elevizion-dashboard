@@ -14,6 +14,10 @@ import {
   LinkIcon,
   CheckCircle2,
   ExternalLink,
+  Database,
+  MapPin,
+  Monitor,
+  Building2,
 } from "lucide-react";
 import { Link } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -44,6 +48,12 @@ interface ControlRoomStats {
   adsTotal: number;
   adsUnlinked: number;
   nonAdsTotal: number;
+  locationsTotal: number;
+  locationsWithMoneybird: number;
+  locationsWithoutMoneybird: number;
+  locationsAddressComplete: number;
+  locationsAddressIncomplete: number;
+  screensWithoutLocation: number;
 }
 
 interface ActionItem {
@@ -131,6 +141,16 @@ export default function Home() {
   // Acties filteren
   const offlineScreens = actionItems.filter(item => item.type === 'offline_screen');
   const hasIssues = offlineScreens.length > 0 || adsUnlinked > 0;
+  
+  // Data compleetheid
+  const locationsTotal = stats?.locationsTotal || 0;
+  const locationsWithMoneybird = stats?.locationsWithMoneybird || 0;
+  const locationsWithoutMoneybird = stats?.locationsWithoutMoneybird || 0;
+  const locationsAddressIncomplete = stats?.locationsAddressIncomplete || 0;
+  const screensWithoutLocation = stats?.screensWithoutLocation || 0;
+  
+  const dataIssues = locationsWithoutMoneybird + locationsAddressIncomplete + screensWithoutLocation;
+  const dataComplete = dataIssues === 0 && locationsTotal > 0;
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -341,6 +361,116 @@ export default function Home() {
               </ExpandableCard>
             )}
           </div>
+        )}
+      </div>
+
+      {/* Data Compleetheid Widget */}
+      <div data-testid="data-compleetheid-panel">
+        <h2 className="text-base font-medium mb-3">Data Compleetheid</h2>
+        {statsLoading ? (
+          <Skeleton className="h-32 w-full rounded-lg" />
+        ) : dataComplete ? (
+          <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">
+            <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-emerald-500 opacity-60" />
+            <p className="text-sm font-medium">Alle data compleet</p>
+            <p className="text-xs text-muted-foreground">{locationsTotal} locaties, allemaal met Moneybird en volledig adres</p>
+          </div>
+        ) : (
+          <Card>
+            <CardContent className="pt-4">
+              <div className="space-y-3">
+                {/* Locaties zonder Moneybird */}
+                <div className="flex items-center justify-between py-2 border-b last:border-0">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-full ${locationsWithoutMoneybird > 0 ? 'bg-orange-100' : 'bg-green-100'}`}>
+                      <Database className={`h-4 w-4 ${locationsWithoutMoneybird > 0 ? 'text-orange-600' : 'text-green-600'}`} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Locaties zonder Moneybird</p>
+                      <p className="text-xs text-muted-foreground">Koppel aan Moneybird voor factuurgegevens</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {locationsWithoutMoneybird > 0 ? (
+                      <>
+                        <Badge variant="outline" className="text-orange-600 border-orange-600">{locationsWithoutMoneybird}</Badge>
+                        <Link href="/screens">
+                          <Button variant="ghost" size="sm">
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </Link>
+                      </>
+                    ) : (
+                      <Badge variant="outline" className="text-green-600 border-green-600">
+                        <CheckCircle2 className="h-3 w-3 mr-1" />
+                        OK
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                {/* Locaties met onvolledig adres */}
+                <div className="flex items-center justify-between py-2 border-b last:border-0">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-full ${locationsAddressIncomplete > 0 ? 'bg-orange-100' : 'bg-green-100'}`}>
+                      <MapPin className={`h-4 w-4 ${locationsAddressIncomplete > 0 ? 'text-orange-600' : 'text-green-600'}`} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Locaties met onvolledig adres</p>
+                      <p className="text-xs text-muted-foreground">Straat, postcode of plaats ontbreekt</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {locationsAddressIncomplete > 0 ? (
+                      <>
+                        <Badge variant="outline" className="text-orange-600 border-orange-600">{locationsAddressIncomplete}</Badge>
+                        <Link href="/screens">
+                          <Button variant="ghost" size="sm">
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </Link>
+                      </>
+                    ) : (
+                      <Badge variant="outline" className="text-green-600 border-green-600">
+                        <CheckCircle2 className="h-3 w-3 mr-1" />
+                        OK
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+
+                {/* Schermen zonder locatie */}
+                <div className="flex items-center justify-between py-2">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-full ${screensWithoutLocation > 0 ? 'bg-orange-100' : 'bg-green-100'}`}>
+                      <Monitor className={`h-4 w-4 ${screensWithoutLocation > 0 ? 'text-orange-600' : 'text-green-600'}`} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">Schermen zonder locatie</p>
+                      <p className="text-xs text-muted-foreground">Koppel scherm aan een locatie</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {screensWithoutLocation > 0 ? (
+                      <>
+                        <Badge variant="outline" className="text-orange-600 border-orange-600">{screensWithoutLocation}</Badge>
+                        <Link href="/screens">
+                          <Button variant="ghost" size="sm">
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </Link>
+                      </>
+                    ) : (
+                      <Badge variant="outline" className="text-green-600 border-green-600">
+                        <CheckCircle2 className="h-3 w-3 mr-1" />
+                        OK
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         )}
       </div>
     </div>
