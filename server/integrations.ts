@@ -407,6 +407,17 @@ export async function syncYodeckScreens(): Promise<{
             // Keep existing locationId - don't overwrite user's choice
           });
           console.log(`[Yodeck] Updated screen ${screenId || screen.name} (UUID: ${screen.uuid})`);
+          
+          // Update Yodeck screens cache
+          await storage.upsertYodeckScreenCache({
+            yodeckScreenId: String(screen.id),
+            name: screen.name || null,
+            uuid: screen.uuid || null,
+            status: screen.state?.online ? "online" : "offline",
+            lastSeen: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
+            screenshotUrl: screen.screenshot_url || null,
+            raw: screen,
+          });
           updatedCount++;
         } else {
           // Create new screen with its own placeholder location
@@ -433,6 +444,18 @@ export async function syncYodeckScreens(): Promise<{
             yodeckContentLastFetchedAt: null,
           });
           console.log(`[Yodeck] Created new screen ${newScreenId} with location "${screenName}" (UUID: ${screen.uuid})`);
+          
+          // Update Yodeck screens cache
+          await storage.upsertYodeckScreenCache({
+            yodeckScreenId: String(screen.id),
+            name: screen.name || null,
+            uuid: screen.uuid || null,
+            status: screen.state?.online ? "online" : "offline",
+            lastSeen: screen.state?.last_seen ? new Date(screen.state.last_seen) : null,
+            screenshotUrl: screen.screenshot_url || null,
+            raw: screen,
+          });
+          
           updatedCount++;
         }
       }

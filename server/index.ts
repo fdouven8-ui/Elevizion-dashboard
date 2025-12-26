@@ -144,6 +144,23 @@ async function runMoneybirdBackgroundSync() {
           customerId: contact.customer_id || null,
           lastSyncedAt: new Date(),
         });
+        
+        const contactName = [contact.firstname, contact.lastname].filter(Boolean).join(" ") || null;
+        await storage.upsertMoneybirdContactCache({
+          moneybirdContactId: contact.id,
+          companyName: contact.company_name || null,
+          contactName,
+          email: contact.email || null,
+          phone: contact.phone || null,
+          address: {
+            street: contact.address1 || null,
+            postcode: contact.zipcode || null,
+            city: contact.city || null,
+            country: contact.country || null,
+          },
+          raw: contact,
+        });
+        
         contactsProcessed++;
       } catch (err: any) {
         contactErrors++;
