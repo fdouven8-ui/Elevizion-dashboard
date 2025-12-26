@@ -91,9 +91,10 @@ export default function Screens() {
     queryKey: ["/api/moneybird/contacts"],
   });
 
-  const linkLocationMutation = useMutation({
-    mutationFn: async ({ locationId, moneybirdContactId }: { locationId: string; moneybirdContactId: string }) => {
-      const response = await fetch(`/api/locations/${locationId}/link-moneybird`, {
+  // Direct screen-to-Moneybird linking (also updates location automatically)
+  const linkScreenMutation = useMutation({
+    mutationFn: async ({ screenId, moneybirdContactId }: { screenId: string; moneybirdContactId: string }) => {
+      const response = await fetch(`/api/screens/${screenId}/link-moneybird`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -102,9 +103,12 @@ export default function Screens() {
       if (!response.ok) throw new Error("Koppeling mislukt");
       return response.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["screens"] });
       queryClient.invalidateQueries({ queryKey: ["locations"] });
-      toast({ title: "Moneybird gekoppeld", description: "Locatie is gekoppeld aan Moneybird contact" });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+      const displayName = data.contact?.displayName || "Moneybird contact";
+      toast({ title: "Moneybird gekoppeld", description: `Scherm gekoppeld aan ${displayName}` });
     },
     onError: () => {
       toast({ title: "Fout", description: "Koppeling mislukt", variant: "destructive" });
@@ -126,8 +130,12 @@ export default function Screens() {
   const [linkPopoverOpen, setLinkPopoverOpen] = useState<string | null>(null);
   const [linkSearch, setLinkSearch] = useState("");
 
+  // Check screen-level Moneybird link first, fall back to location-level
   const screensWithoutMoneybird = useMemo(() => {
     return screens.filter(scr => {
+      // Screen has direct Moneybird link - it's linked
+      if (scr.moneybirdContactId) return false;
+      // Otherwise check location
       const loc = locations.find(l => l.id === scr.locationId);
       return !loc?.moneybirdContactId;
     });
@@ -175,7 +183,8 @@ export default function Screens() {
         return false;
       }
 
-      if (moneybirdMissingFilter && loc?.moneybirdContactId) {
+      // When moneybird-missing filter is active, hide screens that ARE linked (either directly or via location)
+      if (moneybirdMissingFilter && (scr.moneybirdContactId || loc?.moneybirdContactId)) {
         return false;
       }
 
@@ -614,23 +623,23 @@ export default function Screens() {
                       <div className="flex-1 min-w-0">
                         <div className="truncate flex items-center gap-1">
                           {loc?.name || <span className="text-orange-500">Geen locatie</span>}
-                          {loc && (
-                            loc.moneybirdContactId ? (
-                              <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
-                            ) : (
-                              <AlertCircle className="h-3 w-3 text-orange-500 shrink-0" />
-                            )
+                          {/* Check screen-level first, then location-level */}
+                          {(scr.moneybirdContactId || loc?.moneybirdContactId) ? (
+                            <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
+                          ) : loc && (
+                            <AlertCircle className="h-3 w-3 text-orange-500 shrink-0" />
                           )}
                         </div>
                         {loc?.city && (
                           <div className="text-xs text-muted-foreground">{loc.city}</div>
                         )}
                       </div>
-                      {loc && !loc.moneybirdContactId && (
+                      {/* Show link button only if neither screen nor location is linked */}
+                      {!scr.moneybirdContactId && loc && !loc.moneybirdContactId && (
                         <Popover 
-                          open={linkPopoverOpen === loc.id} 
+                          open={linkPopoverOpen === scr.id} 
                           onOpenChange={(open) => {
-                            setLinkPopoverOpen(open ? loc.id : null);
+                            setLinkPopoverOpen(open ? scr.id : null);
                             if (!open) setLinkSearch("");
                           }}
                         >
@@ -639,7 +648,7 @@ export default function Screens() {
                               variant="ghost"
                               size="sm"
                               className="h-7 px-2 text-xs text-orange-600 hover:text-orange-700 hover:bg-orange-50"
-                              data-testid={`button-link-moneybird-${loc.id}`}
+                              data-testid={`button-link-moneybird-${scr.id}`}
                             >
                               <Link2 className="h-3 w-3 mr-1" />
                               Koppel
@@ -669,8 +678,8 @@ export default function Screens() {
                                         key={contact.id}
                                         value={contact.companyName || `${contact.firstname} ${contact.lastname}`}
                                         onSelect={() => {
-                                          linkLocationMutation.mutate({
-                                            locationId: loc.id,
+                                          linkScreenMutation.mutate({
+                                            screenId: scr.id,
                                             moneybirdContactId: contact.moneybirdId,
                                           });
                                           setLinkPopoverOpen(null);

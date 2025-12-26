@@ -137,6 +137,8 @@ export const screens = pgTable("screens", {
   isActive: boolean("is_active").notNull().default(true),
   matchConfidence: text("match_confidence"), // auto_exact, auto_fuzzy, manual, null=unmapped
   matchReason: text("match_reason"), // Explanation of match (e.g., "Exact name match: Basil's Barber Shop")
+  moneybirdContactId: text("moneybird_contact_id"), // Direct link to Moneybird contact (alternative to location-based linking)
+  moneybirdSyncStatus: text("moneybird_sync_status").default("unlinked"), // linked, unlinked, stale
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

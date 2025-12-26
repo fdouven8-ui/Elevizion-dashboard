@@ -1,0 +1,176 @@
+Je bent de lead engineer van mijn Elevizion Dashboard (React + TypeScript + Vite frontend, Express backend, Drizzle ORM + PostgreSQL). Yodeck en Moneybird integraties werken al “online” (tokens/keys ok), maar de KERN ontbreekt: we moeten items (Schermen + Adverteerders) netjes koppelen aan Moneybird Contacts, zodat contactgegevens niet “Default” blijven.
+
+DOEL
+1) Elk Scherm (1 scherm per locatie) moet uiteindelijk gekoppeld zijn aan EXACT 1 Moneybird Contact (de locatie/zaak).
+2) Elke Adverteerder moet ook gekoppeld zijn aan EXACT 1 Moneybird Contact (de adverteerder/klant).
+3) Contactgegevens (naam, bedrijf, adres, email, tel, btw, kvk, IBAN, etc.) komen voortaan primair uit Moneybird en worden in ons systeem gespiegeld.
+4) Koppelen moet super simpel: vanuit het Schermen-overzicht op “Koppel” klikken → Moneybird contact zoeken/selecteren → opslaan → klaar.
+5) Idem voor Adverteerders-overzicht.
+6) Support voor “bulk koppelen” + “suggesties” (automatisch matchen op naam/email).
+
+HUIDIGE SITUATIE (PROBLEEM)
+- Yodeck import maakt schermen aan, maar zet locatie/contact op “Default (Yodeck Import)” en mist contactgegevens.
+- In Schermen-lijst zie je bij Test en Basil’s Barber Shop Maasbracht: “Koppel” en waarschuwing “schermen zonder Moneybird koppeling”.
+- We hebben óók een Locations menu, maar in de praktijk is “Locatie = Scherm” (tenzij later 2 schermen op 1 locatie, maar default is 1:1).
+- Ik wil daarom een data-model dat 1:1 ondersteunt, maar óók future-proof voor 1 locatie → meerdere schermen.
+
+BELANGRIJK PRINCIPES
+- Centrale IDs:
+  - SCREEN_ID (EVZ-001 etc.) blijft onze interne id (verplicht).
+  - yodeck_device_id (zoals YDK-591895 etc.) is extern en uniek per device.
+  - moneybird_contact_id is extern en uniek per contact.
+- We willen geen dubbele Moneybird contacts aanmaken zonder expliciete actie. Eerst koppelen.
+
+WAT JE MOET BOUWEN
+
+A) DATABASE / MODELLEN (Drizzle + Postgres)
+Voeg/normaliseer tabellen (of pas bestaande aan) met deze velden:
+
+1) moneybird_contacts (cache/mirror)
+- id (uuid pk)
+- moneybird_contact_id (string, unique, not null)
+- type (company/person) optional
+- company_name, firstname, lastname
+- email, phone
+- address1, address2, zipcode, city, country
+- kvk, vat_number
+- iban (optioneel als Moneybird dit levert / of via custom fields)
+- updated_at_remote (timestamp)
+- raw_json (jsonb) voor volledige Moneybird payload
+- created_at, updated_at
+
+2) locations (optioneel maar future-proof)
+- id (uuid pk)
+- name (string)
+- moneybird_contact_id (string, nullable, index)
+- primary_screen_id (uuid nullable) (voor 1:1 default)
+- created_at, updated_at
+
+3) screens
+- id (uuid pk)
+- screen_id (string unique EVZ-001)
+- name (string)
+- yodeck_device_id (string unique, nullable)
+- status (online/offline) etc.
+- location_id (uuid nullable)  (future-proof)
+- moneybird_contact_id (string nullable, index)  <-- BELANGRIJK
+- moneybird_contact_sync_status (enum: linked|unlinked|stale)
+- created_at, updated_at
+
+4) advertisers
+- id (uuid pk)
+- name (string)
+- moneybird_contact_id (string nullable, index) <-- BELANGRIJK
+- created_at, updated_at
+
+Regels:
+- screens.moneybird_contact_id verwijst logisch naar moneybird_contacts.moneybird_contact_id (geen FK verplicht maar mag).
+- advertisers.moneybird_contact_id idem.
+- Als location bestaat: location.moneybird_contact_id kan de “bron” zijn en screens kunnen dit erven (maar alleen als we dat zo kiezen). Voor nu: direct in screen + advertiser koppelen (simpel).
+
+B) BACKEND API (Express)
+Maak endpoints + services met goede validatie en foutafhandeling.
+
+1) Moneybird contacts sync
+- GET /api/integrations/moneybird/contacts?query=...
+  - Haalt live contacts uit Moneybird (met search) OF uit cache met fallback refresh.
+- POST /api/integrations/moneybird/contacts/sync
+  - Sync alle contacts (paginated) naar moneybird_contacts tabel (upsert).
+  - Return: { imported, updated, total }
+
+2) Link screen ↔ moneybird contact
+- POST /api/screens/:id/link-moneybird
+  Body: { moneybird_contact_id: string }
+  - Validatie: contact bestaat in moneybird_contacts (zo niet: eerst ophalen via Moneybird API en cache).
+  - Update screen.moneybird_contact_id + sync_status=linked.
+  - Return updated screen + minimal contact.
+
+3) Unlink screen
+- POST /api/screens/:id/unlink-moneybird
+  - Zet moneybird_contact_id null, status=unlinked
+
+4) Link advertiser ↔ moneybird contact
+- POST /api/advertisers/:id/link-moneybird
+  Body: { moneybird_contact_id: string }
+- POST /api/advertisers/:id/unlink-moneybird
+
+5) Suggesties endpoint (matching)
+- GET /api/linking/suggestions/screens
+- GET /api/linking/suggestions/advertisers
+Logic:
+- Voor elk unlinked item: geef top 5 suggesties op basis van:
+  - exact match op email (als screen/adverteerder email heeft)
+  - naam similarity (case-insensitive + remove punctuation)
+  - contains match (Basil’s / Basil Barbershop)
+Return: [{ entityId, entityName, suggestions: [{moneybird_contact_id, displayName, score}] }]
+
+C) FRONTEND UX (React)
+Maak de “Koppel” flow super duidelijk en snel.
+
+1) Schermen pagina
+- Bovenaan badge “X schermen zonder Moneybird koppeling” blijft.
+- Klik “Toon alleen deze” filtert op unlinked.
+- In de tabel:
+  - Kolom “Locatie / Bedrijf” toont:
+    - Als linked: Moneybird contact displayName + subtitel (email/plaats)
+    - Als unlinked: “Niet gekoppeld” + knop “Koppel”
+- Bij “Koppel” open een modal/drawer:
+  - Search input (debounced) → zoekt Moneybird contacts via endpoint.
+  - Laat ook “Suggesties” bovenaan zien (van /api/linking/suggestions/screens).
+  - Selecteer contact → bevestigen → success toast → rij update direct.
+
+2) Adverteerders pagina
+- Exact dezelfde UX: badge “X adverteerders zonder koppeling”, filter “toon alleen deze”, per rij “Koppel” modal.
+
+3) Bulk koppelen
+- Voeg op beide pagina’s een knop “Bulk koppelen” toe (alleen zichtbaar als er unlinked zijn).
+- Bulk modal:
+  - lijst unlinked items links
+  - per item dropdown met suggested contacts
+  - 1 knop “Opslaan alles”
+- Sla sequentieel of parallel (max 5 tegelijk) op met goede error reporting per item.
+
+4) Detail pagina (Open)
+- In Screen detail (Open):
+  - Card “Moneybird Contact” met status:
+    - Linked → toon alle relevante velden (naam, adres, email, tel, btw/kvk)
+    - Unlinked → CTA “Koppel nu”
+  - Knop “Open Moneybird contact” (link bouwen met moneybird_contact_id indien mogelijk)
+
+D) DATA FLOW / SYNC STRATEGIE
+- Bij het openen van Schermen of Adverteerders pagina:
+  - laad entities uit eigen DB
+  - daarnaast laad “count unlinked”
+  - suggestions endpoint call (lazy) zodra unlinked > 0
+- Moneybird contacts:
+  - Bij search: live query naar Moneybird, en cache upsert.
+  - 1x per dag (of handmatig) kan /contacts/sync draaien (optioneel cron later).
+
+E) DISPLAY NAME REGELS (belangrijk)
+- Voor Moneybird contact displayName:
+  - company_name als aanwezig
+  - anders firstname + lastname
+- In de UI toon ook city of email als subtitle.
+
+F) MIGRATIES & SEEDING
+- Maak Drizzle migrations voor nieuwe velden/tabellen.
+- Update bestaande “Yodeck import” flow:
+  - Bij import van device:
+    - maak screen record aan met yodeck_device_id en name
+    - zet moneybird_contact_id = null
+    - zet sync_status = unlinked
+  - Dus geen “Default (Yodeck Import)” meer als “Locatie/Bedrijf” label, maar “Niet gekoppeld”.
+
+G) TESTS / EDGE CASES
+- Contact verwijderd in Moneybird → screen blijft linked maar sync_status=stale (toon waarschuwing).
+- Zelfde Moneybird contact mag gelinkt worden aan meerdere screens (future-proof).
+- Duplicate names → user moet kiezen (geen auto-link zonder bevestiging).
+- Performance: search endpoint debounced, suggestions max 5 per item.
+
+OPLEVERING
+- Lever concrete code changes: DB schema + migrations, backend routes/services, frontend components (modal/bulk), en update van Schermen + Adverteerders pagina’s.
+- Zorg dat alles compileert en draait.
+- Zet duidelijke TODO’s waar Moneybird client functies al bestaan (gebruik bestaande integratie helper).
+- Gebruik nette types (zod schemas), en geef goede errors in UI.
+
+Start nu met implementeren. Geef mij de gewijzigde bestanden/patches en leg kort uit hoe ik het test in de app.

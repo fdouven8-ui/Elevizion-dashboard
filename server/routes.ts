@@ -1889,6 +1889,90 @@ export async function registerRoutes(
     }
   });
 
+  // Link screen directly to Moneybird contact (alternative to location-based linking)
+  app.post("/api/screens/:id/link-moneybird", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { moneybirdContactId } = req.body;
+
+      if (!moneybirdContactId) {
+        return res.status(400).json({ message: "moneybirdContactId is vereist" });
+      }
+
+      // Verify screen exists
+      const screen = await storage.getScreen(id);
+      if (!screen) {
+        return res.status(404).json({ message: "Scherm niet gevonden" });
+      }
+
+      // Verify Moneybird contact exists (lookup by Moneybird external ID)
+      const contact = await storage.getMoneybirdContactByMoneybirdId(moneybirdContactId);
+      if (!contact) {
+        return res.status(404).json({ message: "Moneybird contact niet gevonden" });
+      }
+
+      console.log(`[Moneybird Link] Linking screen ${id} (${screen.screenId}) to contact ${contact.moneybirdId}:`, {
+        companyName: contact.companyName,
+        firstname: contact.firstname,
+        lastname: contact.lastname,
+      });
+
+      // Update screen with Moneybird contact ID
+      const updated = await storage.updateScreen(id, {
+        moneybirdContactId: contact.moneybirdId,
+        moneybirdSyncStatus: "linked",
+      });
+
+      // Also update the location if it exists and is a placeholder
+      const location = await storage.getLocation(screen.locationId);
+      if (location && location.isPlaceholder && !location.moneybirdContactId) {
+        await storage.updateLocationFromMoneybirdContact(location.id, contact);
+        console.log(`[Moneybird Link] Also linked location ${location.id} to contact ${contact.moneybirdId}`);
+      }
+
+      res.json({ 
+        success: true, 
+        message: "Scherm gekoppeld aan Moneybird contact",
+        screen: updated,
+        contact: {
+          id: contact.id,
+          moneybirdId: contact.moneybirdId,
+          displayName: contact.companyName || `${contact.firstname || ''} ${contact.lastname || ''}`.trim(),
+          city: contact.city,
+          email: contact.email,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Moneybird Link] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Unlink screen from Moneybird contact
+  app.post("/api/screens/:id/unlink-moneybird", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const screen = await storage.getScreen(id);
+      if (!screen) {
+        return res.status(404).json({ message: "Scherm niet gevonden" });
+      }
+
+      const updated = await storage.updateScreen(id, {
+        moneybirdContactId: null,
+        moneybirdSyncStatus: "unlinked",
+      });
+
+      res.json({ 
+        success: true, 
+        message: "Scherm ontkoppeld van Moneybird contact",
+        screen: updated,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Link location to Moneybird contact
   app.post("/api/locations/:id/link-moneybird", requirePermission("manage_integrations"), async (req, res) => {
     try {
@@ -1905,8 +1989,8 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Locatie niet gevonden" });
       }
 
-      // Verify Moneybird contact exists
-      const contact = await storage.getMoneybirdContact(moneybirdContactId);
+      // Verify Moneybird contact exists (lookup by Moneybird external ID)
+      const contact = await storage.getMoneybirdContactByMoneybirdId(moneybirdContactId);
       if (!contact) {
         return res.status(404).json({ message: "Moneybird contact niet gevonden" });
       }
@@ -1976,8 +2060,8 @@ export async function registerRoutes(
         return res.status(404).json({ message: "Adverteerder niet gevonden" });
       }
 
-      // Verify Moneybird contact exists
-      const contact = await storage.getMoneybirdContact(moneybirdContactId);
+      // Verify Moneybird contact exists (lookup by Moneybird external ID)
+      const contact = await storage.getMoneybirdContactByMoneybirdId(moneybirdContactId);
       if (!contact) {
         return res.status(404).json({ message: "Moneybird contact niet gevonden" });
       }
