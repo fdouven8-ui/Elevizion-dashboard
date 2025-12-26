@@ -55,6 +55,12 @@ import type {
   MoneybirdContact, InsertMoneybirdContact,
   MoneybirdInvoice, InsertMoneybirdInvoice,
   MoneybirdPayment, InsertMoneybirdPayment,
+  Site, InsertSite,
+  SiteContactSnapshot, InsertSiteContactSnapshot,
+  SiteYodeckSnapshot, InsertSiteYodeckSnapshot,
+  MoneybirdContactCache, InsertMoneybirdContactCache,
+  YodeckScreenCache, InsertYodeckScreenCache,
+  SiteWithSnapshots,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -326,6 +332,35 @@ export interface IStorage {
   upsertScreenContentItem(data: { screenId: string; yodeckMediaId: number; name: string; mediaType?: string; category: string; duration?: number; isActive?: boolean }): Promise<ScreenContentItem>;
   markScreenContentItemsInactive(screenId: string, activeMediaIds: number[]): Promise<number>;
   getScreenContentItemStats(): Promise<{ totalAds: number; unlinkedAds: number; totalNonAds: number; activeScreensWithContent: number }>;
+
+  // Sites (unified entity: 1 site = 1 screen location)
+  getSites(): Promise<Site[]>;
+  getSite(id: string): Promise<Site | undefined>;
+  getSiteByCode(code: string): Promise<Site | undefined>;
+  getSiteByYodeckScreenId(yodeckScreenId: string): Promise<Site | undefined>;
+  getSiteWithSnapshots(id: string): Promise<SiteWithSnapshots | undefined>;
+  getSitesWithSnapshots(): Promise<SiteWithSnapshots[]>;
+  createSite(data: InsertSite): Promise<Site>;
+  updateSite(id: string, data: Partial<InsertSite>): Promise<Site | undefined>;
+  deleteSite(id: string): Promise<boolean>;
+  linkSiteToMoneybird(siteId: string, moneybirdContactId: string): Promise<Site | undefined>;
+  linkSiteToYodeck(siteId: string, yodeckScreenId: string): Promise<Site | undefined>;
+  
+  // Site Snapshots
+  getSiteContactSnapshot(siteId: string): Promise<SiteContactSnapshot | undefined>;
+  upsertSiteContactSnapshot(siteId: string, data: Omit<InsertSiteContactSnapshot, 'siteId'>): Promise<SiteContactSnapshot>;
+  getSiteYodeckSnapshot(siteId: string): Promise<SiteYodeckSnapshot | undefined>;
+  upsertSiteYodeckSnapshot(siteId: string, data: Omit<InsertSiteYodeckSnapshot, 'siteId'>): Promise<SiteYodeckSnapshot>;
+
+  // Moneybird Contacts Cache
+  getMoneybirdContactsCache(): Promise<MoneybirdContactCache[]>;
+  getMoneybirdContactCache(moneybirdContactId: string): Promise<MoneybirdContactCache | undefined>;
+  upsertMoneybirdContactCache(data: InsertMoneybirdContactCache): Promise<MoneybirdContactCache>;
+  
+  // Yodeck Screens Cache
+  getYodeckScreensCache(): Promise<YodeckScreenCache[]>;
+  getYodeckScreenCache(yodeckScreenId: string): Promise<YodeckScreenCache | undefined>;
+  upsertYodeckScreenCache(data: InsertYodeckScreenCache): Promise<YodeckScreenCache>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2126,6 +2161,210 @@ export class DatabaseStorage implements IStorage {
       manualMapped: manual,
       needsReview
     };
+  }
+
+  // ============================================================================
+  // SITES (Unified entity: 1 site = 1 screen location)
+  // ============================================================================
+
+  async getSites(): Promise<Site[]> {
+    return await db.select().from(schema.sites).orderBy(desc(schema.sites.createdAt));
+  }
+
+  async getSite(id: string): Promise<Site | undefined> {
+    const [site] = await db.select().from(schema.sites).where(eq(schema.sites.id, id));
+    return site;
+  }
+
+  async getSiteByCode(code: string): Promise<Site | undefined> {
+    const [site] = await db.select().from(schema.sites).where(eq(schema.sites.code, code));
+    return site;
+  }
+
+  async getSiteByYodeckScreenId(yodeckScreenId: string): Promise<Site | undefined> {
+    const [site] = await db.select().from(schema.sites).where(eq(schema.sites.yodeckScreenId, yodeckScreenId));
+    return site;
+  }
+
+  async getSiteWithSnapshots(id: string): Promise<SiteWithSnapshots | undefined> {
+    const site = await this.getSite(id);
+    if (!site) return undefined;
+    
+    const contactSnapshot = await this.getSiteContactSnapshot(id);
+    const yodeckSnapshot = await this.getSiteYodeckSnapshot(id);
+    
+    return {
+      ...site,
+      contactSnapshot,
+      yodeckSnapshot
+    };
+  }
+
+  async getSitesWithSnapshots(): Promise<SiteWithSnapshots[]> {
+    const sites = await this.getSites();
+    const results: SiteWithSnapshots[] = [];
+    
+    for (const site of sites) {
+      const contactSnapshot = await this.getSiteContactSnapshot(site.id);
+      const yodeckSnapshot = await this.getSiteYodeckSnapshot(site.id);
+      results.push({
+        ...site,
+        contactSnapshot,
+        yodeckSnapshot
+      });
+    }
+    
+    return results;
+  }
+
+  async createSite(data: InsertSite): Promise<Site> {
+    const [site] = await db.insert(schema.sites).values(data).returning();
+    return site;
+  }
+
+  async updateSite(id: string, data: Partial<InsertSite>): Promise<Site | undefined> {
+    const [site] = await db.update(schema.sites)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.sites.id, id))
+      .returning();
+    return site;
+  }
+
+  async deleteSite(id: string): Promise<boolean> {
+    await db.delete(schema.sites).where(eq(schema.sites.id, id));
+    return true;
+  }
+
+  async linkSiteToMoneybird(siteId: string, moneybirdContactId: string): Promise<Site | undefined> {
+    const [site] = await db.update(schema.sites)
+      .set({ moneybirdContactId, updatedAt: new Date() })
+      .where(eq(schema.sites.id, siteId))
+      .returning();
+    return site;
+  }
+
+  async linkSiteToYodeck(siteId: string, yodeckScreenId: string): Promise<Site | undefined> {
+    const [site] = await db.update(schema.sites)
+      .set({ yodeckScreenId, updatedAt: new Date() })
+      .where(eq(schema.sites.id, siteId))
+      .returning();
+    return site;
+  }
+
+  // ============================================================================
+  // SITE SNAPSHOTS
+  // ============================================================================
+
+  async getSiteContactSnapshot(siteId: string): Promise<SiteContactSnapshot | undefined> {
+    const [snapshot] = await db.select()
+      .from(schema.siteContactSnapshot)
+      .where(eq(schema.siteContactSnapshot.siteId, siteId));
+    return snapshot;
+  }
+
+  async upsertSiteContactSnapshot(siteId: string, data: Omit<InsertSiteContactSnapshot, 'siteId'>): Promise<SiteContactSnapshot> {
+    const existing = await this.getSiteContactSnapshot(siteId);
+    
+    if (existing) {
+      const [updated] = await db.update(schema.siteContactSnapshot)
+        .set({ ...data, syncedAt: new Date() })
+        .where(eq(schema.siteContactSnapshot.siteId, siteId))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(schema.siteContactSnapshot)
+        .values({ ...data, siteId })
+        .returning();
+      return created;
+    }
+  }
+
+  async getSiteYodeckSnapshot(siteId: string): Promise<SiteYodeckSnapshot | undefined> {
+    const [snapshot] = await db.select()
+      .from(schema.siteYodeckSnapshot)
+      .where(eq(schema.siteYodeckSnapshot.siteId, siteId));
+    return snapshot;
+  }
+
+  async upsertSiteYodeckSnapshot(siteId: string, data: Omit<InsertSiteYodeckSnapshot, 'siteId'>): Promise<SiteYodeckSnapshot> {
+    const existing = await this.getSiteYodeckSnapshot(siteId);
+    
+    if (existing) {
+      const [updated] = await db.update(schema.siteYodeckSnapshot)
+        .set({ ...data, syncedAt: new Date() })
+        .where(eq(schema.siteYodeckSnapshot.siteId, siteId))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(schema.siteYodeckSnapshot)
+        .values({ ...data, siteId })
+        .returning();
+      return created;
+    }
+  }
+
+  // ============================================================================
+  // MONEYBIRD CONTACTS CACHE
+  // ============================================================================
+
+  async getMoneybirdContactsCache(): Promise<MoneybirdContactCache[]> {
+    return await db.select().from(schema.moneybirdContactsCache);
+  }
+
+  async getMoneybirdContactCache(moneybirdContactId: string): Promise<MoneybirdContactCache | undefined> {
+    const [cache] = await db.select()
+      .from(schema.moneybirdContactsCache)
+      .where(eq(schema.moneybirdContactsCache.moneybirdContactId, moneybirdContactId));
+    return cache;
+  }
+
+  async upsertMoneybirdContactCache(data: InsertMoneybirdContactCache): Promise<MoneybirdContactCache> {
+    const existing = await this.getMoneybirdContactCache(data.moneybirdContactId);
+    
+    if (existing) {
+      const [updated] = await db.update(schema.moneybirdContactsCache)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(schema.moneybirdContactsCache.moneybirdContactId, data.moneybirdContactId))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(schema.moneybirdContactsCache)
+        .values(data)
+        .returning();
+      return created;
+    }
+  }
+
+  // ============================================================================
+  // YODECK SCREENS CACHE
+  // ============================================================================
+
+  async getYodeckScreensCache(): Promise<YodeckScreenCache[]> {
+    return await db.select().from(schema.yodeckScreensCache);
+  }
+
+  async getYodeckScreenCache(yodeckScreenId: string): Promise<YodeckScreenCache | undefined> {
+    const [cache] = await db.select()
+      .from(schema.yodeckScreensCache)
+      .where(eq(schema.yodeckScreensCache.yodeckScreenId, yodeckScreenId));
+    return cache;
+  }
+
+  async upsertYodeckScreenCache(data: InsertYodeckScreenCache): Promise<YodeckScreenCache> {
+    const existing = await this.getYodeckScreenCache(data.yodeckScreenId);
+    
+    if (existing) {
+      const [updated] = await db.update(schema.yodeckScreensCache)
+        .set({ ...data, updatedAt: new Date() })
+        .where(eq(schema.yodeckScreensCache.yodeckScreenId, data.yodeckScreenId))
+        .returning();
+      return updated;
+    } else {
+      const [created] = await db.insert(schema.yodeckScreensCache)
+        .values(data)
+        .returning();
+      return created;
+    }
   }
 }
 
