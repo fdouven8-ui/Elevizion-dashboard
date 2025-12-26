@@ -102,7 +102,12 @@ Core entities: Advertisers, Locations, Screens, PackagePlans, Contracts, Placeme
     - **POST /api/advertisers/:id/link-moneybird**: Link advertiser to Moneybird contact
     - **GET /api/ontbrekende-gegevens**: Overview of missing data (screens without location, locations without Moneybird)
   - **Permissions**: `manage_integrations` for sync/config, `view_finance` for reading data
-  - **Location/Advertiser Linking**: Locations and advertisers have `moneybirdContactId` fields for linking to Moneybird contacts
+  - **Entity Linking to Moneybird**: Three levels of Moneybird linking supported:
+    - **Screen-level**: Direct `moneybirdContactId` and `moneybirdSyncStatus` fields on screens table
+    - **Location-level**: `moneybirdContactId` on locations table (syncs address/contact info from Moneybird)
+    - **Advertiser-level**: `moneybirdContactId` on advertisers table
+  - **Link Priority**: UI checks screen-level first, then falls back to location-level for displaying link status
+  - **POST /api/screens/:id/link-moneybird**: Direct screen-to-Moneybird linking (also updates placeholder location)
   - **Auto-match Service**: `POST /api/locations/auto-match-moneybird` finds matching Moneybird contacts based on name/city similarity with confidence scores (0.92+ auto-links, 0.5+ suggests)
   - **Resolve Wizard**: `ResolveWizard.tsx` component steps through unlinked locations/advertisers for manual Moneybird linking
 - **Yodeck Sync Improvements**:
