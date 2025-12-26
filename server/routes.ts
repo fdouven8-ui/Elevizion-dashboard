@@ -378,6 +378,17 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/migrate/screens-to-sites", requirePermission("manage_integrations"), async (_req, res) => {
+    try {
+      const { migrateScreensToSites } = await import("./migrations/migrateScreensToSites");
+      const result = await migrateScreensToSites();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Migration] Error:", error);
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
   // ============================================================================
   // SCREENS
   // ============================================================================
