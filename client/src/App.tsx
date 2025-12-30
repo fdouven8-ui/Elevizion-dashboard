@@ -19,6 +19,7 @@ import Finance from "@/pages/Finance";
 import Settings from "@/pages/Settings";
 import ContentInventory from "@/pages/ContentInventory";
 import Yodeck from "@/pages/Yodeck";
+import Entities from "@/pages/Entities";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -40,6 +41,7 @@ function DashboardRouter() {
         <Route path="/settings" component={Settings} />
         <Route path="/content-inventory" component={ContentInventory} />
         <Route path="/yodeck" component={Yodeck} />
+        <Route path="/entities" component={Entities} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>
