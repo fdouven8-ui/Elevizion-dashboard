@@ -1,0 +1,144 @@
+Je werkt in het Elevizion Dashboard (React + TS + Vite frontend, Express + Drizzle ORM + Postgres backend). De vorige stap is al afgerond, dus niet opnieuw entiteiten/sync logs toevoegen. We gaan nu door met het fixen van het Moneybird-deel bij Schermen.
+
+Probleem
+
+In de Schermen lijst zie ik wel Yodeck schermnaam + status, maar geen locatie/plaats terwijl het scherm wél gekoppeld is aan Moneybird/contact.
+
+In de Scherm detailpagina (tab Overzicht) staat Bedrijf (Moneybird) = gekoppeld, maar Bedrijfsnaam, Adres, E-mail, Telefoon blijven “—”.
+
+Dit betekent: de koppeling bestaat, maar de Moneybird velden worden niet (goed) opgehaald / gemapt / opgeslagen / doorgestuurd naar de UI.
+
+Doel (wat het moet worden)
+
+Schermen lijst
+
+Toon per scherm een duidelijke “Locatie” op basis van Moneybird contactgegevens:
+
+Plaatsnaam (city) als primary label
+
+optioneel: straat + huisnr of bedrijfsnaam als secundair
+
+Als niet gekoppeld: toon “Niet gekoppeld” zoals nu.
+
+Scherm detail → Bedrijf (Moneybird) kaart
+
+Toon altijd (als gekoppeld) de echte Moneybird waarden:
+
+Bedrijfsnaam / contactnaam
+
+Adres (street + house number + postal code + city + country)
+
+E-mail
+
+Telefoon
+
+Geen “—” meer als de data in Moneybird bestaat.
+
+Aanpak (verplicht)
+
+Voer dit uit met een echte bugfix + structurele oplossing, niet cosmetisch.
+
+A) Backend: Moneybird contact ophalen & normaliseren
+
+Zoek waar de link tussen scherm en Moneybird is opgeslagen (bijv. moneybirdContactId, moneybird_contact_id, contactId, etc.).
+
+Controleer welke Moneybird endpoint gebruikt wordt om een contact op te halen.
+
+Fix de mapping: Moneybird heeft vaak nested velden (bijv. addresses[], phones[], email_addresses[] of vergelijkbaar).
+
+Maak één genormaliseerd model dat wij intern gebruiken:
+
+type MoneybirdContactNormalized = {
+  id: string;
+  displayName: string;      // bedrijf of contact naam (wat het meest logisch is)
+  email?: string;
+  phone?: string;
+  addressLine1?: string;    // straat + huisnr
+  postalCode?: string;
+  city?: string;
+  country?: string;
+  fullAddress?: string;     // samengestelde string voor UI
+};
+
+
+Implementatie-eis:
+
+Als Moneybird meerdere adressen/emails/telefoons heeft: kies de “primary” of de eerste (maar documenteer de keuze in code).
+
+Als velden leeg zijn: geef undefined, maar toon dan in UI “—”.
+
+B) Backend: API response uitbreiden
+
+Bij endpoints die scherm(en) teruggeven (lijst + detail), stuur ook:
+
+moneybirdContactNormalized
+
+locationLabel (minimaal city, anders fullAddress of displayName)
+
+Doe dit server-side zodat de frontend niet zelf Moneybird hoeft te parsen.
+
+C) Database (optioneel maar slim)
+
+Als het nu elke pagina-load Moneybird moet callen:
+
+Cache in Postgres: sla moneybird_contact_snapshot_json + snapshot_updated_at op bij het scherm (of bij een locatie-record als die bestaat).
+
+Refresh snapshot:
+
+bij “Synchroniseren” knop
+
+en/of als snapshot ouder is dan bijv. 6 uur
+
+Maar: als dit te groot wordt, mag je starten zonder caching — dan wel netjes abstraheren zodat caching later kan.
+
+D) Frontend: lijst en detail correct tonen
+
+Schermen lijst:
+
+Voeg een kolom/regel toe: “Locatie” (toon city, of fullAddress).
+
+Dit moet meteen zichtbaar zijn zonder extra klik.
+
+Scherm detail → Bedrijf (Moneybird) kaart:
+
+Render displayName, fullAddress, email, phone.
+
+“Open in Moneybird” blijft.
+
+Acceptance criteria (hard)
+
+Als een scherm gekoppeld is aan Moneybird en Moneybird bevat data, dan:
+
+In de lijst zie ik plaatsnaam/locatie.
+
+In detail zie ik bedrijfsnaam + adres + mail + telefoon (geen “—”).
+
+Geen regressie: Niet-gekoppelde schermen blijven netjes “Niet gekoppeld”.
+
+Voeg minimaal 2 testcases toe (mag simple):
+
+contact met adres + email + telefoon
+
+contact zonder telefoon → toont “—” alleen bij telefoon
+
+Debug & logging (kort en duidelijk)
+
+Voeg één debuglog toe (alleen server-side) die bij het ophalen laat zien:
+
+screenId / yodeckId
+
+moneybirdContactId
+
+of normalization resultaat leeg is
+
+Geen “spam logs”.
+
+Levering
+
+Maak een korte PR summary in comments:
+
+Welke files aangepast
+
+Welke Moneybird velden gemapt zijn (en hoe)
+
+Hoe locationLabel bepaald wordt
