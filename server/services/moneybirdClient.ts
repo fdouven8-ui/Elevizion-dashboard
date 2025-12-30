@@ -458,6 +458,101 @@ export class MoneybirdClient {
       return { ok: false, error: error.message };
     }
   }
+
+  /**
+   * Create a new contact in Moneybird
+   */
+  async createContact(data: {
+    company_name?: string;
+    firstname?: string;
+    lastname?: string;
+    address1?: string;
+    address2?: string;
+    zipcode?: string;
+    city?: string;
+    country?: string;
+    phone?: string;
+    email?: string;
+    chamber_of_commerce?: string;
+    tax_number?: string;
+  }): Promise<MoneybirdContact> {
+    if (!this.administrationId) {
+      throw new Error("No administration selected");
+    }
+
+    debugLog("Creating contact:", data);
+    
+    const result = await this.request<MoneybirdContact>(
+      "POST",
+      `/${this.administrationId}/contacts`,
+      { contact: data }
+    );
+    
+    debugLog("Contact created with ID:", result.id);
+    return result;
+  }
+
+  /**
+   * Update an existing contact in Moneybird
+   */
+  async updateContact(contactId: string, data: {
+    company_name?: string;
+    firstname?: string;
+    lastname?: string;
+    address1?: string;
+    address2?: string;
+    zipcode?: string;
+    city?: string;
+    country?: string;
+    phone?: string;
+    email?: string;
+    chamber_of_commerce?: string;
+    tax_number?: string;
+  }): Promise<MoneybirdContact> {
+    if (!this.administrationId) {
+      throw new Error("No administration selected");
+    }
+
+    debugLog("Updating contact:", contactId, data);
+    
+    const result = await this.request<MoneybirdContact>(
+      "PATCH",
+      `/${this.administrationId}/contacts/${contactId}`,
+      { contact: data }
+    );
+    
+    debugLog("Contact updated:", result.id);
+    return result;
+  }
+
+  /**
+   * Create or update a contact based on whether ID exists
+   */
+  async createOrUpdateContact(
+    existingContactId: string | null,
+    data: {
+      company_name?: string;
+      firstname?: string;
+      lastname?: string;
+      address1?: string;
+      address2?: string;
+      zipcode?: string;
+      city?: string;
+      country?: string;
+      phone?: string;
+      email?: string;
+      chamber_of_commerce?: string;
+      tax_number?: string;
+    }
+  ): Promise<{ contact: MoneybirdContact; created: boolean }> {
+    if (existingContactId) {
+      const contact = await this.updateContact(existingContactId, data);
+      return { contact, created: false };
+    } else {
+      const contact = await this.createContact(data);
+      return { contact, created: true };
+    }
+  }
 }
 
 // Singleton instance
