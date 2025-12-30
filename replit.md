@@ -31,7 +31,26 @@ Elevizion Dashboard is an OPS-first internal operations control room for digital
 - **Architecture**: Thin controller layer, business logic in storage service.
 
 ### Data Model
-Core entities: **Sites** (unified entity for screen+location+business info), Advertisers, PackagePlans, Contracts, Placements, ScheduleSnapshots, Invoices/Payments, and Payouts/CarryOvers.
+Core entities: **Entities** (unified model for ADVERTISER + SCREEN), Sites, Advertisers, PackagePlans, Contracts, Placements, ScheduleSnapshots, Invoices/Payments, and Payouts/CarryOvers.
+
+#### New Unified Entities Architecture (December 2024)
+- **entities table**: Centralized table for both ADVERTISERS and SCREENS with:
+  - `entity_type`: ADVERTISER or SCREEN
+  - `entity_code`: Unique identifier (EVZ-001 for screens, EVZ-ADV-0001 for advertisers)
+  - `moneybird_contact_id`: Linked Moneybird contact (1:1 relationship)
+  - `yodeck_device_id`: Linked Yodeck device (for screens)
+  - `status`: PENDING → ACTIVE or ERROR based on Moneybird sync
+  - `contact_data`: JSONB with company, address, kvk, btw, email, phone
+  - `tags`: JSONB array for Yodeck device matching
+- **sync_jobs table**: Tracks all external service operations
+  - `provider`: MONEYBIRD or YODECK
+  - `action`: CREATE_CONTACT, UPDATE_CONTACT, LINK_DEVICE, SYNC_STATUS
+  - `status`: PENDING → RUNNING → SUCCESS/FAILED
+  - `error_message`: For failed jobs
+- **API Endpoints**: `/api/entities/*` and `/api/sync-jobs`
+- **Frontend Pages**: `/entities` (tabs for SCREEN/ADVERTISER) and `/sync-logs`
+
+#### Legacy Sites Architecture
 - **Unified Sites Architecture**: The `sites` table combines screen, location, and business info into one entity, with `code` (e.g., EVZ-001) as the central unique identifier.
 - **Critical Business Rule**: 1 Site = 1 Screen = 1 Location (99% of cases), explicitly handling multi-screen exceptions.
 - **Data Source Separation**: Yodeck for device data, Moneybird for customer data.
