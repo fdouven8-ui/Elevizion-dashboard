@@ -1,0 +1,90 @@
+DOEL
+Fix dat Moneybird-data (bedrijf/contact + adres/plaats) NIET doorkomt bij Schermen, terwijl Yodeck-data wél klopt. Na deze fix moet Moneybird-info OVERAL correct zichtbaar zijn:
+1) In de Schermen-lijst moet per scherm de plaatsnaam/locatie zichtbaar zijn (op basis van Moneybird-adres).
+2) In het scherm-detail (tab “Overzicht” / “Bedrijf (Moneybird)”) moeten bedrijfsnaam, adres, e-mail, telefoon gevuld zijn.
+3) Dit moet samenwerken met Yodeck: schermen komen uit Yodeck, maar worden verrijkt met Moneybird-contactdata via een koppeling.
+
+CONTEXT / VERWACHT GEDRAG
+- Scherm bestaat primair uit Yodeck device/player (naam, device id, status).
+- Aan elk scherm kan precies 1 Moneybird contact (bedrijf) gekoppeld zijn.
+- Als een scherm gekoppeld is, toon Moneybird velden direct in UI en ook in de Schermen-lijst als “Locatie/plaats”.
+- Als niet gekoppeld: toon “Niet gekoppeld” en geen locatie.
+
+WAT JE MOET DOEN (stap-voor-stap)
+1) Traceer de volledige datastroom:
+   - Welke backend endpoint(s) leveren de Schermen-lijst en het Scherm-detail?
+   - Welke database tabellen/velden bewaren:
+     a) yodeck_device_id of yodeck_screen_id
+     b) moneybird_contact_id (of equivalent)
+     c) eventueel moneybird_contact_snapshot / cached velden
+   - Controleer of de UI de juiste velden verwacht en of de API ze ook daadwerkelijk terugstuurt.
+
+2) Fix de koppeling (JOIN / mapping) tussen Yodeck-scherm en Moneybird-contact:
+   - Identificeer het “koppelpunt” (bijv. screenId/EVZ id, yodeckDeviceId, tag, of mapping-table).
+   - Zorg dat bij het ophalen van:
+     a) Schermen-lijst: per screen ook het gekoppelde Moneybird-contact (minimaal companyName + city/plaats) wordt meegeleverd.
+     b) Scherm-detail: volledige Moneybird-contact info (companyName, address1, address2, zipcode, city, country, email, phone) wordt meegeleverd.
+   - Als er een mapping-table is, implementeer/repair:
+     - `screen_id -> moneybird_contact_id`
+     - of `yodeck_device_id -> moneybird_contact_id`
+   - Als het nu “Gekoppeld” toont maar velden leeg zijn, dan is er waarschijnlijk:
+     - verkeerd contact_id opgeslagen,
+     - of Moneybird fetch faalt,
+     - of response mapping naar UI velden klopt niet.
+     Los dit exact op.
+
+3) Moneybird API fetch en normalisatie:
+   - Zorg dat de backend bij gekoppeld scherm altijd het Moneybird contact ophaalt (of uit cache, maar dan correct gevuld).
+   - Normaliseer Moneybird response naar een intern type, bv:
+     {
+       id,
+       companyName,
+       email,
+       phone,
+       addressLine1,
+       addressLine2,
+       postalCode,
+       city,
+       country
+     }
+   - Maak city/plaatsnaam altijd beschikbaar (voor de Schermen-lijst). Gebruik logica:
+     - city uit adres, anders fallback naar postalCode of “—”.
+
+4) Pas de API responses aan zodat UI alles kan renderen:
+   - Schermen-lijst endpoint moet per scherm teruggeven:
+     {
+       screen: { yodeckName, yodeckDeviceId, status, ... },
+       moneybird: { linked: boolean, contactId?, companyName?, city? }
+     }
+   - Scherm-detail endpoint moet teruggeven:
+     {
+       screen: { ...yodeckFields },
+       moneybird: { linked, contactId, companyName, address..., email, phone }
+     }
+
+5) UI fix:
+   - In Schermen-lijst: toon onder/naast de schermnaam een regel “Plaats: {moneybird.city}” of kolom “Locatie” gevuld met city.
+   - In detail “Bedrijf (Moneybird)” kaart: bind alle velden aan de nieuwe `moneybird` payload.
+   - Zorg dat UI niet per ongeluk oude keys gebruikt (bv. `company_name` vs `companyName`, `city` vs `place`).
+   - Voeg loading/error states toe: als Moneybird fetch faalt, toon “Kon Moneybird gegevens niet laden” + retry knop.
+
+6) Debugging & verifiëren:
+   - Voeg server-side logs toe voor 1 gekoppeld scherm:
+     - welke moneybird_contact_id gebruikt wordt
+     - of Moneybird call 200 teruggeeft
+     - welke velden in de genormaliseerde output zitten
+   - Schrijf minimaal 2 tests (of simpele runtime checks):
+     - gekoppeld scherm => moneybird.companyName en moneybird.city niet leeg
+     - niet gekoppeld scherm => moneybird.linked=false en velden undefined
+
+ACCEPTANCE CRITERIA
+- Als een scherm gekoppeld is:
+  - Schermen-lijst toont correct de plaatsnaam/locatie (Moneybird city).
+  - Scherm-detail toont bedrijfsnaam, adres, email, telefoon ingevuld.
+- Als niet gekoppeld:
+  - Geen plaatsnaam zichtbaar, alleen “Niet gekoppeld”.
+- Alles blijft werken met Yodeck-info (naam/status/device id) zoals nu.
+
+LEVERING
+- Geef concrete code changes (backend + frontend) met bestandsnamen en diff-stijl uitleg.
+- Pas bestaande endpoints aan i.p.v. nieuwe schermen/menu’s te maken.
