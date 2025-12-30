@@ -861,13 +861,17 @@ export async function registerRoutes(
     }
   });
 
-  // Create screen with automatic Moneybird contact creation
+  // Create screen with automatic Moneybird contact creation or linking
+  // Link Yodeck screen to Moneybird contact
   app.post("/api/screens/with-moneybird", requirePermission("onboard_screens"), async (req, res) => {
     try {
       const { 
         screenId, 
         name,
         yodeckPlayerId,
+        // Bestaand Moneybird contact koppelen
+        moneybirdContactId: existingMoneybirdContactId,
+        // Nieuw Moneybird contact aanmaken
         company,
         city,
         address,
@@ -876,7 +880,7 @@ export async function registerRoutes(
         phone,
         kvk,
         btw,
-        createMoneybird = true,
+        createMoneybird = false, // Default: geen nieuw contact (alleen koppelen)
       } = req.body;
 
       if (!screenId) {
@@ -885,12 +889,49 @@ export async function registerRoutes(
       if (!name && !company) {
         return res.status(400).json({ message: "Naam of bedrijfsnaam is vereist" });
       }
+      // VALIDATIE: Yodeck device is verplicht
+      if (!yodeckPlayerId) {
+        return res.status(400).json({ message: "yodeckPlayerId is vereist - selecteer een Yodeck scherm" });
+      }
+      // VALIDATIE: Moneybird contact is verplicht (bestaand of nieuw)
+      if (!existingMoneybirdContactId && !createMoneybird) {
+        return res.status(400).json({ message: "Moneybird contact is vereist - selecteer of maak een contact" });
+      }
 
-      let moneybirdContactId: string | null = null;
+      let moneybirdContactId: string | null = existingMoneybirdContactId || null;
       let moneybirdContactSnapshot: Record<string, any> | null = null;
 
-      // Create Moneybird contact if requested
-      if (createMoneybird && company) {
+      // CASE 1: Link existing Moneybird contact (from local cache)
+      if (existingMoneybirdContactId && !createMoneybird) {
+        console.log(`[Onboarding] Linking existing Moneybird contact: ${existingMoneybirdContactId}`);
+        
+        // VALIDATIE: Controleer dat contact bestaat in lokale cache
+        const cachedContact = await storage.getMoneybirdContactByMoneybirdId(existingMoneybirdContactId);
+        if (!cachedContact) {
+          return res.status(400).json({ 
+            message: `Moneybird contact ${existingMoneybirdContactId} niet gevonden. Synchroniseer eerst de contacten.` 
+          });
+        }
+        
+        // Snapshot opslaan voor snelle weergave (geen API calls nodig later)
+        // Dit is geen "lokale kopie" maar een cache voor performance
+        moneybirdContactSnapshot = {
+          companyName: cachedContact.companyName,
+          firstname: cachedContact.firstname,
+          lastname: cachedContact.lastname,
+          address1: cachedContact.address1,
+          zipcode: cachedContact.zipcode,
+          city: cachedContact.city,
+          email: cachedContact.email,
+          phone: cachedContact.phone,
+          chamberOfCommerce: cachedContact.chamberOfCommerce,
+          taxNumber: cachedContact.taxNumber,
+          syncedAt: new Date().toISOString(),
+        };
+      }
+      
+      // CASE 2: Create new Moneybird contact
+      else if (createMoneybird && company) {
         try {
           const { getMoneybirdClient } = await import("./services/moneybirdClient");
           const mbClient = await getMoneybirdClient();

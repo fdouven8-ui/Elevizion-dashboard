@@ -1,0 +1,118 @@
+DOEL
+Pas de ONBOARDING aan zodat deze volledig aansluit op de bestaande structuur:
+- Schermen komen uit Yodeck (schermnaam, device id, status).
+- Aan een scherm wordt precies 1 Moneybird contact gekoppeld.
+- Moneybird levert alle bedrijfs- en locatiegegevens.
+- Deze gegevens worden daarna OVERAL correct gebruikt (schermenlijst + detail).
+
+De onboarding moet dit logisch, foutloos en data-light ondersteunen.
+
+RANDVOORWAARDEN
+- Verander NIET de hele app.
+- Gebruik bestaande flows, endpoints en componenten waar mogelijk.
+- Houd data zo klein mogelijk (geen volledige Moneybird objects doorgeven).
+- Geen nieuwe menu’s, geen nieuwe entiteiten, geen nieuwe grote tabellen.
+
+---
+
+## AANPASSINGEN AAN ONBOARDING
+
+### 1) Onboarding: Nieuw Scherm
+De onboarding voor “Nieuw scherm” moet exact deze stappen volgen:
+
+#### Stap 1 – Selecteer Yodeck scherm
+- Toon lijst van Yodeck schermen/devices:
+  - Schermnaam (Yodeck)
+  - Online/Offline status
+  - Yodeck device id
+- Gebruiker kiest 1 scherm.
+- Deze stap bepaalt:
+  - `yodeck_device_id`
+  - `yodeck_screen_name`
+- Er wordt hier GEEN schermnaam handmatig ingevoerd.
+
+#### Stap 2 – Koppel bedrijf (Moneybird)
+- Toon keuze:
+  - “Koppel bestaand Moneybird contact”
+  - “Maak nieuw Moneybird contact aan”
+- Bij bestaand contact:
+  - Selecteer contact uit lijst (naam + plaats).
+  - Sla `moneybird_contact_id` op bij het scherm.
+- Bij nieuw contact:
+  - Toon alleen noodzakelijke Moneybird velden:
+    • bedrijfsnaam  
+    • adres (straat + nr)  
+    • postcode  
+    • plaats  
+    • e-mail  
+    • telefoon  
+  - Maak Moneybird contact aan.
+  - Sla alleen `moneybird_contact_id` op (geen volledige contactdata).
+
+#### Stap 3 – Bevestiging
+- Toon samenvatting:
+  - Yodeck schermnaam
+  - Bedrijfsnaam
+  - Plaats
+- Bij bevestigen:
+  - persist koppelrelatie:
+    `yodeck_device_id ↔ moneybird_contact_id`
+  - trigger lichte sync zodat data direct zichtbaar is in:
+    • schermenlijst
+    • scherm-detail
+
+---
+
+### 2) Validaties in onboarding
+- Stap 2 kan niet worden overgeslagen.
+- Onboarding mag niet afronden zonder:
+  - geldig `yodeck_device_id`
+  - geldig `moneybird_contact_id`
+- Als Moneybird contact aanmaken faalt:
+  - toon foutmelding
+  - blokkeer afronden
+
+---
+
+### 3) Datadoorvoer (belangrijk)
+- Onboarding mag GEEN aparte lokale kopie maken van Moneybird data.
+- Alleen opslaan:
+  - `yodeck_device_id`
+  - `moneybird_contact_id`
+- Alle weergave van:
+  - bedrijfsnaam
+  - locatie (plaats)
+  - adres
+  - email / telefoon  
+  gebeurt via dezelfde Moneybird → Screen mapping die al gebruikt wordt in:
+  - schermenlijst
+  - scherm-detail
+
+---
+
+### 4) UX-consistentie
+- Teksten in onboarding:
+  - gebruik “Scherm (Yodeck)” en “Bedrijf (Moneybird)”
+  - gebruik NIET “Locatie” als los concept
+- Labels:
+  - “Plaats” = Moneybird `city`
+- Geen dubbele invoervelden voor naam of locatie.
+
+---
+
+### ACCEPTATIECRITERIA
+- Na afronden onboarding:
+  - scherm verschijnt direct correct in schermenlijst
+  - plaatsnaam is zichtbaar
+  - scherm-detail toont correct Bedrijf (Moneybird) info
+- Geen extra data-opslag
+- Geen nieuwe architectuur
+- Alles blijft samenwerken met bestaande Yodeck + Moneybird logica
+
+---
+
+LEVERING
+- Pas alleen onboarding component(en) + bijbehorende backend calls aan.
+- Gebruik bestaande endpoints waar mogelijk.
+- Geef korte comment in code waar koppeling wordt gelegd:
+  `// Link Yodeck screen to Moneybird contact`

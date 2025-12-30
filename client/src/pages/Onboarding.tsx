@@ -87,76 +87,154 @@ function WizardCard({
   );
 }
 
+// Yodeck scherm type uit cache
+interface YodeckScreen {
+  yodeckScreenId: string;
+  name: string;
+  uuid: string | null;
+  status: string;
+  lastSeen: string | null;
+  screenshotUrl: string | null;
+}
+
+// Moneybird contact type
+interface MoneybirdContact {
+  id: string;
+  moneybirdId: string;
+  companyName: string | null;
+  firstname: string | null;
+  lastname: string | null;
+  city: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
 function NewScreenWizard({ onBack }: { onBack: () => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1);
-  const [formData, setFormData] = useState({
-    locationId: "",
-    newLocationName: "",
-    newLocationAddress: "",
-    newLocationContact: "",
-    newLocationEmail: "",
-    newLocationPhone: "",
-    screenName: "",
-    yodeckDeviceId: "",
+  
+  // Stap 1: Yodeck scherm selectie
+  const [selectedYodeckScreen, setSelectedYodeckScreen] = useState<YodeckScreen | null>(null);
+  const [yodeckSearch, setYodeckSearch] = useState("");
+  
+  // Stap 2: Moneybird contact (bestaand of nieuw)
+  const [isNewContact, setIsNewContact] = useState(false);
+  const [selectedMoneybirdContact, setSelectedMoneybirdContact] = useState<MoneybirdContact | null>(null);
+  const [moneybirdSearch, setMoneybirdSearch] = useState("");
+  const [newContactData, setNewContactData] = useState({
+    company: "",
+    address: "",
+    zipcode: "",
+    city: "",
+    email: "",
+    phone: "",
   });
-  const [generatedScreenId, setGeneratedScreenId] = useState("");
-  const [isNewLocation, setIsNewLocation] = useState(false);
+  
+  const [createdScreenId, setCreatedScreenId] = useState("");
 
-  const { data: locations = [] } = useQuery<Location[]>({
-    queryKey: ["/api/locations"],
+  // Fetch Yodeck schermen uit cache
+  const { data: yodeckScreens = [], isLoading: yodeckLoading } = useQuery<YodeckScreen[]>({
+    queryKey: ["/api/yodeck/screens-cache"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/locations");
+      const res = await apiRequest("GET", "/api/yodeck/screens-cache");
       return res.json();
     },
   });
 
+  // Fetch Moneybird contacten
+  const { data: moneybirdContacts = [], isLoading: moneybirdLoading } = useQuery<MoneybirdContact[]>({
+    queryKey: ["/api/moneybird/contacts"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/moneybird/contacts");
+      return res.json();
+    },
+  });
+
+  // Filter Yodeck schermen op zoekterm
+  const filteredYodeckScreens = yodeckScreens.filter(s => {
+    if (!yodeckSearch) return true;
+    const search = yodeckSearch.toLowerCase();
+    return (s.name || '').toLowerCase().includes(search) ||
+           (s.yodeckScreenId || '').toLowerCase().includes(search);
+  });
+
+  // Filter Moneybird contacten op zoekterm
+  const filteredMoneybirdContacts = moneybirdContacts.filter(c => {
+    if (!moneybirdSearch) return true;
+    const search = moneybirdSearch.toLowerCase();
+    const name = (c.companyName || `${c.firstname || ''} ${c.lastname || ''}`).toLowerCase();
+    const city = (c.city || '').toLowerCase();
+    return name.includes(search) || city.includes(search);
+  });
+
+  // Genereer Screen ID op basis van Yodeck device
   const generateScreenId = () => {
+    if (selectedYodeckScreen) {
+      return `YDK-${selectedYodeckScreen.yodeckScreenId}`;
+    }
     const nextNum = Math.floor(Math.random() * 900) + 100;
-    const id = `EVZ-${String(nextNum).padStart(3, '0')}`;
-    setGeneratedScreenId(id);
-    return id;
+    return `EVZ-${String(nextNum).padStart(3, '0')}`;
   };
 
+  // Link Yodeck screen to Moneybird contact
   const createScreenMutation = useMutation({
     mutationFn: async () => {
-      let locationId = formData.locationId;
+      // VALIDATIE: Blokkeer zonder geldig Yodeck device
+      if (!selectedYodeckScreen?.yodeckScreenId) {
+        throw new Error("Selecteer eerst een Yodeck scherm");
+      }
       
-      if (isNewLocation) {
-        const locRes = await apiRequest("POST", "/api/locations", {
-          name: formData.newLocationName,
-          address: formData.newLocationAddress,
-          contactName: formData.newLocationContact,
-          email: formData.newLocationEmail,
-          phone: formData.newLocationPhone,
-        });
-        const newLoc = await locRes.json();
-        locationId = newLoc.id;
+      // VALIDATIE: Blokkeer zonder geldig Moneybird contact
+      if (!isNewContact && !selectedMoneybirdContact?.moneybirdId) {
+        throw new Error("Selecteer eerst een Moneybird contact");
+      }
+      if (isNewContact && (!newContactData.company || !newContactData.city)) {
+        throw new Error("Bedrijfsnaam en plaats zijn verplicht");
       }
 
-      const res = await apiRequest("POST", "/api/screens", {
-        screenId: generatedScreenId,
-        locationId,
-        name: formData.screenName || generatedScreenId,
-        yodeckPlayerId: formData.yodeckDeviceId || null,
+      const screenId = generateScreenId();
+      setCreatedScreenId(screenId);
+
+      // Gebruik bestaand endpoint met Moneybird integratie
+      const res = await apiRequest("POST", "/api/screens/with-moneybird", {
+        screenId,
+        name: selectedYodeckScreen.name || screenId,
+        yodeckPlayerId: selectedYodeckScreen.yodeckScreenId,
+        // Moneybird: bestaand contact of nieuw contact aanmaken
+        moneybirdContactId: !isNewContact ? selectedMoneybirdContact!.moneybirdId : undefined,
+        createMoneybird: isNewContact,
+        company: isNewContact ? newContactData.company : undefined,
+        address: isNewContact ? newContactData.address : undefined,
+        zipcode: isNewContact ? newContactData.zipcode : undefined,
+        city: isNewContact ? newContactData.city : undefined,
+        email: isNewContact ? newContactData.email : undefined,
+        phone: isNewContact ? newContactData.phone : undefined,
       });
+      
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.message || "Fout bij aanmaken scherm");
+      }
       return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/screens"] });
-      toast({ title: "Scherm toegevoegd!" });
-      setStep(5);
+      queryClient.invalidateQueries({ queryKey: ["/api/screens/with-business"] });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+      toast({ title: "Scherm toegevoegd!", description: "Moneybird contact gekoppeld" });
+      setStep(4); // Succes stap
     },
-    onError: () => {
-      toast({ title: "Fout bij aanmaken scherm", variant: "destructive" });
+    onError: (error: Error) => {
+      toast({ title: "Fout bij aanmaken", description: error.message, variant: "destructive" });
     },
   });
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast({ title: "Gekopieerd!" });
-  };
+  // Validatie: kan naar volgende stap?
+  const canProceedStep1 = selectedYodeckScreen !== null;
+  const canProceedStep2 = isNewContact 
+    ? (newContactData.company.trim() !== "" && newContactData.city.trim() !== "")
+    : (selectedMoneybirdContact !== null);
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -172,219 +250,298 @@ function NewScreenWizard({ onBack }: { onBack: () => void }) {
             <Monitor className="h-5 w-5" />
             Nieuw Scherm Toevoegen
           </CardTitle>
-          <CardDescription>Stap {step} van 5</CardDescription>
+          <CardDescription>{step <= 3 ? `Stap ${step} van 3` : "Voltooid"}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          {/* STAP 1: Selecteer Yodeck scherm */}
           {step === 1 && (
             <div className="space-y-4">
-              <h3 className="font-medium">Selecteer of maak locatie</h3>
+              <h3 className="font-medium flex items-center gap-2">
+                <Monitor className="h-4 w-4" />
+                Selecteer Scherm (Yodeck)
+              </h3>
               
-              <div className="flex gap-2">
-                <Button 
-                  variant={!isNewLocation ? "default" : "outline"}
-                  onClick={() => setIsNewLocation(false)}
-                >
-                  Bestaande locatie
-                </Button>
-                <Button 
-                  variant={isNewLocation ? "default" : "outline"}
-                  onClick={() => setIsNewLocation(true)}
-                >
-                  <Plus className="mr-1 h-4 w-4" /> Nieuwe locatie
-                </Button>
+              <div className="space-y-2">
+                <Label>Zoek scherm</Label>
+                <div className="relative">
+                  <Input 
+                    value={yodeckSearch}
+                    onChange={(e) => setYodeckSearch(e.target.value)}
+                    placeholder="Zoek op naam of device ID..."
+                  />
+                </div>
               </div>
 
-              {!isNewLocation ? (
-                <div className="space-y-2">
-                  <Label>Locatie</Label>
-                  <Select 
-                    value={formData.locationId} 
-                    onValueChange={(v) => setFormData({ ...formData, locationId: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecteer locatie..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {locations.map((loc) => (
-                        <SelectItem key={loc.id} value={loc.id}>
-                          {loc.name} - {loc.address}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              {yodeckLoading ? (
+                <div className="py-8 text-center text-muted-foreground">Laden...</div>
+              ) : filteredYodeckScreens.length === 0 ? (
+                <div className="py-8 text-center text-muted-foreground">
+                  Geen Yodeck schermen gevonden
                 </div>
               ) : (
-                <div className="space-y-4 border p-4 rounded-lg">
-                  <div className="space-y-2">
-                    <Label>Bedrijfsnaam</Label>
-                    <Input 
-                      value={formData.newLocationName}
-                      onChange={(e) => setFormData({ ...formData, newLocationName: e.target.value })}
-                      placeholder="Café De Hoek"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Adres</Label>
-                    <Input 
-                      value={formData.newLocationAddress}
-                      onChange={(e) => setFormData({ ...formData, newLocationAddress: e.target.value })}
-                      placeholder="Hoofdstraat 1, 1234 AB Amsterdam"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Contactpersoon</Label>
-                      <Input 
-                        value={formData.newLocationContact}
-                        onChange={(e) => setFormData({ ...formData, newLocationContact: e.target.value })}
-                        placeholder="Jan Jansen"
-                      />
+                <div className="space-y-2 max-h-[300px] overflow-y-auto border rounded-lg p-2">
+                  {filteredYodeckScreens.map((screen) => (
+                    <div
+                      key={screen.yodeckScreenId}
+                      onClick={() => setSelectedYodeckScreen(screen)}
+                      className={`p-3 rounded-lg cursor-pointer transition-colors border ${
+                        selectedYodeckScreen?.yodeckScreenId === screen.yodeckScreenId
+                          ? "bg-primary/10 border-primary"
+                          : "hover:bg-muted border-transparent"
+                      }`}
+                      data-testid={`yodeck-screen-${screen.yodeckScreenId}`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Monitor className="h-4 w-4 text-muted-foreground" />
+                          <div>
+                            <p className="font-medium">{screen.name || `Scherm ${screen.yodeckScreenId}`}</p>
+                            <p className="text-xs text-muted-foreground">ID: {screen.yodeckScreenId}</p>
+                          </div>
+                        </div>
+                        <Badge variant={screen.status === "online" ? "default" : "destructive"}>
+                          {screen.status === "online" ? (
+                            <><Wifi className="h-3 w-3 mr-1" /> Online</>
+                          ) : (
+                            <><WifiOff className="h-3 w-3 mr-1" /> Offline</>
+                          )}
+                        </Badge>
+                      </div>
                     </div>
-                    <div className="space-y-2">
-                      <Label>Telefoon</Label>
-                      <Input 
-                        value={formData.newLocationPhone}
-                        onChange={(e) => setFormData({ ...formData, newLocationPhone: e.target.value })}
-                        placeholder="06-12345678"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Email</Label>
-                    <Input 
-                      type="email"
-                      value={formData.newLocationEmail}
-                      onChange={(e) => setFormData({ ...formData, newLocationEmail: e.target.value })}
-                      placeholder="info@cafedehoek.nl"
-                    />
-                  </div>
+                  ))}
                 </div>
               )}
 
               <Button 
                 className="w-full" 
-                onClick={() => {
-                  generateScreenId();
-                  setStep(2);
-                }}
-                disabled={!isNewLocation && !formData.locationId}
+                onClick={() => setStep(2)}
+                disabled={!canProceedStep1}
+                data-testid="button-next-step1"
               >
                 Volgende <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             </div>
           )}
 
+          {/* STAP 2: Koppel Bedrijf (Moneybird) */}
           {step === 2 && (
             <div className="space-y-4">
-              <h3 className="font-medium">Screen ID gegenereerd</h3>
+              <h3 className="font-medium flex items-center gap-2">
+                <Building2 className="h-4 w-4" />
+                Koppel Bedrijf (Moneybird)
+              </h3>
               
-              <div className="p-6 bg-green-50 border border-green-200 rounded-lg text-center">
-                <p className="text-sm text-muted-foreground mb-2">Jouw nieuwe Screen ID:</p>
-                <p className="text-3xl font-mono font-bold text-green-700">{generatedScreenId}</p>
+              {/* Geselecteerd Yodeck scherm tonen */}
+              <div className="p-3 bg-muted rounded-lg flex items-center gap-3">
+                <Monitor className="h-5 w-5 text-muted-foreground" />
+                <div>
+                  <p className="font-medium">{selectedYodeckScreen?.name}</p>
+                  <p className="text-xs text-muted-foreground">Yodeck ID: {selectedYodeckScreen?.yodeckScreenId}</p>
+                </div>
+              </div>
+
+              {/* Keuze: bestaand of nieuw contact */}
+              <div className="flex gap-2">
                 <Button 
-                  variant="outline" 
-                  size="sm" 
-                  className="mt-4"
-                  onClick={() => copyToClipboard(generatedScreenId)}
+                  variant={!isNewContact ? "default" : "outline"}
+                  onClick={() => setIsNewContact(false)}
+                  data-testid="button-existing-contact"
                 >
-                  <Copy className="mr-1 h-4 w-4" /> Kopieer
+                  Bestaand contact
+                </Button>
+                <Button 
+                  variant={isNewContact ? "default" : "outline"}
+                  onClick={() => setIsNewContact(true)}
+                  data-testid="button-new-contact"
+                >
+                  <Plus className="mr-1 h-4 w-4" /> Nieuw contact
                 </Button>
               </div>
 
-              <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
-                <p className="text-sm font-medium text-amber-800">Belangrijke instructie:</p>
-                <p className="text-sm text-amber-700 mt-1">
-                  Stel de Yodeck device naam of tag in als <strong>{generatedScreenId}</strong>
-                </p>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Scherm naam (optioneel)</Label>
-                <Input 
-                  value={formData.screenName}
-                  onChange={(e) => setFormData({ ...formData, screenName: e.target.value })}
-                  placeholder={generatedScreenId}
-                />
-              </div>
+              {!isNewContact ? (
+                /* Selecteer bestaand Moneybird contact */
+                <div className="space-y-2">
+                  <Label>Zoek Moneybird contact</Label>
+                  <Input 
+                    value={moneybirdSearch}
+                    onChange={(e) => setMoneybirdSearch(e.target.value)}
+                    placeholder="Zoek op bedrijfsnaam of plaats..."
+                  />
+                  
+                  {moneybirdLoading ? (
+                    <div className="py-4 text-center text-muted-foreground">Laden...</div>
+                  ) : filteredMoneybirdContacts.length === 0 ? (
+                    <div className="py-4 text-center text-muted-foreground">
+                      Geen contacten gevonden
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[200px] overflow-y-auto border rounded-lg p-2">
+                      {filteredMoneybirdContacts.slice(0, 20).map((contact) => (
+                        <div
+                          key={contact.id}
+                          onClick={() => setSelectedMoneybirdContact(contact)}
+                          className={`p-3 rounded-lg cursor-pointer transition-colors border ${
+                            selectedMoneybirdContact?.id === contact.id
+                              ? "bg-primary/10 border-primary"
+                              : "hover:bg-muted border-transparent"
+                          }`}
+                          data-testid={`moneybird-contact-${contact.id}`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <Building2 className="h-4 w-4 text-muted-foreground" />
+                            <div>
+                              <p className="font-medium">
+                                {contact.companyName || `${contact.firstname || ''} ${contact.lastname || ''}`}
+                              </p>
+                              {contact.city && (
+                                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                                  <MapPin className="h-3 w-3" /> {contact.city}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Nieuw Moneybird contact aanmaken */
+                <div className="space-y-4 border p-4 rounded-lg">
+                  <div className="space-y-2">
+                    <Label>Bedrijfsnaam *</Label>
+                    <Input 
+                      value={newContactData.company}
+                      onChange={(e) => setNewContactData({ ...newContactData, company: e.target.value })}
+                      placeholder="Bedrijfsnaam BV"
+                      data-testid="input-company"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Adres (straat + nr)</Label>
+                    <Input 
+                      value={newContactData.address}
+                      onChange={(e) => setNewContactData({ ...newContactData, address: e.target.value })}
+                      placeholder="Hoofdstraat 1"
+                      data-testid="input-address"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Postcode</Label>
+                      <Input 
+                        value={newContactData.zipcode}
+                        onChange={(e) => setNewContactData({ ...newContactData, zipcode: e.target.value })}
+                        placeholder="1234 AB"
+                        data-testid="input-zipcode"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Plaats *</Label>
+                      <Input 
+                        value={newContactData.city}
+                        onChange={(e) => setNewContactData({ ...newContactData, city: e.target.value })}
+                        placeholder="Amsterdam"
+                        data-testid="input-city"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>E-mail</Label>
+                      <Input 
+                        type="email"
+                        value={newContactData.email}
+                        onChange={(e) => setNewContactData({ ...newContactData, email: e.target.value })}
+                        placeholder="info@bedrijf.nl"
+                        data-testid="input-email"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Telefoon</Label>
+                      <Input 
+                        value={newContactData.phone}
+                        onChange={(e) => setNewContactData({ ...newContactData, phone: e.target.value })}
+                        placeholder="06-12345678"
+                        data-testid="input-phone"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setStep(1)}>
                   <ArrowLeft className="mr-2 h-4 w-4" /> Terug
                 </Button>
-                <Button className="flex-1" onClick={() => setStep(3)}>
+                <Button 
+                  className="flex-1" 
+                  onClick={() => setStep(3)}
+                  disabled={!canProceedStep2}
+                  data-testid="button-next-step2"
+                >
                   Volgende <ArrowRight className="ml-2 h-4 w-4" />
                 </Button>
               </div>
             </div>
           )}
 
+          {/* STAP 3: Bevestiging */}
           {step === 3 && (
             <div className="space-y-4">
-              <h3 className="font-medium">Koppel Yodeck Device</h3>
+              <h3 className="font-medium">Bevestig koppeling</h3>
               
-              <div className="space-y-2">
-                <Label>Yodeck Device ID (optioneel)</Label>
-                <Input 
-                  value={formData.yodeckDeviceId}
-                  onChange={(e) => setFormData({ ...formData, yodeckDeviceId: e.target.value })}
-                  placeholder="Device ID uit Yodeck dashboard"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Je kunt dit later ook koppelen vanuit het Schermen overzicht
-                </p>
+              <div className="space-y-3">
+                {/* Yodeck scherm */}
+                <div className="p-4 bg-muted rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Scherm (Yodeck)</p>
+                  <p className="font-semibold">{selectedYodeckScreen?.name}</p>
+                  <p className="text-sm text-muted-foreground font-mono">
+                    Yodeck ID: {selectedYodeckScreen?.yodeckScreenId}
+                  </p>
+                  <Badge variant="outline" className="mt-2">
+                    {selectedYodeckScreen?.status === "online" ? "Online" : "Offline"}
+                  </Badge>
+                </div>
+                
+                {/* Bedrijf (Moneybird) */}
+                <div className="p-4 bg-muted rounded-lg">
+                  <p className="text-xs text-muted-foreground mb-1">Bedrijf (Moneybird)</p>
+                  {isNewContact ? (
+                    <>
+                      <p className="font-semibold">{newContactData.company}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {newContactData.city}
+                        {newContactData.address && ` • ${newContactData.address}`}
+                      </p>
+                      <Badge variant="secondary" className="mt-2">Nieuw contact</Badge>
+                    </>
+                  ) : (
+                    <>
+                      <p className="font-semibold">
+                        {selectedMoneybirdContact?.companyName || 
+                         `${selectedMoneybirdContact?.firstname || ''} ${selectedMoneybirdContact?.lastname || ''}`}
+                      </p>
+                      {selectedMoneybirdContact?.city && (
+                        <p className="text-sm text-muted-foreground">{selectedMoneybirdContact.city}</p>
+                      )}
+                      <p className="text-xs text-muted-foreground font-mono mt-1">
+                        Moneybird ID: {selectedMoneybirdContact?.moneybirdId}
+                      </p>
+                    </>
+                  )}
+                </div>
               </div>
-
-              <Button variant="outline" className="w-full" asChild>
-                <a href="https://app.yodeck.com" target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="mr-2 h-4 w-4" /> Open Yodeck
-                </a>
-              </Button>
 
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setStep(2)}>
-                  <ArrowLeft className="mr-2 h-4 w-4" /> Terug
-                </Button>
-                <Button className="flex-1" onClick={() => setStep(4)}>
-                  Volgende <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {step === 4 && (
-            <div className="space-y-4">
-              <h3 className="font-medium">Bevestig & Valideer</h3>
-              
-              <div className="space-y-3">
-                <div className="flex justify-between p-3 bg-muted rounded-lg">
-                  <span className="text-muted-foreground">Screen ID</span>
-                  <span className="font-mono font-bold">{generatedScreenId}</span>
-                </div>
-                <div className="flex justify-between p-3 bg-muted rounded-lg">
-                  <span className="text-muted-foreground">Locatie</span>
-                  <span>
-                    {isNewLocation 
-                      ? formData.newLocationName 
-                      : locations.find(l => l.id === formData.locationId)?.name
-                    }
-                  </span>
-                </div>
-                {formData.yodeckDeviceId && (
-                  <div className="flex justify-between p-3 bg-muted rounded-lg">
-                    <span className="text-muted-foreground">Yodeck Device</span>
-                    <span className="font-mono">{formData.yodeckDeviceId}</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setStep(3)}>
                   <ArrowLeft className="mr-2 h-4 w-4" /> Terug
                 </Button>
                 <Button 
                   className="flex-1" 
                   onClick={() => createScreenMutation.mutate()}
                   disabled={createScreenMutation.isPending}
+                  data-testid="button-confirm"
                 >
                   {createScreenMutation.isPending ? "Bezig..." : "Scherm Toevoegen"}
                 </Button>
@@ -392,20 +549,21 @@ function NewScreenWizard({ onBack }: { onBack: () => void }) {
             </div>
           )}
 
-          {step === 5 && (
+          {/* STAP 4: Succes */}
+          {step === 4 && (
             <div className="text-center space-y-4">
               <CheckCircle className="h-16 w-16 text-green-600 mx-auto" />
               <h3 className="text-xl font-bold">Scherm Toegevoegd!</h3>
               <p className="text-muted-foreground">
-                {generatedScreenId} is nu actief en wordt gemonitord.
+                {createdScreenId} is nu actief en wordt gemonitord.
               </p>
               <div className="flex gap-2 justify-center">
                 <Button variant="outline" onClick={onBack}>
                   Terug naar Onboarding
                 </Button>
                 <Button asChild>
-                  <a href={`/placements?screen=${generatedScreenId}`}>
-                    <Target className="mr-2 h-4 w-4" /> Voeg Plaatsingen Toe
+                  <a href="/schermen">
+                    <Monitor className="mr-2 h-4 w-4" /> Bekijk Schermen
                   </a>
                 </Button>
               </div>
