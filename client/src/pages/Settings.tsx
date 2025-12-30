@@ -741,8 +741,60 @@ function IntegrationsTab() {
             </div>
           );
         })}
+
+        <Separator className="my-6" />
+
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <History className="h-5 w-5 text-muted-foreground" />
+              <div>
+                <h3 className="font-semibold">Sync Logs</h3>
+                <p className="text-sm text-muted-foreground">Bekijk synchronisatie activiteit</p>
+              </div>
+            </div>
+            <SyncLogsSummary />
+          </div>
+        </div>
       </CardContent>
     </Card>
+  );
+}
+
+function SyncLogsSummary() {
+  const { data: syncJobs = [] } = useQuery<{ id: string; status: string; provider: string; startedAt: string }[]>({
+    queryKey: ["sync-jobs-summary"],
+    queryFn: async () => {
+      const res = await fetch("/api/sync-jobs?limit=20", { credentials: "include" });
+      if (!res.ok) return [];
+      return res.json();
+    },
+    refetchInterval: 30000,
+  });
+
+  const stats = {
+    total: syncJobs.length,
+    success: syncJobs.filter(j => j.status === "SUCCESS").length,
+    failed: syncJobs.filter(j => j.status === "FAILED").length,
+  };
+
+  return (
+    <div className="flex items-center gap-3">
+      {stats.total > 0 && (
+        <div className="flex items-center gap-2 text-sm">
+          <Badge variant="default" className="bg-green-500">{stats.success}</Badge>
+          {stats.failed > 0 && (
+            <Badge variant="destructive">{stats.failed}</Badge>
+          )}
+        </div>
+      )}
+      <Button variant="outline" size="sm" asChild data-testid="button-view-sync-logs">
+        <a href="/sync-logs">
+          <Eye className="h-4 w-4 mr-2" />
+          Bekijk alle
+        </a>
+      </Button>
+    </div>
   );
 }
 

@@ -324,7 +324,7 @@ export default function Screens() {
             <DialogHeader>
               <DialogTitle>Nieuw Scherm Toevoegen</DialogTitle>
             </DialogHeader>
-            <ScreenForm onSuccess={() => setIsDialogOpen(false)} locations={locations} />
+            <ScreenForm onSuccess={() => setIsDialogOpen(false)} />
           </DialogContent>
         </Dialog>
       </div>
@@ -751,14 +751,26 @@ export default function Screens() {
                     })()}
                   </TableCell>
                   
-                  {/* Status */}
+                  {/* Status - Yodeck online/offline + sync status */}
                   <TableCell className={getCellPadding()}>
-                    <Badge 
-                      variant={scr.status === "online" ? "default" : "destructive"}
-                      className="font-medium"
-                    >
-                      {scr.status === "online" ? "Online" : "Offline"}
-                    </Badge>
+                    <div className="flex flex-col gap-1">
+                      {/* Yodeck online/offline status */}
+                      {scr.yodeckPlayerId ? (
+                        <Badge 
+                          variant={scr.status === "online" ? "default" : "destructive"}
+                          className="font-medium w-fit"
+                        >
+                          {scr.status === "online" ? "Online" : "Offline"}
+                        </Badge>
+                      ) : (
+                        <Badge 
+                          variant="outline"
+                          className="font-medium w-fit text-orange-600 border-orange-300"
+                        >
+                          Geen Yodeck
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   
                   {/* Content */}
@@ -829,42 +841,199 @@ export default function Screens() {
   );
 }
 
-function ScreenForm({ onSuccess, locations }: { onSuccess: () => void, locations: any[] }) {
-  const { addScreen } = useAppData();
-  const { register, handleSubmit, setValue } = useForm<any>();
+function ScreenForm({ onSuccess }: { onSuccess: () => void }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { register, handleSubmit, watch, formState: { isSubmitting } } = useForm<{
+    screenId: string;
+    company: string;
+    city: string;
+    address: string;
+    zipcode: string;
+    email: string;
+    phone: string;
+    kvk: string;
+    btw: string;
+    yodeckPlayerId: string;
+    createMoneybird: boolean;
+  }>({
+    defaultValues: {
+      createMoneybird: true,
+    }
+  });
 
-  const onSubmit = (data: any) => {
-    addScreen(data);
-    onSuccess();
+  const createMoneybird = watch("createMoneybird");
+
+  const onSubmit = async (data: any) => {
+    try {
+      const response = await fetch("/api/screens/with-moneybird", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(data),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Scherm aanmaken mislukt");
+      }
+
+      const result = await response.json();
+      
+      queryClient.invalidateQueries({ queryKey: ["screens"] });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+      
+      toast({ 
+        title: "Scherm aangemaakt", 
+        description: result.moneybirdContactCreated 
+          ? `${data.screenId} met Moneybird contact aangemaakt`
+          : `${data.screenId} aangemaakt (zonder Moneybird)`,
+      });
+      
+      onSuccess();
+    } catch (error: any) {
+      toast({ 
+        title: "Fout", 
+        description: error.message,
+        variant: "destructive",
+      });
+    }
   };
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
-      <div className="grid gap-2">
-        <Label htmlFor="name">Schermnaam</Label>
-        <Input id="name" {...register("name", { required: true })} />
+      <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-2">
+          <Label htmlFor="screenId">Scherm ID *</Label>
+          <Input 
+            id="screenId" 
+            placeholder="EVZ-001" 
+            {...register("screenId", { required: true })} 
+            data-testid="input-screen-id"
+          />
+          <p className="text-xs text-muted-foreground">Uniek ID in EVZ-XXX formaat</p>
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="yodeckPlayerId">Yodeck Player ID</Label>
+          <Input 
+            id="yodeckPlayerId" 
+            placeholder="12345" 
+            {...register("yodeckPlayerId")} 
+            data-testid="input-yodeck-id"
+          />
+          <p className="text-xs text-muted-foreground">Optioneel, later te koppelen</p>
+        </div>
       </div>
-      <div className="grid gap-2">
-        <Label htmlFor="location">Locatie</Label>
-        <Select onValueChange={(val) => setValue("locationId", val)}>
-          <SelectTrigger>
-            <SelectValue placeholder="Selecteer locatie" />
-          </SelectTrigger>
-          <SelectContent>
-            {locations.map((loc) => (
-              <SelectItem key={loc.id} value={loc.id}>
-                {loc.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+
+      <div className="border-t pt-4 mt-4">
+        <div className="flex items-center gap-2 mb-4">
+          <Checkbox 
+            id="createMoneybird" 
+            checked={createMoneybird}
+            onCheckedChange={(checked) => {
+              const event = { target: { name: "createMoneybird", value: checked } };
+              register("createMoneybird").onChange(event as any);
+            }}
+            data-testid="checkbox-create-moneybird"
+          />
+          <Label htmlFor="createMoneybird" className="font-medium">
+            Maak Moneybird contact aan
+          </Label>
+        </div>
+
+        {createMoneybird && (
+          <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+            <div className="grid gap-2">
+              <Label htmlFor="company">Bedrijfsnaam *</Label>
+              <Input 
+                id="company" 
+                placeholder="Bakkerij De Groot" 
+                {...register("company", { required: createMoneybird })} 
+                data-testid="input-company"
+              />
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="address">Adres</Label>
+                <Input 
+                  id="address" 
+                  placeholder="Hoofdstraat 123" 
+                  {...register("address")} 
+                  data-testid="input-address"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="zipcode">Postcode</Label>
+                <Input 
+                  id="zipcode" 
+                  placeholder="1234 AB" 
+                  {...register("zipcode")} 
+                  data-testid="input-zipcode"
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="city">Plaats</Label>
+              <Input 
+                id="city" 
+                placeholder="Amsterdam" 
+                {...register("city")} 
+                data-testid="input-city"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="email">E-mail</Label>
+                <Input 
+                  id="email" 
+                  type="email"
+                  placeholder="info@bedrijf.nl" 
+                  {...register("email")} 
+                  data-testid="input-email"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="phone">Telefoon</Label>
+                <Input 
+                  id="phone" 
+                  placeholder="020-1234567" 
+                  {...register("phone")} 
+                  data-testid="input-phone"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="kvk">KvK-nummer</Label>
+                <Input 
+                  id="kvk" 
+                  placeholder="12345678" 
+                  {...register("kvk")} 
+                  data-testid="input-kvk"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="btw">BTW-nummer</Label>
+                <Input 
+                  id="btw" 
+                  placeholder="NL123456789B01" 
+                  {...register("btw")} 
+                  data-testid="input-btw"
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-      <div className="grid gap-2">
-        <Label htmlFor="yodeckId">Yodeck Player ID (Optioneel)</Label>
-        <Input id="yodeckId" {...register("yodeckPlayerId")} />
-      </div>
-      <div className="flex justify-end pt-4">
-        <Button type="submit">Scherm Aanmaken</Button>
+
+      <div className="flex justify-end pt-4 border-t">
+        <Button type="submit" disabled={isSubmitting} data-testid="button-submit-screen">
+          {isSubmitting ? "Bezig..." : "Scherm Aanmaken"}
+        </Button>
       </div>
     </form>
   );

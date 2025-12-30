@@ -779,6 +779,122 @@ export async function registerRoutes(
     }
   });
 
+  // Create screen with automatic Moneybird contact creation
+  app.post("/api/screens/with-moneybird", requirePermission("onboard_screens"), async (req, res) => {
+    try {
+      const { 
+        screenId, 
+        name,
+        yodeckPlayerId,
+        company,
+        city,
+        address,
+        zipcode,
+        email,
+        phone,
+        kvk,
+        btw,
+        createMoneybird = true,
+      } = req.body;
+
+      if (!screenId) {
+        return res.status(400).json({ message: "screenId (bijv. EVZ-001) is vereist" });
+      }
+      if (!name && !company) {
+        return res.status(400).json({ message: "Naam of bedrijfsnaam is vereist" });
+      }
+
+      let moneybirdContactId: string | null = null;
+      let moneybirdContactSnapshot: Record<string, any> | null = null;
+
+      // Create Moneybird contact if requested
+      if (createMoneybird && company) {
+        try {
+          const { getMoneybirdClient } = await import("./services/moneybirdClient");
+          const mbClient = await getMoneybirdClient();
+          
+          if (mbClient) {
+            const { contact, created } = await mbClient.createOrUpdateContact(null, {
+              company_name: company,
+              address1: address || undefined,
+              zipcode: zipcode || undefined,
+              city: city || undefined,
+              email: email || undefined,
+              phone: phone || undefined,
+              chamber_of_commerce: kvk || undefined,
+              tax_number: btw || undefined,
+            });
+
+            console.log(`[Onboarding] ${created ? 'Created' : 'Found'} Moneybird contact for ${company}: ${contact.id}`);
+
+            moneybirdContactId = contact.id;
+            moneybirdContactSnapshot = {
+              companyName: contact.company_name,
+              address1: contact.address1,
+              zipcode: contact.zipcode,
+              city: contact.city,
+              email: contact.email,
+              phone: contact.phone,
+              chamberOfCommerce: contact.chamber_of_commerce,
+              taxNumber: contact.tax_number,
+              syncedAt: new Date().toISOString(),
+            };
+
+            // Also cache in local DB
+            await storage.upsertMoneybirdContact({
+              moneybirdId: contact.id,
+              companyName: contact.company_name || null,
+              firstname: contact.firstname || null,
+              lastname: contact.lastname || null,
+              email: contact.email || null,
+              phone: contact.phone || null,
+              address1: contact.address1 || null,
+              address2: contact.address2 || null,
+              zipcode: contact.zipcode || null,
+              city: contact.city || null,
+              country: contact.country || null,
+              chamberOfCommerce: contact.chamber_of_commerce || null,
+              taxNumber: contact.tax_number || null,
+            });
+          }
+        } catch (mbError: any) {
+          console.error("[Onboarding] Failed to create Moneybird contact:", mbError);
+          // Continue without Moneybird - we'll create the screen anyway
+        }
+      }
+
+      // Create the screen with required fields
+      const effectiveName = company || name;
+      const screenData: any = {
+        screenId,
+        name: name || company,
+        status: "unknown",
+        isActive: true,
+        effectiveName,
+      };
+
+      // Add optional fields only if they have values
+      if (yodeckPlayerId) screenData.yodeckPlayerId = yodeckPlayerId;
+      if (city) screenData.city = city;
+      if (moneybirdContactId) {
+        screenData.moneybirdContactId = moneybirdContactId;
+        screenData.moneybirdContactSnapshot = moneybirdContactSnapshot;
+        screenData.moneybirdSyncStatus = "linked";
+      }
+
+      const screen = await storage.createScreen(screenData);
+
+      res.status(201).json({
+        success: true,
+        screen,
+        moneybirdContactCreated: !!moneybirdContactId,
+      });
+    } catch (error: any) {
+      console.error("[Onboarding] Error creating screen:", error);
+      res.status(400).json({ message: error.message });
+    }
+  });
+
   app.patch("/api/screens/:id", async (req, res) => {
     const screen = await storage.updateScreen(req.params.id, req.body);
     if (!screen) return res.status(404).json({ message: "Screen not found" });
