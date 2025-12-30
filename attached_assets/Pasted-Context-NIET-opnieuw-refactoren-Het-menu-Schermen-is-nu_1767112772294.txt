@@ -1,0 +1,97 @@
+Context (NIET opnieuw refactoren):
+
+Het menu Schermen is nu goed overzichtelijk.
+
+Schermnaam komt uit Yodeck.
+
+Een scherm wordt gekoppeld aan een Moneybird contact (bedrijf) → dáár zitten adres/plaats gegevens.
+
+Probleem nu: zelfs als “Test” al gekoppeld is (adres bekend), zie ik in de lijst geen locatie/plaats. Daardoor kan ik niet zien waar het scherm hangt.
+
+Doel:
+
+In de Schermen-lijst moet bij elk scherm (als het gekoppeld is aan Moneybird) direct zichtbaar zijn:
+
+Plaats (city) als primaire “locatie” (kort en scanbaar)
+
+en optioneel eronder klein: straat + huisnr en postcode (of in tooltip/hover als je UI strak wil houden)
+
+Als niet gekoppeld: toon “Niet gekoppeld” zoals nu (dat is prima).
+
+Dit moet werken voor alle gekoppelde schermen, zonder extra klikken.
+
+Wat je moet bouwen (concreet):
+A) Backend: zorg dat de API die de schermenlijst voedt Moneybird locatievelden mee teruggeeft voor gekoppelde schermen.
+
+We hebben per scherm een moneybirdContactId / moneybird_contact_id (of equivalent).
+
+Haal bij het ophalen van schermen óók (in dezelfde response) de contactgegevens op die nodig zijn voor locatie:
+
+city (plaats)
+
+address1 (straat + nr)
+
+zipcode (postcode)
+
+(optioneel country, state/province)
+
+Doe dit efficiënt:
+
+Als Moneybird data al lokaal in Postgres staat: join die tabel of hydrateer vanuit lokale cache.
+
+Als het nog live via Moneybird API gaat: doe batching/caching zodat je niet per scherm 1 losse API call doet (N+1 vermijden). Bijvoorbeeld:
+
+Verzamel alle unieke contactIds → 1 batch fetch (of parallel met limiter) → map op contactId.
+
+Voeg aan de schermenlijst response per scherm een object toe, bv:
+
+moneybird?: {
+  contactId: string;
+  companyName: string;
+  city?: string;
+  address1?: string;
+  zipcode?: string;
+}
+
+
+of een locationLabel string (bijv “Sittard”) + locationSubLabel (“Dorpsstraat 12, 6131 AB”).
+
+B) Frontend: pas de tabel in /schermen aan zodat locatie zichtbaar is.
+
+In de rij onder de schermnaam (of in een aparte kolom als je dat liever hebt) toon:
+
+Plaats (city) in normale tekst/bold
+
+daaronder klein/grijs: address1 • zipcode (alleen als aanwezig)
+
+Als city ontbreekt maar address wel bestaat: haal plaats uit contact (kijk of Moneybird veld anders heet).
+
+Als alles ontbreekt terwijl gekoppeld: toon “Locatie onbekend (Moneybird)” + een subtiele warning icon.
+
+C) Debug/validatie:
+
+Voeg tijdelijk (dev only) een console/debug log toe bij het mappen van Moneybird → scherm:
+
+schermId + contactId + city/address zodat we meteen zien waarom “Test” leeg is.
+
+Controleer of “Test” écht gekoppeld is in data (dus niet alleen UI-badge). Als gekoppeld maar locatie leeg:
+
+Check of je het juiste Moneybird veld leest (Moneybird heeft soms address1, zipcode, city — of nested addresses).
+
+Fix mapping naar de juiste velden.
+
+Randvoorwaarden:
+
+NIET opnieuw het menu refactoren.
+
+NIET terugkomen op entiteiten/sync logs; dat is al opgelost.
+
+Hou het UI clean: primair “Plaats” is genoeg, details klein eronder of tooltip.
+
+Deliverables:
+
+Aangepaste backend endpoint(s) die schermenlijst teruggeven met Moneybird locatie info.
+
+Aangepaste frontend Schermen-lijst die plaats/locatie zichtbaar maakt bij gekoppelde schermen.
+
+Kort toelichten in comments welke Moneybird velden gebruikt worden en waar ze gemapt zijn.

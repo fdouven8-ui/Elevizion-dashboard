@@ -1,7 +1,7 @@
 import { useAppData } from "@/hooks/use-app-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink, AlertCircle, CheckCircle, Link2 } from "lucide-react";
+import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink, AlertCircle, AlertTriangle, CheckCircle, Link2 } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -89,6 +89,7 @@ interface MoneybirdContact {
 }
 
 // ScreenWithBusiness type van het nieuwe endpoint
+// Moneybird locatie velden: city (plaats), address1 (straat), zipcode (postcode)
 interface ScreenWithBusiness {
   id: string;
   screenId: string;
@@ -114,7 +115,8 @@ interface ScreenWithBusiness {
     btw: string | null;
   } | null;
   linkStatus: "linked" | "unlinked" | "missing_data";
-  locationLabel: string;
+  locationLabel: string; // Plaats (city) als primaire locatie
+  locationSubLabel: string | null; // address1 • zipcode (secundair)
   isActive: boolean;
   createdAt: string;
 }
@@ -154,6 +156,7 @@ export default function Screens() {
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["screens"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/screens/with-business"] });
       queryClient.invalidateQueries({ queryKey: ["locations"] });
       queryClient.invalidateQueries({ queryKey: ["app-data"] });
       const displayName = data.contact?.displayName || "Moneybird contact";
@@ -624,10 +627,12 @@ export default function Screens() {
               const placementCount = getActivePlacementsCount(scr.id);
               
               // Data uit ScreenWithBusiness formaat
+              // Moneybird locatie: city (plaats), address1 + zipcode (straat + postcode)
               const yodeckName = scr.yodeck.screenName;
               const hasMoneybird = scr.linkStatus === "linked";
               const companyName = scr.moneybirdContact?.name || null;
               const cityName = scr.locationLabel !== "—" ? scr.locationLabel : null;
+              const addressInfo = scr.locationSubLabel; // straat • postcode
               
               return (
                 <TableRow 
@@ -730,26 +735,37 @@ export default function Screens() {
                             </div>
                           )}
                           
-                          {/* Plaats (rechts) */}
+                          {/* Plaats (rechts van bedrijfsnaam) */}
                           {cityName && (
                             <>
                               <span className="text-muted-foreground">•</span>
-                              <span className="text-sm text-muted-foreground" data-testid={`location-city-${scr.id}`}>
+                              <span className="text-sm font-medium text-foreground" data-testid={`location-city-${scr.id}`}>
                                 {cityName}
                               </span>
                             </>
                           )}
+                          {/* Locatie onbekend: gekoppeld maar geen city in Moneybird */}
                           {!cityName && hasMoneybird && (
                             <>
                               <span className="text-muted-foreground">•</span>
-                              <span className="text-sm text-muted-foreground">—</span>
+                              <span className="text-sm text-orange-500 flex items-center gap-1">
+                                <AlertTriangle className="h-3 w-3" />
+                                Locatie onbekend
+                              </span>
                             </>
                           )}
                         </div>
                         
-                        {/* EVZ ID (klein, onder subtitel) */}
+                        {/* Adres info (straat + postcode) - klein onder subtitel */}
+                        {hasMoneybird && addressInfo && (
+                          <div className="text-xs text-muted-foreground mt-0.5" data-testid={`location-address-${scr.id}`}>
+                            {addressInfo}
+                          </div>
+                        )}
+                        
+                        {/* EVZ ID (klein, onder adres) */}
                         {scr.screenId && (
-                          <div className="text-xs text-muted-foreground mt-0.5">
+                          <div className="text-xs text-muted-foreground/70 mt-0.5">
                             {scr.screenId}
                           </div>
                         )}

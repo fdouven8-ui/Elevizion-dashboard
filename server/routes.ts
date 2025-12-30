@@ -657,10 +657,13 @@ export async function registerRoutes(
 
   // ScreenWithBusiness: Gecombineerd data object voor UI
   // Retourneert: yodeck info, moneybirdContact, linkStatus, locationLabel
+  // Moneybird velden: city, address1, zipcode komen uit moneybirdContactSnapshot (JSONB)
   app.get("/api/screens/with-business", async (_req, res) => {
     const screens = await storage.getScreens();
     
     const screensWithBusiness = screens.map(screen => {
+      // Parse Moneybird contact snapshot (filled when screen is linked via /api/screens/:id/link-moneybird)
+      // Velden: companyName, address1, zipcode, city, country, phone, email, chamberOfCommerce, taxNumber
       const snapshot = screen.moneybirdContactSnapshot as {
         companyName?: string;
         firstname?: string;
@@ -673,7 +676,14 @@ export async function registerRoutes(
         email?: string;
         kvk?: string;
         btw?: string;
+        chamberOfCommerce?: string;
+        taxNumber?: string;
       } | null;
+
+      // Debug logging for development
+      if (process.env.NODE_ENV === 'development' && screen.moneybirdContactId) {
+        console.log(`[ScreenWithBusiness] ${screen.screenId}: moneybirdContactId=${screen.moneybirdContactId}, snapshot.city=${snapshot?.city || 'EMPTY'}, snapshot.address1=${snapshot?.address1 || 'EMPTY'}`);
+      }
 
       // Determine link status
       let linkStatus: "linked" | "unlinked" | "missing_data" = "unlinked";
@@ -681,6 +691,13 @@ export async function registerRoutes(
         linkStatus = snapshot.companyName ? "linked" : "missing_data";
       } else if (screen.moneybirdContactId) {
         linkStatus = "missing_data";
+      }
+
+      // Build location sublabel: address1 • zipcode (alleen als aanwezig)
+      let locationSubLabel: string | null = null;
+      if (snapshot?.address1 || snapshot?.zipcode) {
+        const parts = [snapshot.address1, snapshot.zipcode].filter(Boolean);
+        locationSubLabel = parts.join(" • ");
       }
 
       return {
@@ -704,11 +721,14 @@ export async function registerRoutes(
           country: snapshot.country || null,
           phone: snapshot.phone || null,
           email: snapshot.email || null,
-          kvk: snapshot.kvk || null,
-          btw: snapshot.btw || null,
+          kvk: snapshot.chamberOfCommerce || snapshot.kvk || null,
+          btw: snapshot.taxNumber || snapshot.btw || null,
         } : null,
         linkStatus,
+        // Plaats (city) als primaire locatie indicator
         locationLabel: snapshot?.city || screen.city || "—",
+        // Straat + postcode als secundaire info
+        locationSubLabel,
         isActive: screen.isActive,
         createdAt: screen.createdAt,
       };
