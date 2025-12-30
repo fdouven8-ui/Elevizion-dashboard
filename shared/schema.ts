@@ -125,8 +125,12 @@ export const sites = pgTable("sites", {
   displayName: text("display_name").notNull(), // UI display name (from Moneybird company or manual)
   moneybirdContactId: text("moneybird_contact_id"), // Link to Moneybird contact
   yodeckScreenId: text("yodeck_screen_id").unique(), // Link to Yodeck screen (always unique)
+  yodeckTags: text("yodeck_tags").array(), // Tags for Yodeck matching (EVZ-SCREEN_ID:EVZ-001)
   multiScreen: boolean("multi_screen").default(false), // If true, allows shared moneybird_contact_id
   status: text("status").notNull().default("active"), // active, offline, paused, terminated
+  syncStatus: text("sync_status").default("OK"), // OK, NEEDS_ACTION, ERROR
+  syncError: text("sync_error"), // Short error message if sync failed
+  lastSyncAt: timestamp("last_sync_at"), // Last successful sync
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

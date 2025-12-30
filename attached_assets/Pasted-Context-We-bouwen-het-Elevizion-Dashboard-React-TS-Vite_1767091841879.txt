@@ -1,0 +1,237 @@
+Context
+We bouwen het Elevizion Dashboard (React + TS + Vite frontend, Express backend, Drizzle ORM + Postgres). Het dashboard integreert met Moneybird (contacten/facturatie) en Yodeck (schermen/players + tags).
+Belangrijk principe: SCREEN_ID (EVZ-001 format) is de centrale identifier overal.
+In praktijk is 1 scherm = 1 locatie (bijna altijd). Locatie en scherm zijn dus functioneel hetzelfde object, maar met 2 databronnen:
+
+Yodeck = technische scherm info (player/device, online/offline, tags, playlists, etc.)
+
+Moneybird = contact/bedrijf info (naam, adres, kvk, btw, email, tel, IBAN, etc.)
+
+Probleem
+De UI heeft nu onnodige items: “Entiteiten” en “Sync Logs”. Dit is overbodig en verwarrend.
+We hebben al Schermen en Locaties, maar die moeten eigenlijk één logisch geheel worden. “Entiteiten” moet dus in bestaande menu’s verwerkt worden. “Sync logs” moet niet zichtbaar als hoofdmenu, maar alleen als debug/instellingen.
+
+Doel (wat je moet aanpassen)
+1) Navigatie herstructureren (UX fix)
+
+Verwijder de sidebar items:
+
+Entiteiten
+
+Sync Logs
+
+Maak de sidebar simpel en logisch (voorbeeld):
+
+Home
+
+Onboarding
+
+Schermen (dit wordt het centrale beheer)
+
+Adverteerders
+
+Plaatsingen
+
+Financieel
+
+Instellingen (hieronder mag “Sync & Logs” verstopt zitten)
+
+Belangrijk: Geen duplicatie meer van “Locaties” als los concept dat hetzelfde doet als Schermen.
+➡️ Schermen is de plek waar je zowel Yodeck-data als Moneybird-contactdata ziet.
+
+2) Nieuw datamodel: “ScreenLocation” (1 object, 2 bronnen)
+
+Maak (of migreer naar) één centrale tabel/entiteit, bv:
+screen_locations
+
+id (uuid)
+
+screen_id (EVZ-001, uniek, verplicht)
+
+display_name (bv “Basil’s Barbershop – TV1”)
+
+status (active/inactive)
+
+moneybird_contact_id (nullable)
+
+yodeck_screen_id of yodeck_player_id (nullable)
+
+yodeck_tags (array/string)
+
+last_sync_at
+
+sync_status (OK / NEEDS_ACTION / ERROR)
+
+sync_error (nullable, korte tekst)
+
+Daarnaast:
+advertisers
+
+id
+
+advertiser_code (EVZ-ADV-001 of eigen format)
+
+name
+
+moneybird_contact_id (verplicht na aanmaken)
+
+billing_email, phone, etc.
+
+status
+
+last_sync_at / sync_status / sync_error
+
+3) Onboarding flow (automatisch Moneybird contact maken)
+3A) Nieuwe adverteerder aanmaken
+
+Wanneer user in dashboard “Nieuwe adverteerder” toevoegt:
+
+Maak direct een Moneybird contact aan met alle velden die Moneybird vereist/verwacht.
+
+Sla het moneybird_contact_id op bij de adverteerder.
+
+Toon direct in UI: “Moneybird gekoppeld ✅” of foutmelding + “actie nodig”.
+
+3B) Nieuw scherm toevoegen (scherm = locatie)
+
+Wanneer user “Scherm toevoegen”:
+
+Maak óók een Moneybird contact aan (want dit is de locatie/zaak waar het scherm hangt).
+
+Daarna hoeft alleen nog de koppeling met Yodeck te gebeuren:
+
+Link met het juiste Yodeck scherm/player via tags (of selectie uit lijst).
+
+Gebruik een tag-standaard, bv: EVZ-SCREEN_ID:EVZ-001
+
+Sla moneybird_contact_id + yodeck_id + tags op bij screen_locations.
+
+Regel: Als er al een Moneybird contact bestaat (zelfde bedrijf), bied een “Kies bestaand contact” optie, maar default is “nieuw contact”.
+
+4) Schermen pagina (vervangt ‘Entiteiten’ en ‘Locaties’)
+
+Maak de pagina /schermen de centrale beheerplek:
+
+4A) Lijstweergave (table)
+
+Kolommen (minimaal):
+
+SCREEN_ID
+
+Naam (display_name)
+
+Zaak/Contact (Moneybird naam)
+
+Plaats (city)
+
+Yodeck status (online/offline/unknown)
+
+Moneybird koppeling (✅/⚠️)
+
+Yodeck koppeling (✅/⚠️)
+
+Sync status (OK/Actie nodig/Error)
+
+Acties (View/Edit/Link Yodeck/Resync)
+
+4B) Detail pagina (tabs)
+
+Per scherm detail:
+
+Overzicht (samenvatting + status badges)
+
+Moneybird (contactvelden, knop “Open in Moneybird” indien url beschikbaar)
+
+Yodeck (player info, tags, laatste check-in)
+
+Koppelingen (koppel/ontkoppel yodeck, resync, tag manager)
+
+Logs (debug) (alleen zichtbaar voor admin of via instellingen)
+
+5) Adverteerders pagina (zelfde principe)
+
+Ook hier:
+
+Lijst met status badges: Moneybird gekoppeld, sync status, acties.
+
+Detail tabs: Moneybird gegevens, facturatie instellingen, placements/ads gekoppeld.
+
+6) Sync logs: verplaatsen naar Instellingen (en begrijpelijk maken)
+
+Verwijder “Sync Logs” als menu item.
+
+Plaats in: Instellingen → Integraties → Moneybird/Yodeck → Logs
+
+Logs moeten niet technisch/eng zijn, maar menselijk:
+
+“Moneybird contact aangemaakt”
+
+“Yodeck tag toegevoegd”
+
+“Koppeling mislukt: geen player met tag EVZ-SCREEN_ID:EVZ-001”
+
+Daarnaast: op normale pagina’s alleen een korte melding:
+
+“Actie nodig: 3 schermen niet gekoppeld met Yodeck”
+
+En dan link naar gefilterde Schermen lijst.
+
+API/Backend requirements (must implement)
+Moneybird
+
+Endpoint/service: createMoneybirdContact(payload)
+Valideer dat we alle verplichte velden meesturen (naam, adres, email etc waar nodig).
+
+Opslaan: moneybird_contact_id in DB.
+
+Error handling: sla fout op in sync_error en status = ERROR.
+
+Yodeck
+
+Sync: fetch screens/players + tags.
+
+Koppelen op basis van tag standaard:
+
+EVZ-SCREEN_ID:EVZ-001
+
+Endpoint: “link screen to yodeck”:
+
+Voeg tag toe aan gekozen yodeck player/screen
+
+Sla yodeck_id op in DB
+
+Als geen match → status NEEDS_ACTION
+
+Algemene sync status
+
+Bereken per screen/advertiser:
+
+Moneybird gekoppeld? (contact_id bestaat)
+
+Yodeck gekoppeld? (yodeck_id bestaat of tag match)
+
+Toon badge + actieknop
+
+Acceptatiecriteria (klaar = dit werkt)
+
+Sidebar bevat geen Entiteiten en geen Sync Logs.
+
+Schermen is de centrale plek waar je zowel Moneybird (locatie/contact) als Yodeck (scherm) ziet.
+
+“Scherm toevoegen” maakt automatisch Moneybird contact + daarna koppeling met Yodeck via tags.
+
+“Adverteerder toevoegen” maakt automatisch Moneybird contact.
+
+Sync logs zijn alleen bereikbaar via Instellingen → Integraties → Logs en zijn begrijpelijk.
+
+Op Schermen/Adverteerders zie je direct: gekoppeld ✅ / actie nodig ⚠️ / fout ❌ en je kunt dit oplossen via knoppen.
+
+Extra: doe dit netjes zonder de app “zwaarder” te maken
+
+Houd logging compact (DB tabel + filter).
+
+Geen extra menu’s, geen dubbele pagina’s.
+
+Hergebruik bestaande UI componenten (table, tabs, badges).
+
+Maak minimale migratie: bestaande “entities/locations” data migreren naar screen_locations.

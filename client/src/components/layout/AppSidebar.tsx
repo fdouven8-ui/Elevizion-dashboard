@@ -21,9 +21,6 @@ import {
   LogIn,
   Rocket,
   Euro,
-  Building2,
-  Network,
-  History,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -40,10 +37,7 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
   { title: "Home", url: "/dashboard", icon: LayoutDashboard, requiredPermissions: [PERMISSIONS.VIEW_HOME] },
   { title: "Onboarding", url: "/onboarding", icon: Rocket, requiredPermissions: [PERMISSIONS.VIEW_ONBOARDING, PERMISSIONS.ONBOARD_ADVERTISERS, PERMISSIONS.ONBOARD_SCREENS], anyPermission: true },
-  { title: "Entiteiten", url: "/entities", icon: Network, requiredPermissions: [PERMISSIONS.VIEW_SCREENS, PERMISSIONS.VIEW_ADVERTISERS], anyPermission: true },
-  { title: "Sync Logs", url: "/sync-logs", icon: History, requiredPermissions: [PERMISSIONS.MANAGE_INTEGRATIONS] },
   { title: "Schermen", url: "/screens", icon: Monitor, requiredPermissions: [PERMISSIONS.VIEW_SCREENS] },
-  { title: "Locaties", url: "/locations", icon: Building2, requiredPermissions: [PERMISSIONS.VIEW_SCREENS] },
   { title: "Adverteerders", url: "/advertisers", icon: Users, requiredPermissions: [PERMISSIONS.VIEW_ADVERTISERS] },
   { title: "Plaatsingen", url: "/placements", icon: Target, requiredPermissions: [PERMISSIONS.VIEW_PLACEMENTS] },
   { title: "Financieel", url: "/finance", icon: Euro, requiredPermissions: [PERMISSIONS.VIEW_FINANCE] },
