@@ -1,0 +1,125 @@
+We willen in het Elevizion Dashboard het concept “Scherm” en “Locatie” niet meer als 2 aparte dingen tonen. In de praktijk is het 1 object:
+
+Schermnaam komt uit Yodeck (device/display name) → dit blijft leidend als titel.
+
+Aan dit scherm wordt 1 Moneybird contact gekoppeld (bedrijf/zaak). Dat contact levert alle “locatie” info: adres, postcode, plaats, telefoon, e-mail, etc.
+
+“Locatie” in de UI betekent voortaan alleen: plaatsnaam (city) uit Moneybird.
+
+Taken
+1) UI herstructureren: Schermen-lijst en detail
+In de lijst (Schermen overzicht)
+
+Voor elk scherm tonen we nog maar 3 regels:
+
+Titel: Yodeck schermnaam (zoals nu al)
+
+Subtitel links: Bedrijfsnaam (Moneybird contact.name)
+
+Als nog niet gekoppeld: toon badge “Niet gekoppeld”
+
+Subtitel rechts (Locatie): Plaatsnaam (Moneybird contact.city)
+
+Als city ontbreekt: toon “—”
+
+👉 Verwijder/voorkom dat er nog apart “Scherm: …” én “Locatie: …” als twee blokken onder elkaar staan.
+👉 Dus niet meer: “Schermnaam / Scherm / Locatie” als 3 labels.
+
+In detailpagina / drawer (als je op een scherm klikt)
+
+Gebruik een duidelijke layout met 2 secties:
+
+A) Scherm (Yodeck)
+
+Schermnaam (titel)
+
+SCREEN_ID (als die bestaat)
+
+Yodeck device id
+
+Tags (voor koppeling)
+
+Online status / last seen (als beschikbaar)
+
+B) Bedrijf (Moneybird)
+
+Bedrijfsnaam
+
+Adres + huisnr
+
+Postcode + Plaats
+
+Land
+
+E-mail
+
+Telefoon
+
+BTW/KVK (als jullie dat opslaan)
+
+Button: “Open Moneybird contact” (als jullie een url/id hebben)
+
+Let op: “Locatie” is geen aparte sectie meer. Locatie = address/city van Moneybird.
+
+2) Data contract: “ScreenWithBusiness”
+
+Maak (of pas) een backend endpoint / service zodat de frontend 1 gecombineerd object krijgt:
+
+ScreenWithBusiness = {
+
+yodeck: { deviceId, screenName, tags, ... }
+
+moneybirdContact: { id, name, address1, zipcode, city, country, phone, email, ... } | null
+
+linkStatus: "linked" | "unlinked" | "missing_data"
+
+locationLabel: string → city (of “—”)
+}
+
+Frontend mag niet zelf ingewikkeld joinen op 5 plekken; maak één bron van waarheid.
+
+Regel: screenName = altijd uit Yodeck.
+Regel: companyName + location(city) = uit Moneybird.
+
+3) Koppeling tonen op juiste plek
+
+In “Nieuw scherm aanmaken” (die wizard is al verbeterd):
+
+Laat scherm selecteren / herkennen via Yodeck (schermnaam zichtbaar)
+
+Laat Moneybird contact kiezen/aanmaken (bedrijf)
+
+Na opslaan: scherm toont direct:
+
+Titel = Yodeck schermnaam
+
+Bedrijf = Moneybird contact naam
+
+Locatie = Moneybird city
+
+4) Cleanup in navigatie (geen entiteiten/synclogs wijziging nu)
+
+NIET meer toevoegen:
+
+Geen “Entiteiten” submenu
+
+Geen “Sync logs” submenu
+Dit is al opgelost; focus nu puur op Schermen UI: labels, structuur, weergave.
+
+Acceptance criteria (moet af zijn)
+
+In Schermen-overzicht zie ik per item alleen: Yodeck schermnaam, Moneybird bedrijfsnaam, Moneybird plaats.
+
+Nergens meer “Scherm:” en “Locatie:” als 2 losse entiteiten onder elkaar.
+
+Detailweergave heeft exact 2 secties: Scherm (Yodeck) en Bedrijf (Moneybird).
+
+Als Moneybird niet gekoppeld is: badge “Niet gekoppeld” + knop “Koppelen”.
+
+Codebase instructies
+
+Stack blijft: React + TypeScript + Vite, Express backend, Drizzle ORM, PostgreSQL
+
+Pas alleen relevante componenten/routes aan (Schermen pagina + detail + service/endpoint)
+
+Houd het licht: geen nieuwe grote pagina’s, geen extra navigatie-items.

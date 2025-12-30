@@ -402,80 +402,251 @@ export default function ScreenDetail() {
           </TabsTrigger>
         </TabsList>
 
-        {/* TAB: Overzicht */}
-        <TabsContent value="overzicht" className="space-y-4 mt-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* Status Card */}
+        {/* TAB: Overzicht - 2 secties: Scherm (Yodeck) + Bedrijf (Moneybird) */}
+        <TabsContent value="overzicht" className="space-y-6 mt-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* SECTIE A: Scherm (Yodeck) */}
             <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Wifi className="h-4 w-4" />
-                  Status
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Monitor className="h-5 w-5" />
+                  Scherm (Yodeck)
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <div className="flex items-center gap-2 mb-2">
-                  <Badge variant={screen.status === "online" ? "default" : "destructive"}>
-                    {screen.status === "online" ? "Online" : "Offline"}
-                  </Badge>
+              <CardContent className="space-y-4">
+                {/* Schermnaam (titel) */}
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Schermnaam</p>
+                  <p className="text-lg font-semibold" data-testid="yodeck-screen-name">
+                    {screen.yodeckPlayerName || screen.name || "—"}
+                  </p>
                 </div>
-                <p className="text-sm text-muted-foreground">
-                  Laatst gezien: {formatLastSeen(screen.lastSeenAt)}
-                </p>
-              </CardContent>
-            </Card>
-
-            {/* Placements Card */}
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Target className="h-4 w-4" />
-                  Actieve plaatsingen
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold mb-2">{activePlacements.length}</div>
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={() => setActiveTab("plaatsingen")}
-                >
-                  Bekijk plaatsingen
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Content Summary Card */}
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                  <Play className="h-4 w-4" />
-                  Content samenvatting
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                {screenDetailLoading ? (
-                  <Skeleton className="h-12 w-full" />
-                ) : currentContent.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">Geen content gedetecteerd</p>
-                ) : (
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-sm">
-                      <span>Ads:</span>
-                      <span className="font-medium">{adsCount}</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span>Overig:</span>
-                      <span className="font-medium">{nonAdsCount}</span>
-                    </div>
-                    {adsUnlinkedCount > 0 && (
-                      <div className="flex justify-between text-sm text-amber-600">
-                        <span>Niet gekoppeld:</span>
-                        <span className="font-medium">{adsUnlinkedCount}</span>
-                      </div>
-                    )}
+                
+                {/* Screen ID */}
+                {screen.screenId && (
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground mb-1">Screen ID</p>
+                    <p className="text-sm font-mono">{screen.screenId}</p>
                   </div>
                 )}
+                
+                {/* Yodeck Device ID */}
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Yodeck Device ID</p>
+                  <p className="text-sm font-mono">
+                    {screen.yodeckPlayerId ? `YDK-${screen.yodeckPlayerId}` : "—"}
+                  </p>
+                </div>
+                
+                {/* Online status */}
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Status</p>
+                  <div className="flex items-center gap-3">
+                    <Badge variant={screen.status === "online" ? "default" : "destructive"}>
+                      {screen.status === "online" ? "Online" : "Offline"}
+                    </Badge>
+                    <span className="text-sm text-muted-foreground">
+                      Laatst gezien: {formatLastSeen(screen.lastSeenAt)}
+                    </span>
+                  </div>
+                </div>
+                
+                {/* Content summary */}
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Content</p>
+                  {screenDetailLoading ? (
+                    <Skeleton className="h-6 w-24" />
+                  ) : currentContent.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Geen content gedetecteerd</p>
+                  ) : (
+                    <p className="text-sm">
+                      {adsCount} ads, {nonAdsCount} overig
+                      {adsUnlinkedCount > 0 && (
+                        <span className="text-amber-600 ml-2">({adsUnlinkedCount} niet gekoppeld)</span>
+                      )}
+                    </p>
+                  )}
+                </div>
+                
+                {/* Open in Yodeck button */}
+                {screen.yodeckPlayerId && (
+                  <Button variant="outline" size="sm" onClick={openInYodeck} className="mt-2">
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Open in Yodeck
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* SECTIE B: Bedrijf (Moneybird) */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Building2 className="h-5 w-5" />
+                  Bedrijf (Moneybird)
+                  {screenDetail?.moneybirdContactId ? (
+                    <Badge variant="outline" className="text-green-600 border-green-600 ml-2">
+                      <CheckCircle className="h-3 w-3 mr-1" />
+                      Gekoppeld
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-orange-600 border-orange-600 ml-2">
+                      <AlertCircle className="h-3 w-3 mr-1" />
+                      Niet gekoppeld
+                    </Badge>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {(() => {
+                  const snapshot = screenDetail?.moneybirdContactSnapshot as MoneybirdContactSnapshot | null;
+                  const hasMoneybird = Boolean(screenDetail?.moneybirdContactId);
+                  
+                  if (!hasMoneybird) {
+                    return (
+                      <div className="text-center py-6">
+                        <AlertCircle className="h-10 w-10 mx-auto mb-3 text-orange-400" />
+                        <p className="text-muted-foreground mb-4">
+                          Dit scherm is nog niet gekoppeld aan een Moneybird contact.
+                        </p>
+                        <Button variant="default" size="sm" onClick={() => setActiveTab("contact")}>
+                          Koppel Moneybird contact
+                        </Button>
+                      </div>
+                    );
+                  }
+                  
+                  const companyName = snapshot?.companyName || 
+                    (snapshot?.firstname && snapshot?.lastname ? `${snapshot.firstname} ${snapshot.lastname}` : null);
+                  
+                  return (
+                    <>
+                      {/* Bedrijfsnaam */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Bedrijfsnaam</p>
+                        <p className="text-lg font-semibold" data-testid="moneybird-company-name">
+                          {companyName || "—"}
+                        </p>
+                      </div>
+                      
+                      {/* Adres */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Adres</p>
+                        {snapshot?.address1 || snapshot?.zipcode || snapshot?.city ? (
+                          <div className="text-sm">
+                            {snapshot.address1 && <p>{snapshot.address1}</p>}
+                            {(snapshot.zipcode || snapshot.city) && (
+                              <p>{[snapshot.zipcode, snapshot.city].filter(Boolean).join(" ")}</p>
+                            )}
+                            {snapshot.country && <p>{snapshot.country}</p>}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">—</p>
+                        )}
+                      </div>
+                      
+                      {/* Email */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">E-mail</p>
+                        {snapshot?.email ? (
+                          <a href={`mailto:${snapshot.email}`} className="text-sm text-primary hover:underline">
+                            {snapshot.email}
+                          </a>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">—</p>
+                        )}
+                      </div>
+                      
+                      {/* Telefoon */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Telefoon</p>
+                        {snapshot?.phone ? (
+                          <a href={`tel:${snapshot.phone}`} className="text-sm text-primary hover:underline">
+                            {snapshot.phone}
+                          </a>
+                        ) : (
+                          <p className="text-sm text-muted-foreground">—</p>
+                        )}
+                      </div>
+                      
+                      {/* KVK/BTW */}
+                      {(snapshot?.chamberOfCommerce || snapshot?.taxNumber) && (
+                        <div>
+                          <p className="text-sm font-medium text-muted-foreground mb-1">KVK / BTW</p>
+                          <div className="text-sm">
+                            {snapshot.chamberOfCommerce && <p>KvK: {snapshot.chamberOfCommerce}</p>}
+                            {snapshot.taxNumber && <p>BTW: {snapshot.taxNumber}</p>}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Open in Moneybird button */}
+                      {screenDetail?.moneybirdContactId && (
+                        <Button 
+                          variant="outline" 
+                          size="sm" 
+                          className="mt-2"
+                          onClick={() => {
+                            const mbId = screenDetail.moneybirdContactId;
+                            if (mbId) {
+                              window.open(`https://moneybird.com/contacts/${mbId}`, "_blank");
+                            }
+                          }}
+                        >
+                          <ExternalLink className="h-4 w-4 mr-2" />
+                          Open in Moneybird
+                        </Button>
+                      )}
+                    </>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          </div>
+          
+          {/* Quick stats row */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Target className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Actieve plaatsingen</span>
+                </div>
+                <p className="text-2xl font-bold">{activePlacements.length}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Play className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Content items</span>
+                </div>
+                <p className="text-2xl font-bold">{currentContent.length}</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Wifi className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Status</span>
+                </div>
+                <Badge variant={screen.status === "online" ? "default" : "destructive"} className="mt-1">
+                  {screen.status === "online" ? "Online" : "Offline"}
+                </Badge>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Building2 className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Moneybird</span>
+                </div>
+                <Badge 
+                  variant="outline" 
+                  className={screenDetail?.moneybirdContactId ? "text-green-600 border-green-600" : "text-orange-600 border-orange-600"}
+                >
+                  {screenDetail?.moneybirdContactId ? "Gekoppeld" : "Niet gekoppeld"}
+                </Badge>
               </CardContent>
             </Card>
           </div>

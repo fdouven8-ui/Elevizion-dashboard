@@ -88,6 +88,37 @@ interface MoneybirdContact {
   city: string | null;
 }
 
+// ScreenWithBusiness type van het nieuwe endpoint
+interface ScreenWithBusiness {
+  id: string;
+  screenId: string;
+  yodeck: {
+    deviceId: string | null;
+    screenName: string;
+    tags: string[];
+    uuid: string | null;
+    status: string;
+    lastSeenAt: string | null;
+    screenshotUrl: string | null;
+  };
+  moneybirdContact: {
+    id: string;
+    name: string | null;
+    address1: string | null;
+    zipcode: string | null;
+    city: string | null;
+    country: string | null;
+    phone: string | null;
+    email: string | null;
+    kvk: string | null;
+    btw: string | null;
+  } | null;
+  linkStatus: "linked" | "unlinked" | "missing_data";
+  locationLabel: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
 export default function Screens() {
   const { screens, locations, placements } = useAppData();
   const [location, setLocation] = useLocation();
@@ -99,6 +130,11 @@ export default function Screens() {
   const urlParams = new URLSearchParams(location.split('?')[1] || '');
   const initialStatus = urlParams.get('status');
   const initialMoneybirdFilter = urlParams.get('moneybird') === 'missing';
+
+  // Fetch screens with business data (consolidated endpoint)
+  const { data: screensWithBusiness = [] } = useQuery<ScreenWithBusiness[]>({
+    queryKey: ["/api/screens/with-business"],
+  });
 
   const { data: moneybirdContacts = [] } = useQuery<MoneybirdContact[]>({
     queryKey: ["/api/moneybird/contacts"],
@@ -143,10 +179,10 @@ export default function Screens() {
   const [linkPopoverOpen, setLinkPopoverOpen] = useState<string | null>(null);
   const [linkSearch, setLinkSearch] = useState("");
 
-  // Check screen-level Moneybird link only (per-screen linking, no location-based fallback)
+  // Check screen-level Moneybird link using screensWithBusiness data
   const screensWithoutMoneybird = useMemo(() => {
-    return screens.filter(scr => !scr.moneybirdContactId);
-  }, [screens]);
+    return screensWithBusiness.filter(scr => scr.linkStatus === "unlinked");
+  }, [screensWithBusiness]);
 
   const screensWithoutMoneybirdCount = screensWithoutMoneybird.length;
 
@@ -157,20 +193,13 @@ export default function Screens() {
     return () => clearTimeout(timer);
   }, [searchInput]);
 
+  // Get unique cities from screensWithBusiness (Moneybird data)
   const uniqueCities = useMemo(() => {
-    // Get cities from screen's Moneybird snapshot, screen.city, or location.city (fallback)
-    const cities = screens
-      .map(scr => {
-        const snapshot = scr.moneybirdContactSnapshot as { city?: string } | null;
-        if (snapshot?.city) return snapshot.city;
-        if (scr.city) return scr.city;
-        // Fallback to location city for unlinked screens
-        const loc = locations.find(l => l.id === scr.locationId);
-        return loc?.city;
-      })
-      .filter((city): city is string => !!city && city.trim() !== "");
+    const cities = screensWithBusiness
+      .map(scr => scr.locationLabel)
+      .filter((city): city is string => !!city && city !== "—" && city.trim() !== "");
     return Array.from(new Set(cities)).sort();
-  }, [screens, locations]);
+  }, [screensWithBusiness]);
 
   const getActivePlacementsCount = (screenId: string) => {
     return placements.filter(p => 
@@ -183,36 +212,21 @@ export default function Screens() {
     return locations.find(l => l.id === locationId);
   };
 
-  // Helper to get screen's city - priority: Moneybird snapshot > screen.city > location.city (fallback for legacy)
-  const getScreenCity = (scr: any): string | undefined => {
-    const snapshot = scr.moneybirdContactSnapshot as { city?: string } | null;
-    if (snapshot?.city) return snapshot.city;
-    if (scr.city) return scr.city;
-    // Fallback to location city for unlinked screens (ensures they remain discoverable)
-    const loc = getLocation(scr.locationId);
-    return loc?.city || undefined;
-  };
-
+  // Filter screensWithBusiness based on filters
   const filteredScreens = useMemo(() => {
-    return screens.filter(scr => {
-      const loc = getLocation(scr.locationId);
-      const screenCity = getScreenCity(scr);
-
-      // City filter: check screen's Moneybird city (NOT location city)
-      if (cityFilter && screenCity !== cityFilter) {
+    return screensWithBusiness.filter(scr => {
+      // City filter: check locationLabel (Moneybird city)
+      if (cityFilter && scr.locationLabel !== cityFilter) {
         return false;
       }
 
-      if (locationFilter && scr.locationId !== locationFilter) {
+      // Status filter: check Yodeck status
+      if (statusFilter.length > 0 && !statusFilter.includes(scr.yodeck.status)) {
         return false;
       }
 
-      if (statusFilter.length > 0 && !statusFilter.includes(scr.status)) {
-        return false;
-      }
-
-      // Moneybird filter: ONLY check screen-level linking (no location fallback!)
-      if (moneybirdMissingFilter && scr.moneybirdContactId) {
+      // Moneybird filter: check linkStatus
+      if (moneybirdMissingFilter && scr.linkStatus !== "unlinked") {
         return false;
       }
 
@@ -227,26 +241,20 @@ export default function Screens() {
       }
 
       if (searchQuery) {
-        const displayName = getScreenDisplayName(scr, loc).toLowerCase();
+        const yodeckName = scr.yodeck.screenName.toLowerCase();
         const screenId = (scr.screenId || "").toLowerCase();
-        const yodeckIdRaw = (scr.yodeckPlayerId || "").toLowerCase();
-        const yodeckIdPrefixed = scr.yodeckPlayerId ? `ydk-${scr.yodeckPlayerId}`.toLowerCase() : "";
-        // Use screen's city from Moneybird snapshot
-        const city = (screenCity || "").toLowerCase();
-        // Get company from snapshot
-        const snapshot = scr.moneybirdContactSnapshot as { company?: string } | null;
-        const company = (snapshot?.company || "").toLowerCase();
-        const summary = scr.yodeckContentSummary as { topItems?: string[] } | null;
-        const contentStr = (summary?.topItems || []).join(" ").toLowerCase();
+        const deviceId = (scr.yodeck.deviceId || "").toLowerCase();
+        const deviceIdPrefixed = scr.yodeck.deviceId ? `ydk-${scr.yodeck.deviceId}`.toLowerCase() : "";
+        const city = scr.locationLabel.toLowerCase();
+        const company = (scr.moneybirdContact?.name || "").toLowerCase();
         
         const searchMatch = 
-          displayName.includes(searchQuery) ||
+          yodeckName.includes(searchQuery) ||
           screenId.includes(searchQuery) ||
-          yodeckIdRaw.includes(searchQuery) ||
-          yodeckIdPrefixed.includes(searchQuery) ||
+          deviceId.includes(searchQuery) ||
+          deviceIdPrefixed.includes(searchQuery) ||
           city.includes(searchQuery) ||
-          company.includes(searchQuery) ||
-          contentStr.includes(searchQuery);
+          company.includes(searchQuery);
         
         if (!searchMatch) {
           return false;
@@ -255,7 +263,7 @@ export default function Screens() {
 
       return true;
     });
-  }, [screens, cityFilter, locationFilter, statusFilter, moneybirdMissingFilter, minPlacements, maxPlacements, placements, locations, searchQuery]);
+  }, [screensWithBusiness, cityFilter, statusFilter, moneybirdMissingFilter, minPlacements, maxPlacements, placements, searchQuery]);
 
   const filteredLocations = useMemo(() => {
     if (!cityFilter) return locations;
@@ -555,7 +563,7 @@ export default function Screens() {
             {/* Right side: count + density toggle */}
             <div className="flex items-center gap-3">
               <span className="text-xs text-muted-foreground">
-                {filteredScreens.length} / {screens.length}
+                {filteredScreens.length} / {screensWithBusiness.length}
               </span>
               
               <ToggleGroup 
@@ -601,31 +609,25 @@ export default function Screens() {
         </CardContent>
       </Card>
 
-      {/* Screens Table */}
+      {/* Screens Table - Vereenvoudigd: Yodeck naam, Bedrijf, Plaats */}
       <div className="rounded-md border bg-card">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead className={getCellPadding()}>Scherm</TableHead>
-              <TableHead className={getCellPadding()}>Locatie / Bedrijf</TableHead>
               <TableHead className={getCellPadding()}>Status</TableHead>
-              <TableHead className={getCellPadding()}>Content</TableHead>
-              <TableHead className={`${getCellPadding()} text-center`}>Plaatsingen</TableHead>
-              <TableHead className={`${getCellPadding()} w-[100px] text-right`}>Actie</TableHead>
+              <TableHead className={`${getCellPadding()} w-[120px] text-right`}>Actie</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody className={getRowClasses()}>
             {filteredScreens.map((scr) => {
-              const loc = getLocation(scr.locationId);
-              const displayName = getScreenDisplayName(scr, loc);
               const placementCount = getActivePlacementsCount(scr.id);
               
-              const summary = scr.yodeckContentSummary as { topItems?: string[] } | null;
-              const contentItems = summary?.topItems || [];
-              const firstContentItem = contentItems[0] || null;
-              const contentTooltip = contentItems.length > 0 
-                ? contentItems.join(" • ") 
-                : (scr.yodeckContentCount === 0 ? "Leeg" : "Onbekend");
+              // Data uit ScreenWithBusiness formaat
+              const yodeckName = scr.yodeck.screenName;
+              const hasMoneybird = scr.linkStatus === "linked";
+              const companyName = scr.moneybirdContact?.name || null;
+              const cityName = scr.locationLabel !== "—" ? scr.locationLabel : null;
               
               return (
                 <TableRow 
@@ -634,133 +636,136 @@ export default function Screens() {
                   className="cursor-pointer hover:bg-muted/50 transition-colors"
                   onClick={() => setLocation(`/screens/${scr.id}`)}
                 >
-                  {/* Scherm column: name + EVZ-ID + YDK subtitle */}
+                  {/* Scherm kolom: Yodeck naam (titel) + Bedrijf + Plaats */}
                   <TableCell className={getCellPadding()}>
-                    <div className="flex items-center gap-2">
-                      <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <div className="min-w-0">
-                        <div className="font-medium truncate">{displayName}</div>
-                        <div className="text-xs text-muted-foreground flex items-center gap-2">
-                          {scr.screenId && <span>{scr.screenId}</span>}
-                          {scr.yodeckPlayerId && <span>• YDK-{scr.yodeckPlayerId}</span>}
+                    <div className="flex items-start gap-3">
+                      <Monitor className="h-5 w-5 text-muted-foreground shrink-0 mt-0.5" />
+                      <div className="min-w-0 flex-1">
+                        {/* Titel: Yodeck schermnaam */}
+                        <div className="font-medium truncate text-base" data-testid={`screen-name-${scr.id}`}>
+                          {yodeckName}
                         </div>
+                        
+                        {/* Subtitel: Bedrijf (links) + Plaats (rechts) */}
+                        <div className="flex items-center gap-2 mt-0.5" onClick={(e) => e.stopPropagation()}>
+                          {hasMoneybird && companyName ? (
+                            <span className="text-sm text-foreground/80 truncate" data-testid={`company-name-${scr.id}`}>
+                              {companyName}
+                            </span>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <Badge 
+                                variant="outline" 
+                                className="text-orange-600 border-orange-300 text-xs"
+                                data-testid={`badge-unlinked-${scr.id}`}
+                              >
+                                Niet gekoppeld
+                              </Badge>
+                              <Popover 
+                                open={linkPopoverOpen === scr.id} 
+                                onOpenChange={(open) => {
+                                  setLinkPopoverOpen(open ? scr.id : null);
+                                  if (!open) setLinkSearch("");
+                                }}
+                              >
+                                <PopoverTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-6 px-2 text-xs text-orange-600 hover:text-orange-700 hover:bg-orange-50"
+                                    data-testid={`button-link-moneybird-${scr.id}`}
+                                  >
+                                    <Link2 className="h-3 w-3 mr-1" />
+                                    Koppel
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-[280px] p-0" align="start">
+                                  <Command>
+                                    <CommandInput 
+                                      placeholder="Zoek Moneybird contact..." 
+                                      value={linkSearch}
+                                      onValueChange={setLinkSearch}
+                                    />
+                                    <CommandList>
+                                      <CommandEmpty>Geen contact gevonden</CommandEmpty>
+                                      <CommandGroup>
+                                        {moneybirdContacts
+                                          .filter(c => {
+                                            if (!linkSearch) return true;
+                                            const search = linkSearch.toLowerCase();
+                                            const name = (c.companyName || `${c.firstname || ''} ${c.lastname || ''}`).toLowerCase();
+                                            const city = (c.city || '').toLowerCase();
+                                            return name.includes(search) || city.includes(search);
+                                          })
+                                          .slice(0, 10)
+                                          .map((contact) => (
+                                            <CommandItem
+                                              key={contact.id}
+                                              value={contact.companyName || `${contact.firstname} ${contact.lastname}`}
+                                              onSelect={() => {
+                                                linkScreenMutation.mutate({
+                                                  screenId: scr.id,
+                                                  moneybirdContactId: contact.moneybirdId,
+                                                });
+                                                setLinkPopoverOpen(null);
+                                                setLinkSearch("");
+                                              }}
+                                              className="cursor-pointer"
+                                            >
+                                              <div className="flex flex-col">
+                                                <span className="font-medium text-sm">
+                                                  {contact.companyName || `${contact.firstname || ''} ${contact.lastname || ''}`}
+                                                </span>
+                                                {contact.city && (
+                                                  <span className="text-xs text-muted-foreground">{contact.city}</span>
+                                                )}
+                                              </div>
+                                            </CommandItem>
+                                          ))}
+                                      </CommandGroup>
+                                    </CommandList>
+                                  </Command>
+                                </PopoverContent>
+                              </Popover>
+                            </div>
+                          )}
+                          
+                          {/* Plaats (rechts) */}
+                          {cityName && (
+                            <>
+                              <span className="text-muted-foreground">•</span>
+                              <span className="text-sm text-muted-foreground" data-testid={`location-city-${scr.id}`}>
+                                {cityName}
+                              </span>
+                            </>
+                          )}
+                          {!cityName && hasMoneybird && (
+                            <>
+                              <span className="text-muted-foreground">•</span>
+                              <span className="text-sm text-muted-foreground">—</span>
+                            </>
+                          )}
+                        </div>
+                        
+                        {/* EVZ ID (klein, onder subtitel) */}
+                        {scr.screenId && (
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {scr.screenId}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </TableCell>
                   
-                  {/* Locatie / Bedrijf - Source: Moneybird snapshot (NOT location entity) */}
-                  <TableCell className={getCellPadding()} onClick={(e) => e.stopPropagation()}>
-                    {(() => {
-                      // Get Moneybird data from screen's snapshot (per-screen, no grouping!)
-                      const snapshot = scr.moneybirdContactSnapshot as { company?: string; city?: string } | null;
-                      const hasMoneybird = Boolean(scr.moneybirdContactId);
-                      const companyName = snapshot?.company;
-                      const cityName = snapshot?.city || scr.city;
-                      
-                      return (
-                        <div className="min-w-0 flex items-center gap-2">
-                          <div className="flex-1 min-w-0">
-                            <div className="truncate flex items-center gap-1">
-                              {hasMoneybird && companyName ? (
-                                <>
-                                  {companyName}
-                                  <CheckCircle className="h-3 w-3 text-green-500 shrink-0" />
-                                </>
-                              ) : (
-                                <>
-                                  <span className="text-orange-500">Niet gekoppeld</span>
-                                  <AlertCircle className="h-3 w-3 text-orange-500 shrink-0" />
-                                </>
-                              )}
-                            </div>
-                            {cityName && (
-                              <div className="text-xs text-muted-foreground">{cityName}</div>
-                            )}
-                          </div>
-                          {/* Show link button only if screen is not linked */}
-                          {!scr.moneybirdContactId && (
-                        <Popover 
-                          open={linkPopoverOpen === scr.id} 
-                          onOpenChange={(open) => {
-                            setLinkPopoverOpen(open ? scr.id : null);
-                            if (!open) setLinkSearch("");
-                          }}
-                        >
-                          <PopoverTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 px-2 text-xs text-orange-600 hover:text-orange-700 hover:bg-orange-50"
-                              data-testid={`button-link-moneybird-${scr.id}`}
-                            >
-                              <Link2 className="h-3 w-3 mr-1" />
-                              Koppel
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-[280px] p-0" align="start">
-                            <Command>
-                              <CommandInput 
-                                placeholder="Zoek Moneybird contact..." 
-                                value={linkSearch}
-                                onValueChange={setLinkSearch}
-                              />
-                              <CommandList>
-                                <CommandEmpty>Geen contact gevonden</CommandEmpty>
-                                <CommandGroup>
-                                  {moneybirdContacts
-                                    .filter(c => {
-                                      if (!linkSearch) return true;
-                                      const search = linkSearch.toLowerCase();
-                                      const name = (c.companyName || `${c.firstname || ''} ${c.lastname || ''}`).toLowerCase();
-                                      const city = (c.city || '').toLowerCase();
-                                      return name.includes(search) || city.includes(search);
-                                    })
-                                    .slice(0, 10)
-                                    .map((contact) => (
-                                      <CommandItem
-                                        key={contact.id}
-                                        value={contact.companyName || `${contact.firstname} ${contact.lastname}`}
-                                        onSelect={() => {
-                                          linkScreenMutation.mutate({
-                                            screenId: scr.id,
-                                            moneybirdContactId: contact.moneybirdId,
-                                          });
-                                          setLinkPopoverOpen(null);
-                                          setLinkSearch("");
-                                        }}
-                                        className="cursor-pointer"
-                                      >
-                                        <div className="flex flex-col">
-                                          <span className="font-medium text-sm">
-                                            {contact.companyName || `${contact.firstname || ''} ${contact.lastname || ''}`}
-                                          </span>
-                                          {contact.city && (
-                                            <span className="text-xs text-muted-foreground">{contact.city}</span>
-                                          )}
-                                        </div>
-                                      </CommandItem>
-                                    ))}
-                                </CommandGroup>
-                              </CommandList>
-                            </Command>
-                          </PopoverContent>
-                        </Popover>
-                          )}
-                        </div>
-                      );
-                    })()}
-                  </TableCell>
-                  
-                  {/* Status - Yodeck online/offline + sync status */}
+                  {/* Status kolom: Yodeck online/offline */}
                   <TableCell className={getCellPadding()}>
                     <div className="flex flex-col gap-1">
-                      {/* Yodeck online/offline status */}
-                      {scr.yodeckPlayerId ? (
+                      {scr.yodeck.deviceId ? (
                         <Badge 
-                          variant={scr.status === "online" ? "default" : "destructive"}
+                          variant={scr.yodeck.status === "online" ? "default" : "destructive"}
                           className="font-medium w-fit"
                         >
-                          {scr.status === "online" ? "Online" : "Offline"}
+                          {scr.yodeck.status === "online" ? "Online" : "Offline"}
                         </Badge>
                       ) : (
                         <Badge 
@@ -770,46 +775,15 @@ export default function Screens() {
                           Geen Yodeck
                         </Badge>
                       )}
+                      {placementCount > 0 && (
+                        <span className="text-xs text-muted-foreground">
+                          {placementCount} plaatsing{placementCount !== 1 ? "en" : ""}
+                        </span>
+                      )}
                     </div>
                   </TableCell>
                   
-                  {/* Content */}
-                  <TableCell className={getCellPadding()}>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <div className="max-w-[180px] truncate cursor-default">
-                            {scr.yodeckContentCount === null || scr.yodeckContentCount === undefined ? (
-                              <span className="text-muted-foreground">Onbekend</span>
-                            ) : scr.yodeckContentCount === 0 ? (
-                              <span className="text-orange-500">Leeg</span>
-                            ) : firstContentItem ? (
-                              <span className="text-muted-foreground">
-                                media: {firstContentItem}
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground">{scr.yodeckContentCount} items</span>
-                            )}
-                          </div>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom" className="max-w-[300px]">
-                          <p className="text-sm">{contentTooltip}</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </TableCell>
-                  
-                  {/* Actieve plaatsingen */}
-                  <TableCell className={`${getCellPadding()} text-center`}>
-                    <Badge 
-                      variant={placementCount > 0 ? "secondary" : "outline"}
-                      className={placementCount === 0 ? "text-muted-foreground" : ""}
-                    >
-                      {placementCount}
-                    </Badge>
-                  </TableCell>
-                  
-                  {/* Actie */}
+                  {/* Actie kolom */}
                   <TableCell className={`${getCellPadding()} text-right`} onClick={(e) => e.stopPropagation()}>
                     <Button 
                       variant="default" 
@@ -829,7 +803,7 @@ export default function Screens() {
             })}
             {filteredScreens.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={3} className="h-24 text-center text-muted-foreground">
                   Geen schermen gevonden
                 </TableCell>
               </TableRow>

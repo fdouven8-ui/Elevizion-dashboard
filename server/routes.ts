@@ -655,6 +655,68 @@ export async function registerRoutes(
     res.json(enrichedScreens);
   });
 
+  // ScreenWithBusiness: Gecombineerd data object voor UI
+  // Retourneert: yodeck info, moneybirdContact, linkStatus, locationLabel
+  app.get("/api/screens/with-business", async (_req, res) => {
+    const screens = await storage.getScreens();
+    
+    const screensWithBusiness = screens.map(screen => {
+      const snapshot = screen.moneybirdContactSnapshot as {
+        companyName?: string;
+        firstname?: string;
+        lastname?: string;
+        address1?: string;
+        zipcode?: string;
+        city?: string;
+        country?: string;
+        phone?: string;
+        email?: string;
+        kvk?: string;
+        btw?: string;
+      } | null;
+
+      // Determine link status
+      let linkStatus: "linked" | "unlinked" | "missing_data" = "unlinked";
+      if (screen.moneybirdContactId && snapshot) {
+        linkStatus = snapshot.companyName ? "linked" : "missing_data";
+      } else if (screen.moneybirdContactId) {
+        linkStatus = "missing_data";
+      }
+
+      return {
+        id: screen.id,
+        screenId: screen.screenId,
+        yodeck: {
+          deviceId: screen.yodeckPlayerId || null,
+          screenName: screen.yodeckPlayerName || screen.name,
+          tags: [], // Tags not stored on screens, reserved for future
+          uuid: screen.yodeckUuid || null,
+          status: screen.status,
+          lastSeenAt: screen.lastSeenAt,
+          screenshotUrl: screen.yodeckScreenshotUrl || null,
+        },
+        moneybirdContact: screen.moneybirdContactId && snapshot ? {
+          id: screen.moneybirdContactId,
+          name: snapshot.companyName || `${snapshot.firstname || ''} ${snapshot.lastname || ''}`.trim() || null,
+          address1: snapshot.address1 || null,
+          zipcode: snapshot.zipcode || null,
+          city: snapshot.city || null,
+          country: snapshot.country || null,
+          phone: snapshot.phone || null,
+          email: snapshot.email || null,
+          kvk: snapshot.kvk || null,
+          btw: snapshot.btw || null,
+        } : null,
+        linkStatus,
+        locationLabel: snapshot?.city || screen.city || "—",
+        isActive: screen.isActive,
+        createdAt: screen.createdAt,
+      };
+    });
+
+    res.json(screensWithBusiness);
+  });
+
   app.get("/api/screens/:id", async (req, res) => {
     const screen = await storage.getScreen(req.params.id);
     if (!screen) return res.status(404).json({ message: "Screen not found" });
