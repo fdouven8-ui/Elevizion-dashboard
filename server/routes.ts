@@ -27,7 +27,10 @@ import {
   insertTaskSchema,
   insertTaskAttachmentSchema,
   insertSiteSchema,
+  insertEntitySchema,
+  insertSyncJobSchema,
 } from "@shared/schema";
+import { getMoneybirdClient } from "./services/moneybirdClient";
 import { ObjectStorageService, ObjectNotFoundError } from "./objectStorage";
 import {
   getIntegrationStatus,
@@ -375,6 +378,239 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[Sites API] Error fetching Yodeck screens cache:", error);
       res.status(500).json({ message: "Error fetching screens cache" });
+    }
+  });
+
+  // ============================================================================
+  // ENTITIES (UNIFIED MODEL FOR ADVERTISERS + SCREENS)
+  // ============================================================================
+
+  app.get("/api/entities", async (_req, res) => {
+    try {
+      const entities = await storage.getEntities();
+      res.json(entities);
+    } catch (error: any) {
+      console.error("[Entities API] Error fetching entities:", error);
+      res.status(500).json({ message: "Error fetching entities" });
+    }
+  });
+
+  app.get("/api/entities/:id", async (req, res) => {
+    try {
+      const entity = await storage.getEntity(req.params.id);
+      if (!entity) return res.status(404).json({ message: "Entity not found" });
+      res.json(entity);
+    } catch (error: any) {
+      console.error("[Entities API] Error fetching entity:", error);
+      res.status(500).json({ message: "Error fetching entity" });
+    }
+  });
+
+  app.get("/api/entities/code/:code", async (req, res) => {
+    try {
+      const entity = await storage.getEntityByCode(req.params.code);
+      if (!entity) return res.status(404).json({ message: "Entity not found" });
+      res.json(entity);
+    } catch (error: any) {
+      console.error("[Entities API] Error fetching entity by code:", error);
+      res.status(500).json({ message: "Error fetching entity" });
+    }
+  });
+
+  // Create entity with automatic Moneybird contact creation
+  app.post("/api/entities", isAuthenticated, async (req, res) => {
+    try {
+      const result = insertEntitySchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ message: "Invalid entity data", errors: result.error.flatten() });
+      }
+
+      const { entityType, entityCode, displayName, contactData, tags } = result.data;
+
+      // Create entity in PENDING state
+      const entity = await storage.createEntity({
+        entityType,
+        entityCode,
+        displayName,
+        status: "PENDING",
+        contactData: contactData as object || null,
+        tags: tags as string[] || [],
+      });
+
+      // Create sync job for Moneybird contact creation
+      const syncJob = await storage.createSyncJob({
+        entityId: entity.id,
+        provider: "MONEYBIRD",
+        action: "CREATE_CONTACT",
+        status: "PENDING",
+        payload: contactData as object || null,
+      });
+
+      // Try to create Moneybird contact
+      const moneybirdClient = await getMoneybirdClient();
+      if (moneybirdClient && contactData) {
+        try {
+          await storage.updateSyncJob(syncJob.id, { status: "RUNNING" });
+          
+          const cd = contactData as any;
+          const { contact, created } = await moneybirdClient.createOrUpdateContact(null, {
+            company_name: cd.company || displayName,
+            address1: cd.address || undefined,
+            zipcode: cd.zipcode || undefined,
+            city: cd.city || undefined,
+            phone: cd.phone || undefined,
+            email: cd.email || undefined,
+            chamber_of_commerce: cd.kvk || undefined,
+            tax_number: cd.btw || undefined,
+          });
+
+          // Update entity with Moneybird contact ID and set status to ACTIVE
+          await storage.updateEntity(entity.id, {
+            moneybirdContactId: contact.id,
+            status: "ACTIVE",
+          });
+
+          await storage.updateSyncJob(syncJob.id, { 
+            status: "SUCCESS",
+            finishedAt: new Date(),
+          });
+
+          // Fetch updated entity
+          const updatedEntity = await storage.getEntity(entity.id);
+          return res.status(201).json({
+            entity: updatedEntity,
+            moneybirdContact: { id: contact.id, created },
+          });
+        } catch (mbError: any) {
+          console.error("[Entities API] Moneybird error:", mbError);
+          await storage.updateSyncJob(syncJob.id, { 
+            status: "FAILED",
+            errorMessage: mbError.message,
+            finishedAt: new Date(),
+          });
+          await storage.updateEntity(entity.id, { status: "ERROR" });
+        }
+      }
+
+      // Return entity even if Moneybird failed (status will be PENDING or ERROR)
+      const finalEntity = await storage.getEntity(entity.id);
+      res.status(201).json({ entity: finalEntity });
+    } catch (error: any) {
+      console.error("[Entities API] Error creating entity:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Update entity
+  app.patch("/api/entities/:id", isAuthenticated, async (req, res) => {
+    try {
+      const entity = await storage.updateEntity(req.params.id, req.body);
+      if (!entity) return res.status(404).json({ message: "Entity not found" });
+      res.json(entity);
+    } catch (error: any) {
+      console.error("[Entities API] Error updating entity:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Delete entity
+  app.delete("/api/entities/:id", isAuthenticated, async (req, res) => {
+    try {
+      await storage.deleteEntity(req.params.id);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Entities API] Error deleting entity:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get sync jobs for entity
+  app.get("/api/entities/:id/sync-jobs", async (req, res) => {
+    try {
+      const jobs = await storage.getSyncJobs(req.params.id);
+      res.json(jobs);
+    } catch (error: any) {
+      console.error("[Entities API] Error fetching sync jobs:", error);
+      res.status(500).json({ message: "Error fetching sync jobs" });
+    }
+  });
+
+  // Get all sync jobs
+  app.get("/api/sync-jobs", async (_req, res) => {
+    try {
+      const jobs = await storage.getSyncJobs();
+      res.json(jobs);
+    } catch (error: any) {
+      console.error("[Entities API] Error fetching sync jobs:", error);
+      res.status(500).json({ message: "Error fetching sync jobs" });
+    }
+  });
+
+  // Retry sync job (re-attempt Moneybird contact creation)
+  app.post("/api/entities/:id/retry-sync", isAuthenticated, async (req, res) => {
+    try {
+      const entity = await storage.getEntity(req.params.id);
+      if (!entity) return res.status(404).json({ message: "Entity not found" });
+
+      // Only retry if entity is in ERROR state
+      if (entity.status !== "ERROR" && entity.status !== "PENDING") {
+        return res.status(400).json({ message: "Entity is not in error state" });
+      }
+
+      const moneybirdClient = await getMoneybirdClient();
+      if (!moneybirdClient) {
+        return res.status(503).json({ message: "Moneybird not configured" });
+      }
+
+      // Create new sync job
+      const syncJob = await storage.createSyncJob({
+        entityId: entity.id,
+        provider: "MONEYBIRD",
+        action: entity.moneybirdContactId ? "UPDATE_CONTACT" : "CREATE_CONTACT",
+        status: "RUNNING",
+        payload: entity.contactData as object || null,
+      });
+
+      try {
+        const cd = entity.contactData as any || {};
+        const { contact, created } = await moneybirdClient.createOrUpdateContact(
+          entity.moneybirdContactId || null,
+          {
+            company_name: cd.company || entity.displayName,
+            address1: cd.address || undefined,
+            zipcode: cd.zipcode || undefined,
+            city: cd.city || undefined,
+            phone: cd.phone || undefined,
+            email: cd.email || undefined,
+            chamber_of_commerce: cd.kvk || undefined,
+            tax_number: cd.btw || undefined,
+          }
+        );
+
+        await storage.updateEntity(entity.id, {
+          moneybirdContactId: contact.id,
+          status: "ACTIVE",
+        });
+
+        await storage.updateSyncJob(syncJob.id, { 
+          status: "SUCCESS",
+          finishedAt: new Date(),
+        });
+
+        const updatedEntity = await storage.getEntity(entity.id);
+        res.json({ entity: updatedEntity, moneybirdContact: { id: contact.id, created } });
+      } catch (mbError: any) {
+        console.error("[Entities API] Retry Moneybird error:", mbError);
+        await storage.updateSyncJob(syncJob.id, { 
+          status: "FAILED",
+          errorMessage: mbError.message,
+          finishedAt: new Date(),
+        });
+        res.status(500).json({ message: `Moneybird sync failed: ${mbError.message}` });
+      }
+    } catch (error: any) {
+      console.error("[Entities API] Error retrying sync:", error);
+      res.status(500).json({ message: error.message });
     }
   });
 
