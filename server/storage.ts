@@ -61,6 +61,8 @@ import type {
   MoneybirdContactCache, InsertMoneybirdContactCache,
   YodeckScreenCache, InsertYodeckScreenCache,
   SiteWithSnapshots,
+  Entity, InsertEntity,
+  SyncJob, InsertSyncJob,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -361,6 +363,20 @@ export interface IStorage {
   getYodeckScreensCache(): Promise<YodeckScreenCache[]>;
   getYodeckScreenCache(yodeckScreenId: string): Promise<YodeckScreenCache | undefined>;
   upsertYodeckScreenCache(data: InsertYodeckScreenCache): Promise<YodeckScreenCache>;
+  
+  // Entities (unified model for ADVERTISER + SCREEN)
+  getEntities(): Promise<Entity[]>;
+  getEntity(id: string): Promise<Entity | undefined>;
+  getEntityByCode(entityCode: string): Promise<Entity | undefined>;
+  createEntity(data: InsertEntity): Promise<Entity>;
+  updateEntity(id: string, data: Partial<InsertEntity>): Promise<Entity | undefined>;
+  deleteEntity(id: string): Promise<boolean>;
+  
+  // Sync Jobs
+  getSyncJobs(entityId?: string): Promise<SyncJob[]>;
+  getSyncJob(id: string): Promise<SyncJob | undefined>;
+  createSyncJob(data: InsertSyncJob): Promise<SyncJob>;
+  updateSyncJob(id: string, data: Partial<InsertSyncJob>): Promise<SyncJob | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2365,6 +2381,73 @@ export class DatabaseStorage implements IStorage {
         .returning();
       return created;
     }
+  }
+
+  // ============================================================================
+  // ENTITIES (UNIFIED MODEL FOR ADVERTISER + SCREEN)
+  // ============================================================================
+
+  async getEntities(): Promise<Entity[]> {
+    return await db.select().from(schema.entities).orderBy(desc(schema.entities.createdAt));
+  }
+
+  async getEntity(id: string): Promise<Entity | undefined> {
+    const [entity] = await db.select().from(schema.entities).where(eq(schema.entities.id, id));
+    return entity;
+  }
+
+  async getEntityByCode(entityCode: string): Promise<Entity | undefined> {
+    const [entity] = await db.select().from(schema.entities).where(eq(schema.entities.entityCode, entityCode));
+    return entity;
+  }
+
+  async createEntity(data: InsertEntity): Promise<Entity> {
+    const [entity] = await db.insert(schema.entities).values(data).returning();
+    return entity;
+  }
+
+  async updateEntity(id: string, data: Partial<InsertEntity>): Promise<Entity | undefined> {
+    const [entity] = await db.update(schema.entities)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.entities.id, id))
+      .returning();
+    return entity;
+  }
+
+  async deleteEntity(id: string): Promise<boolean> {
+    await db.delete(schema.entities).where(eq(schema.entities.id, id));
+    return true;
+  }
+
+  // ============================================================================
+  // SYNC JOBS
+  // ============================================================================
+
+  async getSyncJobs(entityId?: string): Promise<SyncJob[]> {
+    if (entityId) {
+      return await db.select().from(schema.syncJobs)
+        .where(eq(schema.syncJobs.entityId, entityId))
+        .orderBy(desc(schema.syncJobs.startedAt));
+    }
+    return await db.select().from(schema.syncJobs).orderBy(desc(schema.syncJobs.startedAt));
+  }
+
+  async getSyncJob(id: string): Promise<SyncJob | undefined> {
+    const [job] = await db.select().from(schema.syncJobs).where(eq(schema.syncJobs.id, id));
+    return job;
+  }
+
+  async createSyncJob(data: InsertSyncJob): Promise<SyncJob> {
+    const [job] = await db.insert(schema.syncJobs).values(data).returning();
+    return job;
+  }
+
+  async updateSyncJob(id: string, data: Partial<InsertSyncJob>): Promise<SyncJob | undefined> {
+    const [job] = await db.update(schema.syncJobs)
+      .set(data)
+      .where(eq(schema.syncJobs.id, id))
+      .returning();
+    return job;
   }
 }
 

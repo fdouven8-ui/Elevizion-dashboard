@@ -1,0 +1,126 @@
+# OPDRACHT: Elevizion Dashboard – Moneybird + Yodeck end-to-end onboarding + overzicht
+
+Je bent senior full-stack engineer (React + TS + Vite, Express, Drizzle, Postgres).
+Doel: In het Elevizion Dashboard moet onboarding van (1) Adverteerder en (2) Scherm/Locatie volledig kloppen:
+- Bij aanmaken in dashboard => DIRECT Moneybird contact aanmaken (met alle verplichte velden)
+- Bij nieuw scherm => ook Moneybird contact aanmaken + Yodeck device koppelen dmv TAGS
+- Daarna moet alles overzichtelijk zichtbaar zijn in submenu’s (Schermen, Adverteerders, Ads/Placements, Sync/Logs)
+
+BELANGRIJK PRINCIPES
+1) Eén bron van waarheid intern:
+   - Adverteerder = entity_type="ADVERTISER" + ENTITY_ID (EVZ-ADV-0001)
+   - Scherm/Locatie = entity_type="SCREEN" + SCREEN_ID (EVZ-001)
+   - In 95% gevallen is locatie == scherm (1 scherm per locatie). Locatie is dus geen apart object tenzij multi-screen.
+2) Moneybird:
+   - Voor ELKE entity (advertiser én screen) bestaat EXACT 1 Moneybird contact.
+   - We bewaren moneybird_contact_id intern. Nooit “matchen op naam”.
+3) Yodeck:
+   - Device koppelen via tags: tag bevat minimaal SCREEN_ID, plus eventueel “EVZ” en “LOC:<plaats>”.
+   - We bewaren yodeck_device_id intern zodra we die match hebben gevonden.
+4) Idempotent & fouttolerant:
+   - Herhaald klikken mag geen dubbele Moneybird contacten maken.
+   - Alles loggen, met duidelijke status badges in UI.
+
+UIT TE VOEREN (TECH + UI)
+
+A) DATABASE / MODELLEN (Drizzle)
+Maak/controleer tabellen:
+- entities:
+  - id (pk uuid)
+  - entity_type ("ADVERTISER" | "SCREEN")
+  - entity_code (ENTITY_ID of SCREEN_ID, unique)
+  - display_name
+  - status ("ACTIVE" | "PENDING" | "ERROR")
+  - moneybird_contact_id (string, unique nullable)
+  - yodeck_device_id (string, unique nullable)
+  - tags (jsonb array of strings)
+  - contact_data (jsonb) -> alle adres/kvk/btw/email/telefoon etc
+  - created_at, updated_at
+- sync_jobs:
+  - id, entity_id, provider ("MONEYBIRD"|"YODECK"), action, status, error_message, started_at, finished_at, payload(jsonb)
+
+Zorg voor unieke constraints:
+- entity_code unique
+- moneybird_contact_id unique
+- yodeck_device_id unique
+
+B) MONEYBIRD INTEGRATIE
+1) Bouw een Moneybird client:
+- env vars: MONEYBIRD_ADMIN_ID, MONEYBIRD_TOKEN, MONEYBIRD_API_BASE
+- functies:
+  - createOrUpdateContact(entity): 
+      * als moneybird_contact_id bestaat -> update
+      * anders -> create
+      * map velden naar Moneybird eisen (company/person, name, address1, zipcode, city, country, email, phone, chamber_of_commerce, vat_number, etc)
+      * validatie: als verplichte velden ontbreken => return error met veldnamen
+  - getContact(id)
+2) Nieuwe onboarding flow:
+- POST /api/entities/advertiser
+- POST /api/entities/screen
+Beide moeten:
+- entity intern aanmaken (status=PENDING)
+- Moneybird contact create (of update) en moneybird_contact_id opslaan
+- status=ACTIVE bij succes, anders status=ERROR + log sync_jobs
+
+C) YODECK KOPPELING VIA TAGS (Scherm)
+1) Voor screen onboarding:
+- Vereist: SCREEN_ID + gewenste yodeck_tag_set
+- Na Moneybird success:
+  - Zoek Yodeck device(s) met tag SCREEN_ID of exact match op tag set
+  - Als 1 match: save yodeck_device_id en status=ACTIVE
+  - Als 0 matches: status blijft PENDING, UI toont “Koppeling nodig”
+  - Als >1 matches: status=ERROR met list, UI vraagt keuze
+2) Endpoint:
+- POST /api/entities/:id/yodeck/link-by-tags { tags: string[] }
+- GET /api/yodeck/devices?tag=EVZ-001 (search)
+3) Idempotent:
+- Als al gekoppeld aan device_id => geen actie behalve check
+
+D) UI / SUBMENU OVERZICHTEN
+In React:
+1) Menu: Schermen, Adverteerders, Ads/Placements, Sync/Logs
+2) Schermen lijst (table):
+- SCREEN_ID, display_name, Moneybird badge (linked/unlinked), Yodeck badge (linked/pending/error),
+- tags (chips), laatste sync tijd, acties:
+  - “Koppel Yodeck via tags”
+  - “Open Moneybird contact” (link met id)
+  - “Resync”
+3) Adverteerders lijst:
+- ENTITY_ID, naam, contactgegevens (compact), Moneybird badge, status, laatste sync, “Resync”
+4) Detailpagina entity:
+- Tabs: Overzicht, Moneybird, Yodeck, Logs
+- Overzicht toont alle kernvelden en warnings (missende velden)
+5) Sync/Logs pagina:
+- filter op provider/status/entity_type
+- toont sync_jobs met error_message en payload preview
+
+E) VALIDATIE & UX
+- Onboarding wizard:
+  - Stap 1: Basis (naam/type)
+  - Stap 2: Contactgegevens (alle Moneybird velden)
+  - Stap 3 (alleen screen): tags + “zoek in Yodeck” preview
+- Toon inline fouten per veld (Moneybird requirements).
+- Laat gebruiker niet “opslaan” zonder minimaal verplichte Moneybird velden.
+- Geef duidelijke toasts + status badges.
+
+F) TESTS / EDGE CASES
+- Dubbel aanmaken met dezelfde SCREEN_ID => netjes blokkeren (409)
+- Moneybird down => entity blijft bestaan met status=ERROR en retry knop
+- Yodeck 0 match => pending + koppel flow
+- Yodeck multiple match => keuze dialoog
+
+G) DELIVERABLES
+- Implementeer bovenstaande in bestaande codebase.
+- Pas bestaande routes aan zodat “locatie” en “scherm” niet meer gescheiden worden tenzij multi-screen expliciet.
+- Voeg migraties toe.
+- Maak alles compileerbaar + type-safe.
+- Voeg een “System Health / Integrations status” widget op Home: Moneybird connected + Yodeck connected.
+
+Start met:
+1) Database migratie + models
+2) Moneybird create/update + endpoints
+3) Yodeck link-by-tags + endpoints
+4) UI lists + detail + onboarding wizard
+5) Logs/sync_jobs
+
+Let op: NIET opnieuw een los ‘locations’ model introduceren; gebruik entities als centrale laag.

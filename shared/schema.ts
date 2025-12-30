@@ -213,6 +213,51 @@ export const contactRoles = pgTable("contact_roles", {
   uniqueIndex("contact_roles_pk").on(table.moneybirdContactId, table.role),
 ]);
 
+// ============================================================================
+// ENTITIES - UNIFIED MODEL FOR ADVERTISER + SCREEN
+// ============================================================================
+
+/**
+ * Entities - Central table for both Advertisers and Screens
+ * 
+ * BUSINESS RULE: 1 Screen = 1 Location (95% of cases)
+ * - entity_type="ADVERTISER": companies that buy advertising space
+ * - entity_type="SCREEN": physical screen locations (each has its own Moneybird contact)
+ * 
+ * Each entity has exactly 1 Moneybird contact (never match on name, always by ID).
+ * Yodeck devices are linked via tags containing the entity_code.
+ */
+export const entities = pgTable("entities", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  entityType: text("entity_type").notNull(), // ADVERTISER, SCREEN
+  entityCode: text("entity_code").notNull().unique(), // EVZ-ADV-0001 or EVZ-001
+  displayName: text("display_name").notNull(),
+  status: text("status").notNull().default("PENDING"), // ACTIVE, PENDING, ERROR
+  moneybirdContactId: text("moneybird_contact_id").unique(), // Exactly 1 Moneybird contact per entity
+  yodeckDeviceId: text("yodeck_device_id").unique(), // Linked Yodeck device (for screens only)
+  tags: jsonb("tags").default([]), // Array of strings for Yodeck tag matching
+  contactData: jsonb("contact_data"), // All contact info: company, address, kvk, btw, email, phone, etc.
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * SyncJobs - Track all sync operations with external services
+ * Used for logging, debugging, and retry functionality
+ */
+export const syncJobs = pgTable("sync_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  entityId: varchar("entity_id").references(() => entities.id, { onDelete: "cascade" }),
+  provider: text("provider").notNull(), // MONEYBIRD, YODECK
+  action: text("action").notNull(), // CREATE_CONTACT, UPDATE_CONTACT, LINK_DEVICE, SYNC_STATUS
+  status: text("status").notNull().default("PENDING"), // PENDING, RUNNING, SUCCESS, FAILED
+  errorMessage: text("error_message"),
+  payload: jsonb("payload"), // Request/response data for debugging
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  finishedAt: timestamp("finished_at"),
+});
+
 /**
  * LocationGroups - For rare multi-screen locations (2+ screens at same physical location)
  * Only used when isMultiScreenLocation=true on screens
@@ -1513,3 +1558,39 @@ export type SiteWithSnapshots = Site & {
   contactSnapshot?: SiteContactSnapshot | null;
   yodeckSnapshot?: SiteYodeckSnapshot | null;
 };
+
+// ============================================================================
+// ENTITIES SCHEMAS AND TYPES
+// ============================================================================
+
+export const insertEntitySchema = createInsertSchema(entities).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertSyncJobSchema = createInsertSchema(syncJobs).omit({
+  id: true,
+  startedAt: true,
+});
+
+export type Entity = typeof entities.$inferSelect;
+export type InsertEntity = z.infer<typeof insertEntitySchema>;
+
+export type SyncJob = typeof syncJobs.$inferSelect;
+export type InsertSyncJob = z.infer<typeof insertSyncJobSchema>;
+
+// Contact data structure for entities
+export interface EntityContactData {
+  companyName?: string;
+  contactName?: string;
+  email?: string;
+  phone?: string;
+  address1?: string;
+  address2?: string;
+  zipcode?: string;
+  city?: string;
+  country?: string;
+  kvkNumber?: string;
+  vatNumber?: string;
+}
