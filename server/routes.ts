@@ -241,10 +241,12 @@ export async function registerRoutes(
         expiresAt,
       });
       
-      // Build portal URL
-      const baseUrl = process.env.REPLIT_DEV_DOMAIN 
-        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-        : `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      // Build portal URL using request origin for correct absolute URL
+      const baseUrl = process.env.PUBLIC_PORTAL_URL 
+        || (req.headers.origin ? req.headers.origin : null)
+        || (req.headers.host ? `https://${req.headers.host}` : null)
+        || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : null)
+        || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
       const portalUrl = `${baseUrl}/portal/${rawToken}`;
       
       res.status(201).json({
@@ -380,9 +382,12 @@ export async function registerRoutes(
         onboardingStatus: "invited",
       });
       
-      const baseUrl = process.env.REPLIT_DEV_DOMAIN 
-        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
-        : `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      // Build portal URL using request origin for correct absolute URL
+      const baseUrl = process.env.PUBLIC_PORTAL_URL 
+        || (req.headers.origin ? req.headers.origin : null)
+        || (req.headers.host ? `https://${req.headers.host}` : null)
+        || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : null)
+        || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
       const portalUrl = `${baseUrl}/portal/${rawToken}`;
       
       res.json({

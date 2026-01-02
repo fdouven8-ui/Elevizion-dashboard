@@ -1,0 +1,65 @@
+FIX HUIDIG PROBLEEM – GEEN NIEUWE FEATURES
+
+CONTEXT
+- De “Nieuwe adverteerder” functionaliteit is al toegevoegd onder:
+  Adverteerders → Iemand toevoegen.
+- Dit werkt daar goed.
+- Dezelfde functionaliteit MOET ook beschikbaar zijn in:
+  Onboarding → Nieuwe adverteerder.
+- Daarnaast: de gegenereerde portal/invul-link werkt nu NIET.
+
+DOEL
+1) Zorg dat dezelfde “Nieuwe adverteerder” flow ook in Onboarding gebruikt wordt.
+2) Fix de gegenereerde invul-link zodat deze wél werkt (juiste route + absolute URL).
+
+WAT JE MOET DOEN (ALLEEN DIT)
+
+1) ONBOARDING KOPPELEN
+- Hergebruik exact dezelfde component / logic die nu wordt gebruikt bij:
+  “Adverteerders → Iemand toevoegen”.
+- Voeg deze toe aan Onboarding (bijv. als stap of sectie).
+- GEEN nieuwe form maken.
+- GEEN velden aanpassen.
+- GEEN extra validatie toevoegen.
+- Alleen hergebruiken en renderen in Onboarding.
+
+2) INVUL-LINK FIXEN
+De link die nu wordt gegenereerd werkt niet. Fix dit als volgt:
+
+- Zorg dat de gegenereerde link:
+  - een ABSOLUTE URL is
+  - naar de juiste portal route wijst
+- Gebruik voor de link:
+  - `PUBLIC_PORTAL_URL` (env var)
+  - fallback naar huidige host als deze env ontbreekt
+
+Voorbeeld (concept):
+`${PUBLIC_PORTAL_URL || currentOrigin}/portal/adverteerder/${token}`
+
+- Controleer dat:
+  - de frontend route `/portal/adverteerder/:token` bestaat
+  - deze route GEEN admin-auth vereist
+  - de token correct wordt doorgegeven aan de portal API
+
+3) ROUTING CONTROLE
+- Verifieer dat de portal route correct wordt opgepakt in de React router.
+- Zorg dat de pagina opent i.p.v. 404 / blank screen.
+- Geen nieuwe layouts, gebruik bestaande simpele layout.
+
+AFBLIJVEN VAN
+- Database schema
+- Moneybird mapping
+- Extra velden
+- Nieuwe tabellen
+- Nieuwe flows
+- Extra UI logica
+
+ACCEPTATIE
+- Ik kan in Onboarding ook een adverteerder toevoegen (zelfde als onder Adverteerders).
+- Na opslaan kan ik “genereer invul-link” klikken.
+- De link opent correct in een nieuw tabblad.
+- Portal pagina laadt zonder fout.
+
+BEGIN NU MET FIXEN
+- Pas alleen relevante bestanden aan.
+- Hou diff zo klein mogelijk.

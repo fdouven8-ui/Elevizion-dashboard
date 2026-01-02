@@ -578,39 +578,64 @@ function NewScreenWizard({ onBack }: { onBack: () => void }) {
 function NewAdvertiserWizard({ onBack }: { onBack: () => void }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [step, setStep] = useState(1);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [portalLink, setPortalLink] = useState<{ url: string; expiresAt: string } | null>(null);
   const [formData, setFormData] = useState({
     companyName: "",
-    contactName: "",
     email: "",
-    phone: "",
-    address: "",
-    moneybirdContactId: "",
+    contactName: "",
   });
-  const [createdAdvertiser, setCreatedAdvertiser] = useState<Advertiser | null>(null);
 
-  const createAdvertiserMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/advertisers", {
-        companyName: formData.companyName,
-        contactName: formData.contactName,
-        email: formData.email,
-        phone: formData.phone || null,
-        address: formData.address || null,
-        moneybirdContactId: formData.moneybirdContactId || null,
+  const onQuickSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.companyName || !formData.email) return;
+    
+    setIsSubmitting(true);
+    try {
+      const response = await fetch("/api/advertisers/quick-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          companyName: formData.companyName,
+          email: formData.email,
+          contactName: formData.contactName || undefined,
+        }),
       });
-      return res.json();
-    },
-    onSuccess: (data) => {
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Fout bij aanmaken");
+      }
+      
+      const result = await response.json();
+      setPortalLink({ url: result.portalUrl, expiresAt: result.expiresAt });
       queryClient.invalidateQueries({ queryKey: ["/api/advertisers"] });
-      setCreatedAdvertiser(data);
-      setStep(4);
-      toast({ title: "Adverteerder aangemaakt!" });
-    },
-    onError: () => {
-      toast({ title: "Fout bij aanmaken", variant: "destructive" });
-    },
-  });
+      queryClient.invalidateQueries({ queryKey: ["advertisers"] });
+      
+      toast({
+        title: "Adverteerder aangemaakt",
+        description: "Kopieer de link en stuur deze naar de klant.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Fout",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const copyPortalLink = () => {
+    if (portalLink) {
+      navigator.clipboard.writeText(portalLink.url);
+      toast({
+        title: "Link gekopieerd",
+        description: "De portal link is naar je klembord gekopieerd.",
+      });
+    }
+  };
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -626,160 +651,100 @@ function NewAdvertiserWizard({ onBack }: { onBack: () => void }) {
             <Users className="h-5 w-5" />
             Nieuwe Adverteerder
           </CardTitle>
-          <CardDescription>Stap {step} van 4</CardDescription>
+          <CardDescription>
+            {portalLink ? "Klaar! Stuur de link naar de klant." : "Snelle aanmaak met invul-link"}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {step === 1 && (
+          {portalLink ? (
             <div className="space-y-4">
-              <h3 className="font-medium">Bedrijfsgegevens</h3>
-              
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Bedrijfsnaam *</Label>
-                  <Input 
-                    value={formData.companyName}
-                    onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
-                    placeholder="ABC Fitness"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Contactpersoon *</Label>
-                    <Input 
-                      value={formData.contactName}
-                      onChange={(e) => setFormData({ ...formData, contactName: e.target.value })}
-                      placeholder="Jan Jansen"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Telefoon</Label>
-                    <Input 
-                      value={formData.phone}
-                      onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                      placeholder="06-12345678"
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Email *</Label>
-                  <Input 
-                    type="email"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="info@abcfitness.nl"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Adres</Label>
-                  <Input 
-                    value={formData.address}
-                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                    placeholder="Sportlaan 1, 1234 AB Amsterdam"
-                  />
-                </div>
+              <div className="flex items-center gap-2 text-green-600">
+                <CheckCircle className="h-5 w-5" />
+                <span className="font-medium">Adverteerder aangemaakt!</span>
               </div>
-
-              <Button 
-                className="w-full" 
-                onClick={() => setStep(2)}
-                disabled={!formData.companyName || !formData.contactName || !formData.email}
-              >
-                Volgende <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </div>
-          )}
-
-          {step === 2 && (
-            <div className="space-y-4">
-              <h3 className="font-medium">Moneybird Koppeling (optioneel)</h3>
               
               <div className="space-y-2">
-                <Label>Moneybird Contact ID</Label>
-                <Input 
-                  value={formData.moneybirdContactId}
-                  onChange={(e) => setFormData({ ...formData, moneybirdContactId: e.target.value })}
-                  placeholder="Contact ID uit Moneybird"
-                />
+                <Label>Invul-link voor klant</Label>
+                <div className="flex items-center gap-2">
+                  <Input 
+                    value={portalLink.url} 
+                    readOnly 
+                    className="font-mono text-sm"
+                    data-testid="input-portal-link"
+                  />
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    size="icon"
+                    onClick={copyPortalLink}
+                    data-testid="button-copy-link"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  Je kunt dit later ook koppelen. Financiële integratie is secundair in V1.
+                  Geldig tot {new Date(portalLink.expiresAt).toLocaleDateString("nl-NL")}
                 </p>
               </div>
 
-              <Button variant="outline" className="w-full" asChild>
-                <a href="https://moneybird.com" target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="mr-2 h-4 w-4" /> Open Moneybird
-                </a>
-              </Button>
-
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setStep(1)}>
-                  <ArrowLeft className="mr-2 h-4 w-4" /> Terug
-                </Button>
-                <Button className="flex-1" onClick={() => setStep(3)}>
-                  Volgende <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {step === 3 && (
-            <div className="space-y-4">
-              <h3 className="font-medium">Bevestig Gegevens</h3>
-              
-              <div className="space-y-3">
-                <div className="flex justify-between p-3 bg-muted rounded-lg">
-                  <span className="text-muted-foreground">Bedrijf</span>
-                  <span className="font-medium">{formData.companyName}</span>
-                </div>
-                <div className="flex justify-between p-3 bg-muted rounded-lg">
-                  <span className="text-muted-foreground">Contact</span>
-                  <span>{formData.contactName}</span>
-                </div>
-                <div className="flex justify-between p-3 bg-muted rounded-lg">
-                  <span className="text-muted-foreground">Email</span>
-                  <span>{formData.email}</span>
-                </div>
-                {formData.moneybirdContactId && (
-                  <div className="flex justify-between p-3 bg-muted rounded-lg">
-                    <span className="text-muted-foreground">Moneybird</span>
-                    <Badge variant="secondary">{formData.moneybirdContactId}</Badge>
-                  </div>
-                )}
-              </div>
-
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setStep(2)}>
-                  <ArrowLeft className="mr-2 h-4 w-4" /> Terug
-                </Button>
-                <Button 
-                  className="flex-1" 
-                  onClick={() => createAdvertiserMutation.mutate()}
-                  disabled={createAdvertiserMutation.isPending}
-                >
-                  {createAdvertiserMutation.isPending ? "Bezig..." : "Adverteerder Aanmaken"}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {step === 4 && createdAdvertiser && (
-            <div className="text-center space-y-4">
-              <CheckCircle className="h-16 w-16 text-green-600 mx-auto" />
-              <h3 className="text-xl font-bold">Adverteerder Aangemaakt!</h3>
-              <p className="text-muted-foreground">
-                {createdAdvertiser.companyName} is nu actief.
-              </p>
-              <div className="flex gap-2 justify-center">
+              <div className="flex gap-2 pt-4">
                 <Button variant="outline" onClick={onBack}>
                   Terug naar Onboarding
                 </Button>
-                <Button asChild>
-                  <a href={`/placements?advertiser=${createdAdvertiser.id}`}>
-                    <Upload className="mr-2 h-4 w-4" /> Upload Creative
-                  </a>
+                <Button onClick={() => window.open(portalLink.url, '_blank')}>
+                  <ExternalLink className="mr-2 h-4 w-4" /> Link Openen
                 </Button>
               </div>
             </div>
+          ) : (
+            <form onSubmit={onQuickSubmit} className="space-y-4">
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+                <p className="font-medium">Snelle aanmaak met invul-link</p>
+                <p className="mt-1 text-blue-700">
+                  Vul alleen bedrijfsnaam en e-mail in. De klant ontvangt een link om zelf de rest in te vullen.
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Bedrijfsnaam *</Label>
+                <Input 
+                  value={formData.companyName}
+                  onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+                  placeholder="ABC Fitness"
+                  required
+                  data-testid="input-company-name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>E-mail *</Label>
+                <Input 
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="info@abcfitness.nl"
+                  required
+                  data-testid="input-email"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Contactpersoon (optioneel)</Label>
+                <Input 
+                  value={formData.contactName}
+                  onChange={(e) => setFormData({ ...formData, contactName: e.target.value })}
+                  placeholder="Jan Jansen"
+                  data-testid="input-contact-name"
+                />
+              </div>
+              
+              <Button 
+                type="submit" 
+                className="w-full" 
+                disabled={isSubmitting || !formData.companyName || !formData.email}
+                data-testid="button-submit"
+              >
+                {isSubmitting ? "Aanmaken..." : "Aanmaken + Link Genereren"}
+              </Button>
+            </form>
           )}
         </CardContent>
       </Card>
