@@ -1,0 +1,114 @@
+FIX ALLEEN DEZE 2 PROBLEMEN – GEEN EXTRA FEATURES
+
+CONTEXT
+- Elevizion Dashboard (React + TS + Vite, Express, Drizzle, Postgres)
+- Bij een adverteerder kan SEPA incasso worden geactiveerd.
+- UI toont:
+  - “PDF downloaden” bij actief SEPA-mandaat → maar er wordt GEEN PDF gegenereerd.
+  - “Moneybird: Niet gekoppeld” terwijl alle gegevens al compleet zijn.
+- Dit moet automatisch werken zodra alles is ingevuld.
+
+DOEL
+1) SEPA-mandaat PDF moet écht gegenereerd en downloadbaar zijn.
+2) Moneybird contact moet AUTOMATISCH gekoppeld worden zodra adverteerder compleet is.
+
+---
+
+## 1) SEPA PDF DOWNLOAD FIXEN
+
+PROBLEEM
+- De knop “PDF downloaden” bestaat, maar:
+  - er is geen backend endpoint
+  - of het endpoint returnt geen PDF
+  - of frontend linkt niet correct
+
+OPLOSSING (MINIMAAL)
+- Maak een backend endpoint:
+  GET /api/advertisers/:id/sepa-mandate-pdf
+
+- Dit endpoint:
+  - Haalt advertiser + SEPA gegevens op (naam, IBAN, datum, consent)
+  - Genereert on-the-fly een eenvoudige PDF (tekst is genoeg, geen design nodig)
+  - Zet correcte headers:
+    - Content-Type: application/pdf
+    - Content-Disposition: attachment; filename="SEPA-mandaat-{bedrijfsnaam}.pdf"
+  - Stuurt PDF binary terug
+
+PDF INHOUD (simpel, functioneel)
+- Titel: “SEPA Incasso Machtiging”
+- Bedrijfsnaam adverteerder
+- IBAN
+- Rekeninghouder
+- Datum akkoord
+- Tekst: “Ondergetekende geeft toestemming voor automatische incasso…”
+
+FRONTEND
+- Koppel bestaande “PDF downloaden” knop aan dit endpoint
+- Gebruik window.open(...) of fetch + blob download
+- Geen nieuwe UI, alleen laten werken
+
+ACCEPTATIE
+- Klik op “PDF downloaden” → browser download direct een geldige PDF
+
+---
+
+## 2) MONEYBIRD AUTOMATISCH KOPPELEN
+
+PROBLEEM
+- Na invullen van alle gegevens blijft status:
+  “Moneybird: Niet gekoppeld”
+- Koppeling gebeurt nu niet automatisch
+
+OPLOSSING (MINIMAAL)
+- Zodra een adverteerder:
+  - status = compleet / ingevuld
+  - EN minimaal deze velden heeft:
+    - naam
+    - email
+    - adres (straat, postcode, plaats, land)
+- DAN:
+  - automatisch Moneybird contact aanmaken of updaten
+
+IMPLEMENTATIE
+- Voeg server-side functie toe:
+  upsertMoneybirdContact(advertiser)
+
+- Logica:
+  - Als advertiser.moneybird_contact_id bestaat:
+    -> update contact in Moneybird
+  - Anders:
+    -> create contact in Moneybird
+    -> sla moneybird_contact_id op in DB
+
+- Trigger deze functie:
+  - na succesvol opslaan van portal-invulgegevens
+  - of na opslaan in dashboard als alles compleet is
+
+ERROR HANDLING
+- Als Moneybird faalt:
+  - sla advertiser wél op
+  - log error
+  - laat status “Niet gekoppeld”
+- Geen crashes
+
+FRONTEND
+- Zodra moneybird_contact_id bestaat:
+  - toon status “Gekoppeld” (groen)
+- Geen handmatige knop nodig
+
+ACCEPTATIE
+- Na volledig invullen:
+  - Moneybird status springt automatisch naar “Gekoppeld”
+  - Geen handmatige actie nodig
+
+---
+
+BELANGRIJK
+- GEEN nieuwe tabellen
+- GEEN nieuwe flows
+- GEEN redesign
+- Alleen fixen wat nu zichtbaar stuk is
+
+BEGIN NU MET IMPLEMENTEREN
+- Pas alleen relevante backend + frontend bestanden aan
+- Hou diff zo klein mogelijk

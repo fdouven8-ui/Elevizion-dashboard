@@ -7,6 +7,7 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { z } from "zod";
 import crypto from "crypto";
+import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import {
   insertAdvertiserSchema,
@@ -220,6 +221,71 @@ export async function registerRoutes(
     }
   });
 
+  // SEPA Mandate PDF download
+  app.get("/api/advertisers/:id/sepa-mandate-pdf", async (req, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      if (!advertiser.sepaMandate || !advertiser.iban) {
+        return res.status(400).json({ message: "Geen SEPA mandaat beschikbaar" });
+      }
+      
+      const doc = new PDFDocument({ margin: 50 });
+      const chunks: Buffer[] = [];
+      
+      doc.on('data', (chunk: Buffer) => chunks.push(chunk));
+      doc.on('end', () => {
+        const pdfBuffer = Buffer.concat(chunks);
+        const filename = `SEPA-mandaat-${advertiser.companyName.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.send(pdfBuffer);
+      });
+      
+      // Generate PDF content
+      doc.fontSize(20).font('Helvetica-Bold').text('SEPA Incasso Machtiging', { align: 'center' });
+      doc.moveDown(2);
+      
+      doc.fontSize(12).font('Helvetica');
+      doc.text('Door ondertekening van dit formulier geeft u toestemming aan Elevizion B.V. om doorlopende incasso-opdrachten te sturen naar uw bank om een bedrag van uw rekening af te schrijven.');
+      doc.moveDown(1.5);
+      
+      doc.font('Helvetica-Bold').text('Gegevens incassant:');
+      doc.font('Helvetica').text('Naam: Elevizion B.V.');
+      doc.text('Incassant-ID: NL00ZZZ000000000000');
+      doc.moveDown(1);
+      
+      doc.font('Helvetica-Bold').text('Gegevens betaler:');
+      doc.font('Helvetica').text(`Bedrijfsnaam: ${advertiser.companyName}`);
+      doc.text(`Rekeninghouder: ${advertiser.ibanAccountHolder || advertiser.contactName || advertiser.companyName}`);
+      doc.text(`IBAN: ${advertiser.iban}`);
+      if (advertiser.street) doc.text(`Adres: ${advertiser.street}`);
+      if (advertiser.zipcode && advertiser.city) doc.text(`${advertiser.zipcode} ${advertiser.city}`);
+      doc.moveDown(1);
+      
+      doc.font('Helvetica-Bold').text('Mandaatgegevens:');
+      doc.font('Helvetica');
+      doc.text(`Mandaatreferentie: ${advertiser.sepaMandateReference || 'N.v.t.'}`);
+      doc.text(`Datum akkoord: ${advertiser.sepaMandateDate ? new Date(advertiser.sepaMandateDate).toLocaleDateString('nl-NL') : new Date().toLocaleDateString('nl-NL')}`);
+      doc.moveDown(1.5);
+      
+      doc.font('Helvetica-Bold').text('Verklaring:');
+      doc.font('Helvetica').text('Ondergetekende geeft hierbij toestemming voor automatische incasso van verschuldigde bedragen door Elevizion B.V. conform de SEPA Europese incassorichtlijnen.');
+      doc.moveDown(2);
+      
+      doc.text(`Datum: ${new Date().toLocaleDateString('nl-NL')}`);
+      doc.moveDown(2);
+      doc.text('Handtekening: ____________________________');
+      
+      doc.end();
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ============================================================================
   // ADVERTISER PORTAL (Quick Create + Self-Service Onboarding)
   // ============================================================================
@@ -363,9 +429,53 @@ export async function registerRoutes(
         onboardingStatus: "completed",
       });
       
+      // Auto-link to Moneybird if all required fields are present
+      let moneybirdLinked = false;
+      if (updatedAdvertiser && 
+          updatedAdvertiser.companyName && 
+          updatedAdvertiser.email && 
+          updatedAdvertiser.street && 
+          updatedAdvertiser.zipcode && 
+          updatedAdvertiser.city) {
+        try {
+          const moneybirdClient = await getMoneybirdClient();
+          if (moneybirdClient) {
+            const contactData = {
+              company_name: updatedAdvertiser.companyName,
+              firstname: updatedAdvertiser.contactName?.split(' ')[0] || undefined,
+              lastname: updatedAdvertiser.contactName?.split(' ').slice(1).join(' ') || undefined,
+              address1: updatedAdvertiser.street || undefined,
+              zipcode: updatedAdvertiser.zipcode || undefined,
+              city: updatedAdvertiser.city || undefined,
+              country: updatedAdvertiser.country || 'NL',
+              phone: updatedAdvertiser.phone || undefined,
+              email: updatedAdvertiser.email,
+              chamber_of_commerce: updatedAdvertiser.kvkNumber || undefined,
+              tax_number: updatedAdvertiser.vatNumber || undefined,
+            };
+            
+            const { contact } = await moneybirdClient.upsertOrCreateContact(
+              contactData,
+              updatedAdvertiser.moneybirdContactId || undefined
+            );
+            
+            // Update advertiser with Moneybird contact ID
+            await storage.updateAdvertiser(updatedAdvertiser.id, {
+              moneybirdContactId: contact.id,
+              moneybirdSyncStatus: 'synced',
+            });
+            moneybirdLinked = true;
+          }
+        } catch (mbError: any) {
+          console.error('[Portal] Moneybird auto-link failed:', mbError.message);
+          // Don't fail the request, just log the error
+        }
+      }
+      
       res.json({
         message: "Gegevens succesvol opgeslagen",
         advertiser: updatedAdvertiser,
+        moneybirdLinked,
       });
     } catch (error: any) {
       res.status(400).json({ message: error.message });

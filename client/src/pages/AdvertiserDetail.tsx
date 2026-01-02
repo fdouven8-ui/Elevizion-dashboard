@@ -333,7 +333,12 @@ export default function AdvertiserDetail() {
               </p>
               <div className="flex gap-2">
                 {advertiser.sepaMandate ? (
-                  <Button size="sm" variant="outline" data-testid="button-download-sepa">
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    data-testid="button-download-sepa"
+                    onClick={() => window.open(`/api/advertisers/${advertiser.id}/sepa-mandate-pdf`, '_blank')}
+                  >
                     <Download className="h-4 w-4 mr-1" />
                     PDF downloaden
                   </Button>
