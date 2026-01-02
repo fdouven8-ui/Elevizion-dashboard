@@ -2,7 +2,7 @@ import { useAppData } from "@/hooks/use-app-data";
 import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Search, MoreHorizontal, CreditCard, Check, X, Eye, ChevronDown, ChevronRight, Building2, Globe, Mail, FileText, Zap, Send, Copy, Link, Loader2, Clock } from "lucide-react";
+import { Plus, Search, MoreHorizontal, CreditCard, Check, X, Eye, ChevronDown, ChevronRight, Building2, Globe, Mail, FileText, Zap, Send, Copy, Link, Loader2, Clock, Trash2 } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -38,10 +38,14 @@ import type { Advertiser } from "@shared/schema";
 export default function Advertisers() {
   const { advertisers, addAdvertiser, updateAdvertiser } = useAppData();
   const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingAdvertiser, setEditingAdvertiser] = useState<Advertiser | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [deleteAdvertiser, setDeleteAdvertiser] = useState<Advertiser | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const filteredAdvertisers = advertisers.filter(adv => 
     adv.companyName.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -51,6 +55,40 @@ export default function Advertisers() {
   const handleEditSepa = (adv: Advertiser) => {
     setEditingAdvertiser(adv);
     setIsEditDialogOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteAdvertiser) return;
+    setIsDeleting(true);
+    try {
+      const response = await fetch(`/api/advertisers/${deleteAdvertiser.id}`, {
+        method: "DELETE",
+      });
+      if (response.status === 409) {
+        const error = await response.json();
+        toast({
+          title: "Kan niet verwijderen",
+          description: error.message,
+          variant: "destructive",
+        });
+      } else if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || "Fout bij verwijderen");
+      } else {
+        toast({ title: "Adverteerder verwijderd" });
+        queryClient.invalidateQueries({ queryKey: ["advertisers"] });
+        queryClient.invalidateQueries({ queryKey: ["/api/advertisers"] });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Fout",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+      setDeleteAdvertiser(null);
+    }
   };
 
   return (
@@ -164,6 +202,15 @@ export default function Advertisers() {
                       <DropdownMenuItem onClick={() => updateAdvertiser(adv.id, { status: adv.status === 'active' ? 'paused' : 'active' })}>
                         Status Wijzigen
                       </DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem 
+                        onClick={() => setDeleteAdvertiser(adv)}
+                        className="text-destructive focus:text-destructive"
+                        data-testid={`button-delete-${adv.id}`}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Verwijderen
+                      </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </TableCell>
@@ -197,6 +244,30 @@ export default function Advertisers() {
               }} 
             />
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!deleteAdvertiser} onOpenChange={(open) => !open && setDeleteAdvertiser(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Adverteerder Verwijderen</DialogTitle>
+            <DialogDescription>
+              Weet je zeker dat je <strong>{deleteAdvertiser?.companyName}</strong> wilt verwijderen? Dit kan niet ongedaan gemaakt worden.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteAdvertiser(null)} disabled={isDeleting}>
+              Annuleren
+            </Button>
+            <Button 
+              variant="destructive" 
+              onClick={handleDelete} 
+              disabled={isDeleting}
+              data-testid="button-confirm-delete"
+            >
+              {isDeleting ? "Verwijderen..." : "Verwijderen"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

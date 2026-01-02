@@ -1,0 +1,41 @@
+DOEL
+Ik kan in het bestaande Elevizion Dashboard (React + TS + Vite, Express, Drizzle, Postgres) adverteerders eenvoudig verwijderen vanuit /adverteerders.
+Dit is puur voor testen (ik voeg vaak toe/verwijder). Maak dit klein, consistent met bestaande patterns.
+
+EISEN (NIET AFWIJKEN)
+- Voeg een “Verwijderen” actie toe per rij in de tabel op de Adverteerders-pagina (bij de ... actions rechts).
+- Klik op “Verwijderen” -> bevestigingsmodal (of confirm dialog) met: “Weet je zeker dat je {bedrijfsnaam} wilt verwijderen? Dit kan niet ongedaan gemaakt worden.”
+- Na bevestigen: delete via API, toon toast/success, refresh lijst.
+- Als verwijderen faalt door gekoppelde data: toon nette foutmelding “Kan niet verwijderen: er zijn nog gekoppelde items (plaatsingen/ads/facturatie).”
+- Geen grote aanpassingen aan de app-structuur. Hergebruik bestaande components (Button/Modal/Toast) en bestaande fetch helper als die er is.
+
+BACKEND / API
+- Voeg endpoint toe: DELETE /api/advertisers/:id
+- Auth/role: zelfde check als de andere admin routes (gebruik bestaande middleware/pattern).
+- In handler:
+  1) check dat advertiser bestaat
+  2) probeer te verwijderen
+  3) bij FK constraint error -> return 409 met duidelijke message
+  4) anders 204 No Content of 200 {ok:true}
+- Log minimaal (zoals bestaande routes), geen uitgebreide logging.
+
+DATABASE / DRIZZLE
+- Gebruik de bestaande advertisers tabel (naam kan advertisers/adverteerders zijn; volg project naming).
+- Delete query met drizzle: delete(table).where(eq(table.id, id))
+- Zorg dat je id type correct parsed (uuid of number).
+- Als schema nu cascade deletes heeft: laat zo. Zo niet: laat zo. Alleen netjes afhandelen als het niet kan.
+
+FRONTEND
+- In de actions (… menu) voeg item “Verwijderen” toe.
+- Gebruik state voor geselecteerde advertiser + open/close modal.
+- Bij confirm: call DELETE endpoint, disable knop tijdens request, handle errors.
+- Na success: verwijder lokaal uit state of refetch (kies wat al gebruikt wordt op deze pagina).
+
+ACCEPTATIE
+- Ik kan een rij verwijderen en hij verdwijnt direct uit de lijst.
+- Bij gekoppelde data krijg ik 409 en een duidelijke melding, en de rij blijft staan.
+- Code blijft klein en past in huidige structuur.
+
+LEVER OP
+- Exacte code changes in de bestaande bestanden (noem paden) + nieuwe route file indien nodig.
+- Geen uitlegverhaal; gewoon implementeren.

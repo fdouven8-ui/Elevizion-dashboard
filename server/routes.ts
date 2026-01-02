@@ -202,8 +202,22 @@ export async function registerRoutes(
   });
 
   app.delete("/api/advertisers/:id", async (req, res) => {
-    await storage.deleteAdvertiser(req.params.id);
-    res.status(204).send();
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      await storage.deleteAdvertiser(req.params.id);
+      res.status(204).send();
+    } catch (error: any) {
+      // Handle FK constraint errors
+      if (error.code === '23503' || error.message?.includes('foreign key') || error.message?.includes('constraint')) {
+        return res.status(409).json({ 
+          message: "Kan niet verwijderen: er zijn nog gekoppelde items (plaatsingen/ads/facturatie)." 
+        });
+      }
+      res.status(500).json({ message: error.message || "Fout bij verwijderen" });
+    }
   });
 
   // ============================================================================
