@@ -41,26 +41,47 @@ export type { User, UpsertUser, Permission, RolePreset };
  */
 export const advertisers = pgTable("advertisers", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // Basisgegevens
   companyName: text("company_name").notNull(),
   contactName: text("contact_name").notNull(),
   email: text("email").notNull(),
   phone: text("phone"),
-  vatNumber: text("vat_number"),
-  kvkNumber: text("kvk_number"), // KvK nummer (Kamer van Koophandel)
-  address: text("address"),
-  street: text("street"),
-  zipcode: text("zipcode"),
-  city: text("city"),
+  // Adresgegevens (losse velden voor Moneybird mapping)
+  address: text("address"), // Legacy combined address field
+  street: text("street"), // Straat + huisnummer
+  zipcode: text("zipcode"), // Postcode
+  city: text("city"), // Plaats
+  country: text("country").default("NL"), // Land (default NL)
+  // Identificatie & belasting
+  vatNumber: text("vat_number"), // BTW-nummer
+  kvkNumber: text("kvk_number"), // KvK-nummer (Kamer van Koophandel)
+  customerReference: text("customer_reference"), // Externe referentie / klantnummer
+  isBusiness: boolean("is_business").default(true), // Zakelijk (true) of particulier (false)
+  // Extra contactgegevens (Moneybird)
+  website: text("website"), // Website URL
+  invoiceEmail: text("invoice_email"), // Factuur e-mail (als anders dan email)
+  attention: text("attention"), // T.a.v. (ter attentie van)
+  tags: text("tags"), // Labels (comma-separated, max 5)
+  // Facturatie instellingen
+  invoiceDeliveryMethod: text("invoice_delivery_method").default("email"), // email | post | portal
+  language: text("language").default("nl"), // nl | en
+  paymentTermDays: integer("payment_term_days").default(14), // Betaaltermijn in dagen (0-90)
+  discountPercentage: decimal("discount_percentage", { precision: 5, scale: 2 }), // Kortingspercentage (0-100)
   // SEPA Automatisch Incasso velden
   iban: text("iban"), // IBAN rekeningnummer voor incasso
   ibanAccountHolder: text("iban_account_holder"), // Tenaamstelling rekening
+  sepaBic: text("sepa_bic"), // BIC code (optioneel, niet vereist voor NL)
   sepaMandate: boolean("sepa_mandate").default(false), // Heeft machtiging getekend
-  sepaMandateReference: text("sepa_mandate_reference"), // Mandaat kenmerk (bijv. ELEVIZ-2024-001)
+  sepaMandateReference: text("sepa_mandate_reference"), // Mandaat kenmerk (bijv. EVZ-{YYYYMMDD}-{random4})
   sepaMandateDate: date("sepa_mandate_date"), // Datum ondertekening machtiging
+  // Moneybird integratie
   moneybirdContactId: text("moneybird_contact_id"), // Synced from Moneybird
   moneybirdContactSnapshot: jsonb("moneybird_contact_snapshot"), // Cached Moneybird contact data for fast UI loading
+  moneybirdSyncStatus: text("moneybird_sync_status").default("pending"), // pending | synced | error
+  moneybirdSyncError: text("moneybird_sync_error"), // Laatste sync foutmelding
+  // Status & meta
   status: text("status").notNull().default("active"), // active, paused, churned
-  notes: text("notes"),
+  notes: text("notes"), // Interne notities (max 500 chars)
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

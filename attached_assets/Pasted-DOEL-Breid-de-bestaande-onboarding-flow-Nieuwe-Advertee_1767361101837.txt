@@ -1,0 +1,105 @@
+DOEL
+Breid de bestaande onboarding flow “Nieuwe Adverteerder” uit zodat we alle (relevante) Moneybird contact/relatie gegevens kunnen vastleggen bij het aanmaken van een adverteerder. Doe dit met minimale aanpassingen: hergebruik bestaande UI componenten, bestaande stappenstructuur (4 stappen) en bestaande API/DB patronen. Geen redesign, geen nieuwe grote dependency’s, geen nieuwe pagina’s.
+
+CONTEXT (huidig)
+- Pagina: /onboarding -> “Nieuwe Adverteerder” (stap 1 van 4) met velden: bedrijfsnaam, contactpersoon, telefoon, email, adres.
+- Stack: React + TS + Vite frontend, Express + Drizzle + Postgres backend.
+- Moneybird integratie bestaat al of komt al voor in de app (gebruik hetzelfde integratie/route patroon als elders).
+- Eis: data “klein” houden: alleen Moneybird-velden opslaan die we nodig hebben om een Moneybird Contact correct aan te maken + facturatie/incasso te kunnen doen.
+
+WAT MOET ER BIJKOMEN (Moneybird-geschikt)
+1) UI: Voeg in stap 1 “Bedrijfsgegevens” extra velden toe, maar houd het overzichtelijk:
+   - Toon basisvelden altijd.
+   - Zet “Extra (Moneybird)” velden in een inklapbare sectie (Accordion/Details) zodat de pagina niet druk wordt.
+
+BASISVELDEN (blijven + verbeteren waar nodig)
+- company_name (Bedrijfsnaam) *required*
+- contact_person_name (Contactpersoon) *required*
+- phone (Telefoon) *optional*
+- email (Email) *required*
+- address_line1 (Straat + huisnummer) *optional maar sterk aanbevolen*
+- postal_code (Postcode) *optional*
+- city (Plaats) *optional*
+- country (Land) default “NL” *required in payload*
+
+EXTRA (MONEYBIRD) VELDEN (in collapsible “Extra (Moneybird)”)
+Identificatie & belasting:
+- kvk_number (KvK-nummer) optional
+- vat_number (BTW-nummer) optional
+- customer_reference / external_id (Jouw referentie / klantnummer) optional (kan later helpen voor sync)
+- is_business (Zakelijk?) boolean default true (als false: particulier; toon dan voornaam/achternaam velden)
+
+Contact & bedrijf:
+- website optional
+- invoice_email (Factuur e-mail) optional (default = email)
+- attention (T.a.v.) optional
+- notes (Interne notitie) optional (max 500 chars)
+- tags (labels) optional (comma separated, max 5)
+
+Facturatie instellingen (klein maar nuttig):
+- invoice_delivery_method enum: email | post | portal (default email)
+- language enum: nl | en (default nl)
+- payment_term_days number default 14 (min 0 max 90)
+- discount_percentage optional number (0-100)
+
+Incasso (SEPA) – alleen tonen als toggle “Automatische incasso” aan staat
+- enable_direct_debit boolean default false
+Als enable_direct_debit = true:
+- iban *required*
+- account_holder_name *required*
+- sepa_mandate_id optional (als leeg: genereer automatisch “EVZ-{YYYYMMDD}-{random4}”)
+- sepa_mandate_date required (default vandaag)
+- bic optional (niet required voor NL maar mag)
+
+2) VALIDATIE
+- Gebruik dezelfde validatie aanpak als in de rest van de app (bijv. Zod/React Hook Form/whatever aanwezig).
+- Vereisten:
+  - bedrijfsnaam + contactpersoon + email zijn required
+  - email format valid
+  - payment_term_days binnen range
+  - discount_percentage binnen 0-100
+  - als incasso aan: iban + account_holder_name + mandate_date required, iban basic check (lengte + startsWith NL + alphanum) zonder zware library.
+
+3) DATA MODEL / DB (Drizzle)
+- Voeg GEEN grote nieuwe tabellen toe tenzij het al zo is. Voorkeur: uitbreiden van bestaande “advertisers” (of “customers/relations”) tabel met compacte kolommen.
+- Sla alleen op wat we hierboven benoemen (geen dubbele velden).
+- Voor adres: sla als losse velden op (street, postal_code, city, country) zodat we makkelijk naar Moneybird mappen.
+- Voor tags: opslaan als string[] of als 1 string (comma) afhankelijk van bestaande conventie, maar houd het simpel.
+
+4) BACKEND API
+- Pas bestaande endpoint(s) voor onboarding advertiser create/update aan zodat deze extra velden mee kunnen.
+- Zorg dat payload -> DB opslag werkt.
+- Voeg mappingfunctie toe: toMoneybirdContactPayload(advertiser) die exact de Moneybird velden aanlevert.
+- Als er al Moneybird sync bestaat: roep dezelfde service aan om contact aan te maken/updaten.
+  - Bij succes: sla moneybird_contact_id op bij de adverteerder (als kolom bestaat of voeg toe).
+  - Bij falen: sla wél lokaal op en toon nette foutmelding “Opgeslagen, maar Moneybird sync mislukt” + retry knop.
+
+5) UI/UX KLEIN HOUDEN
+- Houd stap 1 layout vrijwel hetzelfde.
+- Voeg alleen een extra sectie toe met 2 kolommen grid zoals de bestaande inputs.
+- Geen nieuwe routes, geen grote herstructurering van state management.
+- Houd state in het bestaande onboarding state object (bijv. advertiserDraft).
+- Zorg dat “Volgende” disabled is als required velden ontbreken.
+
+6) OUTPUT / WAT JE MOET AANPASSEN (CONCREET)
+- Frontend:
+  - Update component voor “Nieuwe Adverteerder – Stap 1”:
+    - extra velden + collapsible “Extra (Moneybird)” + toggle incasso
+    - validation + default values
+- Backend:
+  - Update Drizzle schema + migration
+  - Update create/update advertiser route(s)
+  - Add mapping function for Moneybird + call existing moneybird service if aanwezig
+- Tests (licht):
+  - 1 simpele unit test of route test als er al test setup is, anders overslaan.
+
+BELANGRIJK
+- NIET de hele app veranderen.
+- Geen nieuwe grote packages.
+- Geen complete redesign.
+- Alles moet samenwerken met de bestaande Moneybird integratie/structuur in de codebase.
+
+GA NU DOOR:
+1) Zoek in de repo de huidige onboarding “Nieuwe Adverteerder” step component en de bestaande advertiser model/route.
+2) Implementeer bovenstaande uitbreidingen met minimale diff.
+3) Laat na afloop kort zien welke files zijn aangepast en welke velden exact worden verstuurd naar Moneybird.
