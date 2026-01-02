@@ -6,6 +6,7 @@
 import type { Express } from "express";
 import { type Server } from "http";
 import { z } from "zod";
+import crypto from "crypto";
 import { storage } from "./storage";
 import {
   insertAdvertiserSchema,
@@ -203,6 +204,194 @@ export async function registerRoutes(
   app.delete("/api/advertisers/:id", async (req, res) => {
     await storage.deleteAdvertiser(req.params.id);
     res.status(204).send();
+  });
+
+  // ============================================================================
+  // ADVERTISER PORTAL (Quick Create + Self-Service Onboarding)
+  // ============================================================================
+
+  // Quick create advertiser with minimal fields + generate portal link
+  app.post("/api/advertisers/quick-create", async (req, res) => {
+    try {
+      const quickCreateSchema = z.object({
+        companyName: z.string().min(1, "Bedrijfsnaam is verplicht"),
+        email: z.string().email("Geldig e-mailadres is verplicht"),
+        contactName: z.string().optional(),
+      });
+      
+      const data = quickCreateSchema.parse(req.body);
+      
+      // Create advertiser with draft status
+      const advertiser = await storage.createAdvertiser({
+        companyName: data.companyName,
+        email: data.email,
+        contactName: data.contactName || null,
+        onboardingStatus: "draft",
+        source: "quick_create",
+      });
+      
+      // Generate portal token (valid for 7 days)
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      
+      await storage.createPortalToken({
+        advertiserId: advertiser.id,
+        tokenHash,
+        expiresAt,
+      });
+      
+      // Build portal URL
+      const baseUrl = process.env.REPLIT_DEV_DOMAIN 
+        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+        : `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      const portalUrl = `${baseUrl}/portal/${rawToken}`;
+      
+      res.status(201).json({
+        advertiser,
+        portalUrl,
+        expiresAt,
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Get advertiser data via portal token (public endpoint)
+  app.get("/api/portal/:token", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const portalToken = await storage.getPortalTokenByHash(tokenHash);
+      
+      if (!portalToken) {
+        return res.status(404).json({ message: "Link niet gevonden of verlopen" });
+      }
+      
+      if (portalToken.usedAt) {
+        return res.status(410).json({ message: "Deze link is al gebruikt" });
+      }
+      
+      if (new Date() > new Date(portalToken.expiresAt)) {
+        return res.status(410).json({ message: "Deze link is verlopen" });
+      }
+      
+      const advertiser = await storage.getAdvertiser(portalToken.advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      // Return only fields needed for portal form
+      res.json({
+        id: advertiser.id,
+        companyName: advertiser.companyName,
+        contactName: advertiser.contactName,
+        email: advertiser.email,
+        phone: advertiser.phone,
+        street: advertiser.street,
+        zipcode: advertiser.zipcode,
+        city: advertiser.city,
+        country: advertiser.country,
+        kvkNumber: advertiser.kvkNumber,
+        vatNumber: advertiser.vatNumber,
+        iban: advertiser.iban,
+        ibanAccountHolder: advertiser.ibanAccountHolder,
+        sepaMandate: advertiser.sepaMandate,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Submit portal form (public endpoint)
+  app.post("/api/portal/:token", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const portalToken = await storage.getPortalTokenByHash(tokenHash);
+      
+      if (!portalToken) {
+        return res.status(404).json({ message: "Link niet gevonden of verlopen" });
+      }
+      
+      if (portalToken.usedAt) {
+        return res.status(410).json({ message: "Deze link is al gebruikt" });
+      }
+      
+      if (new Date() > new Date(portalToken.expiresAt)) {
+        return res.status(410).json({ message: "Deze link is verlopen" });
+      }
+      
+      const portalSubmitSchema = z.object({
+        companyName: z.string().min(1),
+        contactName: z.string().optional().nullable(),
+        email: z.string().email(),
+        phone: z.string().optional().nullable(),
+        street: z.string().optional().nullable(),
+        zipcode: z.string().optional().nullable(),
+        city: z.string().optional().nullable(),
+        country: z.string().optional().nullable(),
+        kvkNumber: z.string().optional().nullable(),
+        vatNumber: z.string().optional().nullable(),
+        iban: z.string().optional().nullable(),
+        ibanAccountHolder: z.string().optional().nullable(),
+        sepaMandate: z.boolean().optional().nullable(),
+      });
+      
+      const data = portalSubmitSchema.parse(req.body);
+      
+      // Update advertiser with portal data
+      const updatedAdvertiser = await storage.updateAdvertiser(portalToken.advertiserId, {
+        ...data,
+        onboardingStatus: "completed",
+      });
+      
+      // Mark token as used
+      await storage.markPortalTokenUsed(portalToken.id);
+      
+      res.json({
+        message: "Gegevens succesvol opgeslagen",
+        advertiser: updatedAdvertiser,
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Resend portal link (generate new token)
+  app.post("/api/advertisers/:id/resend-portal", async (req, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      // Generate new portal token
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      
+      await storage.createPortalToken({
+        advertiserId: advertiser.id,
+        tokenHash,
+        expiresAt,
+      });
+      
+      // Update status to invited
+      await storage.updateAdvertiser(advertiser.id, {
+        onboardingStatus: "invited",
+      });
+      
+      const baseUrl = process.env.REPLIT_DEV_DOMAIN 
+        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+        : `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      const portalUrl = `${baseUrl}/portal/${rawToken}`;
+      
+      res.json({
+        portalUrl,
+        expiresAt,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
   });
 
   // ============================================================================
