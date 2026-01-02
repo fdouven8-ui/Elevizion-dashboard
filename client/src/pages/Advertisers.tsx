@@ -220,6 +220,14 @@ function AdvertiserForm({ onSuccess }: { onSuccess: () => void }) {
       status: "active"
     };
     
+    // Convert numeric fields from string to number
+    if (data.paymentTermDays) {
+      advertiserData.paymentTermDays = parseInt(data.paymentTermDays, 10);
+    }
+    if (data.discountPercentage) {
+      advertiserData.discountPercentage = data.discountPercentage.toString();
+    }
+    
     if (hasSepaMandate) {
       advertiserData.sepaMandateDate = new Date().toISOString().split('T')[0];
       if (!data.sepaMandateReference) {

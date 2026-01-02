@@ -33,6 +33,20 @@ Elevizion Dashboard is an OPS-first internal operations control room for digital
 ### Data Model
 Core entities: **Entities** (unified model for ADVERTISER + SCREEN), Sites, Advertisers, PackagePlans, Contracts, Placements, ScheduleSnapshots, Invoices/Payments, and Payouts/CarryOvers.
 
+#### Advertiser Schema (Extended January 2026)
+The `advertisers` table now includes comprehensive Moneybird contact fields:
+- **Basisgegevens**: companyName, contactName, email, phone, street, zipcode, city, country
+- **Identificatie**: vatNumber, kvkNumber, customerReference, isBusiness
+- **Extra contact**: website, invoiceEmail, attention, tags
+- **Facturatie**: invoiceDeliveryMethod (email/post/portal), language (nl/en), paymentTermDays, discountPercentage
+- **SEPA Incasso**: iban, ibanAccountHolder, sepaBic, sepaMandate, sepaMandateReference, sepaMandateDate
+- **Moneybird sync**: moneybirdContactId, moneybirdContactSnapshot, moneybirdSyncStatus, moneybirdSyncError
+
+The "Nieuwe Adverteerder" form has 3 sections:
+1. **Basisgegevens**: Required company info + address fields
+2. **SEPA Automatisch Incasso**: Toggle-controlled section for direct debit setup
+3. **Extra (Moneybird)**: Collapsible section with billing settings + extra contact info
+
 #### New Unified Entities Architecture (December 2024)
 - **entities table**: Centralized table for both ADVERTISERS and SCREENS with:
   - `entity_type`: ADVERTISER or SCREEN
