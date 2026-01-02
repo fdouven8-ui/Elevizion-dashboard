@@ -64,7 +64,6 @@ import type {
   Entity, InsertEntity,
   SyncJob, InsertSyncJob,
   PortalToken, InsertPortalToken,
-  portalTokens,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -2463,28 +2462,28 @@ export class DatabaseStorage implements IStorage {
   // ============================================================================
 
   async createPortalToken(data: InsertPortalToken): Promise<PortalToken> {
-    const [token] = await db.insert(portalTokens).values(data).returning();
+    const [token] = await db.insert(schema.portalTokens).values(data).returning();
     return token;
   }
 
   async getPortalTokenByHash(tokenHash: string): Promise<PortalToken | undefined> {
-    const [token] = await db.select().from(portalTokens)
-      .where(eq(portalTokens.tokenHash, tokenHash));
+    const [token] = await db.select().from(schema.portalTokens)
+      .where(eq(schema.portalTokens.tokenHash, tokenHash));
     return token;
   }
 
   async markPortalTokenUsed(id: string): Promise<PortalToken | undefined> {
-    const [token] = await db.update(portalTokens)
+    const [token] = await db.update(schema.portalTokens)
       .set({ usedAt: new Date() })
-      .where(eq(portalTokens.id, id))
+      .where(eq(schema.portalTokens.id, id))
       .returning();
     return token;
   }
 
   async getPortalTokensForAdvertiser(advertiserId: string): Promise<PortalToken[]> {
-    return await db.select().from(portalTokens)
-      .where(eq(portalTokens.advertiserId, advertiserId))
-      .orderBy(desc(portalTokens.createdAt));
+    return await db.select().from(schema.portalTokens)
+      .where(eq(schema.portalTokens.advertiserId, advertiserId))
+      .orderBy(desc(schema.portalTokens.createdAt));
   }
 }
 

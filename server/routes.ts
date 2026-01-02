@@ -221,11 +221,11 @@ export async function registerRoutes(
       
       const data = quickCreateSchema.parse(req.body);
       
-      // Create advertiser with draft status
+      // Create advertiser with draft status (use placeholder for contactName if not provided)
       const advertiser = await storage.createAdvertiser({
         companyName: data.companyName,
         email: data.email,
-        contactName: data.contactName || null,
+        contactName: data.contactName || "(in te vullen via portal)",
         onboardingStatus: "draft",
         source: "quick_create",
       });
@@ -320,6 +320,9 @@ export async function registerRoutes(
         return res.status(410).json({ message: "Deze link is verlopen" });
       }
       
+      // Mark token as used FIRST to prevent race conditions (optimistic locking)
+      await storage.markPortalTokenUsed(portalToken.id);
+      
       const portalSubmitSchema = z.object({
         companyName: z.string().min(1),
         contactName: z.string().optional().nullable(),
@@ -343,9 +346,6 @@ export async function registerRoutes(
         ...data,
         onboardingStatus: "completed",
       });
-      
-      // Mark token as used
-      await storage.markPortalTokenUsed(portalToken.id);
       
       res.json({
         message: "Gegevens succesvol opgeslagen",

@@ -42,10 +42,21 @@ The `advertisers` table now includes comprehensive Moneybird contact fields:
 - **SEPA Incasso**: iban, ibanAccountHolder, sepaBic, sepaMandate, sepaMandateReference, sepaMandateDate
 - **Moneybird sync**: moneybirdContactId, moneybirdContactSnapshot, moneybirdSyncStatus, moneybirdSyncError
 
-The "Nieuwe Adverteerder" form has 3 sections:
-1. **Basisgegevens**: Required company info + address fields
-2. **SEPA Automatisch Incasso**: Toggle-controlled section for direct debit setup
-3. **Extra (Moneybird)**: Collapsible section with billing settings + extra contact info
+The "Nieuwe Adverteerder" dialog has 2 modes via tabs:
+1. **Snel (Quick Create)**: Minimal fields (companyName, email) with portal link generation for customer self-service
+2. **Volledig (Full Form)**: Complete form with 3 collapsible sections:
+   - Basisgegevens: Required company info + address fields
+   - SEPA Automatisch Incasso: Toggle-controlled section for direct debit setup
+   - Extra (Moneybird): Collapsible section with billing settings + extra contact info
+
+#### Advertiser Self-Service Portal (January 2026)
+- **Portal Tokens**: `portal_tokens` table with SHA256 hashed tokens, 7-day expiration, one-time use
+- **Quick Create Flow**: POST `/api/advertisers/quick-create` creates draft advertiser + generates portal link
+- **Public Portal Page**: `/portal/:token` allows customers to complete their profile (no authentication required)
+- **Token Validation**: 404 for not found, 410 for expired/used tokens
+- **Race Condition Prevention**: Token marked as used BEFORE advertiser update (optimistic locking)
+- **onboardingStatus States**: `draft` → `invited` → `completed`
+- **source Field**: Tracks advertiser origin (`quick_create`, `manual`, etc.)
 
 #### New Unified Entities Architecture (December 2024)
 - **entities table**: Centralized table for both ADVERTISERS and SCREENS with:

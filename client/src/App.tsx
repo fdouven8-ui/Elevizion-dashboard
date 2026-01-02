@@ -21,6 +21,7 @@ import ContentInventory from "@/pages/ContentInventory";
 import Yodeck from "@/pages/Yodeck";
 import Entities from "@/pages/Entities";
 import SyncLogs from "@/pages/SyncLogs";
+import AdvertiserPortal from "@/pages/AdvertiserPortal";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -54,6 +55,7 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Login} />
+      <Route path="/portal/:token" component={AdvertiserPortal} />
       <Route component={DashboardRouter} />
     </Switch>
   );
