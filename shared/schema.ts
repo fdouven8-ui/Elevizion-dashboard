@@ -81,9 +81,24 @@ export const advertisers = pgTable("advertisers", {
   moneybirdSyncError: text("moneybird_sync_error"), // Laatste sync foutmelding
   // Status & meta
   status: text("status").notNull().default("active"), // active, paused, churned
+  onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | completed
+  source: text("source"), // Face-to-face, Telefoon, Website, etc
   notes: text("notes"), // Interne notities (max 500 chars)
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * Portal Tokens - Secure tokens for advertiser self-service portal
+ * Used for sending "complete your profile" links to advertisers
+ */
+export const portalTokens = pgTable("portal_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(), // SHA256 hash of the token
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"), // When the token was used (null = unused)
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
 /**
@@ -1107,6 +1122,7 @@ export const insertTaskAttachmentSchema = createInsertSchema(taskAttachments).om
 export const insertYodeckCreativeSchema = createInsertSchema(yodeckCreatives).omit({ id: true, createdAt: true, updatedAt: true });
 
 export const insertAdvertiserSchema = createInsertSchema(advertisers).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertPortalTokenSchema = createInsertSchema(portalTokens).omit({ id: true, createdAt: true });
 export const insertLocationSchema = createInsertSchema(locations).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertScreenGroupSchema = createInsertSchema(screenGroups).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertScreenSchema = createInsertSchema(screens).omit({ id: true, createdAt: true, updatedAt: true });
@@ -1156,6 +1172,9 @@ export const insertWebhookDeliverySchema = createInsertSchema(webhookDeliveries)
 
 export type Advertiser = typeof advertisers.$inferSelect;
 export type InsertAdvertiser = z.infer<typeof insertAdvertiserSchema>;
+
+export type PortalToken = typeof portalTokens.$inferSelect;
+export type InsertPortalToken = z.infer<typeof insertPortalTokenSchema>;
 
 export type Location = typeof locations.$inferSelect;
 export type InsertLocation = z.infer<typeof insertLocationSchema>;

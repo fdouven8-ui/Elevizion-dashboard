@@ -1,0 +1,172 @@
+DOEL
+Breid de bestaande onboarding “Nieuwe Adverteerder” uit zodat:
+1) We minimaal “quick create” kunnen doen (naam + e-mail + tel) wanneer ik face-to-face ben of gebeld word.
+2) Daarna sturen we automatisch een “invul-link” (portal link) waarmee de klant zelf alle Moneybird-relevante gegevens invult.
+3) Na invullen wordt het Moneybird contact volledig aangevuld/gesynchroniseerd en markeren we de onboarding als “compleet”.
+4) Geen dashboard login nodig voor de klant (alleen token-link).
+5) Bouw dit in de bestaande app zonder grote aanpassingen, hergebruik bestaande styling/components, en houd de data klein.
+
+UITGANGSPUNTEN / CONSTRAINTS
+- Stack: React + TypeScript + Vite frontend, Express backend, Drizzle ORM + PostgreSQL.
+- UI taal NL.
+- Huidige onboarding pagina bestaat al. Voeg alleen nieuwe step/velden toe.
+- Gebruik bestaande form componenten (Input, Select, etc).
+- Voeg zo min mogelijk nieuwe dependencies toe.
+- Bewaar alleen noodzakelijke velden in DB, en map deze naar Moneybird contact fields.
+
+MONEYBIRD - GEGEVENS DIE WE WILLEN VRAGEN (CONTACT)
+Maak het formulier zo dat we Moneybird zoveel mogelijk kunnen vullen:
+A) Basis
+- Bedrijfsnaam (company_name) verplicht bij B2B
+- Contactpersoon (firstname, lastname) optioneel
+- E-mail (email) verplicht
+- Telefoon (phone) optioneel
+- Website (website) optioneel
+
+B) Adres (address)
+- Straat + huisnummer
+- Postcode
+- Plaats
+- Land (default NL)
+Optioneel: extra adresregel
+
+C) Facturatie/BTW
+- Klanttype: Zakelijk / Particulier (radio)
+- BTW-nummer (vat_number) (als Zakelijk)
+- KvK nummer (chamber_of_commerce) optioneel
+- Factuur e-mail (als afwijkend) optioneel
+- Referentie/PO nummer optioneel
+
+D) Betaalgegevens / Incasso voorbereiding
+- IBAN (iban) (optioneel nu, maar in portal wel vragen)
+- Rekeninghouder naam
+- Incasso akkoord checkbox (mandate consent) + datum
+(Als je nog geen echte incasso integratie hebt: sla alleen consent + iban + naam op zodat later makkelijk te koppelen is.)
+
+E) Interne velden (niet naar Moneybird maar voor ons)
+- Opmerking / notities
+- Bron (Face-to-face, Telefoon, Website, etc)
+- Status: Draft / Invited / Completed
+
+FLOW
+1) In dashboard onboarding “Nieuwe Adverteerder”:
+   - Stap 1: Quick create (minimaal):
+     * Bedrijfsnaam of Naam
+     * E-mail
+     * Telefoon (optioneel)
+     * Type (Zakelijk/Particulier)
+   - Knop: “Opslaan & invul-link sturen”
+2) Backend maakt (of update) een adverteerder record + genereert secure token + expiry (bijv 14 dagen).
+3) Backend stuurt email met link: https://elevizion.nl/portal/complete-adverteerder/<token>
+   - Als mailen nog niet bestaat: maak tijdelijk endpoint dat de link teruggeeft + logt in console. Maar structureer het alsof mailing er later makkelijk in kan.
+4) Portal pagina (publiek) toont form met alle velden (A t/m D), prefilled met wat we al hebben.
+   - Geen login. Alleen token validatie.
+   - Na submit: sla op in DB + sync naar Moneybird contact.
+5) Na succesvolle sync:
+   - markeer status = Completed
+   - toon “Bedankt, gegevens ontvangen”.
+6) Dashboard ziet status en toont “Compleet” + Moneybird contact id.
+
+TECHNISCHE IMPLEMENTATIE (MINIMAAL)
+DATABASE (Drizzle)
+- Maak tabel `advertiser` uitbreidingen of aparte tabel `advertiser_profile` (kies wat het kleinste is bij jouw huidige schema).
+Minimale kolommen:
+  id (uuid)
+  moneybird_contact_id (text nullable)
+  type (enum: business|consumer)
+  company_name (text)
+  firstname (text nullable)
+  lastname (text nullable)
+  email (text)
+  phone (text nullable)
+  website (text nullable)
+  address_street (text nullable)
+  address_house_number (text nullable)
+  address_zip (text nullable)
+  address_city (text nullable)
+  address_country (text default 'NL')
+  vat_number (text nullable)
+  coc_number (text nullable)
+  invoice_email (text nullable)
+  reference (text nullable)
+  iban (text nullable)
+  account_holder (text nullable)
+  sepa_consent (boolean default false)
+  sepa_consent_date (date nullable)
+  notes (text nullable)
+  source (text nullable)
+  status (enum: draft|invited|completed default draft)
+  created_at, updated_at
+
+PORTAL TOKENS
+- Maak tabel `portal_token`:
+  id (uuid)
+  advertiser_id (uuid fk)
+  token_hash (text)  // hash token, sla geen plaintext op
+  expires_at (timestamp)
+  used_at (timestamp nullable)
+  created_at
+
+SECURITY
+- Token is random (32-64 chars). Hash met crypto (sha256) + salt.
+- Endpoint valideert hash + expiry + not used.
+- Rate limit simpel: per IP basic in-memory (als je al middleware hebt, hergebruik).
+- Portal toont geen data als token ongeldig.
+
+API ENDPOINTS (Express)
+1) POST /api/advertisers/quick-create
+   body: { company_name, email, phone?, type }
+   -> upsert advertiser (op email) of create nieuw
+   -> create portal_token
+   -> return { advertiser, portal_url }
+   -> optioneel: send email via bestaande mail service; anders console.log
+
+2) GET /api/portal/advertiser/:token
+   -> validate token
+   -> return advertiser data (alle velden die portal mag zien)
+
+3) POST /api/portal/advertiser/:token
+   -> validate token
+   -> update advertiser met alle form velden
+   -> sync naar Moneybird contact:
+      - als moneybird_contact_id bestaat: update contact
+      - anders: create contact en bewaar id
+   -> mark status completed + set used_at
+   -> return success
+
+MONEYBIRD SYNC
+- Gebruik jouw bestaande Moneybird integratie helpers.
+- Map velden correct naar Moneybird contact fields (company_name, firstname, lastname, email, phone, address, country, vat_number, coc, etc).
+- Houd het robuust: als Moneybird faalt, sla gegevens wel op en zet status = invited met error log/flag zodat ik het in dashboard kan oplossen.
+
+FRONTEND
+A) Dashboard onboarding (bestaande scherm):
+- Voeg bovenaan een toggle: “Snel aanmaken (nu)” vs “Alles invullen (direct)”
+- Default op “Snel aanmaken”
+- Bij “Snel aanmaken” toon alleen minimale velden + knop “Opslaan & invul-link sturen”
+- Na success: toon portal link + knop “Kopieer link” + status chip “Invited”
+- Kleine UI, geen nieuwe grote pagina.
+
+B) Portal route (publiek)
+- Nieuwe Vite route: /portal/complete-adverteerder/:token
+- Simpele pagina in Elevizion styling (light, clean)
+- Form secties: Basis, Adres, Facturatie, Betaling (SEPA akkoord)
+- Submit -> API -> success pagina
+
+C) Geen klant-login
+- Geen accounts, geen auth, alleen token link.
+
+ACCEPTATIECRITERIA
+- Quick create werkt en geeft een invul-link.
+- Portal kan gegevens invullen en opslaan.
+- Na submit wordt Moneybird contact aangemaakt of geüpdatet.
+- Dashboard toont status (draft/invited/completed) en Moneybird contact id.
+- Geen grote refactor, geen zware dependencies, hergebruik bestaande componenten.
+
+BEGIN NU MET IMPLEMENTATIE
+- Inspecteer eerst huidige codebase routes/components/schema.
+- Voeg vervolgens de schema migratie toe.
+- Bouw endpoints.
+- Bouw UI minimal changes.
+- Test de volledige flow end-to-end.
+- Lever de exacte bestanden/patches die je aangepast hebt met korte uitleg per bestand.

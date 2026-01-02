@@ -63,6 +63,8 @@ import type {
   SiteWithSnapshots,
   Entity, InsertEntity,
   SyncJob, InsertSyncJob,
+  PortalToken, InsertPortalToken,
+  portalTokens,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -377,6 +379,12 @@ export interface IStorage {
   getSyncJob(id: string): Promise<SyncJob | undefined>;
   createSyncJob(data: InsertSyncJob): Promise<SyncJob>;
   updateSyncJob(id: string, data: Partial<InsertSyncJob>): Promise<SyncJob | undefined>;
+  
+  // Portal Tokens
+  createPortalToken(data: InsertPortalToken): Promise<PortalToken>;
+  getPortalTokenByHash(tokenHash: string): Promise<PortalToken | undefined>;
+  markPortalTokenUsed(id: string): Promise<PortalToken | undefined>;
+  getPortalTokensForAdvertiser(advertiserId: string): Promise<PortalToken[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2448,6 +2456,35 @@ export class DatabaseStorage implements IStorage {
       .where(eq(schema.syncJobs.id, id))
       .returning();
     return job;
+  }
+
+  // ============================================================================
+  // PORTAL TOKENS
+  // ============================================================================
+
+  async createPortalToken(data: InsertPortalToken): Promise<PortalToken> {
+    const [token] = await db.insert(portalTokens).values(data).returning();
+    return token;
+  }
+
+  async getPortalTokenByHash(tokenHash: string): Promise<PortalToken | undefined> {
+    const [token] = await db.select().from(portalTokens)
+      .where(eq(portalTokens.tokenHash, tokenHash));
+    return token;
+  }
+
+  async markPortalTokenUsed(id: string): Promise<PortalToken | undefined> {
+    const [token] = await db.update(portalTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(portalTokens.id, id))
+      .returning();
+    return token;
+  }
+
+  async getPortalTokensForAdvertiser(advertiserId: string): Promise<PortalToken[]> {
+    return await db.select().from(portalTokens)
+      .where(eq(portalTokens.advertiserId, advertiserId))
+      .orderBy(desc(portalTokens.createdAt));
   }
 }
 
