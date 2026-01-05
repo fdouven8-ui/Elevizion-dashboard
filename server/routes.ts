@@ -472,10 +472,53 @@ export async function registerRoutes(
         }
       }
       
+      // Send onboarding completed confirmation email (idempotent - check if already sent)
+      let emailSent = false;
+      if (updatedAdvertiser && updatedAdvertiser.email) {
+        try {
+          const existingLog = await storage.getEmailLogByTemplateAndEntity(
+            "onboarding_completed", "advertiser", updatedAdvertiser.id
+          );
+          if (!existingLog) {
+            const contactName = updatedAdvertiser.contactName || updatedAdvertiser.companyName || "Klant";
+            await sendEmail({
+              to: updatedAdvertiser.email,
+              subject: "Gegevens ontvangen – Elevizion",
+              templateKey: "onboarding_completed",
+              entityType: "advertiser",
+              entityId: updatedAdvertiser.id,
+              html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+                  <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+                    <h1 style="color: white; margin: 0; font-size: 24px;">Elevizion</h1>
+                    <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
+                  </div>
+                  <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
+                    <h2 style="color: #1e3a5f; margin-top: 0;">Bedankt voor uw gegevens!</h2>
+                    <p>Beste ${contactName},</p>
+                    <p>Wij hebben uw gegevens in goede orde ontvangen. Ons team gaat nu aan de slag om uw schermreclame te activeren.</p>
+                    <p>Heeft u vragen? Neem gerust contact met ons op door te reageren op deze e-mail.</p>
+                    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+                  </div>
+                  <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
+                    <p>© ${new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
+                  </div>
+                </div>
+              `,
+              text: `Beste ${contactName},\n\nWij hebben uw gegevens in goede orde ontvangen. Ons team gaat nu aan de slag om uw schermreclame te activeren.\n\nHeeft u vragen? Neem gerust contact met ons op via info@elevizion.nl\n\nMet vriendelijke groet,\nTeam Elevizion`,
+            });
+            emailSent = true;
+          }
+        } catch (emailError: any) {
+          console.error('[Portal] Onboarding completed email failed:', emailError.message);
+        }
+      }
+      
       res.json({
         message: "Gegevens succesvol opgeslagen",
         advertiser: updatedAdvertiser,
         moneybirdLinked,
+        emailSent,
       });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -7067,32 +7110,246 @@ export async function registerRoutes(
   // DEV / TEST ENDPOINTS
   // ============================================================================
 
-  // Test email endpoint (development only)
+  // Test email endpoint
   app.post("/api/dev/test-email", async (req, res) => {
     try {
       const { to } = req.body;
       if (!to || typeof to !== 'string') {
-        return res.status(400).json({ success: false, message: "E-mailadres (to) is verplicht" });
+        return res.status(400).json({ ok: false, error: "E-mailadres (to) is verplicht" });
       }
       
       const result = await sendEmail({
         to,
-        subject: "Elevizion Test E-mail",
+        subject: "Elevizion testmail ✅",
+        templateKey: "test_email",
         html: `
           <div style="font-family: Arial, sans-serif; padding: 20px;">
-            <h2 style="color: #1e3a5f;">Elevizion Test E-mail</h2>
+            <h2 style="color: #1e3a5f;">Elevizion Test E-mail ✅</h2>
             <p>Dit is een test e-mail om te verifiëren dat de Postmark integratie correct werkt.</p>
             <p>Verzonden op: ${new Date().toLocaleString('nl-NL')}</p>
             <hr style="border: 1px solid #eee; margin: 20px 0;">
             <p style="color: #666; font-size: 12px;">© ${new Date().getFullYear()} Elevizion B.V.</p>
           </div>
         `,
-        text: `Elevizion Test E-mail\n\nDit is een test e-mail om te verifiëren dat de Postmark integratie correct werkt.\n\nVerzonden op: ${new Date().toLocaleString('nl-NL')}`,
+        text: `Elevizion Test E-mail ✅\n\nDit is een test e-mail om te verifiëren dat de Postmark integratie correct werkt.\n\nVerzonden op: ${new Date().toLocaleString('nl-NL')}`,
       });
       
-      res.json(result);
+      res.json({ ok: result.success, messageId: result.messageId, logId: result.logId, error: result.success ? undefined : result.message });
     } catch (error: any) {
-      res.status(500).json({ success: false, message: error.message });
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // Email config health check
+  app.get("/api/dev/email-config", async (_req, res) => {
+    const { getEmailConfig } = await import("./email");
+    const config = getEmailConfig();
+    res.json(config);
+  });
+
+  // ============================================================================
+  // EMAIL LOGS (Admin read-only)
+  // ============================================================================
+
+  app.get("/api/email/logs", requirePermission("view_finance"), async (req, res) => {
+    try {
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
+      const logs = await storage.getEmailLogs(limit);
+      // Remove sensitive data
+      const safeLogs = logs.map(log => ({
+        id: log.id,
+        toEmail: log.toEmail,
+        templateKey: log.templateKey,
+        entityType: log.entityType,
+        entityId: log.entityId,
+        status: log.status,
+        createdAt: log.createdAt,
+        sentAt: log.sentAt,
+        // Don't expose providerMessageId or errorMessage to non-admins
+      }));
+      res.json(safeLogs);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // VERIFICATION CODE FLOW
+  // ============================================================================
+  const crypto = await import("crypto");
+
+  // Send verification code
+  app.post("/api/auth/send-verification", async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email || typeof email !== 'string') {
+        return res.status(400).json({ ok: false, error: "E-mail is verplicht" });
+      }
+      
+      const normalizedEmail = email.toLowerCase().trim();
+      
+      // Rate limit: max 3 codes per 15 min
+      const recentCount = await storage.getRecentVerificationCodeCount(normalizedEmail, 15);
+      if (recentCount >= 3) {
+        return res.status(429).json({ ok: false, error: "Te veel verificatiecodes aangevraagd. Wacht 15 minuten." });
+      }
+      
+      // Generate 6-digit code
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const codeHash = crypto.createHash("sha256").update(code).digest("hex");
+      
+      // Store hashed code (expires in 10 minutes)
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      await storage.createVerificationCode({
+        email: normalizedEmail,
+        codeHash,
+        expiresAt,
+        attempts: 0,
+      });
+      
+      // Send email
+      const result = await sendEmail({
+        to: normalizedEmail,
+        subject: "Je verificatiecode voor Elevizion",
+        templateKey: "verification_code",
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 400px; margin: 0 auto;">
+            <h2 style="color: #1e3a5f; text-align: center;">Verificatiecode</h2>
+            <p style="text-align: center;">Gebruik deze code om je e-mailadres te verifiëren:</p>
+            <div style="background: #f5f5f5; padding: 20px; text-align: center; font-size: 32px; font-weight: bold; letter-spacing: 8px; margin: 20px 0; border-radius: 8px;">
+              ${code}
+            </div>
+            <p style="text-align: center; color: #666; font-size: 14px;">Deze code is 10 minuten geldig.</p>
+            <hr style="border: 1px solid #eee; margin: 20px 0;">
+            <p style="color: #666; font-size: 12px; text-align: center;">© ${new Date().getFullYear()} Elevizion B.V.</p>
+          </div>
+        `,
+        text: `Je verificatiecode voor Elevizion: ${code}\n\nDeze code is 10 minuten geldig.`,
+      });
+      
+      if (!result.success) {
+        return res.status(500).json({ ok: false, error: "Kon verificatiemail niet verzenden" });
+      }
+      
+      res.json({ ok: true, message: "Verificatiecode verzonden" });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // Verify code
+  app.post("/api/auth/verify-code", async (req, res) => {
+    try {
+      const { email, code } = req.body;
+      if (!email || !code) {
+        return res.status(400).json({ ok: false, error: "E-mail en code zijn verplicht" });
+      }
+      
+      const normalizedEmail = email.toLowerCase().trim();
+      const codeHash = crypto.createHash("sha256").update(code.toString()).digest("hex");
+      
+      // Get active verification code
+      const verificationCode = await storage.getActiveVerificationCode(normalizedEmail);
+      
+      if (!verificationCode) {
+        return res.status(400).json({ ok: false, error: "Geen geldige verificatiecode gevonden" });
+      }
+      
+      // Check attempts
+      if (verificationCode.attempts >= 5) {
+        return res.status(400).json({ ok: false, error: "Te veel pogingen. Vraag een nieuwe code aan." });
+      }
+      
+      // Verify code
+      if (verificationCode.codeHash !== codeHash) {
+        await storage.incrementVerificationAttempts(verificationCode.id);
+        return res.status(400).json({ ok: false, error: "Ongeldige code" });
+      }
+      
+      // Mark as used
+      await storage.markVerificationCodeUsed(verificationCode.id);
+      
+      res.json({ ok: true, message: "E-mail geverifieerd" });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // ONBOARDING INVITE FLOW
+  // ============================================================================
+
+  // Send onboarding invite
+  app.post("/api/onboarding/send-invite", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { email, entityType, entityId } = req.body;
+      
+      if (!email || !entityType || !entityId) {
+        return res.status(400).json({ ok: false, error: "email, entityType en entityId zijn verplicht" });
+      }
+      
+      if (!["screen", "advertiser", "location"].includes(entityType)) {
+        return res.status(400).json({ ok: false, error: "entityType moet screen, advertiser of location zijn" });
+      }
+      
+      // Generate single-use token
+      const token = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+      
+      // Store token
+      await storage.createOnboardingInviteToken({
+        tokenHash,
+        entityType,
+        entityId,
+        expiresAt,
+      });
+      
+      // Build onboarding URL
+      const baseUrl = process.env.ONBOARDING_BASE_URL || `https://${req.get("host")}`;
+      const onboardingUrl = `${baseUrl}/onboarding?token=${token}`;
+      
+      // Send email
+      const result = await sendEmail({
+        to: email,
+        subject: "Vul je gegevens aan voor Elevizion",
+        templateKey: "onboarding_invite",
+        entityType,
+        entityId,
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+              <h1 style="color: white; margin: 0; font-size: 24px;">Elevizion</h1>
+              <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
+            </div>
+            <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
+              <h2 style="color: #1e3a5f; margin-top: 0;">Welkom bij Elevizion!</h2>
+              <p>Om uw schermreclame te activeren, hebben wij nog wat gegevens van u nodig.</p>
+              <p>Klik op de onderstaande knop om uw gegevens aan te vullen:</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${onboardingUrl}" style="background: #1e3a5f; color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">
+                  Gegevens aanvullen
+                </a>
+              </div>
+              <p style="color: #666; font-size: 14px;">Deze link is 7 dagen geldig en kan slechts 1x worden gebruikt.</p>
+              <p>Heeft u vragen? Neem gerust contact met ons op via info@elevizion.nl</p>
+              <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+            </div>
+            <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
+              <p>© ${new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
+            </div>
+          </div>
+        `,
+        text: `Welkom bij Elevizion!\n\nOm uw schermreclame te activeren, hebben wij nog wat gegevens van u nodig.\n\nKlik hier om uw gegevens aan te vullen:\n${onboardingUrl}\n\nDeze link is 7 dagen geldig en kan slechts 1x worden gebruikt.\n\nMet vriendelijke groet,\nTeam Elevizion`,
+      });
+      
+      if (!result.success) {
+        return res.status(500).json({ ok: false, error: result.message });
+      }
+      
+      res.json({ ok: true, message: "Uitnodiging verzonden", onboardingUrl });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
     }
   });
 

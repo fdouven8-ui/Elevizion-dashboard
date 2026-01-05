@@ -64,6 +64,9 @@ import type {
   Entity, InsertEntity,
   SyncJob, InsertSyncJob,
   PortalToken, InsertPortalToken,
+  EmailLog, InsertEmailLog,
+  VerificationCode, InsertVerificationCode,
+  OnboardingInviteToken, InsertOnboardingInviteToken,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -384,6 +387,24 @@ export interface IStorage {
   getPortalTokenByHash(tokenHash: string): Promise<PortalToken | undefined>;
   markPortalTokenUsed(id: string): Promise<PortalToken | undefined>;
   getPortalTokensForAdvertiser(advertiserId: string): Promise<PortalToken[]>;
+
+  // Email Logs
+  createEmailLog(data: InsertEmailLog): Promise<EmailLog>;
+  updateEmailLog(id: string, data: Partial<EmailLog>): Promise<EmailLog | undefined>;
+  getEmailLogs(limit?: number): Promise<EmailLog[]>;
+  getEmailLogByTemplateAndEntity(templateKey: string, entityType: string, entityId: string): Promise<EmailLog | undefined>;
+
+  // Verification Codes
+  createVerificationCode(data: InsertVerificationCode): Promise<VerificationCode>;
+  getActiveVerificationCode(email: string): Promise<VerificationCode | undefined>;
+  getRecentVerificationCodeCount(email: string, minutes: number): Promise<number>;
+  incrementVerificationAttempts(id: string): Promise<VerificationCode | undefined>;
+  markVerificationCodeUsed(id: string): Promise<VerificationCode | undefined>;
+
+  // Onboarding Invite Tokens
+  createOnboardingInviteToken(data: InsertOnboardingInviteToken): Promise<OnboardingInviteToken>;
+  getOnboardingInviteTokenByHash(tokenHash: string): Promise<OnboardingInviteToken | undefined>;
+  markOnboardingInviteTokenUsed(id: string): Promise<OnboardingInviteToken | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2484,6 +2505,111 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(schema.portalTokens)
       .where(eq(schema.portalTokens.advertiserId, advertiserId))
       .orderBy(desc(schema.portalTokens.createdAt));
+  }
+
+  // ============================================================================
+  // EMAIL LOGS
+  // ============================================================================
+
+  async createEmailLog(data: InsertEmailLog): Promise<EmailLog> {
+    const [log] = await db.insert(schema.emailLogs).values(data).returning();
+    return log;
+  }
+
+  async updateEmailLog(id: string, data: Partial<EmailLog>): Promise<EmailLog | undefined> {
+    const [log] = await db.update(schema.emailLogs)
+      .set(data)
+      .where(eq(schema.emailLogs.id, id))
+      .returning();
+    return log;
+  }
+
+  async getEmailLogs(limit: number = 50): Promise<EmailLog[]> {
+    return await db.select().from(schema.emailLogs)
+      .orderBy(desc(schema.emailLogs.createdAt))
+      .limit(limit);
+  }
+
+  async getEmailLogByTemplateAndEntity(templateKey: string, entityType: string, entityId: string): Promise<EmailLog | undefined> {
+    const [log] = await db.select().from(schema.emailLogs)
+      .where(and(
+        eq(schema.emailLogs.templateKey, templateKey),
+        eq(schema.emailLogs.entityType, entityType),
+        eq(schema.emailLogs.entityId, entityId),
+        eq(schema.emailLogs.status, "sent")
+      ))
+      .orderBy(desc(schema.emailLogs.createdAt));
+    return log;
+  }
+
+  // ============================================================================
+  // VERIFICATION CODES
+  // ============================================================================
+
+  async createVerificationCode(data: InsertVerificationCode): Promise<VerificationCode> {
+    const [code] = await db.insert(schema.verificationCodes).values(data).returning();
+    return code;
+  }
+
+  async getActiveVerificationCode(email: string): Promise<VerificationCode | undefined> {
+    const [code] = await db.select().from(schema.verificationCodes)
+      .where(and(
+        eq(schema.verificationCodes.email, email.toLowerCase()),
+        gte(schema.verificationCodes.expiresAt, new Date()),
+        isNull(schema.verificationCodes.usedAt)
+      ))
+      .orderBy(desc(schema.verificationCodes.createdAt));
+    return code;
+  }
+
+  async getRecentVerificationCodeCount(email: string, minutes: number): Promise<number> {
+    const since = new Date(Date.now() - minutes * 60 * 1000);
+    const result = await db.select({ count: sql<number>`count(*)` })
+      .from(schema.verificationCodes)
+      .where(and(
+        eq(schema.verificationCodes.email, email.toLowerCase()),
+        gte(schema.verificationCodes.createdAt, since)
+      ));
+    return Number(result[0]?.count || 0);
+  }
+
+  async incrementVerificationAttempts(id: string): Promise<VerificationCode | undefined> {
+    const [code] = await db.update(schema.verificationCodes)
+      .set({ attempts: sql`attempts + 1` })
+      .where(eq(schema.verificationCodes.id, id))
+      .returning();
+    return code;
+  }
+
+  async markVerificationCodeUsed(id: string): Promise<VerificationCode | undefined> {
+    const [code] = await db.update(schema.verificationCodes)
+      .set({ usedAt: new Date() })
+      .where(eq(schema.verificationCodes.id, id))
+      .returning();
+    return code;
+  }
+
+  // ============================================================================
+  // ONBOARDING INVITE TOKENS
+  // ============================================================================
+
+  async createOnboardingInviteToken(data: InsertOnboardingInviteToken): Promise<OnboardingInviteToken> {
+    const [token] = await db.insert(schema.onboardingInviteTokens).values(data).returning();
+    return token;
+  }
+
+  async getOnboardingInviteTokenByHash(tokenHash: string): Promise<OnboardingInviteToken | undefined> {
+    const [token] = await db.select().from(schema.onboardingInviteTokens)
+      .where(eq(schema.onboardingInviteTokens.tokenHash, tokenHash));
+    return token;
+  }
+
+  async markOnboardingInviteTokenUsed(id: string): Promise<OnboardingInviteToken | undefined> {
+    const [token] = await db.update(schema.onboardingInviteTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(schema.onboardingInviteTokens.id, id))
+      .returning();
+    return token;
   }
 }
 

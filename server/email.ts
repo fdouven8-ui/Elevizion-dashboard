@@ -9,6 +9,7 @@
  */
 
 import * as postmark from "postmark";
+import { storage } from "./storage";
 
 interface EmailConfig {
   to: string;
@@ -17,12 +18,17 @@ interface EmailConfig {
   text?: string;
   from?: string;
   fromName?: string;
+  // For logging
+  templateKey?: string;
+  entityType?: string;
+  entityId?: string;
 }
 
 interface EmailResult {
   success: boolean;
   message: string;
   messageId?: string;
+  logId?: string;
 }
 
 // Check if Postmark is configured
@@ -30,7 +36,16 @@ export function isEmailConfigured(): boolean {
   return !!process.env.POSTMARK_SERVER_TOKEN;
 }
 
-// Send email via Postmark
+// Get email configuration info (for health check)
+export function getEmailConfig() {
+  return {
+    hasToken: !!process.env.POSTMARK_SERVER_TOKEN,
+    from: process.env.EMAIL_FROM || "no-reply@elevizion.nl",
+    replyTo: process.env.EMAIL_REPLY_TO || "info@elevizion.nl",
+  };
+}
+
+// Send email via Postmark with optional logging
 export async function sendEmail(config: EmailConfig): Promise<EmailResult> {
   const serverToken = process.env.POSTMARK_SERVER_TOKEN;
   
@@ -43,6 +58,23 @@ export async function sendEmail(config: EmailConfig): Promise<EmailResult> {
 
   const fromEmail = process.env.EMAIL_FROM || "no-reply@elevizion.nl";
   const replyTo = process.env.EMAIL_REPLY_TO || "info@elevizion.nl";
+
+  // Create log entry if templateKey provided
+  let logId: string | undefined;
+  if (config.templateKey) {
+    try {
+      const log = await storage.createEmailLog({
+        toEmail: config.to,
+        templateKey: config.templateKey,
+        entityType: config.entityType || null,
+        entityId: config.entityId || null,
+        status: "queued",
+      });
+      logId = log.id;
+    } catch (err) {
+      console.error("Failed to create email log:", err);
+    }
+  }
 
   try {
     const client = new postmark.ServerClient(serverToken);
@@ -57,16 +89,36 @@ export async function sendEmail(config: EmailConfig): Promise<EmailResult> {
       MessageStream: "outbound",
     });
 
+    // Update log on success
+    if (logId) {
+      await storage.updateEmailLog(logId, {
+        status: "sent",
+        providerMessageId: result.MessageID,
+        sentAt: new Date(),
+      });
+    }
+
     return {
       success: true,
       message: "E-mail succesvol verzonden",
       messageId: result.MessageID,
+      logId,
     };
   } catch (error: any) {
     console.error("Postmark error:", error);
+    
+    // Update log on failure
+    if (logId) {
+      await storage.updateEmailLog(logId, {
+        status: "failed",
+        errorMessage: error.message,
+      });
+    }
+
     return {
       success: false,
       message: `Fout bij verzenden: ${error.message}`,
+      logId,
     };
   }
 }
