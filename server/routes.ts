@@ -2536,6 +2536,157 @@ export async function registerRoutes(
   console.log("[routes] Yodeck routes registered: GET /api/integrations/yodeck/config-status, POST /api/integrations/yodeck/test");
   console.log("[routes] Sync routes registered: POST /api/sync/yodeck/run");
 
+  // ============================================================================
+  // INTEGRATION OUTBOX ROUTES (SSOT Pattern)
+  // ============================================================================
+
+  const { getOutboxStats, retryFailedJobs, getEntitySyncStatus, enqueueMoneybirdContactSync, enqueueYodeckDeviceLink } = await import("./services/outboxService");
+  const { processOutboxBatch, getWorkerStatus } = await import("./services/outboxWorker");
+
+  app.get("/api/sync/outbox/status", isAuthenticated, async (_req, res) => {
+    try {
+      const stats = await getOutboxStats();
+      const workerStatus = getWorkerStatus();
+      res.json({ 
+        ok: true, 
+        queued: stats.queued,
+        processing: stats.processing,
+        failed: stats.failed,
+        completed: stats.succeeded,
+        total: stats.total,
+        worker: workerStatus 
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  app.post("/api/sync/outbox/run", isAuthenticated, requirePermission("manage_system"), async (_req, res) => {
+    try {
+      const result = await processOutboxBatch(20);
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  app.post("/api/sync/outbox/retry-failed", isAuthenticated, requirePermission("manage_system"), async (req, res) => {
+    try {
+      const provider = req.body.provider as "moneybird" | "yodeck" | undefined;
+      const retriedCount = await retryFailedJobs(provider);
+      res.json({ ok: true, retriedCount });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  app.get("/api/sync/entity/:entityType/:entityId", isAuthenticated, async (req, res) => {
+    try {
+      const { entityType, entityId } = req.params;
+      const status = await getEntitySyncStatus(entityType as any, entityId);
+      res.json({ ok: true, ...status });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  app.post("/api/sync/entity/:entityType/:entityId/resync", isAuthenticated, requirePermission("manage_system"), async (req, res) => {
+    try {
+      const { entityType, entityId } = req.params;
+      const { provider } = req.body;
+
+      if (provider === "moneybird" || !provider) {
+        await enqueueMoneybirdContactSync(entityType as any, entityId);
+      }
+      if (provider === "yodeck" || !provider) {
+        if (entityType === "screen") {
+          await enqueueYodeckDeviceLink(entityId);
+        }
+      }
+
+      res.json({ ok: true, message: "Resync job queued" });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  app.get("/api/sync/outbox/failed", isAuthenticated, async (req, res) => {
+    try {
+      const provider = req.query.provider as string | undefined;
+      const failedJobs = await storage.getFailedOutboxJobs(provider);
+      res.json({ ok: true, jobs: failedJobs.slice(0, 50) });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  console.log("[routes] Outbox sync routes registered: /api/sync/outbox/*");
+
+  // Data Health endpoint - summary of sync status across all entities
+  app.get("/api/sync/data-health", isAuthenticated, async (_req, res) => {
+    try {
+      const [screens, locations, advertisers] = await Promise.all([
+        storage.getScreens(),
+        storage.getLocations(),
+        storage.getAdvertisers(),
+      ]);
+      
+      const outboxStats = await getOutboxStats();
+      
+      const screenStats = {
+        total: screens.length,
+        synced: screens.filter(s => s.yodeckSyncStatus === "synced").length,
+        pending: screens.filter(s => s.yodeckSyncStatus === "pending").length,
+        failed: screens.filter(s => s.yodeckSyncStatus === "failed").length,
+        notLinked: screens.filter(s => !s.yodeckSyncStatus || s.yodeckSyncStatus === "not_linked").length,
+      };
+      
+      const locationStats = {
+        total: locations.length,
+        synced: locations.filter(l => l.moneybirdSyncStatus === "synced").length,
+        pending: locations.filter(l => l.moneybirdSyncStatus === "pending").length,
+        failed: locations.filter(l => l.moneybirdSyncStatus === "failed").length,
+        notLinked: locations.filter(l => !l.moneybirdSyncStatus || l.moneybirdSyncStatus === "not_linked").length,
+      };
+      
+      const advertiserStats = {
+        total: advertisers.length,
+        synced: advertisers.filter(a => a.moneybirdSyncStatus === "synced").length,
+        pending: advertisers.filter(a => a.moneybirdSyncStatus === "pending").length,
+        failed: advertisers.filter(a => a.moneybirdSyncStatus === "failed").length,
+        notLinked: advertisers.filter(a => !a.moneybirdSyncStatus || a.moneybirdSyncStatus === "not_linked").length,
+      };
+      
+      const healthScore = Math.round(
+        ((screenStats.synced + locationStats.synced + advertiserStats.synced) /
+        Math.max(screenStats.total + locationStats.total + advertiserStats.total, 1)) * 100
+      );
+      
+      res.json({
+        ok: true,
+        healthScore,
+        screens: screenStats,
+        locations: locationStats,
+        advertisers: advertiserStats,
+        outbox: {
+          queued: outboxStats.queued,
+          processing: outboxStats.processing,
+          failed: outboxStats.failed,
+          completed: outboxStats.succeeded,
+        },
+        failedItems: {
+          screens: screens.filter(s => s.yodeckSyncStatus === "failed").map(s => ({ id: s.id, screenId: s.screenId, error: s.yodeckSyncError })),
+          locations: locations.filter(l => l.moneybirdSyncStatus === "failed").map(l => ({ id: l.id, name: l.name, error: l.moneybirdSyncError })),
+          advertisers: advertisers.filter(a => a.moneybirdSyncStatus === "failed").map(a => ({ id: a.id, name: a.companyName, error: a.moneybirdSyncError })),
+        },
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+  
+  console.log("[routes] Data health endpoint registered: /api/sync/data-health");
+
   // Yodeck sync core function - reusable without req/res
   const runYodeckSyncCore = async (): Promise<{ ok: boolean; processed?: number; message?: string }> => {
     try {

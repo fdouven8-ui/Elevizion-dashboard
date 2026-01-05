@@ -19,6 +19,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SyncStatusBadge } from "@/components/SyncStatusBadge";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { 
@@ -254,6 +255,16 @@ export default function AdvertiserDetail() {
             {getStatusBadge(advertiser.status)}
           </div>
           <p className="text-muted-foreground">{advertiser.contactName}</p>
+          <div className="mt-2">
+            <SyncStatusBadge
+              status={advertiser.moneybirdSyncStatus}
+              provider="moneybird"
+              entityType="advertiser"
+              entityId={advertiser.id}
+              error={advertiser.moneybirdSyncError}
+              lastSyncAt={advertiser.moneybirdLastSyncAt}
+            />
+          </div>
         </div>
         <div className="flex gap-2">
           <Button 

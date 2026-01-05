@@ -74,11 +74,12 @@ export const advertisers = pgTable("advertisers", {
   sepaMandate: boolean("sepa_mandate").default(false), // Heeft machtiging getekend
   sepaMandateReference: text("sepa_mandate_reference"), // Mandaat kenmerk (bijv. EVZ-{YYYYMMDD}-{random4})
   sepaMandateDate: date("sepa_mandate_date"), // Datum ondertekening machtiging
-  // Moneybird integratie
+  // Moneybird integratie (SSOT pattern)
   moneybirdContactId: text("moneybird_contact_id"), // Synced from Moneybird
   moneybirdContactSnapshot: jsonb("moneybird_contact_snapshot"), // Cached Moneybird contact data for fast UI loading
-  moneybirdSyncStatus: text("moneybird_sync_status").default("pending"), // pending | synced | error
+  moneybirdSyncStatus: text("moneybird_sync_status").default("not_linked"), // not_linked | pending | synced | failed
   moneybirdSyncError: text("moneybird_sync_error"), // Laatste sync foutmelding
+  moneybirdLastSyncAt: timestamp("moneybird_last_sync_at"),
   // Status & meta
   status: text("status").notNull().default("active"), // active, paused, churned
   onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | completed
@@ -121,6 +122,10 @@ export const locations = pgTable("locations", {
   minimumPayoutAmount: decimal("minimum_payout_amount", { precision: 10, scale: 2 }).notNull().default("25.00"),
   bankAccountIban: text("bank_account_iban"),
   moneybirdContactId: text("moneybird_contact_id"), // Link to Moneybird contact (NOT unique - same contact can link to multiple locations)
+  // Moneybird sync status (SSOT pattern)
+  moneybirdSyncStatus: text("moneybird_sync_status").default("not_linked"), // not_linked | pending | synced | failed
+  moneybirdSyncError: text("moneybird_sync_error"),
+  moneybirdLastSyncAt: timestamp("moneybird_last_sync_at"),
   isPlaceholder: boolean("is_placeholder").default(false), // Auto-created from Yodeck, needs Moneybird linking
   source: text("source").default("manual"), // manual, yodeck - where this location came from
   status: text("status").notNull().default("active"), // active, paused, terminated
@@ -360,7 +365,13 @@ export const screens = pgTable("screens", {
   // === MONEYBIRD FIELDS (source: Moneybird API) ===
   moneybirdContactId: text("moneybird_contact_id"), // Direct link to Moneybird contact (per-screen, no auto-grouping!)
   moneybirdContactSnapshot: jsonb("moneybird_contact_snapshot"), // Cached: { company, firstname, lastname, email, phone, address, city, kvk, btw, syncedAt }
-  moneybirdSyncStatus: text("moneybird_sync_status").default("unlinked"), // linked, unlinked, stale
+  moneybirdSyncStatus: text("moneybird_sync_status").default("not_linked"), // not_linked | pending | synced | failed
+  moneybirdSyncError: text("moneybird_sync_error"),
+  moneybirdLastSyncAt: timestamp("moneybird_last_sync_at"),
+  // === YODECK SYNC STATUS (SSOT pattern) ===
+  yodeckSyncStatus: text("yodeck_sync_status").default("not_linked"), // not_linked | pending | synced | failed
+  yodeckSyncError: text("yodeck_sync_error"),
+  yodeckLastSyncAt: timestamp("yodeck_last_sync_at"),
   // === ONBOARDING STATUS ===
   onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | in_progress | completed
   // === COMPUTED/DISPLAY FIELDS ===
@@ -799,6 +810,48 @@ export const syncLogs = pgTable("sync_logs", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+// ============================================================================
+// INTEGRATION OUTBOX (SSOT Pattern - No Data Loss)
+// ============================================================================
+
+/**
+ * IntegrationOutbox - Transactional outbox for external API calls
+ * 
+ * DESIGN PRINCIPLE: Dashboard DB is the source of truth.
+ * All writes to Moneybird/Yodeck go through this outbox to ensure:
+ * - No data loss if external API fails
+ * - Retry capability with exponential backoff
+ * - Idempotent operations (no duplicate records)
+ * - Full auditability of all external operations
+ */
+export const integrationOutbox = pgTable("integration_outbox", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // Target integration
+  provider: text("provider").notNull(), // moneybird | yodeck
+  actionType: text("action_type").notNull(), // create_contact, update_contact, link_device, sync_status
+  // Entity reference
+  entityType: text("entity_type").notNull(), // advertiser, screen, location, invoice
+  entityId: varchar("entity_id").notNull(),
+  // Payload for the API call
+  payloadJson: jsonb("payload_json"),
+  // Idempotency key (UNIQUE) - prevents duplicate operations
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  // Status tracking
+  status: text("status").notNull().default("queued"), // queued | processing | succeeded | failed
+  attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(5),
+  lastError: text("last_error"),
+  // External result
+  externalId: text("external_id"), // moneybirdContactId, yodeckPlayerId
+  responseJson: jsonb("response_json"), // Full API response for debugging
+  // Scheduling
+  nextRetryAt: timestamp("next_retry_at"),
+  processedAt: timestamp("processed_at"),
+  // Metadata
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
 /**
  * AlertRules - Configuration for automated alerts
  */
@@ -1130,6 +1183,7 @@ export const insertLocationSchema = createInsertSchema(locations).omit({ id: tru
 export const insertScreenGroupSchema = createInsertSchema(screenGroups).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertScreenSchema = createInsertSchema(screens).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertSyncLogSchema = createInsertSchema(syncLogs).omit({ id: true, createdAt: true });
+export const insertIntegrationOutboxSchema = createInsertSchema(integrationOutbox).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPackagePlanSchema = createInsertSchema(packagePlans).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertContractSchema = createInsertSchema(contracts).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertContractEventSchema = createInsertSchema(contractEvents).omit({ id: true, createdAt: true });
@@ -1190,6 +1244,9 @@ export type InsertScreen = z.infer<typeof insertScreenSchema>;
 
 export type SyncLog = typeof syncLogs.$inferSelect;
 export type InsertSyncLog = z.infer<typeof insertSyncLogSchema>;
+
+export type IntegrationOutbox = typeof integrationOutbox.$inferSelect;
+export type InsertIntegrationOutbox = z.infer<typeof insertIntegrationOutboxSchema>;
 
 export type PackagePlan = typeof packagePlans.$inferSelect;
 export type InsertPackagePlan = z.infer<typeof insertPackagePlanSchema>;

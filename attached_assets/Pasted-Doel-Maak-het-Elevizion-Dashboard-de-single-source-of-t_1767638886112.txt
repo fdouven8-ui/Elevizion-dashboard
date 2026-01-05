@@ -1,0 +1,107 @@
+Doel: Maak het Elevizion Dashboard de “single source of truth” en betrouwbare control-room. 
+Yodeck en Moneybird blijven externe systemen, maar het dashboard bestuurt alles, bewaart alle data, en kan altijd herstellen (geen dataverlies). 
+Focus op betrouwbaarheid, sync, auditability en herstel-acties. GEEN grote redesign en geen nieuwe product-features behalve wat nodig is voor betrouwbaarheid.
+
+HARD RULES
+- Herstructureer de app NIET en verander bestaande UX zo min mogelijk.
+- Geen klantlogin/portal bouwen.
+- Alle writes naar Yodeck/Moneybird moeten idempotent zijn (nooit dubbele records).
+- Creëren in dashboard moet NOOIT mislukken omdat externe API faalt: dashboard slaat altijd lokaal op en zet sync taak op “pending/failed”.
+- Elke externe actie moet gelogd en reproduceerbaar zijn.
+- Maak alles “ops-first”: duidelijk wat pending is, wat failed is, en 1 knop om te fixen.
+
+DEEL 1 — DEFINIEER SINGLE SOURCE OF TRUTH + DATA CONTRACT
+1) Leg vast in code (korte doc + types) dat:
+   - Dashboard DB = bron van waarheid voor entities en status.
+   - Moneybird en Yodeck zijn “replica/extern”, gevoed door sync jobs.
+2) Voeg een statusmodel toe per entity voor elke integratie:
+   - moneybird_sync_status: not_linked | pending | synced | failed
+   - yodeck_sync_status: not_linked | pending | synced | failed
+   - last_sync_at, last_sync_error
+   (alleen toevoegen waar dit nog ontbreekt)
+
+DEEL 2 — OUTBOX PATTERN (geen dataverlies bij externe fouten)
+3) Implementeer een “integration_outbox” tabel (minimaal):
+   - id, provider (moneybird|yodeck), action_type, entity_type, entity_id
+   - payload_json
+   - status (queued|processing|succeeded|failed)
+   - attempts, last_error, next_retry_at
+   - idempotency_key (UNIQUE)
+   - created_at, updated_at
+4) Iedere write naar Moneybird/Yodeck gebeurt via:
+   - schrijf/update entity in DB
+   - voeg outbox job toe (queued)
+   - background worker verwerkt jobs
+   - bij succes: markeer entity synced + store external id
+   - bij fout: failed + retry backoff
+
+DEEL 3 — IDEMPOTENCY & DUPLICATE PREVENTION (super belangrijk)
+5) Maak idempotency keys per provider:
+   - moneybird: bijv. contact:create:${entityId} / invoice:create:${entityId}:${period}
+   - yodeck: screen:upsert:${SCREEN_ID}
+6) Zorg dat dezelfde actie niet 2x kan gebeuren:
+   - UNIQUE op idempotency_key in outbox
+   - upsert gedrag waar mogelijk
+7) Als externe id al bestaat (moneybirdContactId / yodeckScreenId), doe UPDATE i.p.v. CREATE.
+
+DEEL 4 — SYNC ENGINE (handmatig én automatisch)
+8) Voeg een “Sync Engine” service toe:
+   - processOutboxOnce(limit)
+   - retryFailed(provider?, entityType?, entityId?)
+   - resyncEntity(entityType, entityId, provider)
+9) Voeg routes (admin-only):
+   - POST /api/sync/run (process outbox now)
+   - POST /api/sync/retry-failed (filters optioneel)
+   - POST /api/sync/resync/:provider/:entityType/:entityId
+   - GET /api/sync/status (queued/failed counts + last run)
+
+DEEL 5 — DATA HEALTH (zodat ik zie dat niks kwijt is)
+10) Maak een “Data Health” endpoint:
+   - GET /api/health/data
+   - retourneer per kern entity type:
+     - total
+     - moneybird: synced/pending/failed/not_linked
+     - yodeck: synced/pending/failed/not_linked
+     - last errors top 10
+11) Voeg in UI (minimale pagina) “Data Health / Sync”:
+   - counters
+   - lijst met failed items (laatste 50)
+   - knoppen: Retry, Resync, Open entity details
+
+DEEL 6 — AUDIT LOG & TRACEABILITY
+12) Voeg audit log toe (als nog niet aanwezig):
+   - audit_logs: actor_user_id, action, entity_type, entity_id, meta_json, created_at
+13) Log belangrijke acties:
+   - entity created/updated
+   - outbox job queued/succeeded/failed
+   - resync/retry buttons
+   - moneybird/yodeck external ids changes
+
+DEEL 7 — “NO SURPRISES” UI OP ENTITY DETAIL PAGINA’S
+14) Op advertiser detail en screen/location detail:
+   - Toon badges: Moneybird: Synced/Pending/Failed + last error (kort)
+   - Toon badges: Yodeck: Synced/Pending/Failed + last error
+   - Voeg knoppen: Resync Moneybird / Resync Yodeck
+   - Toon externe IDs (readonly)
+
+DEEL 8 — EMAIL ALS SIDE-EFFECT (niet blokkeren)
+15) Zorg dat email triggers ook via outbox of vergelijkbare queue lopen OF minimaal:
+   - nooit flow blokkeren
+   - loggen in email_logs
+   - bij Postmark pending approval: markeer blocked en later retry mogelijk
+
+DEEL 9 — ACCEPTANCE TESTS
+16) Voeg een test checklist toe en “simulatie”:
+   - Simuleer Moneybird down (force fail) => dashboard create blijft slagen, outbox job failed zichtbaar, resync werkt
+   - Simuleer Yodeck fail => idem
+   - Daarna provider weer ok => Retry => status synced
+17) Voeg dev-only toggles:
+   - FORCE_MONEYBIRD_FAIL=true
+   - FORCE_YODECK_FAIL=true
+   om dit te testen zonder echte storingen
+
+OUTPUT VEREISTEN
+- Toon exact welke tabellen/velden zijn toegevoegd.
+- Toon exact welke routes zijn toegevoegd.
+- Toon waar de outbox worker draait (bij app start interval of cron).
+- Geen extra features buiten betrouwbaarheid/sync.

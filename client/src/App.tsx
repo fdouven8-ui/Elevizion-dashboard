@@ -23,6 +23,7 @@ import Entities from "@/pages/Entities";
 import SyncLogs from "@/pages/SyncLogs";
 import EmailCenter from "@/pages/EmailCenter";
 import AdvertiserPortal from "@/pages/AdvertiserPortal";
+import DataHealthPage from "@/pages/DataHealthPage";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -47,6 +48,7 @@ function DashboardRouter() {
         <Route path="/entities" component={Entities} />
         <Route path="/sync-logs" component={SyncLogs} />
         <Route path="/email-center" component={EmailCenter} />
+        <Route path="/data-health" component={DataHealthPage} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>

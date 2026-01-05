@@ -4,6 +4,7 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { initializeAdminUser } from "./initAdmin";
 import { syncAllScreensContent } from "./services/yodeckContent";
+import { startOutboxWorker, stopOutboxWorker } from "./services/outboxWorker";
 import { db } from "./db";
 import { storage } from "./storage";
 
@@ -47,6 +48,9 @@ async function gracefulShutdown(signal: string) {
     clearInterval(memoryLogIntervalId);
     memoryLogIntervalId = null;
   }
+  
+  // Stop outbox worker
+  stopOutboxWorker();
   
   // Close HTTP server (stop accepting new connections)
   httpServer.close(() => {
@@ -339,6 +343,14 @@ app.use((req, res, next) => {
           moneybirdSyncIntervalId = setInterval(runMoneybirdBackgroundSync, MONEYBIRD_SYNC_INTERVAL_MS);
         }
       }, 60000);
+      
+      // Start integration outbox worker (30 second interval)
+      // Processes queued sync jobs with retry capability
+      setTimeout(() => {
+        if (!isShuttingDown) {
+          startOutboxWorker();
+        }
+      }, 15000);
     },
   );
 })();

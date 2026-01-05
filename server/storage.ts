@@ -67,6 +67,7 @@ import type {
   EmailLog, InsertEmailLog,
   VerificationCode, InsertVerificationCode,
   OnboardingInviteToken, InsertOnboardingInviteToken,
+  IntegrationOutbox, InsertIntegrationOutbox,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -407,6 +408,16 @@ export interface IStorage {
   createOnboardingInviteToken(data: InsertOnboardingInviteToken): Promise<OnboardingInviteToken>;
   getOnboardingInviteTokenByHash(tokenHash: string): Promise<OnboardingInviteToken | undefined>;
   markOnboardingInviteTokenUsed(id: string): Promise<OnboardingInviteToken | undefined>;
+
+  // Integration Outbox (SSOT Pattern)
+  createOutboxJob(data: InsertIntegrationOutbox): Promise<IntegrationOutbox>;
+  getOutboxJob(id: string): Promise<IntegrationOutbox | undefined>;
+  getOutboxJobByIdempotencyKey(key: string): Promise<IntegrationOutbox | undefined>;
+  getQueuedOutboxJobs(limit?: number): Promise<IntegrationOutbox[]>;
+  getFailedOutboxJobs(provider?: string): Promise<IntegrationOutbox[]>;
+  getOutboxJobsByEntity(entityType: string, entityId: string): Promise<IntegrationOutbox[]>;
+  updateOutboxJob(id: string, data: Partial<IntegrationOutbox>): Promise<IntegrationOutbox | undefined>;
+  getOutboxStats(): Promise<{ queued: number; processing: number; succeeded: number; failed: number; total: number }>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2658,6 +2669,88 @@ export class DatabaseStorage implements IStorage {
       .where(eq(schema.onboardingInviteTokens.id, id))
       .returning();
     return token;
+  }
+
+  // ============================================================================
+  // INTEGRATION OUTBOX (SSOT Pattern)
+  // ============================================================================
+
+  async createOutboxJob(data: InsertIntegrationOutbox): Promise<IntegrationOutbox> {
+    const [job] = await db.insert(schema.integrationOutbox).values(data).returning();
+    return job;
+  }
+
+  async getOutboxJob(id: string): Promise<IntegrationOutbox | undefined> {
+    const [job] = await db.select().from(schema.integrationOutbox)
+      .where(eq(schema.integrationOutbox.id, id));
+    return job;
+  }
+
+  async getOutboxJobByIdempotencyKey(key: string): Promise<IntegrationOutbox | undefined> {
+    const [job] = await db.select().from(schema.integrationOutbox)
+      .where(eq(schema.integrationOutbox.idempotencyKey, key));
+    return job;
+  }
+
+  async getQueuedOutboxJobs(limit: number = 50): Promise<IntegrationOutbox[]> {
+    return await db.select().from(schema.integrationOutbox)
+      .where(and(
+        eq(schema.integrationOutbox.status, "queued"),
+        sql`(${schema.integrationOutbox.nextRetryAt} IS NULL OR ${schema.integrationOutbox.nextRetryAt} <= NOW())`
+      ))
+      .orderBy(schema.integrationOutbox.createdAt)
+      .limit(limit);
+  }
+
+  async getFailedOutboxJobs(provider?: string): Promise<IntegrationOutbox[]> {
+    if (provider) {
+      return await db.select().from(schema.integrationOutbox)
+        .where(and(
+          eq(schema.integrationOutbox.status, "failed"),
+          eq(schema.integrationOutbox.provider, provider)
+        ))
+        .orderBy(desc(schema.integrationOutbox.updatedAt));
+    }
+    return await db.select().from(schema.integrationOutbox)
+      .where(eq(schema.integrationOutbox.status, "failed"))
+      .orderBy(desc(schema.integrationOutbox.updatedAt));
+  }
+
+  async getOutboxJobsByEntity(entityType: string, entityId: string): Promise<IntegrationOutbox[]> {
+    return await db.select().from(schema.integrationOutbox)
+      .where(and(
+        eq(schema.integrationOutbox.entityType, entityType),
+        eq(schema.integrationOutbox.entityId, entityId)
+      ))
+      .orderBy(desc(schema.integrationOutbox.createdAt));
+  }
+
+  async updateOutboxJob(id: string, data: Partial<IntegrationOutbox>): Promise<IntegrationOutbox | undefined> {
+    const [job] = await db.update(schema.integrationOutbox)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.integrationOutbox.id, id))
+      .returning();
+    return job;
+  }
+
+  async getOutboxStats(): Promise<{ queued: number; processing: number; succeeded: number; failed: number; total: number }> {
+    const result = await db.select({
+      status: schema.integrationOutbox.status,
+      count: sql<number>`count(*)`
+    })
+      .from(schema.integrationOutbox)
+      .groupBy(schema.integrationOutbox.status);
+    
+    const stats = { queued: 0, processing: 0, succeeded: 0, failed: 0, total: 0 };
+    for (const row of result) {
+      const count = Number(row.count);
+      stats.total += count;
+      if (row.status === "queued") stats.queued = count;
+      if (row.status === "processing") stats.processing = count;
+      if (row.status === "succeeded") stats.succeeded = count;
+      if (row.status === "failed") stats.failed = count;
+    }
+    return stats;
   }
 }
 

@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SyncStatusBadge } from "@/components/SyncStatusBadge";
 import { 
   Wifi, 
   WifiOff, 
@@ -350,6 +351,16 @@ export default function ScreenDetail() {
               <Clock className="h-3 w-3" />
               Laatst gezien: {formatLastSeen(screen.lastSeenAt)}
             </p>
+            <div className="mt-2">
+              <SyncStatusBadge
+                status={screen.yodeckSyncStatus}
+                provider="yodeck"
+                entityType="screen"
+                entityId={screen.id}
+                error={screen.yodeckSyncError}
+                lastSyncAt={screen.yodeckLastSyncAt}
+              />
+            </div>
           </div>
         </div>
 
