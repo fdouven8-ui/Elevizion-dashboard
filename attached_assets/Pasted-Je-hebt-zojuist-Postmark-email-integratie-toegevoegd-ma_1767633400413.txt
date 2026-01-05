@@ -1,0 +1,109 @@
+Je hebt zojuist “Postmark email integratie” toegevoegd, maar ik (de gebruiker) weet niet wat je precies hebt aangepast. 
+Jouw taak: eerst alles uitzoeken wat er al is toegevoegd, het werkend testen, daarna de echte automatische email-flows toevoegen op de juiste momenten.
+
+BELANGRIJKE BEPERKINGEN
+- Herstructureer de app NIET.
+- Verander geen bestaande flows/pages behalve wat strikt nodig is om emails te versturen.
+- Voeg GEEN inbox/IMAP/Outlook integratie toe.
+- Gebruik ALLEEN Postmark via Server API token uit Secrets.
+- Gebruik de bestaande secrets:
+  - POSTMARK_SERVER_TOKEN
+  - EMAIL_FROM (no-reply@elevizion.nl)
+  - EMAIL_REPLY_TO (info@elevizion.nl)
+- Geen tokens hardcoden in code.
+- Hou code klein en overzichtelijk.
+
+DEEL 1 — INVENTARISATIE (verplicht)
+1) Zoek in de codebase welke bestanden/regels je eerder hebt toegevoegd of aangepast voor Postmark.
+2) Geef een overzicht:
+   - welke bestanden zijn nieuw/aangepast
+   - welke routes/endpoints bestaan er voor email
+   - welke service/functie verstuurt emails
+   - welke env vars worden gelezen
+3) Als er nog GEEN test-endpoint bestaat, voeg die toe:
+   - POST /api/dev/test-email
+   - body: { "to": "email@adres.nl" }
+   - stuurt een testmail “Elevizion testmail ✅”
+   - return JSON { ok: true } of { ok:false, error: ... }
+4) Voeg ook een simpele health-check toe voor email config:
+   - GET /api/dev/email-config
+   - return JSON met boolean: { hasToken: true/false, from: "...", replyTo: "..." } 
+   - NOOIT de token zelf teruggeven.
+
+DEEL 2 — DATABASE & LOGGING (minimaal maar professioneel)
+5) Voeg een minimale email logging tabel toe (via Drizzle of jouw migrationsysteem):
+   - email_logs:
+     - id
+     - to_email
+     - template_key (string)
+     - entity_type (string, nullable)
+     - entity_id (string, nullable)
+     - status (queued|sent|failed)
+     - provider_message_id (nullable)
+     - error_message (nullable)
+     - created_at
+     - sent_at (nullable)
+6) Zorg dat elke sendEmail call ook een email_log record maakt en update:
+   - bij start: queued
+   - bij success: sent + provider_message_id + sent_at
+   - bij error: failed + error_message
+
+DEEL 3 — AUTOMATISCHE EMAIL FLOWS (de “juiste momenten”)
+Ik wil minimaal deze flows:
+
+FLOW A: Verification code (aanmelding / email verificatie)
+7) Implementatie:
+   - Endpoint: POST /api/auth/send-verification
+     body: { email: string }
+   - Generate 6-digit code
+   - Sla hashed code op in DB met expires_at (10 minuten), attempts (0), used_at nullable
+   - Rate limit: max 3 codes per 15 min per email (simpel in DB check)
+   - Stuur mail via Postmark:
+     subject: "Je verificatiecode voor Elevizion"
+     body: bevat code + “geldig 10 minuten”
+   - Log mail in email_logs met template_key="verification_code"
+
+8) Verify endpoint:
+   - POST /api/auth/verify-code
+     body: { email: string, code: string }
+   - Check: bestaat token, niet verlopen, niet used, attempts < 5
+   - Bij goed: mark used_at, return { ok:true }
+   - Bij fout: attempts++ en return { ok:false, error:"..." }
+
+FLOW B: Onboarding invite (als ik in dashboard op “versturen” klik)
+9) Voeg endpoint toe:
+   - POST /api/onboarding/send-invite
+     body: { email: string, entityType: "screen"|"advertiser"|"location", entityId: string }
+   - Maak een single-use token (random), hash opslaan, expires_at (7 dagen)
+   - Maak een link naar mijn portal: https://elevizion.nl/onboarding?token=...
+     (als base URL niet bestaat, maak een env var ONBOARDING_BASE_URL met default jouw huidige app base URL)
+   - Stuur mail:
+     subject: "Vul je gegevens aan voor Elevizion"
+     body: knop/link naar onboarding
+   - Log mail template_key="onboarding_invite"
+
+FLOW C: Onboarding completed (automatisch na afronden)
+10) Zoek in de code waar onboarding status wordt opgeslagen (bijv. onboardingStatus = COMPLETED).
+   - Voeg daar een trigger toe die een bevestigingsmail stuurt naar de klant:
+     subject: "Gegevens ontvangen – Elevizion"
+     body: bevestiging + “vragen? reply naar info@elevizion.nl”
+   - Log mail template_key="onboarding_completed"
+   - BELANGRIJK: stuur deze mail alleen 1x (idempotent), dus check in email_logs of al gestuurd.
+
+DEEL 4 — ADMIN OVERZICHT IN DASHBOARD (klein)
+11) Voeg een simpele read-only endpoint toe:
+   - GET /api/email/logs?limit=50
+   - Return laatste logs (zonder gevoelige data)
+   - Gebruik dit later in UI; nu alleen backend.
+
+DEEL 5 — AFWERKING & TESTEN
+12) Voeg minimale tests/handmatige test-instructies toe in README of in comment:
+   - Hoe test ik /api/dev/test-email
+   - Hoe test ik verification flow
+   - Welke env vars zijn nodig (zonder tokenwaarde)
+13) Zorg dat alles compileert en draait.
+
+LEVERING
+- Laat exact zien welke bestanden je hebt aangepast/toegevoegd.
+- Geef daarna een korte checklist “zo test je het” met 3 curl-commands.
+- Geen extra uitleg buiten deze output.

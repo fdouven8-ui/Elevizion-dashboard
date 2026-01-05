@@ -1638,3 +1638,75 @@ export interface EntityContactData {
   kvkNumber?: string;
   vatNumber?: string;
 }
+
+// ============================================================================
+// EMAIL LOGGING & VERIFICATION
+// ============================================================================
+
+/**
+ * EmailLogs - Track all sent emails for auditing and debugging
+ */
+export const emailLogs = pgTable("email_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  toEmail: text("to_email").notNull(),
+  templateKey: text("template_key").notNull(), // test_email, verification_code, onboarding_invite, onboarding_completed, contract_confirmation, sepa_request
+  entityType: text("entity_type"), // advertiser, screen, location (nullable)
+  entityId: varchar("entity_id"), // ID of related entity (nullable)
+  status: text("status").notNull().default("queued"), // queued, sent, failed
+  providerMessageId: text("provider_message_id"), // Postmark MessageID
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  sentAt: timestamp("sent_at"),
+});
+
+/**
+ * VerificationCodes - Email verification codes for auth
+ */
+export const verificationCodes = pgTable("verification_codes", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: text("email").notNull(),
+  codeHash: text("code_hash").notNull(), // SHA256 hash of 6-digit code
+  expiresAt: timestamp("expires_at").notNull(),
+  attempts: integer("attempts").notNull().default(0),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * OnboardingInviteTokens - Single-use tokens for onboarding invites
+ */
+export const onboardingInviteTokens = pgTable("onboarding_invite_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tokenHash: text("token_hash").notNull(), // SHA256 hash of token
+  entityType: text("entity_type").notNull(), // screen, advertiser, location
+  entityId: varchar("entity_id").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Email & Verification Schemas
+export const insertEmailLogSchema = createInsertSchema(emailLogs).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertVerificationCodeSchema = createInsertSchema(verificationCodes).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertOnboardingInviteTokenSchema = createInsertSchema(onboardingInviteTokens).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Email & Verification Types
+export type EmailLog = typeof emailLogs.$inferSelect;
+export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
+
+export type VerificationCode = typeof verificationCodes.$inferSelect;
+export type InsertVerificationCode = z.infer<typeof insertVerificationCodeSchema>;
+
+export type OnboardingInviteToken = typeof onboardingInviteTokens.$inferSelect;
+export type InsertOnboardingInviteToken = z.infer<typeof insertOnboardingInviteTokenSchema>;
