@@ -4,7 +4,7 @@
  */
 
 import { db } from "./db";
-import { eq, and, gte, lte, desc, sql, isNull, notInArray } from "drizzle-orm";
+import { eq, and, gte, lte, desc, sql, isNull, notInArray, ilike } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import type {
   Advertiser, InsertAdvertiser,
@@ -392,6 +392,8 @@ export interface IStorage {
   createEmailLog(data: InsertEmailLog): Promise<EmailLog>;
   updateEmailLog(id: string, data: Partial<EmailLog>): Promise<EmailLog | undefined>;
   getEmailLogs(limit?: number): Promise<EmailLog[]>;
+  getEmailLogsWithFilters(filters: { limit?: number; status?: string; templateKey?: string; entityType?: string; entityId?: string; search?: string }): Promise<EmailLog[]>;
+  getEmailLogById(id: string): Promise<EmailLog | undefined>;
   getEmailLogByTemplateAndEntity(templateKey: string, entityType: string, entityId: string): Promise<EmailLog | undefined>;
 
   // Verification Codes
@@ -2528,6 +2530,52 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(schema.emailLogs)
       .orderBy(desc(schema.emailLogs.createdAt))
       .limit(limit);
+  }
+
+  async getEmailLogsWithFilters(filters: { 
+    limit?: number; 
+    status?: string; 
+    templateKey?: string; 
+    entityType?: string; 
+    entityId?: string; 
+    search?: string 
+  }): Promise<EmailLog[]> {
+    const conditions = [];
+    
+    if (filters.status) {
+      conditions.push(eq(schema.emailLogs.status, filters.status));
+    }
+    if (filters.templateKey) {
+      conditions.push(eq(schema.emailLogs.templateKey, filters.templateKey));
+    }
+    if (filters.entityType) {
+      conditions.push(eq(schema.emailLogs.entityType, filters.entityType));
+    }
+    if (filters.entityId) {
+      conditions.push(eq(schema.emailLogs.entityId, filters.entityId));
+    }
+    if (filters.search) {
+      conditions.push(ilike(schema.emailLogs.toEmail, `%${filters.search}%`));
+    }
+
+    const query = db.select().from(schema.emailLogs);
+    
+    if (conditions.length > 0) {
+      return await query
+        .where(and(...conditions))
+        .orderBy(desc(schema.emailLogs.createdAt))
+        .limit(filters.limit || 200);
+    }
+    
+    return await query
+      .orderBy(desc(schema.emailLogs.createdAt))
+      .limit(filters.limit || 200);
+  }
+
+  async getEmailLogById(id: string): Promise<EmailLog | undefined> {
+    const [log] = await db.select().from(schema.emailLogs)
+      .where(eq(schema.emailLogs.id, id));
+    return log;
   }
 
   async getEmailLogByTemplateAndEntity(templateKey: string, entityType: string, entityId: string): Promise<EmailLog | undefined> {

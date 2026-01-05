@@ -1,0 +1,91 @@
+Je hebt eerder Postmark + email flows toegevoegd (verification, onboarding invite, logs). 
+Nu moet je dit volledig integreren in mijn bestaande Elevizion Dashboard flows, zodat emails automatisch verstuurd worden bij de juiste systeem-stappen (zoals bij het aanmaken van een adverteerder) EN ik moet het kunnen zien/testen in de UI.
+
+BELANGRIJKE BEPERKINGEN
+- Herstructureer de app NIET.
+- Houd wijzigingen klein en lokaal.
+- Gebruik alleen bestaande DB/tabellen waar mogelijk; voeg alleen iets toe als noodzakelijk.
+- Nooit tokens in frontend; alleen backend gebruikt POSTMARK_SERVER_TOKEN.
+- Emails moeten idempotent zijn: dezelfde “step mail” mag niet dubbel verstuurd worden (ook niet bij refresh/retry).
+
+DEEL 1 — AUDIT & BEWIJS DAT HET WERKT (verplicht)
+1) Zoek alle endpoints/services die nu bestaan:
+   - send-verification, verify-code, onboarding invite, email logs, test-email
+2) Voeg een dev endpoint toe dat hard bewijst dat Postmark werkt:
+   - POST /api/dev/email/send
+   - body: { to, templateKey, entityType?, entityId? }
+   - verstuurt mail via bestaande EmailService + schrijft email_logs
+3) Voeg een endpoint toe om email logs te bekijken:
+   - GET /api/email/logs?limit=100&status=&templateKey=&entityType=&entityId=
+   - Voeg filters toe (optioneel)
+4) Voeg een endpoint toe om één log detail te bekijken:
+   - GET /api/email/logs/:id
+
+DEEL 2 — DEFINIEER EMAIL “STEPS” (centrale mapping)
+5) Maak 1 centrale mapping file (bijv. src/email/steps.ts) met vaste keys voor alle systeem-stappen, bijv:
+   - advertiser_created
+   - advertiser_invite_sent
+   - advertiser_onboarding_completed
+   - screen_created
+   - screen_onboarding_invite_sent
+   - contract_sent
+   - contract_signed
+   - first_invoice_created
+   - payment_failed
+   etc.
+Elke step bevat:
+   - templateKey
+   - subject/html generator of template id (wat jullie nu hebben)
+   - idempotencyKey format: `${step}:${entityType}:${entityId}:${toEmail}`
+6) Implementeer een helper:
+   - sendStepEmail({ step, toEmail, entityType, entityId, meta })
+   - check email_logs op bestaande idempotencyKey met status sent/queued => dan NIET opnieuw sturen
+   - log queued -> sent/failed
+
+DEEL 3 — INTEGRATIE OP ECHTE MOMENTEN IN DE APP (dit is het belangrijkste)
+7) Vind de bestaande backend flow waar een nieuwe adverteerder wordt aangemaakt (POST route of service).
+   - Op het moment dat advertiser succesvol is aangemaakt, trigger direct:
+     step: advertiser_created
+     toEmail: advertiser contact email (uit request of DB)
+   - Als er bij aanmaken ook een verificatiecode/token wordt aangemaakt:
+     - stuur die mail direct mee (verification_code) OF vervang door 1 consistente “invite” mail met link + code (jullie keuze, maar maak het consistent).
+   - Zorg dat de mail alleen verstuurd wordt als er een geldig e-mailadres is.
+   - Zorg dat de create call niet faalt als email faalt: 
+     - advertiser aanmaken moet slagen, email failure wordt gelogd als failed en zichtbaar in email center.
+
+8) Doe hetzelfde voor andere kern flows (zoek bestaande routes/services):
+   - Nieuwe Screen/Locatie aanmaken => screen_created mail of invite
+   - Onboarding status -> COMPLETED => onboarding_completed mail (bestaat al; koppel aan echte status update plek)
+   - Contract flow (Dropbox Sign):
+     - bij “contract sent” => contract_sent mail
+     - bij webhook “signed” => contract_signed bevestiging mail
+   - Moneybird factuur aangemaakt (als jullie dit al in code hebben):
+     - bij invoice created => invoice_created mail (optioneel)
+   Voor elke integratie: voeg het minimaal toe op de plek waar het event echt plaatsvindt (route handler of service), zonder extra refactor.
+
+DEEL 4 — EMAIL CENTER IN DE UI (zodat de gebruiker het ziet)
+9) Voeg in het Dashboard een nieuw menu item toe: “Email Center”
+   - Toon tabel met laatste 200 email_logs:
+     kolommen: created_at, to_email, template_key/step, status, entityType/entityId, error (truncate)
+   - Voeg filters: status + templateKey/step + search op email
+   - Voeg “Resend” knop per failed email:
+     - POST /api/email/resend/:id
+     - hergebruikt dezelfde payload, maar maakt een nieuwe log entry (met link naar original)
+     - idempotency voor resend: alleen resend als status=failed
+
+10) Voeg een “Send test email” UI bovenaan:
+   - input: toEmail
+   - dropdown: step/templateKey
+   - button: Send
+   - toont success/foutmelding
+
+DEEL 5 — TESTPLAN (moet)
+11) Maak een korte checklist in output:
+   - maak nieuwe adverteerder aan met jouw eigen email => je moet direct mail ontvangen
+   - check Email Center => log zichtbaar met status sent
+   - forceer error (zet onzin email) => status failed + error zichtbaar
+
+OUTPUT VEREISTEN
+- Laat exact zien welke bestanden zijn aangepast/toegevoegd.
+- Toon de exacte routes die nu bestaan voor email.
+- Geen extra uitleg: alleen changes + test checklist.

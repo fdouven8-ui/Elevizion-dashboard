@@ -190,6 +190,22 @@ export async function registerRoutes(
     try {
       const data = insertAdvertiserSchema.parse(req.body);
       const advertiser = await storage.createAdvertiser(data);
+      
+      // Send welcome email (non-blocking, failure doesn't affect create)
+      if (advertiser.email) {
+        const { sendStepEmail } = await import("./emailSteps");
+        sendStepEmail({
+          step: "advertiser_created",
+          toEmail: advertiser.email,
+          entityType: "advertiser",
+          entityId: advertiser.id,
+          meta: {
+            companyName: advertiser.companyName,
+            contactName: advertiser.contactName,
+          },
+        }).catch(err => console.error("[Email] advertiser_created failed:", err));
+      }
+      
       res.status(201).json(advertiser);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -328,6 +344,21 @@ export async function registerRoutes(
         || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : null)
         || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
       const portalUrl = `${baseUrl}/portal/${rawToken}`;
+      
+      // Send invite email (non-blocking)
+      if (advertiser.email) {
+        const { sendStepEmail } = await import("./emailSteps");
+        sendStepEmail({
+          step: "advertiser_invite_sent",
+          toEmail: advertiser.email,
+          entityType: "advertiser",
+          entityId: advertiser.id,
+          meta: {
+            companyName: advertiser.companyName,
+            portalUrl,
+          },
+        }).catch(err => console.error("[Email] advertiser_invite_sent failed:", err));
+      }
       
       res.status(201).json({
         advertiser,
@@ -7153,24 +7184,126 @@ export async function registerRoutes(
 
   app.get("/api/email/logs", requirePermission("view_finance"), async (req, res) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
-      const logs = await storage.getEmailLogs(limit);
-      // Remove sensitive data
-      const safeLogs = logs.map(log => ({
+      const filters = {
+        limit: Math.min(parseInt(req.query.limit as string) || 200, 500),
+        status: req.query.status as string | undefined,
+        templateKey: req.query.templateKey as string | undefined,
+        entityType: req.query.entityType as string | undefined,
+        entityId: req.query.entityId as string | undefined,
+        search: req.query.search as string | undefined,
+      };
+      
+      const logs = await storage.getEmailLogsWithFilters(filters);
+      res.json(logs.map(log => ({
         id: log.id,
         toEmail: log.toEmail,
         templateKey: log.templateKey,
         entityType: log.entityType,
         entityId: log.entityId,
         status: log.status,
+        errorMessage: log.errorMessage,
         createdAt: log.createdAt,
         sentAt: log.sentAt,
-        // Don't expose providerMessageId or errorMessage to non-admins
-      }));
-      res.json(safeLogs);
+      })));
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
+  });
+
+  // Get single email log detail
+  app.get("/api/email/logs/:id", requirePermission("view_finance"), async (req, res) => {
+    try {
+      const log = await storage.getEmailLogById(req.params.id);
+      if (!log) {
+        return res.status(404).json({ message: "Email log niet gevonden" });
+      }
+      res.json(log);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Resend failed email
+  app.post("/api/email/resend/:id", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const originalLog = await storage.getEmailLogById(req.params.id);
+      if (!originalLog) {
+        return res.status(404).json({ message: "Email log niet gevonden" });
+      }
+      
+      if (originalLog.status !== "failed") {
+        return res.status(400).json({ message: "Alleen mislukte emails kunnen opnieuw verzonden worden" });
+      }
+      
+      const { sendStepEmail, availableSteps } = await import("./emailSteps");
+      
+      // Check if templateKey is a valid step
+      const step = availableSteps.find(s => s === originalLog.templateKey);
+      if (!step) {
+        return res.status(400).json({ message: `Onbekende email step: ${originalLog.templateKey}` });
+      }
+      
+      const result = await sendStepEmail({
+        step,
+        toEmail: originalLog.toEmail,
+        entityType: originalLog.entityType || undefined,
+        entityId: originalLog.entityId || undefined,
+        skipIdempotencyCheck: true, // Allow resend
+      });
+      
+      res.json({
+        ok: result.success,
+        message: result.message,
+        logId: result.logId,
+        originalLogId: originalLog.id,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Send email using step system (dev/admin endpoint)
+  app.post("/api/dev/email/send", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const { to, step, entityType, entityId, meta } = req.body;
+      
+      if (!to || !step) {
+        return res.status(400).json({ ok: false, error: "to en step zijn verplicht" });
+      }
+      
+      const { sendStepEmail, availableSteps } = await import("./emailSteps");
+      
+      if (!availableSteps.includes(step)) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: `Ongeldige step. Beschikbaar: ${availableSteps.join(", ")}` 
+        });
+      }
+      
+      const result = await sendStepEmail({
+        step,
+        toEmail: to,
+        entityType,
+        entityId,
+        meta,
+        skipIdempotencyCheck: true,
+      });
+      
+      res.json({
+        ok: result.success,
+        message: result.message,
+        skipped: result.skipped,
+        logId: result.logId,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // Get available email steps
+  app.get("/api/email/steps", requirePermission("view_finance"), async (_req, res) => {
+    const { availableSteps } = await import("./emailSteps");
+    res.json(availableSteps);
   });
 
   // ============================================================================
