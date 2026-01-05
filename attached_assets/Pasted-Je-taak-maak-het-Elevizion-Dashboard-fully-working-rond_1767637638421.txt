@@ -1,0 +1,97 @@
+Je taak: maak het Elevizion Dashboard “fully working” rondom onboarding, email triggers, Yodeck + Moneybird koppeling en PDF downloads. 
+Je moet ALLES nalopen, gaps vinden, en repareren. Dit is een audit + fix opdracht.
+
+ABSOLUTE REGELS
+- Herstructureer de app NIET.
+- Verander geen bestaande databronnen (Yodeck/Moneybird) of core UI zonder noodzaak.
+- Hou wijzigingen klein, lokaal en duidelijk.
+- Geen tokens hardcoden; gebruik bestaande Secrets.
+- Email failures mogen NOOIT onboarding blokkeren: loggen als failed/blocked en doorgaan.
+- Alles moet idempotent zijn: dubbele clicks / retries mogen geen dubbele records maken in Moneybird, Yodeck of DB.
+
+CONTEXT
+- We gebruiken Postmark voor no-reply mails. Sender domain is verified. Account approval is aangevraagd (kan nog pending zijn).
+- Email Center en /api/email/steps bestaan; /api/email/logs bestaat.
+- Core principe: SCREEN_ID is centrale identifier (EVZ-001 format) overal.
+
+DEEL 1 — AUDIT (verplicht) + RAPPORT
+1) Scan de volledige codebase en maak een “Onboarding & Integrations Checklist” met status:
+   - Onboarding Advertiser: create, invite/code, form submit, completion, email triggers, Moneybird sync, contract/pdf
+   - Onboarding Screen/Location: create, invite/code, form submit, completion, email triggers, Yodeck sync, Moneybird sync, contract/pdf
+   - Email: step triggers, idempotency, logs, resend, pending approval guard
+   - Moneybird: contact/company creation, custom fields, link naar entities, duplicate prevention
+   - Yodeck: screen mapping, device/screen creation/update, fields required, mapping met SCREEN_ID
+   - PDF: waar contracten/overeenkomsten worden opgeslagen en hoe download links werken
+2) Print dit rapport in output (kort maar volledig) en markeer exact wat je gaat fixen.
+
+DEEL 2 — ONBOARDING FLOW UNIFICEREN (advertiser & screen gelijk)
+3) Zorg dat “Onboarding nieuw scherm” exact dezelfde structuur volgt als “Onboarding nieuwe adverteerder”:
+   - Zelfde stappen (minimaal): create → invite/code → details invullen → review → complete
+   - Zelfde mail-logica: bij create direct invite + code/mail
+   - Zelfde manier van token/code opslag & verify (hergebruik bestaande verification/invite infra)
+4) Maak 1 gedeelde backend helper/service voor onboarding flow logic zodat beide flows consistent zijn, maar zonder grote refactor (bijv. src/services/onboarding.ts met kleine functions).
+5) Zorg dat je per onboarding entity een status veld hebt (DRAFT/INVITED/IN_PROGRESS/COMPLETED) en dat “COMPLETED” maar 1x kan (idempotent).
+
+DEEL 3 — EMAIL TRIGGERS OP JUISTE MOMENTEN
+6) Controleer dat de volgende events daadwerkelijk een mail sturen (en zichtbaar in email_logs):
+   - Advertiser created => advertiser_created mail
+   - Advertiser invite sent => advertiser_invite_sent (of combineer met created, maar log duidelijk)
+   - Advertiser onboarding completed => advertiser_onboarding_completed mail (1x)
+   - Screen created => screen_created mail
+   - Screen invite sent => screen invite step (zelfde gedrag als advertiser)
+   - Verification code => verification_code mail
+7) Als Postmark pending approval is:
+   - block externe domains (zoals eerder) en zet status blocked/failed met duidelijke error
+   - UI Email Center toont dit duidelijk
+
+DEEL 4 — YODECK INTEGRATIE (scherm onboarding moet “klaar” zijn)
+8) Voor Onboarding nieuw scherm: zorg dat alle velden die Yodeck nodig heeft worden opgeslagen en gekoppeld:
+   - SCREEN_ID (centraal)
+   - Yodeck screen/device id (na koppeling)
+   - screen name (moet matchen of syncen)
+   - locatie/adres gegevens
+9) Zorg dat bij onboarding completion:
+   - als Yodeck object al bestaat => update (idempotent)
+   - als niet => create (als de API dat ondersteunt) of markeer “needs manual link” met duidelijke UI indicator
+10) Maak 1 plek waar mapping gebeurt: SCREEN_ID ↔ yodeckScreenId. Geen “losse locaties” als het in jullie model 1 scherm = 1 locatie is (tenzij meerdere schermen expliciet).
+
+DEEL 5 — MONEYBIRD INTEGRATIE (alles direct doorvoeren)
+11) Bij advertiser onboarding completion en screen onboarding completion:
+   - maak/zoek Moneybird contact/company (idempotent)
+   - update alle relevante velden (naam, adres, email, kvk, btw, contactpersoon)
+   - sla moneybirdContactId op in DB en link aan entity
+12) Zorg dat alle schermen/locaties en adverteerders overal de juiste Moneybird data tonen (dit was eerder issue):
+   - bij openen detailpagina moet company/contact gevuld zijn
+   - in schermenlijst moet plaatsnaam/locatie zichtbaar zijn
+13) Duplicate prevention:
+   - gebruik EMAIL of KVK als unique key waar mogelijk
+   - als meerdere matches: kies de beste match en log een warning
+
+DEEL 6 — OVEREENKOMSTEN & PDF DOWNLOAD PER KLANT
+14) Zorg dat “aangemaakte overeenkomsten” als PDF beschikbaar zijn per klant/entity:
+   - Als jullie Dropbox Sign gebruiken: haal signed PDF op via API en sla veilig op (storage) + metadata in DB.
+   - Voeg endpoint: GET /api/contracts/:entityType/:entityId/pdf
+     - stream de PDF
+     - auth: alleen eigenaar/admin
+15) Voeg in UI bij advertiser en screen details:
+   - sectie “Overeenkomsten”
+   - lijst met contracten (status, datum)
+   - knop “Download PDF”
+16) Als er nog geen contract bestaat: toon “Nog geen overeenkomst” + knop “Start overeenkomst” (indien jullie flow dat heeft).
+
+DEEL 7 — ACCEPTANCE TESTS (verplicht)
+17) Voeg een korte “End-to-End test checklist” in output met concrete stappen:
+   - Create advertiser -> check email_logs entry -> (als allowed domain) mail ontvangen
+   - Complete advertiser onboarding -> Moneybird contactId gevuld -> contract PDF download werkt
+   - Create screen -> Yodeck mapping + Moneybird koppeling -> plaatsnaam zichtbaar
+   - Complete screen onboarding -> mail + logs + Moneybird update + Yodeck update
+18) Voeg 3 debug endpoints (alleen voor admin) om status te checken:
+   - GET /api/debug/onboarding/:entityType/:id (toont status, linked ids: moneybird/yodeck)
+   - GET /api/debug/moneybird/:entityType/:id (toont mapped fields die we sturen)
+   - GET /api/debug/yodeck/:screenId (toont mapping en sync status)
+
+OUTPUT VEREISTEN
+- Toon exact welke bestanden zijn aangepast/toegevoegd.
+- Toon exact welke routes je hebt toegevoegd/gewijzigd.
+- Geef een korte lijst “wat is nu opgelost”.
+- Geen extra features buiten dit scope.

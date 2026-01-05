@@ -11,6 +11,10 @@ export type EmailStep =
   | "advertiser_invite_sent"
   | "advertiser_onboarding_completed"
   | "screen_created"
+  | "screen_invite_sent"
+  | "screen_onboarding_completed"
+  | "location_invite_sent"
+  | "location_onboarding_completed"
   | "contract_sent"
   | "contract_signed"
   | "verification_code"
@@ -42,6 +46,26 @@ const stepConfigs: Record<EmailStep, StepConfig> = {
     templateKey: "screen_created",
     getSubject: (meta) => `Nieuw scherm geregistreerd - ${meta?.screenName || "Scherm"}`,
     getHtml: (meta) => generateScreenCreatedHtml(meta),
+  },
+  screen_invite_sent: {
+    templateKey: "screen_invite_sent",
+    getSubject: (meta) => `Voltooi registratie - ${meta?.screenName || "Scherm"}`,
+    getHtml: (meta) => generateScreenInviteHtml(meta),
+  },
+  screen_onboarding_completed: {
+    templateKey: "screen_onboarding_completed",
+    getSubject: (meta) => `Scherm onboarding voltooid - ${meta?.screenName || "Scherm"}`,
+    getHtml: (meta) => generateScreenOnboardingCompletedHtml(meta),
+  },
+  location_invite_sent: {
+    templateKey: "location_invite_sent",
+    getSubject: (meta) => `Voltooi registratie - ${meta?.locationName || "Locatie"}`,
+    getHtml: (meta) => generateLocationInviteHtml(meta),
+  },
+  location_onboarding_completed: {
+    templateKey: "location_onboarding_completed",
+    getSubject: (meta) => `Locatie onboarding voltooid - ${meta?.locationName || "Locatie"}`,
+    getHtml: (meta) => generateLocationOnboardingCompletedHtml(meta),
   },
   contract_sent: {
     templateKey: "contract_sent",
@@ -206,6 +230,64 @@ function generateScreenCreatedHtml(meta?: Record<string, any>): string {
       <p><strong>Scherm:</strong> ${screenName}</p>
       ${locationName ? `<p><strong>Locatie:</strong> ${locationName}</p>` : ""}
     </div>
+    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+  `);
+}
+
+function generateScreenInviteHtml(meta?: Record<string, any>): string {
+  const portalUrl = meta?.portalUrl || "#";
+  const screenName = meta?.screenName || "uw scherm";
+  
+  return baseEmailTemplate(`
+    <h2 style="color: #1e3a5f; margin-top: 0;">Voltooi uw scherm registratie</h2>
+    <p>Beste klant,</p>
+    <p>Om het scherm <strong>${screenName}</strong> te activeren, vragen wij u enkele gegevens in te vullen.</p>
+    <div style="text-align: center; margin: 30px 0;">
+      <a href="${portalUrl}" style="background: #f8a12f; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold;">Gegevens invullen</a>
+    </div>
+    <p style="color: #666; font-size: 12px;">Deze link is 7 dagen geldig.</p>
+    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+  `);
+}
+
+function generateScreenOnboardingCompletedHtml(meta?: Record<string, any>): string {
+  const screenName = meta?.screenName || "uw scherm";
+  const locationName = meta?.locationName || "";
+  
+  return baseEmailTemplate(`
+    <h2 style="color: #1e3a5f; margin-top: 0;">Scherm Onboarding Voltooid!</h2>
+    <p>Beste klant,</p>
+    <p>De onboarding voor scherm <strong>${screenName}</strong>${locationName ? ` op locatie <strong>${locationName}</strong>` : ""} is nu voltooid.</p>
+    <p>Wij gaan aan de slag om het scherm live te zetten. U hoort spoedig van ons!</p>
+    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+  `);
+}
+
+function generateLocationInviteHtml(meta?: Record<string, any>): string {
+  const portalUrl = meta?.portalUrl || "#";
+  const locationName = meta?.locationName || "uw locatie";
+  
+  return baseEmailTemplate(`
+    <h2 style="color: #1e3a5f; margin-top: 0;">Voltooi uw locatie registratie</h2>
+    <p>Beste klant,</p>
+    <p>Om de locatie <strong>${locationName}</strong> te activeren voor digitale signage, vragen wij u enkele gegevens in te vullen.</p>
+    <div style="text-align: center; margin: 30px 0;">
+      <a href="${portalUrl}" style="background: #f8a12f; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold;">Gegevens invullen</a>
+    </div>
+    <p style="color: #666; font-size: 12px;">Deze link is 7 dagen geldig.</p>
+    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+  `);
+}
+
+function generateLocationOnboardingCompletedHtml(meta?: Record<string, any>): string {
+  const locationName = meta?.locationName || "uw locatie";
+  const companyName = meta?.companyName || "";
+  
+  return baseEmailTemplate(`
+    <h2 style="color: #1e3a5f; margin-top: 0;">Locatie Onboarding Voltooid!</h2>
+    <p>Beste klant,</p>
+    <p>De onboarding voor locatie <strong>${locationName}</strong>${companyName ? ` (${companyName})` : ""} is nu voltooid.</p>
+    <p>Wij gaan aan de slag met de installatie. U hoort spoedig van ons!</p>
     <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
   `);
 }
