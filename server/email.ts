@@ -1,10 +1,14 @@
 /**
  * Email Service for Elevizion Dashboard
- * Uses SendGrid for transactional emails
+ * Uses Postmark for transactional emails
  * 
- * To configure: Add SENDGRID_API_KEY environment variable
- * Get your API key from: https://sendgrid.com/docs/ui/account-and-settings/api-keys/
+ * Environment variables:
+ * - POSTMARK_SERVER_TOKEN: Your Postmark server token
+ * - EMAIL_FROM: From email address (default: no-reply@elevizion.nl)
+ * - EMAIL_REPLY_TO: Reply-to email address (default: info@elevizion.nl)
  */
+
+import * as postmark from "postmark";
 
 interface EmailConfig {
   to: string;
@@ -21,70 +25,48 @@ interface EmailResult {
   messageId?: string;
 }
 
-// Check if SendGrid is configured
+// Check if Postmark is configured
 export function isEmailConfigured(): boolean {
-  return !!process.env.SENDGRID_API_KEY;
+  return !!process.env.POSTMARK_SERVER_TOKEN;
 }
 
-// Send email via SendGrid API
+// Send email via Postmark
 export async function sendEmail(config: EmailConfig): Promise<EmailResult> {
-  const apiKey = process.env.SENDGRID_API_KEY;
+  const serverToken = process.env.POSTMARK_SERVER_TOKEN;
   
-  if (!apiKey) {
+  if (!serverToken) {
     return {
       success: false,
-      message: "SendGrid API key is not configured. Add SENDGRID_API_KEY to your environment variables."
+      message: "Postmark is niet geconfigureerd. Voeg POSTMARK_SERVER_TOKEN toe aan environment variables."
     };
   }
 
-  const fromEmail = config.from || process.env.SENDGRID_FROM_EMAIL || "noreply@elevizion.nl";
-  const fromName = config.fromName || "Elevizion";
+  const fromEmail = process.env.EMAIL_FROM || "no-reply@elevizion.nl";
+  const replyTo = process.env.EMAIL_REPLY_TO || "info@elevizion.nl";
 
   try {
-    const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        personalizations: [
-          {
-            to: [{ email: config.to }],
-          },
-        ],
-        from: {
-          email: fromEmail,
-          name: fromName,
-        },
-        subject: config.subject,
-        content: [
-          ...(config.text ? [{ type: "text/plain", value: config.text }] : []),
-          { type: "text/html", value: config.html },
-        ],
-      }),
+    const client = new postmark.ServerClient(serverToken);
+    
+    const result = await client.sendEmail({
+      From: fromEmail,
+      To: config.to,
+      Subject: config.subject,
+      HtmlBody: config.html,
+      TextBody: config.text || "",
+      ReplyTo: replyTo,
+      MessageStream: "outbound",
     });
 
-    if (response.ok || response.status === 202) {
-      const messageId = response.headers.get("x-message-id") || undefined;
-      return {
-        success: true,
-        message: "E-mail succesvol verzonden",
-        messageId,
-      };
-    } else {
-      const errorText = await response.text();
-      console.error("SendGrid error:", response.status, errorText);
-      return {
-        success: false,
-        message: `Fout bij verzenden: ${response.status} - ${errorText}`,
-      };
-    }
+    return {
+      success: true,
+      message: "E-mail succesvol verzonden",
+      messageId: result.MessageID,
+    };
   } catch (error: any) {
-    console.error("Email send error:", error);
+    console.error("Postmark error:", error);
     return {
       success: false,
-      message: `Verbindingsfout: ${error.message}`,
+      message: `Fout bij verzenden: ${error.message}`,
     };
   }
 }

@@ -7063,5 +7063,38 @@ export async function registerRoutes(
     }
   });
 
+  // ============================================================================
+  // DEV / TEST ENDPOINTS
+  // ============================================================================
+
+  // Test email endpoint (development only)
+  app.post("/api/dev/test-email", async (req, res) => {
+    try {
+      const { to } = req.body;
+      if (!to || typeof to !== 'string') {
+        return res.status(400).json({ success: false, message: "E-mailadres (to) is verplicht" });
+      }
+      
+      const result = await sendEmail({
+        to,
+        subject: "Elevizion Test E-mail",
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2 style="color: #1e3a5f;">Elevizion Test E-mail</h2>
+            <p>Dit is een test e-mail om te verifiëren dat de Postmark integratie correct werkt.</p>
+            <p>Verzonden op: ${new Date().toLocaleString('nl-NL')}</p>
+            <hr style="border: 1px solid #eee; margin: 20px 0;">
+            <p style="color: #666; font-size: 12px;">© ${new Date().getFullYear()} Elevizion B.V.</p>
+          </div>
+        `,
+        text: `Elevizion Test E-mail\n\nDit is een test e-mail om te verifiëren dat de Postmark integratie correct werkt.\n\nVerzonden op: ${new Date().toLocaleString('nl-NL')}`,
+      });
+      
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
   return httpServer;
 }
