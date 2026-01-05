@@ -105,6 +105,23 @@ The "Nieuwe Adverteerder" dialog has 2 modes via tabs:
 - **Reduced Logging**: `DEBUG_YODECK=true` flag for verbose Yodeck sync logs.
 - **Control Room DB-Only**: `/api/control-room/stats` and `/api/control-room/actions` use only database queries.
 
+### Integration Outbox Pattern (January 2026)
+Transactional outbox pattern ensures DB is Single Source of Truth for external API operations:
+- **integration_outbox Table**: Queued sync jobs with provider, actionType, entityType, entityId, status, retry scheduling
+- **Idempotency Keys**: Format `${provider}:${actionType}:${entityType}:${entityId}` prevents duplicate operations
+- **Sync Status Fields**: Added to screens, locations, advertisers: `moneybirdSyncStatus`, `yodeckSyncStatus`, `lastSyncAt`, `syncError`
+- **Status Values**: `not_linked` | `pending` | `synced` | `failed`
+- **Background Worker**: 30-second interval, batch size 10, max 5 attempts with exponential backoff (`Math.pow(2, attempts) * 5` minutes)
+- **API Endpoints**:
+  - `GET /api/sync/outbox/status` - Worker and queue statistics
+  - `POST /api/sync/outbox/run` - Manual batch processing
+  - `POST /api/sync/outbox/retry-failed` - Retry all failed jobs
+  - `GET /api/sync/data-health` - Comprehensive sync health overview
+  - `POST /api/sync/entity/:entityType/:entityId/resync` - Resync specific entity
+- **Data Health UI**: `/data-health` page with health score, entity sync stats, failed items tabs
+- **Dev Toggles**: `FORCE_MONEYBIRD_FAIL=true`, `FORCE_YODECK_FAIL=true` for testing failure scenarios
+- **UI Components**: `SyncStatusBadge` component on Screen and Advertiser detail pages with resync buttons
+
 ## External Dependencies
 
 ### Database
