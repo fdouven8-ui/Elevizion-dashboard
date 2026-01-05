@@ -1556,6 +1556,91 @@ export async function registerRoutes(
     res.json(contract);
   });
 
+  // Contract PDF download
+  app.get("/api/contracts/:id/pdf", requirePermission("view_finance"), async (req, res) => {
+    try {
+      const contract = await storage.getContract(req.params.id);
+      if (!contract) {
+        return res.status(404).json({ message: "Contract niet gevonden" });
+      }
+
+      const advertiser = contract.advertiserId 
+        ? await storage.getAdvertiser(contract.advertiserId) 
+        : null;
+      
+      const placements = await storage.getPlacementsByContract(contract.id);
+      const screenNames: string[] = [];
+      for (const p of placements) {
+        if (p.screenId) {
+          const screen = await storage.getScreen(p.screenId);
+          if (screen) screenNames.push(screen.name || screen.screenId);
+        }
+      }
+
+      const PDFDocument = (await import("pdfkit")).default;
+      const doc = new PDFDocument({ margin: 50 });
+      const chunks: Buffer[] = [];
+
+      doc.on("data", (chunk: Buffer) => chunks.push(chunk));
+      doc.on("end", () => {
+        const pdfBuffer = Buffer.concat(chunks);
+        const filename = `Contract-${contract.name?.replace(/[^a-zA-Z0-9]/g, "_") || contract.id}.pdf`;
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+        res.send(pdfBuffer);
+      });
+
+      doc.fontSize(20).font("Helvetica-Bold").text("Reclamecontract", { align: "center" });
+      doc.moveDown(0.5);
+      doc.fontSize(12).font("Helvetica-Bold").fillColor("#f8a12f").text("Elevizion - See Your Business Grow", { align: "center" });
+      doc.fillColor("#000000");
+      doc.moveDown(2);
+
+      doc.fontSize(14).font("Helvetica-Bold").text("Partijen");
+      doc.moveDown(0.5);
+      doc.fontSize(11).font("Helvetica");
+      doc.text(`Leverancier: Elevizion B.V.`);
+      doc.text(`Klant: ${advertiser?.companyName || "Onbekend"}`);
+      if (advertiser?.contactName) doc.text(`T.a.v.: ${advertiser.contactName}`);
+      doc.moveDown(1);
+
+      doc.fontSize(14).font("Helvetica-Bold").text("Contractgegevens");
+      doc.moveDown(0.5);
+      doc.fontSize(11).font("Helvetica");
+      doc.text(`Contractnaam: ${contract.name || contract.title}`);
+      doc.text(`Startdatum: ${contract.startDate ? new Date(contract.startDate).toLocaleDateString("nl-NL") : "N.v.t."}`);
+      if (contract.endDate) doc.text(`Einddatum: ${new Date(contract.endDate).toLocaleDateString("nl-NL")}`);
+      doc.text(`Prijs per maand: € ${contract.monthlyPriceExVat || "0.00"} excl. BTW`);
+      doc.text(`BTW: ${contract.vatPercent || "21"}%`);
+      doc.text(`Status: ${contract.status}`);
+      doc.moveDown(1);
+
+      if (screenNames.length > 0) {
+        doc.fontSize(14).font("Helvetica-Bold").text("Toegewezen schermen");
+        doc.moveDown(0.5);
+        doc.fontSize(11).font("Helvetica");
+        screenNames.forEach((name, i) => doc.text(`${i + 1}. ${name}`));
+        doc.moveDown(1);
+      }
+
+      doc.fontSize(14).font("Helvetica-Bold").text("Voorwaarden");
+      doc.moveDown(0.5);
+      doc.fontSize(10).font("Helvetica");
+      doc.text("1. Dit contract wordt aangegaan voor de overeengekomen periode.");
+      doc.text("2. Facturering vindt maandelijks vooraf plaats via automatische incasso.");
+      doc.text("3. Opzegging dient schriftelijk te gebeuren met een termijn van 1 maand.");
+      doc.text("4. Op dit contract zijn de Algemene Voorwaarden van Elevizion B.V. van toepassing.");
+      doc.moveDown(2);
+
+      doc.fontSize(10).text(`Gegenereerd op: ${new Date().toLocaleDateString("nl-NL")}`, { align: "right" });
+
+      doc.end();
+    } catch (error: any) {
+      console.error("[Contract PDF] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ============================================================================
   // PLACEMENTS
   // ============================================================================
@@ -7483,6 +7568,142 @@ export async function registerRoutes(
       res.json({ ok: true, message: "Uitnodiging verzonden", onboardingUrl });
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // DEBUG ENDPOINTS (admin only)
+  // ============================================================================
+
+  // Debug: Get onboarding status for any entity
+  app.get("/api/debug/onboarding/:entityType/:id", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const { entityType, id } = req.params;
+      
+      if (!["advertiser", "screen", "location"].includes(entityType)) {
+        return res.status(400).json({ error: "entityType moet advertiser, screen of location zijn" });
+      }
+
+      const { getOnboardingDebugInfo } = await import("./services/onboarding");
+      const debugInfo = await getOnboardingDebugInfo(entityType as any, id);
+      
+      res.json(debugInfo);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Debug: Get Moneybird mapping info for entity
+  app.get("/api/debug/moneybird/:entityType/:id", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const { entityType, id } = req.params;
+      
+      let entity: any = null;
+      let moneybirdContactId: string | null = null;
+      let mappedFields: Record<string, any> = {};
+
+      if (entityType === "advertiser") {
+        entity = await storage.getAdvertiser(id);
+        moneybirdContactId = entity?.moneybirdContactId || null;
+        mappedFields = {
+          company_name: entity?.companyName,
+          firstname: entity?.contactName?.split(" ")[0],
+          lastname: entity?.contactName?.split(" ").slice(1).join(" "),
+          email: entity?.email,
+          phone: entity?.phone,
+          address1: entity?.street,
+          zipcode: entity?.zipcode,
+          city: entity?.city,
+          country: entity?.country || "NL",
+          chamber_of_commerce: entity?.kvkNumber,
+          tax_number: entity?.vatNumber,
+          sepa_iban: entity?.iban,
+          sepa_iban_account_name: entity?.ibanAccountHolder,
+        };
+      } else if (entityType === "location") {
+        entity = await storage.getLocation(id);
+        moneybirdContactId = entity?.moneybirdContactId || null;
+        mappedFields = {
+          company_name: entity?.name,
+          email: entity?.email,
+          phone: entity?.phone,
+          address1: entity?.street || entity?.address,
+          zipcode: entity?.zipcode,
+          city: entity?.city,
+        };
+      } else if (entityType === "screen") {
+        const screen = await storage.getScreen(id);
+        if (screen?.locationId) {
+          entity = await storage.getLocation(screen.locationId);
+          moneybirdContactId = entity?.moneybirdContactId || null;
+        }
+        mappedFields = {
+          note: `Via locatie: ${entity?.name || "geen locatie"}`,
+          screenId: screen?.screenId,
+          screenName: screen?.name,
+        };
+      }
+
+      res.json({
+        entityType,
+        entityId: id,
+        found: !!entity,
+        moneybirdContactId,
+        syncStatus: moneybirdContactId ? "linked" : "not_linked",
+        mappedFields: Object.fromEntries(
+          Object.entries(mappedFields).filter(([_, v]) => v != null)
+        ),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Debug: Get Yodeck mapping info for screen
+  app.get("/api/debug/yodeck/:screenId", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      
+      // Try to find by DB id first, then by screenId
+      let screen = await storage.getScreen(screenId);
+      if (!screen) {
+        screen = await storage.getScreenByScreenId(screenId);
+      }
+
+      if (!screen) {
+        return res.status(404).json({ error: "Scherm niet gevonden" });
+      }
+
+      const location = screen.locationId ? await storage.getLocation(screen.locationId) : null;
+
+      res.json({
+        dbId: screen.id,
+        screenId: screen.screenId,
+        name: screen.name,
+        status: screen.status,
+        yodeck: {
+          playerId: screen.yodeckPlayerId,
+          uuid: screen.yodeckUuid,
+          playerName: screen.yodeckPlayerName,
+          workspaceName: screen.yodeckWorkspaceName,
+          screenshotUrl: screen.yodeckScreenshotUrl,
+          contentStatus: screen.yodeckContentStatus,
+          contentCount: screen.yodeckContentCount,
+          lastContentFetch: screen.yodeckContentLastFetchedAt,
+        },
+        location: location ? {
+          id: location.id,
+          name: location.name,
+          city: location.city,
+          moneybirdContactId: location.moneybirdContactId,
+        } : null,
+        syncStatus: screen.yodeckPlayerId ? "linked" : "not_linked",
+        matchConfidence: screen.matchConfidence,
+        matchReason: screen.matchReason,
+        lastSeenAt: screen.lastSeenAt,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
     }
   });
 

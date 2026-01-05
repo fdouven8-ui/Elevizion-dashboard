@@ -124,6 +124,7 @@ export const locations = pgTable("locations", {
   isPlaceholder: boolean("is_placeholder").default(false), // Auto-created from Yodeck, needs Moneybird linking
   source: text("source").default("manual"), // manual, yodeck - where this location came from
   status: text("status").notNull().default("active"), // active, paused, terminated
+  onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | in_progress | completed
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -360,6 +361,8 @@ export const screens = pgTable("screens", {
   moneybirdContactId: text("moneybird_contact_id"), // Direct link to Moneybird contact (per-screen, no auto-grouping!)
   moneybirdContactSnapshot: jsonb("moneybird_contact_snapshot"), // Cached: { company, firstname, lastname, email, phone, address, city, kvk, btw, syncedAt }
   moneybirdSyncStatus: text("moneybird_sync_status").default("unlinked"), // linked, unlinked, stale
+  // === ONBOARDING STATUS ===
+  onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | in_progress | completed
   // === COMPUTED/DISPLAY FIELDS ===
   effectiveName: text("effective_name"), // Calculated: Moneybird company > Yodeck device name > screenId
   city: text("city"), // Denormalized from Moneybird for filtering/display
