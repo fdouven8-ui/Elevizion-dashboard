@@ -21,6 +21,7 @@ import ContentInventory from "@/pages/ContentInventory";
 import Yodeck from "@/pages/Yodeck";
 import Entities from "@/pages/Entities";
 import SyncLogs from "@/pages/SyncLogs";
+import EmailCenter from "@/pages/EmailCenter";
 import AdvertiserPortal from "@/pages/AdvertiserPortal";
 import NotFound from "@/pages/not-found";
 
@@ -45,6 +46,7 @@ function DashboardRouter() {
         <Route path="/yodeck" component={Yodeck} />
         <Route path="/entities" component={Entities} />
         <Route path="/sync-logs" component={SyncLogs} />
+        <Route path="/email-center" component={EmailCenter} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>
