@@ -122,40 +122,46 @@ export default function Landing() {
         </div>
       </section>
 
-      <section id="adverteren" className="py-20 md:py-28">
+      <section id="adverteren" className="py-20 md:py-28 bg-white">
         <div className="container mx-auto px-4">
           <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-3">Voor wie?</h2>
-          <p className="text-center text-slate-400 mb-14 max-w-md mx-auto">
+          <p className="text-center text-slate-600 mb-14 max-w-md mx-auto">
             Elevizion verbindt adverteerders met lokale schermlocaties
           </p>
           <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-            <Card className="border border-slate-100 hover:border-slate-200 transition-colors">
+            <Card className="border-2 border-emerald-200 hover:border-emerald-400 bg-gradient-to-b from-emerald-50/50 to-white transition-all hover:shadow-lg">
               <CardHeader className="pb-3">
-                <div className="w-10 h-10 rounded-lg bg-slate-50 flex items-center justify-center mb-3">
-                  <Megaphone className="h-5 w-5 text-slate-400" />
+                <div className="w-12 h-12 rounded-full bg-emerald-600 text-white flex items-center justify-center mb-4 shadow-lg">
+                  <Megaphone className="h-6 w-6" />
                 </div>
-                <CardTitle className="text-lg font-semibold text-slate-800">Voor adverteerders</CardTitle>
-                <p className="text-sm text-slate-400 mt-1 leading-relaxed">
+                <CardTitle className="text-xl font-bold text-slate-800">Voor adverteerders</CardTitle>
+                <p className="text-sm text-slate-600 mt-1 leading-relaxed">
                   Lokaal groeien zonder verspilling aan online advertentiebudget.
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
-                <ul className="space-y-2.5 text-slate-500 text-sm">
+                <ul className="space-y-3 text-slate-700 text-sm">
                   <li className="flex items-start gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0 mt-0.5" />
+                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Check className="h-3 w-3 text-emerald-600" />
+                    </div>
                     <span>Bereik klanten in jouw regio</span>
                   </li>
                   <li className="flex items-start gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0 mt-0.5" />
+                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Check className="h-3 w-3 text-emerald-600" />
+                    </div>
                     <span>Herhaling zorgt voor herkenning</span>
                   </li>
                   <li className="flex items-start gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0 mt-0.5" />
+                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Check className="h-3 w-3 text-emerald-600" />
+                    </div>
                     <span>Zichtbaar waar je doelgroep komt</span>
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
-                  <Button className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 mt-4 transition-colors">
+                  <Button className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 mt-4 transition-colors font-semibold shadow-lg">
                     <Mail className="h-4 w-4" />
                     Vraag mediakit aan
                   </Button>
@@ -163,33 +169,39 @@ export default function Landing() {
               </CardContent>
             </Card>
             
-            <Card id="scherm-aanbieden" className="border border-slate-100 hover:border-slate-200 transition-colors">
+            <Card id="scherm-aanbieden" className="border-2 border-slate-200 hover:border-emerald-300 bg-white transition-all hover:shadow-lg">
               <CardHeader className="pb-3">
-                <div className="w-10 h-10 rounded-lg bg-slate-50 flex items-center justify-center mb-3">
-                  <Building2 className="h-5 w-5 text-slate-400" />
+                <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center mb-4">
+                  <Building2 className="h-6 w-6" />
                 </div>
-                <CardTitle className="text-lg font-semibold text-slate-800">Voor locaties</CardTitle>
-                <p className="text-sm text-slate-400 mt-1 leading-relaxed">
+                <CardTitle className="text-xl font-bold text-slate-800">Voor locaties</CardTitle>
+                <p className="text-sm text-slate-600 mt-1 leading-relaxed">
                   Scherm dat past bij jouw zaak, volledig verzorgd.
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
-                <ul className="space-y-2.5 text-slate-500 text-sm">
+                <ul className="space-y-3 text-slate-700 text-sm">
                   <li className="flex items-start gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0 mt-0.5" />
+                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Check className="h-3 w-3 text-emerald-600" />
+                    </div>
                     <span>Scherm en plaatsing vaak kosteloos</span>
                   </li>
                   <li className="flex items-start gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0 mt-0.5" />
+                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Check className="h-3 w-3 text-emerald-600" />
+                    </div>
                     <span>Vergoeding of commissie</span>
                   </li>
                   <li className="flex items-start gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0 mt-0.5" />
+                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <Check className="h-3 w-3 text-emerald-600" />
+                    </div>
                     <span>Wij regelen content en onderhoud</span>
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Scherm%20aanbieden">
-                  <Button variant="outline" className="w-full gap-2 border-slate-200 hover:bg-slate-50 mt-4 transition-colors">
+                  <Button variant="outline" className="w-full gap-2 border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white mt-4 transition-colors font-semibold">
                     <MapPin className="h-4 w-4" />
                     Scherm aanbieden
                   </Button>
@@ -200,18 +212,19 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="py-16 md:py-20 bg-slate-800 text-white">
-        <div className="container mx-auto px-4">
+      <section className="py-16 md:py-24 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white relative overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-emerald-900/20 via-transparent to-transparent" />
+        <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-2xl mx-auto text-center">
-            <h2 className="text-2xl md:text-3xl font-bold mb-4 leading-tight text-white">
+            <h2 className="text-2xl md:text-4xl font-bold mb-5 leading-tight text-white">
               Online advertenties worden weggeklikt. Onze schermen niet.
             </h2>
-            <p className="text-white/70 mb-8 leading-relaxed">
+            <p className="text-white/80 mb-8 leading-relaxed text-lg">
               Je boodschap komt in beeld waar mensen wachten, kijken en besluiten.
             </p>
             <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
-              <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 transition-colors">
-                <Mail className="h-4 w-4" />
+              <Button size="lg" className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20">
+                <Mail className="h-5 w-5" />
                 Vraag mediakit aan
               </Button>
             </a>
@@ -401,97 +414,97 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="py-20 md:py-28 bg-slate-50/50">
+      <section className="py-20 md:py-28 bg-white">
         <div className="container mx-auto px-4">
           <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-3">Waar je ons tegenkomt</h2>
-          <p className="text-center text-slate-400 mb-14 max-w-md mx-auto">
+          <p className="text-center text-slate-600 mb-14 max-w-md mx-auto">
             Schermen op plekken waar mensen wachten en kijken
           </p>
           <div className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
-            <Card className="border border-slate-100 bg-white">
-              <CardContent className="pt-6 text-center">
-                <div className="w-10 h-10 rounded-lg bg-slate-50 flex items-center justify-center mx-auto mb-4">
-                  <Scissors className="h-5 w-5 text-slate-400" />
+            <Card className="border-2 border-slate-100 bg-gradient-to-b from-slate-50 to-white hover:border-emerald-300 hover:shadow-lg transition-all">
+              <CardContent className="pt-8 pb-6 text-center">
+                <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-4">
+                  <Scissors className="h-6 w-6" />
                 </div>
-                <h3 className="font-semibold text-sm text-slate-700 mb-1">Wachtruimtes & balies</h3>
-                <p className="text-sm text-slate-400">Kappers, tandartsen, praktijken</p>
+                <h3 className="font-bold text-base text-slate-800 mb-1">Wachtruimtes & balies</h3>
+                <p className="text-sm text-slate-500">Kappers, tandartsen, praktijken</p>
               </CardContent>
             </Card>
-            <Card className="border border-slate-100 bg-white">
-              <CardContent className="pt-6 text-center">
-                <div className="w-10 h-10 rounded-lg bg-slate-50 flex items-center justify-center mx-auto mb-4">
-                  <Dumbbell className="h-5 w-5 text-slate-400" />
+            <Card className="border-2 border-slate-100 bg-gradient-to-b from-slate-50 to-white hover:border-emerald-300 hover:shadow-lg transition-all">
+              <CardContent className="pt-8 pb-6 text-center">
+                <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-4">
+                  <Dumbbell className="h-6 w-6" />
                 </div>
-                <h3 className="font-semibold text-sm text-slate-700 mb-1">Sportscholen & studio's</h3>
-                <p className="text-sm text-slate-400">Fitness, yoga, dansstudio's</p>
+                <h3 className="font-bold text-base text-slate-800 mb-1">Sportscholen & studio's</h3>
+                <p className="text-sm text-slate-500">Fitness, yoga, dansstudio's</p>
               </CardContent>
             </Card>
-            <Card className="border border-slate-100 bg-white">
-              <CardContent className="pt-6 text-center">
-                <div className="w-10 h-10 rounded-lg bg-slate-50 flex items-center justify-center mx-auto mb-4">
-                  <Coffee className="h-5 w-5 text-slate-400" />
+            <Card className="border-2 border-slate-100 bg-gradient-to-b from-slate-50 to-white hover:border-emerald-300 hover:shadow-lg transition-all">
+              <CardContent className="pt-8 pb-6 text-center">
+                <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-4">
+                  <Coffee className="h-6 w-6" />
                 </div>
-                <h3 className="font-semibold text-sm text-slate-700 mb-1">Horeca & retail</h3>
-                <p className="text-sm text-slate-400">Cafés, winkels, restaurants</p>
+                <h3 className="font-bold text-base text-slate-800 mb-1">Horeca & retail</h3>
+                <p className="text-sm text-slate-500">Cafés, winkels, restaurants</p>
               </CardContent>
             </Card>
           </div>
         </div>
       </section>
 
-      <section className="py-20 md:py-28 bg-white">
+      <section className="py-20 md:py-28 bg-gradient-to-b from-slate-50 to-white">
         <div className="container mx-auto px-4">
           <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-3">Veelgestelde vragen</h2>
-          <p className="text-center text-slate-400 mb-14 max-w-md mx-auto">
+          <p className="text-center text-slate-600 mb-14 max-w-md mx-auto">
             Antwoord op de meest gestelde vragen
           </p>
           <div className="max-w-2xl mx-auto">
-            <Accordion type="single" collapsible className="space-y-2">
-              <AccordionItem value="item-1" className="bg-slate-50/70 rounded-lg border border-slate-100 px-4">
-                <AccordionTrigger className="text-left hover:no-underline text-sm font-medium text-slate-700">
+            <Accordion type="single" collapsible className="space-y-3">
+              <AccordionItem value="item-1" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
+                <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
                   In welke regio zijn jullie actief?
                 </AccordionTrigger>
-                <AccordionContent className="text-slate-500 text-sm">
+                <AccordionContent className="text-slate-600 text-sm pb-5">
                   Voornamelijk in de Randstad. Neem contact op om te kijken of we actief zijn in jouw regio.
                 </AccordionContent>
               </AccordionItem>
-              <AccordionItem value="item-2" className="bg-slate-50/70 rounded-lg border border-slate-100 px-4">
-                <AccordionTrigger className="text-left hover:no-underline text-sm font-medium text-slate-700">
+              <AccordionItem value="item-2" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
+                <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
                   Hoe lang loopt een campagne?
                 </AccordionTrigger>
-                <AccordionContent className="text-slate-500 text-sm">
+                <AccordionContent className="text-slate-600 text-sm pb-5">
                   Minimaal één maand. Langere campagnes zijn mogelijk met korting.
                 </AccordionContent>
               </AccordionItem>
-              <AccordionItem value="item-3" className="bg-slate-50/70 rounded-lg border border-slate-100 px-4">
-                <AccordionTrigger className="text-left hover:no-underline text-sm font-medium text-slate-700">
+              <AccordionItem value="item-3" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
+                <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
                   Maken jullie de advertentie ook op?
                 </AccordionTrigger>
-                <AccordionContent className="text-slate-500 text-sm">
+                <AccordionContent className="text-slate-600 text-sm pb-5">
                   Ja, wij ontwerpen je advertentie op basis van je logo, video en teksten. Bij sommige pakketten inbegrepen.
                 </AccordionContent>
               </AccordionItem>
-              <AccordionItem value="item-4" className="bg-slate-50/70 rounded-lg border border-slate-100 px-4">
-                <AccordionTrigger className="text-left hover:no-underline text-sm font-medium text-slate-700">
+              <AccordionItem value="item-4" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
+                <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
                   Kan ik meerdere locaties kiezen?
                 </AccordionTrigger>
-                <AccordionContent className="text-slate-500 text-sm">
+                <AccordionContent className="text-slate-600 text-sm pb-5">
                   Zeker. Je kunt specifieke locaties kiezen of een regio selecteren.
                 </AccordionContent>
               </AccordionItem>
-              <AccordionItem value="item-5" className="bg-slate-50/70 rounded-lg border border-slate-100 px-4">
-                <AccordionTrigger className="text-left hover:no-underline text-sm font-medium text-slate-700">
+              <AccordionItem value="item-5" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
+                <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
                   Wat als ik mijn content wil aanpassen?
                 </AccordionTrigger>
-                <AccordionContent className="text-slate-500 text-sm">
+                <AccordionContent className="text-slate-600 text-sm pb-5">
                   Content aanpassen kan altijd. Stuur nieuw materiaal en wij zorgen dat het snel wordt bijgewerkt.
                 </AccordionContent>
               </AccordionItem>
-              <AccordionItem value="item-6" className="bg-slate-50/70 rounded-lg border border-slate-100 px-4">
-                <AccordionTrigger className="text-left hover:no-underline text-sm font-medium text-slate-700">
+              <AccordionItem value="item-6" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
+                <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
                   Hoe kan ik een schermlocatie aanbieden?
                 </AccordionTrigger>
-                <AccordionContent className="text-slate-500 text-sm">
+                <AccordionContent className="text-slate-600 text-sm pb-5">
                   Mail naar info@elevizion.nl met je locatiegegevens. We nemen contact op.
                 </AccordionContent>
               </AccordionItem>
@@ -500,23 +513,24 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="py-20 md:py-28 bg-emerald-600 text-white">
-        <div className="container mx-auto px-4">
+      <section className="py-20 md:py-28 bg-gradient-to-br from-emerald-600 via-emerald-500 to-emerald-600 text-white relative overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,_var(--tw-gradient-stops))] from-emerald-400/30 via-transparent to-transparent" />
+        <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-xl mx-auto text-center">
-            <h2 className="text-2xl md:text-3xl font-bold mb-4 text-white">Klaar om lokaal zichtbaar te worden?</h2>
-            <p className="text-white/80 mb-8 leading-relaxed">
+            <h2 className="text-2xl md:text-4xl font-bold mb-5 text-white">Klaar om lokaal zichtbaar te worden?</h2>
+            <p className="text-white/90 mb-8 leading-relaxed text-lg">
               Wij regelen de schermen, planning en content. Jij wordt gezien.
             </p>
-            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
-                <Button size="lg" className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto transition-colors">
-                  <Mail className="h-4 w-4" />
+                <Button size="lg" className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8 shadow-xl">
+                  <Mail className="h-5 w-5" />
                   Vraag mediakit aan
                 </Button>
               </a>
               <a href="mailto:info@elevizion.nl?subject=Scherm%20aanbieden">
-                <Button size="lg" variant="outline" className="gap-2 border border-white/30 hover:bg-white/10 text-white w-full sm:w-auto transition-colors">
-                  <MapPin className="h-4 w-4" />
+                <Button size="lg" variant="outline" className="gap-2 border-2 border-white/40 hover:bg-white/20 text-white w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8">
+                  <MapPin className="h-5 w-5" />
                   Scherm aanbieden
                 </Button>
               </a>
@@ -525,16 +539,19 @@ export default function Landing() {
         </div>
       </section>
 
-      <section id="contact" className="py-20 md:py-28 bg-slate-900 text-white">
+      <section id="contact" className="py-20 md:py-28 bg-gradient-to-b from-slate-900 to-slate-950 text-white">
         <div className="container mx-auto px-4">
           <div className="max-w-xl mx-auto text-center">
+            <div className="w-16 h-16 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto mb-6 shadow-lg shadow-emerald-500/30">
+              <Mail className="h-7 w-7" />
+            </div>
             <h2 className="text-2xl md:text-3xl font-bold mb-4 text-white">Contact</h2>
-            <p className="text-slate-500 mb-8">
+            <p className="text-slate-400 mb-8 text-lg">
               Mail ons en we reageren snel.
             </p>
             <a href="mailto:info@elevizion.nl">
-              <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 transition-colors">
-                <Mail className="h-4 w-4" />
+              <Button size="lg" className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20">
+                <Mail className="h-5 w-5" />
                 info@elevizion.nl
               </Button>
             </a>
