@@ -1,0 +1,94 @@
+JE BENT IN MIJN BESTAANDE “ELEVIZION DASHBOARD” REPLIT PROJECT (React + TS + Vite, Express). 
+Custom domain: https://elevizion.nl
+
+SITUATIE:
+De landingpage op "/" bestaat al en werkt. Het dashboard en auth moeten exact blijven zoals nu.
+Ik wil NU alleen de landingpage professioneler en uitgebreider maken, zonder het dashboard te veranderen.
+
+HARD RULES:
+- GEEN wijzigingen aan dashboard pagina’s, routes, auth, database, API, Moneybird/Yodeck integraties.
+- Alleen aanpassingen aan de landingpage component(en) + eventueel kleine shared UI componenten die alleen door landing gebruikt worden.
+- Geen zware libraries toevoegen. Gebruik bestaande styling (Tailwind/shadcn/etc. wat al aanwezig is).
+- Houd het licht en snel (1 pagina, geen CMS).
+
+DOEL:
+Maak https://elevizion.nl ("/") een nette commerciële ontvangstwebsite met deze secties (in deze volgorde) en moderne layout:
+
+1) NAVBAR (sticky)
+- Links: logo of tekst “Elevizion”
+- Rechts: knoppen/links:
+  - “Adverteren”
+  - “Scherm aanbieden”
+  - “Contact”
+  - Kleine subtiele tekstlink: “Login” → /login
+
+2) HERO (sterk)
+- Headline: “Lokale schermreclame die écht opvalt.”
+- Subheadline: “Elevizion plaatst schermen in drukbezochte zaken en verkoopt advertentieruimte aan lokale bedrijven.”
+- 2 CTA knoppen:
+  - Primary: “Vraag mediakit aan” → mailto:info@elevizion.nl?subject=Mediakit%20aanvragen
+  - Secondary: “Scherm aanbieden” → scroll naar sectie “Scherm aanbieden”
+- 3 kleine trust bullets onder CTA (met icoontjes als die al bestaan, anders tekst):
+  - “Lokale zichtbaarheid”
+  - “Vaste looptijd, duidelijke prijs”
+  - “Wij regelen planning & plaatsing”
+
+3) “VOOR WIE” (2 cards)
+- Card 1: “Voor adverteerders”
+  - 3 bullets (bereik in regio, herhaling, zichtbaar op locatie)
+  - CTA: mailto:info@elevizion.nl?subject=Adverteren%20via%20Elevizion
+- Card 2: “Voor locaties”
+  - 3 bullets (gratis scherm/plaatsing afhankelijk van model, extra omzet/commissie, wij regelen content)
+  - CTA: mailto:info@elevizion.nl?subject=Scherm%20beschikbaar%20stellen
+
+4) “ZO WERKT HET” (3 stappen)
+- Stap 1: “Kennismaken”
+- Stap 2: “Plaatsing & planning”
+- Stap 3: “Live + rapportage”
+
+5) PRIJZEN (simpel, geen harde bedragen als die niet zeker zijn)
+- 3 pakketten met placeholders:
+  - “Starter”
+  - “Local Plus”
+  - “Premium”
+- Elk pakket: 4 bullets met features (bijv. looptijd, aantal spots, rotatie, design support)
+- Kleine disclaimer: “Prijs afhankelijk van locatie en looptijd. Vraag de mediakit aan.”
+- CTA: “Vraag mediakit aan” (mailto)
+
+6) FAQ (accordion als shadcn aanwezig is, anders eenvoudige details/summary)
+Minimaal 6 vragen:
+- “In welke regio zijn jullie actief?”
+- “Hoe lang loopt een campagne?”
+- “Maken jullie de advertentie ook op?”
+- “Kan ik meerdere locaties kiezen?”
+- “Wat als ik mijn content wil aanpassen?”
+- “Hoe kan ik een schermlocatie aanbieden?”
+
+7) CONTACT (mooie sectie)
+- Titel: “Contact”
+- Tekst: “Mail ons en we reageren snel.”
+- Buttons:
+  - mailto:info@elevizion.nl
+- Optioneel: klein formulier (naam, e-mail, bericht) MAG alleen als er al een mail/endpoint bestaat; anders NIET toevoegen. Hou het bij mailto.
+
+8) FOOTER
+- “© Elevizion”
+- “info@elevizion.nl”
+- Links: “Login” → /login
+
+DESIGN RICHTLIJNEN:
+- Rustige, moderne spacing, duidelijke typografie, mooie cards.
+- Responsive (mobile-first).
+- Gebruik max 1 accentkleur (gebruik bestaande Elevizion kleuren indien aanwezig).
+- Geen stockfoto’s nodig; als je een achtergrond wilt: gradient/abstract shapes met CSS.
+
+TECHNISCH:
+- Pas alleen LandingPage en eventuele landing-only components aan.
+- Geen impact op router behalve dat "/" deze landing laadt (dat is al zo).
+- Geen nieuwe routes.
+- Zorg dat alles compileert zonder warnings.
+
+OUTPUT:
+- Geef een korte lijst: welke files aangepast/toegevoegd.
+- Daarna: 5 bullet points met wat er visueel verbeterd is.
+VOER NU UIT.
