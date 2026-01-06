@@ -68,6 +68,8 @@ import type {
   VerificationCode, InsertVerificationCode,
   OnboardingInviteToken, InsertOnboardingInviteToken,
   IntegrationOutbox, InsertIntegrationOutbox,
+  LocationToken, InsertLocationToken,
+  LocationOnboardingEvent, InsertLocationOnboardingEvent,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -81,9 +83,20 @@ export interface IStorage {
   // Locations
   getLocations(): Promise<Location[]>;
   getLocation(id: string): Promise<Location | undefined>;
+  getLocationByCode(locationCode: string): Promise<Location | undefined>;
   createLocation(data: InsertLocation): Promise<Location>;
   updateLocation(id: string, data: Partial<InsertLocation>): Promise<Location | undefined>;
   deleteLocation(id: string): Promise<boolean>;
+  getNextLocationCode(): Promise<string>;
+
+  // Location Onboarding Tokens
+  createLocationToken(data: InsertLocationToken): Promise<LocationToken>;
+  getLocationTokenByHash(tokenHash: string): Promise<LocationToken | undefined>;
+  markLocationTokenUsed(id: string): Promise<void>;
+
+  // Location Onboarding Events
+  createLocationOnboardingEvent(data: InsertLocationOnboardingEvent): Promise<LocationOnboardingEvent>;
+  getLocationOnboardingEvents(locationId: string): Promise<LocationOnboardingEvent[]>;
 
   // Screens
   getScreens(): Promise<Screen[]>;
@@ -481,6 +494,65 @@ export class DatabaseStorage implements IStorage {
   async deleteLocation(id: string): Promise<boolean> {
     await db.delete(schema.locations).where(eq(schema.locations.id, id));
     return true;
+  }
+
+  async getLocationByCode(locationCode: string): Promise<Location | undefined> {
+    const [location] = await db.select().from(schema.locations).where(eq(schema.locations.locationCode, locationCode));
+    return location;
+  }
+
+  async getNextLocationCode(): Promise<string> {
+    const locations = await db.select({ locationCode: schema.locations.locationCode })
+      .from(schema.locations)
+      .where(sql`${schema.locations.locationCode} IS NOT NULL`);
+    
+    let maxNum = 0;
+    for (const loc of locations) {
+      if (loc.locationCode) {
+        const match = loc.locationCode.match(/EVZ-LOC-(\d+)/);
+        if (match) {
+          const num = parseInt(match[1], 10);
+          if (num > maxNum) maxNum = num;
+        }
+      }
+    }
+    return `EVZ-LOC-${String(maxNum + 1).padStart(3, '0')}`;
+  }
+
+  // ============================================================================
+  // LOCATION ONBOARDING TOKENS
+  // ============================================================================
+
+  async createLocationToken(data: InsertLocationToken): Promise<LocationToken> {
+    const [token] = await db.insert(schema.locationTokens).values(data).returning();
+    return token;
+  }
+
+  async getLocationTokenByHash(tokenHash: string): Promise<LocationToken | undefined> {
+    const [token] = await db.select().from(schema.locationTokens).where(eq(schema.locationTokens.tokenHash, tokenHash));
+    return token;
+  }
+
+  async markLocationTokenUsed(id: string): Promise<void> {
+    await db.update(schema.locationTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(schema.locationTokens.id, id));
+  }
+
+  // ============================================================================
+  // LOCATION ONBOARDING EVENTS
+  // ============================================================================
+
+  async createLocationOnboardingEvent(data: InsertLocationOnboardingEvent): Promise<LocationOnboardingEvent> {
+    const [event] = await db.insert(schema.locationOnboardingEvents).values(data).returning();
+    return event;
+  }
+
+  async getLocationOnboardingEvents(locationId: string): Promise<LocationOnboardingEvent[]> {
+    return await db.select()
+      .from(schema.locationOnboardingEvents)
+      .where(eq(schema.locationOnboardingEvents.locationId, locationId))
+      .orderBy(desc(schema.locationOnboardingEvents.createdAt));
   }
 
   // ============================================================================
