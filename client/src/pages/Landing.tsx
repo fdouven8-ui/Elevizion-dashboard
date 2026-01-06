@@ -8,10 +8,8 @@ import {
 } from "@/components/ui/accordion";
 import { 
   Monitor, MapPin, Eye, Clock, CheckCircle, Mail, 
-  Users, Zap, BarChart3, ArrowRight, Building2, 
-  Megaphone, Handshake, Play
+  ArrowRight, Building2, Megaphone, Handshake, Play
 } from "lucide-react";
-import { Link } from "wouter";
 
 export default function Landing() {
   const scrollToSection = (id: string) => {
@@ -61,11 +59,6 @@ export default function Landing() {
             >
               Contact
             </Button>
-            <Link href="/login">
-              <span className="text-sm text-slate-500 hover:text-slate-700 px-2 cursor-pointer" data-testid="button-login">
-                Login
-              </span>
-            </Link>
           </nav>
         </div>
       </header>
@@ -417,17 +410,13 @@ export default function Landing() {
       </section>
 
       <footer className="py-8 bg-slate-950 text-slate-400">
-        <div className="container mx-auto px-4">
-          <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-            <div className="flex items-center gap-4">
-              <span className="text-sm">&copy; {new Date().getFullYear()} Elevizion</span>
-              <a href="mailto:info@elevizion.nl" className="text-sm hover:text-white">
-                info@elevizion.nl
-              </a>
-            </div>
-            <Link href="/login">
-              <span className="text-sm hover:text-white cursor-pointer">Login</span>
-            </Link>
+        <div className="container mx-auto px-4 text-center">
+          <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
+            <span className="text-sm">&copy; {new Date().getFullYear()} Elevizion</span>
+            <span className="hidden sm:inline text-slate-600">•</span>
+            <a href="mailto:info@elevizion.nl" className="text-sm hover:text-white">
+              info@elevizion.nl
+            </a>
           </div>
         </div>
       </footer>
