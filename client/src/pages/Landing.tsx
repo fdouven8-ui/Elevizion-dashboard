@@ -64,20 +64,28 @@ export default function Landing() {
         </div>
       </header>
 
-      <section className="py-16 md:py-24 bg-gradient-to-br from-slate-50 via-white to-emerald-50 relative overflow-hidden">
-        <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-100/50 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
-        <div className="absolute bottom-0 left-0 w-72 h-72 bg-blue-100/50 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
-        <div className="container mx-auto px-4 relative">
+      <section className="py-20 md:py-32 relative overflow-hidden min-h-[70vh] flex items-center">
+        <video 
+          autoPlay 
+          muted 
+          loop 
+          playsInline
+          className="absolute inset-0 w-full h-full object-cover"
+        >
+          <source src="/hero-video.mp4" type="video/mp4" />
+        </video>
+        <div className="absolute inset-0 bg-slate-900/60" />
+        <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-3xl mx-auto text-center">
-            <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-slate-900 mb-4 leading-tight" data-testid="hero-title">
+            <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-4 leading-tight drop-shadow-lg" data-testid="hero-title">
               Lokale schermreclame die écht opvalt.
             </h1>
-            <p className="text-lg md:text-xl text-slate-600 mb-8 max-w-2xl mx-auto">
+            <p className="text-lg md:text-xl text-slate-200 mb-8 max-w-2xl mx-auto">
               Elevizion plaatst digitale schermen op drukbezochte locaties en helpt lokale bedrijven zichtbaar worden bij hun eigen doelgroep — precies waar aandacht is.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center mb-4">
               <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
-                <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-6 w-full sm:w-auto shadow-lg shadow-emerald-200" data-testid="button-cta-mediakit">
+                <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-6 w-full sm:w-auto shadow-lg" data-testid="button-cta-mediakit">
                   <Mail className="h-4 w-4" />
                   Vraag mediakit aan
                 </Button>
@@ -85,7 +93,7 @@ export default function Landing() {
               <Button 
                 size="lg" 
                 variant="outline" 
-                className="gap-2 border-2 border-slate-200 hover:bg-slate-50 px-6"
+                className="gap-2 border-2 border-white/30 hover:bg-white/10 px-6 text-white"
                 onClick={() => scrollToSection('scherm-aanbieden')}
                 data-testid="button-cta-partner"
               >
@@ -93,20 +101,20 @@ export default function Landing() {
                 Scherm aanbieden
               </Button>
             </div>
-            <p className="text-sm text-slate-500 mb-10">
+            <p className="text-sm text-slate-300 mb-10">
               Snel reactie • We regelen ontwerp & planning • Duidelijke afspraken
             </p>
-            <div className="flex flex-wrap justify-center gap-6 text-sm text-slate-600">
+            <div className="flex flex-wrap justify-center gap-6 text-sm text-slate-200">
               <div className="flex items-center gap-2">
-                <Eye className="h-4 w-4 text-emerald-600" />
+                <Eye className="h-4 w-4 text-emerald-400" />
                 <span>Zichtbaar bij lokaal publiek</span>
               </div>
               <div className="flex items-center gap-2">
-                <Clock className="h-4 w-4 text-emerald-600" />
+                <Clock className="h-4 w-4 text-emerald-400" />
                 <span>Vaste prijs & looptijd (geen verrassingen)</span>
               </div>
               <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-emerald-600" />
+                <CheckCircle className="h-4 w-4 text-emerald-400" />
                 <span>Volledig verzorgd: planning & plaatsing</span>
               </div>
             </div>
