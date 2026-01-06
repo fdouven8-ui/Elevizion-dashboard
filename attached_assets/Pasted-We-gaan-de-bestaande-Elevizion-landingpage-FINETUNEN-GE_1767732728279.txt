@@ -1,0 +1,86 @@
+We gaan de bestaande Elevizion landingpage FINETUNEN.
+GEEN redesign, GEEN nieuwe structuur, GEEN nieuwe pagina’s.
+Alles blijft zoals het nu is, maar wordt visueel en inhoudelijk strakker en consistenter.
+
+FOCUS:
+- Rust
+- Leesbaarheid
+- Hiërarchie
+- Conversie
+- Premium gevoel (zonder schreeuwen)
+
+VOER ALLE ONDERSTAANDE PUNTEN UIT:
+
+────────────────────────
+1) HERO / HEADER FINETUNING
+────────────────────────
+- Laat de hero-afbeelding exact zoals deze nu is.
+- Voeg een subtiele donkere overlay toe (±25–35%) zodat tekst beter leesbaar blijft op alle schermen.
+- Zorg dat H1 altijd 100% leesbaar is op desktop én mobiel.
+- Beperk de maximale breedte van de tekstcontainer (zodat regels niet te lang worden).
+- CTA-knoppen:
+  - Primaire CTA (“Vraag mediakit aan”) iets prominenter dan secundaire.
+  - Hover states subtiel (geen felle animaties).
+- Microcopy onder de knoppen iets lichter van kleur dan hoofdtekst, maar nog goed leesbaar.
+
+────────────────────────
+2) TYPOGRAFIE & RITME
+────────────────────────
+- Controleer consistentie in:
+  - lettergroottes
+  - regelhoogtes
+  - marges tussen secties
+- Meer verticale ruimte tussen grote secties (iets meer adem).
+- Headlines iets zwaarder dan bodytekst, maar geen extra fonts toevoegen.
+
+────────────────────────
+3) KLEUR & CONTRAST
+────────────────────────
+- Groen alleen gebruiken voor:
+  - primaire CTA
+  - checkmarks / highlights
+- Geen nieuwe kleuren toevoegen.
+- Zorg dat iconen en checkmarks overal exact dezelfde tint groen gebruiken.
+- Subtiele schaduwen consistent maken (zelfde opacity en blur).
+
+────────────────────────
+4) CTA-CONSISTENTIE
+────────────────────────
+- Overal dezelfde terminologie:
+  - “Vraag mediakit aan”
+  - “Scherm aanbieden”
+- Geen varianten of synoniemen gebruiken.
+- CTA’s visueel consistent (zelfde radius, padding, hover).
+
+────────────────────────
+5) CONTENT FINE TUNING (GEEN NIEUWE COPY)
+────────────────────────
+- Huidige teksten behouden.
+- Alleen:
+  - zinnen iets inkorten waar mogelijk
+  - regelafbreking verbeteren voor scanbaarheid
+- Geen marketingjargon toevoegen.
+- Geen SaaS-woorden (platform, dashboard, software, starten, trial).
+
+────────────────────────
+6) VISUELE RUST
+────────────────────────
+- Controleer of er geen secties te “druk” ogen.
+- Als nodig:
+  - verlaag icon size licht
+  - verminder border contrast
+- Zorg dat de hero visueel dominant blijft t.o.v. de rest van de pagina.
+
+────────────────────────
+7) MOBIEL CONTROLE
+────────────────────────
+- Hero tekst mag max 3–4 regels zijn op mobiel.
+- CTA’s onder elkaar, voldoende spacing.
+- Geen tekst over belangrijke delen van de achtergrondafbeelding.
+
+────────────────────────
+8) PERFORMANCE
+────────────────────────
+- Hero image lazy-load correct instellen.
+- Geen extra scripts of libraries toevoegen.
+- CSS
