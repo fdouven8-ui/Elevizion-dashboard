@@ -1,0 +1,88 @@
+JE BENT IN MIJN BESTAANDE “ELEVIZION DASHBOARD” REPLIT PROJECT 
+(React + TypeScript + Vite frontend, Express backend).
+
+CONTEXT:
+Deze app wordt live gebruikt op het custom domein:
+https://elevizion.nl
+
+DOEL (MINIMALE AANPASSINGEN, GEEN GROTE REFACTOR):
+1) Zorg dat https://elevizion.nl (root "/") een publieke ontvangstwebsite / landingpage toont.
+2) Houd het bestaande dashboard volledig intact.
+3) Het dashboard blijft bereikbaar onder hetzelfde domein via routes zoals:
+   - https://elevizion.nl/dashboard
+   - https://elevizion.nl/schermen
+   - https://elevizion.nl/adverteerders
+   - https://elevizion.nl/onboarding
+4) Landingpage is publiek (geen login vereist).
+5) Alle dashboard-routes blijven afgeschermd zoals nu:
+   - Niet ingelogd → redirect naar /login (of bestaande login route).
+6) Er komt GEEN apart subdomein, GEEN tweede app, GEEN nieuwe deployment.
+   Alles draait onder elevizion.nl.
+
+BELANGRIJK:
+- VERANDER NIET de bestaande dashboard-structuur, logica of UX.
+- VERWIJDER GEEN bestaande routes of API’s.
+- Voeg alleen toe wat nodig is om "/" als publieke landing te laten werken.
+- Gebruik bestaande styling / component library die al aanwezig is.
+- Geen nieuwe database tabellen.
+- Geen nieuwe auth-opzet.
+
+IMPLEMENTATIE-STAPPEN:
+
+A) Frontend routing (cruciaal):
+- Voeg een nieuwe publieke pagina toe: LandingPage (bijv. src/pages/LandingPage.tsx).
+- Update de router zodat:
+  - "/" → LandingPage (PUBLIC, voor elevizion.nl)
+  - "/login" → bestaande login pagina (ongewijzigd)
+  - "/dashboard" + bestaande dashboard routes → blijven exact werken zoals nu
+- Als "/" momenteel het dashboard toont:
+  - verplaats het dashboard NIET,
+  - maar zorg dat "/" landingpage wordt en dashboard alleen via zijn bestaande routes bereikbaar is.
+
+B) LandingPage inhoud (licht en professioneel):
+- Hero:
+  - Titel: “Elevizion”
+  - Subtitel: “Schermreclame in lokale zaken.”
+- Call-to-actions:
+  1) “Adverteren” → mailto:info@elevizion.nl?subject=Adverteren%20via%20Elevizion
+  2) “Scherm beschikbaar stellen” → mailto:info@elevizion.nl?subject=Scherm%20beschikbaar%20stellen
+- Korte uitlegblokken:
+  - Wij plaatsen schermen in drukbezochte lokale zaken
+  - Lokale bedrijven adverteren per week of maand
+  - Wij regelen planning, plaatsing en rapportage
+- Mini “Zo werkt het” (3 stappen, simpel)
+- Footer:
+  - info@elevizion.nl
+  - © Elevizion
+- Toon bestaand Elevizion-logo ALS het al in de repo staat.
+  - Zo niet: alleen typografische tekst “Elevizion”
+  - GEEN nieuwe logo’s genereren.
+
+C) Auth & beveiliging:
+- Alle dashboard routes onder elevizion.nl blijven beschermd.
+- Niet ingelogd → redirect naar /login.
+- Gebruik bestaande auth-guard / middleware als die er al is.
+- GEEN nieuwe login flows maken.
+
+D) Express / server setup:
+- Zorg dat SPA routing correct werkt op het custom domein elevizion.nl:
+  - Directe refresh op /dashboard mag geen 404 geven.
+  - Alle niet-API routes moeten naar index.html resolven.
+- Laat alle bestaande API routes exact zoals ze zijn.
+
+E) Validatie:
+- Controleer:
+  - https://elevizion.nl → landingpage zichtbaar
+  - https://elevizion.nl/login → login werkt
+  - https://elevizion.nl/dashboard → login vereist
+  - Na login → exact hetzelfde dashboard als voorheen
+- Geen console errors
+- Geen redirect loops
+
+OUTPUT:
+- Pas de code aan en rapporteer:
+  1) Welke files zijn aangepast/toegevoegd
+  2) Wat elke wijziging doet (max 1–2 zinnen per file)
+- GEEN extra features, GEEN uitleg buiten scope.
+
+START NU MET IMPLEMENTEREN.

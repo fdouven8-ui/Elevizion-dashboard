@@ -4,6 +4,7 @@ import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 
+import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
 import Home from "@/pages/Home";
 import Onboarding from "@/pages/Onboarding";
@@ -58,7 +59,8 @@ function DashboardRouter() {
 function Router() {
   return (
     <Switch>
-      <Route path="/" component={Login} />
+      <Route path="/" component={Landing} />
+      <Route path="/login" component={Login} />
       <Route path="/portal/:token" component={AdvertiserPortal} />
       <Route component={DashboardRouter} />
     </Switch>
