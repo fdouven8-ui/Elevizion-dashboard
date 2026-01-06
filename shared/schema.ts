@@ -85,6 +85,10 @@ export const advertisers = pgTable("advertisers", {
   onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | completed
   source: text("source"), // Face-to-face, Telefoon, Website, etc
   notes: text("notes"), // Interne notities (max 500 chars)
+  // Email tracking timestamps (idempotency)
+  inviteEmailSentAt: timestamp("invite_email_sent_at"), // When portal invite was sent
+  confirmationEmailSentAt: timestamp("confirmation_email_sent_at"), // When submission confirmation was sent
+  whatnowEmailSentAt: timestamp("whatnow_email_sent_at"), // When "what now" email was sent
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

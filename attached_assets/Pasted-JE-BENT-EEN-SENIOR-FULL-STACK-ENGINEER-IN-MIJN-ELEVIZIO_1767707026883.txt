@@ -1,0 +1,102 @@
+JE BENT EEN SENIOR FULL-STACK ENGINEER IN MIJN ELEVIZION DASHBOARD (React + TS + Vite, Express API, Drizzle/Postgres). WE ZITTEN IN FINETUNING: GEEN GROTE REFACTOR, GEEN NIEUWE ARCHITECTUUR, GEEN EXTRA COMPLEXE FLOWS. FIX ALLEEN WAT HIERONDER STAAT EN HOUD HET KLEIN, ROBUUST EN IDEMPOTENT.
+
+PROBLEEM 1 — EMAIL WORDT AL VERZONDEN ZONDER “EMAIL VERZENDEN” KLIK
+Huidig gedrag:
+- Bij het aanmaken van de onboarding link voor nieuwe adverteerder wordt er direct al een mail verstuurd, terwijl de UI nog aangeeft dat ik pas moet klikken op “E-mail verzenden”.
+
+Doelgedrag:
+- De mail met “gegevens invullen” link mag PAS verzonden worden op expliciete actie:
+  - óf op button “E-mail verzenden”
+  - óf als ik in de wizard kies “Auto-verzenden” (alleen als die optie al bestaat; anders NIET toevoegen).
+- Bij “Link aanmaken” mag er GEEN mail verzonden worden, alleen de link genereren + opslaan.
+
+Implementatie-eis:
+- Zoek waar de mail wordt getriggerd (waarschijnlijk in dezelfde endpoint als link genereren, of in een effect/side-effect).
+- Split dit:
+  1) Endpoint: create onboarding link (maakt token/link, slaat op, returnt link) -> GEEN mail
+  2) Endpoint: send onboarding email (neemt advertiserId / onboardingId) -> verstuurt mail, zet status “sent_at” timestamp
+- Maak dit idempotent:
+  - Als sent_at al gezet is, verstuur niet opnieuw (tenzij er expliciet “opnieuw versturen” bestaat; anders blokkeren en meld in response dat het al verzonden is).
+
+PROBLEEM 2 — VERKEERDE EMAIL VOLGORDE / CONTENT NA INVULLEN FORMULIER
+Huidig gedrag:
+- Na invullen en “versturen” krijgt adverteerder een bevestigingsmail met tekst alsof we al aan de slag gaan met de advertentie. Dat is te vroeg.
+
+Doelgedrag (exacte flow):
+A) Eerste mail (NA expliciet verzenden door mij):
+- Onderwerp: “Vul je gegevens in voor Elevizion”
+- Inhoud: link om gegevens in te vullen
+B) Na succesvol invullen formulier + verzenden:
+1) Bevestigingsmail (DIRECT):
+   - Onderwerp: “Gegevens ontvangen – Elevizion”
+   - Inhoud: kort: “Bedankt, we hebben je gegevens ontvangen en opgeslagen.”
+   - GEEN tekst over “we gaan aan de slag met de advertentie”
+2) Daarna (DIRECT na bevestiging, of als aparte stap binnen dezelfde actie) een ‘Wat nu’-mail:
+   - Onderwerp: “Wat nu? Stuur je bestanden naar Elevizion”
+   - Inhoud MOET bevatten:
+     - “Mail je bedrijfsvideo, logo, teksten en eventuele wensen naar info@elevizion.nl”
+     - “Zodra we alles binnen hebben, maken we de advertentie en nemen we contact op als er vragen zijn.”
+     - Eventueel: “Vermeld je bedrijfsnaam + eventueel scherm/locatie (als bekend).”
+- Belangrijk: deze ‘Wat nu’-mail moet ALTIJD na formulier submit, maar alleen als submit echt succesvol is.
+
+Implementatie-eis:
+- Verplaats de mail-logica naar de backend bij de submit handler zodat volgorde gegarandeerd is.
+- Maak mail verzending ook hier idempotent op basis van onboarding submission:
+  - Gebruik flags/timestamps zoals:
+    - submission_received_at
+    - confirmation_email_sent_at
+    - whatnow_email_sent_at
+  - Als gebruiker refresh/spam submit: geen dubbele mails.
+
+PROBLEEM 3 — NA INVULLEN FORMULIER WORDT MONEYBIRD NIET GEVULD + DASHBOARD ZEGT “MOET NOG KOPPELEN”
+Huidig gedrag:
+- Adverteerder vult alles in -> ik zie hem in dashboard, maar in Moneybird staat niets (contact/klant niet aangemaakt/geen update).
+- Dashboard toont dat hij nog gekoppeld moet worden.
+
+Doelgedrag:
+- Na formulier submit moet Moneybird automatisch correct bijgewerkt worden:
+  - Maak of update Moneybird Contact (klant) met de ingestuurde gegevens.
+  - Sla Moneybird contact_id op in onze DB bij de adverteerder.
+  - Zet status in dashboard direct op “gekoppeld” (of equivalent).
+- Als Moneybird call faalt:
+  - Bewaar submission wél
+  - Toon in dashboard status: “Moneybird sync mislukt” met retry mogelijkheid (alleen als retry knop al bestaat; anders maak een simpele backend retry route en een kleine UI button in detailpagina).
+- Belangrijk: voorkom dubbele contacts:
+  - Als er al moneybird_contact_id bestaat -> update i.p.v. create
+  - Als nog niet bestaat -> probeer eerst te matchen op e-mail of KvK (wat jij al gebruikt), anders create
+- Zorg dat de koppeling ook terug te zien is in schermen/advertisers overzicht (dus: de UI leest moneybird_contact_id/status correct).
+
+Implementatie-stappen (hou klein):
+1) Zoek submit endpoint van advertiser onboarding (bijv. POST /api/onboarding/advertiser/submit)
+2) Voeg daar na DB save een Moneybird sync functie toe:
+   - upsertMoneybirdContactFromAdvertiser(payload)
+   - return moneybird_contact_id
+   - update DB: set moneybird_contact_id + synced_at + sync_status='ok'
+3) Als Moneybird error:
+   - update DB: sync_status='error', sync_error_message (kort), sync_last_attempt_at
+   - return 200 naar de klantpagina (zodat gebruiker niet vastloopt), maar toon duidelijke “we hebben je gegevens ontvangen; we verwerken dit z.s.m.” (in mail / UI)
+4) Dashboard UI:
+   - Status badge/logica corrigeren: als moneybird_contact_id en sync_status ok -> “gekoppeld”
+   - Als sync_status error -> “actie nodig” + (optioneel) retry knop
+
+ACCEPTANCE TESTS (MOET JE ZELF DOEN EN AFVINKEN IN JE ANTWOORD):
+1) “Link aanmaken” -> GEEN mail verstuurd
+2) Klik “E-mail verzenden” -> WEL mail met link
+3) Adverteerder vult in + submit:
+   - krijgt Bevestigingsmail zonder “we gaan aan de slag met advertentie”
+   - krijgt daarna ‘Wat nu’-mail met instructie om te mailen naar info@elevizion.nl
+4) In Moneybird is contact aangemaakt/geüpdatet met juiste data
+5) In dashboard staat adverteerder direct als gekoppeld (geen “moet nog koppelen”)
+6) Refresh / dubbel submit -> geen dubbele mails + geen dubbele Moneybird contacts
+7) Als Moneybird down -> dashboard toont sync error, data blijft opgeslagen, en retry werkt (of is duidelijk te retriggeren)
+
+TECHNISCHE RANDVOORWAARDEN:
+- Geen nieuwe grote dependencies.
+- Geen grote refactor.
+- Voeg alleen minimale velden toe aan DB als nodig (sent_at timestamps / sync_status).
+- Voeg logging toe in server logs voor: link created, email sent, submit received, moneybird sync ok/error (met correlation id / advertiserId).
+- Houd bestaande UI/flows zoveel mogelijk hetzelfde.
+
+LEVER OP:
+- Concrete code changes (backend routes + service + DB schema indien nodig + minimale UI aanpassing).
+- Korte checklist met waar ik het kan testen in de app.

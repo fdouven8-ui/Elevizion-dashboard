@@ -345,20 +345,8 @@ export async function registerRoutes(
         || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
       const portalUrl = `${baseUrl}/portal/${rawToken}`;
       
-      // Send invite email (non-blocking)
-      if (advertiser.email) {
-        const { sendStepEmail } = await import("./emailSteps");
-        sendStepEmail({
-          step: "advertiser_invite_sent",
-          toEmail: advertiser.email,
-          entityType: "advertiser",
-          entityId: advertiser.id,
-          meta: {
-            companyName: advertiser.companyName,
-            portalUrl,
-          },
-        }).catch(err => console.error("[Email] advertiser_invite_sent failed:", err));
-      }
+      // NOTE: No email is sent here - user must explicitly click "Send Email" button
+      console.log(`[Portal] Link created for advertiser ${advertiser.id}, NO email sent (awaiting explicit action)`);
       
       res.status(201).json({
         advertiser,
@@ -367,6 +355,105 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Send portal invite email (explicit action - idempotent)
+  app.post("/api/advertisers/:id/send-portal-email", async (req, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+
+      if (!advertiser.email) {
+        return res.status(400).json({ message: "Adverteerder heeft geen e-mailadres" });
+      }
+
+      // Check if already sent (idempotent)
+      if (advertiser.inviteEmailSentAt) {
+        return res.status(200).json({ 
+          message: "Uitnodigingsmail was al eerder verstuurd",
+          alreadySent: true,
+          sentAt: advertiser.inviteEmailSentAt 
+        });
+      }
+
+      // Get active portal token
+      const tokens = await storage.getPortalTokensForAdvertiser(advertiser.id);
+      const activeToken = tokens.find(t => !t.usedAt && new Date(t.expiresAt) > new Date());
+      
+      if (!activeToken) {
+        return res.status(400).json({ message: "Geen actieve portal link gevonden. Maak eerst een nieuwe link aan." });
+      }
+
+      // Reconstruct portal URL (we need to find the raw token - but we only have hash)
+      // Generate new token for email
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      
+      await storage.createPortalToken({
+        advertiserId: advertiser.id,
+        tokenHash,
+        expiresAt,
+      });
+
+      const baseUrl = process.env.PUBLIC_PORTAL_URL 
+        || (req.headers.origin ? req.headers.origin : null)
+        || (req.headers.host ? `https://${req.headers.host}` : null)
+        || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : null)
+        || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      const portalUrl = `${baseUrl}/portal/${rawToken}`;
+
+      // Send the email
+      const contactName = advertiser.contactName || advertiser.companyName || "Klant";
+      await sendEmail({
+        to: advertiser.email,
+        subject: "Vul je gegevens in voor Elevizion",
+        templateKey: "portal_invite",
+        entityType: "advertiser",
+        entityId: advertiser.id,
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+              <h1 style="color: white; margin: 0; font-size: 24px;">Elevizion</h1>
+              <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
+            </div>
+            <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
+              <h2 style="color: #1e3a5f; margin-top: 0;">Welkom bij Elevizion!</h2>
+              <p>Beste ${contactName},</p>
+              <p>Om uw schermreclame te activeren hebben wij enkele gegevens van u nodig. Klik op onderstaande knop om uw gegevens in te vullen:</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${portalUrl}" style="background: #f8a12f; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">Gegevens Invullen</a>
+              </div>
+              <p style="font-size: 12px; color: #666;">Deze link is 7 dagen geldig.</p>
+              <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+            </div>
+            <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
+              <p>© ${new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
+            </div>
+          </div>
+        `,
+        text: `Beste ${contactName},\n\nOm uw schermreclame te activeren hebben wij enkele gegevens van u nodig.\n\nKlik op deze link om uw gegevens in te vullen: ${portalUrl}\n\nDeze link is 7 dagen geldig.\n\nMet vriendelijke groet,\nTeam Elevizion`,
+      });
+
+      // Mark as sent
+      await storage.updateAdvertiser(advertiser.id, {
+        inviteEmailSentAt: new Date(),
+        onboardingStatus: "invited",
+      });
+
+      console.log(`[Portal] Invite email sent to advertiser ${advertiser.id} at ${advertiser.email}`);
+
+      res.json({ 
+        message: "Uitnodigingsmail verstuurd",
+        sentAt: new Date(),
+        portalUrl,
+      });
+    } catch (error: any) {
+      console.error(`[Portal] Send invite email failed:`, error.message);
+      res.status(500).json({ message: error.message });
     }
   });
 
@@ -499,23 +586,27 @@ export async function registerRoutes(
           }
         } catch (mbError: any) {
           console.error('[Portal] Moneybird auto-link failed:', mbError.message);
-          // Don't fail the request, just log the error
+          // Log error to advertiser but don't fail the request
+          await storage.updateAdvertiser(updatedAdvertiser.id, {
+            moneybirdSyncStatus: 'failed',
+            moneybirdSyncError: mbError.message?.substring(0, 255) || 'Unknown error',
+          });
         }
       }
       
-      // Send onboarding completed confirmation email (idempotent - check if already sent)
-      let emailSent = false;
+      // Send emails (idempotent using timestamps)
+      let confirmationEmailSent = false;
+      let whatnowEmailSent = false;
+      const contactName = updatedAdvertiser?.contactName || updatedAdvertiser?.companyName || "Klant";
+      
       if (updatedAdvertiser && updatedAdvertiser.email) {
-        try {
-          const existingLog = await storage.getEmailLogByTemplateAndEntity(
-            "onboarding_completed", "advertiser", updatedAdvertiser.id
-          );
-          if (!existingLog) {
-            const contactName = updatedAdvertiser.contactName || updatedAdvertiser.companyName || "Klant";
+        // 1. Send confirmation email (if not already sent)
+        if (!updatedAdvertiser.confirmationEmailSentAt) {
+          try {
             await sendEmail({
               to: updatedAdvertiser.email,
               subject: "Gegevens ontvangen – Elevizion",
-              templateKey: "onboarding_completed",
+              templateKey: "onboarding_confirmation",
               entityType: "advertiser",
               entityId: updatedAdvertiser.id,
               html: `
@@ -525,10 +616,9 @@ export async function registerRoutes(
                     <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
                   </div>
                   <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
-                    <h2 style="color: #1e3a5f; margin-top: 0;">Bedankt voor uw gegevens!</h2>
+                    <h2 style="color: #1e3a5f; margin-top: 0;">Bedankt!</h2>
                     <p>Beste ${contactName},</p>
-                    <p>Wij hebben uw gegevens in goede orde ontvangen. Ons team gaat nu aan de slag om uw schermreclame te activeren.</p>
-                    <p>Heeft u vragen? Neem gerust contact met ons op door te reageren op deze e-mail.</p>
+                    <p>Wij hebben uw gegevens in goede orde ontvangen en opgeslagen.</p>
                     <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
                   </div>
                   <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
@@ -536,12 +626,62 @@ export async function registerRoutes(
                   </div>
                 </div>
               `,
-              text: `Beste ${contactName},\n\nWij hebben uw gegevens in goede orde ontvangen. Ons team gaat nu aan de slag om uw schermreclame te activeren.\n\nHeeft u vragen? Neem gerust contact met ons op via info@elevizion.nl\n\nMet vriendelijke groet,\nTeam Elevizion`,
+              text: `Beste ${contactName},\n\nWij hebben uw gegevens in goede orde ontvangen en opgeslagen.\n\nMet vriendelijke groet,\nTeam Elevizion`,
             });
-            emailSent = true;
+            await storage.updateAdvertiser(updatedAdvertiser.id, { confirmationEmailSentAt: new Date() });
+            confirmationEmailSent = true;
+            console.log(`[Portal] Confirmation email sent to advertiser ${updatedAdvertiser.id}`);
+          } catch (emailError: any) {
+            console.error('[Portal] Confirmation email failed:', emailError.message);
           }
-        } catch (emailError: any) {
-          console.error('[Portal] Onboarding completed email failed:', emailError.message);
+        }
+
+        // 2. Send "What Now" email with instructions (if not already sent)
+        if (!updatedAdvertiser.whatnowEmailSentAt) {
+          try {
+            await sendEmail({
+              to: updatedAdvertiser.email,
+              subject: "Wat nu? Stuur je bestanden naar Elevizion",
+              templateKey: "onboarding_whatnow",
+              entityType: "advertiser",
+              entityId: updatedAdvertiser.id,
+              html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+                  <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+                    <h1 style="color: white; margin: 0; font-size: 24px;">Elevizion</h1>
+                    <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
+                  </div>
+                  <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
+                    <h2 style="color: #1e3a5f; margin-top: 0;">Wat nu?</h2>
+                    <p>Beste ${contactName},</p>
+                    <p>Om uw advertentie te kunnen maken hebben wij de volgende bestanden van u nodig:</p>
+                    <ul style="padding-left: 20px; margin: 15px 0;">
+                      <li>Uw bedrijfsvideo (indien beschikbaar)</li>
+                      <li>Uw logo (hoge resolutie)</li>
+                      <li>Teksten voor de advertentie</li>
+                      <li>Eventuele specifieke wensen of opmerkingen</li>
+                    </ul>
+                    <div style="background: #fff; border: 2px solid #f8a12f; border-radius: 8px; padding: 20px; margin: 20px 0; text-align: center;">
+                      <p style="margin: 0; font-weight: bold; color: #1e3a5f;">Mail uw bestanden naar:</p>
+                      <a href="mailto:info@elevizion.nl" style="color: #f8a12f; font-size: 18px; text-decoration: none; font-weight: bold;">info@elevizion.nl</a>
+                      <p style="margin: 10px 0 0 0; font-size: 12px; color: #666;">Vermeld uw bedrijfsnaam in het onderwerp</p>
+                    </div>
+                    <p>Zodra we alles binnen hebben, maken we de advertentie en nemen we contact op als er vragen zijn.</p>
+                    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+                  </div>
+                  <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
+                    <p>© ${new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
+                  </div>
+                </div>
+              `,
+              text: `Beste ${contactName},\n\nOm uw advertentie te kunnen maken hebben wij de volgende bestanden van u nodig:\n- Uw bedrijfsvideo (indien beschikbaar)\n- Uw logo (hoge resolutie)\n- Teksten voor de advertentie\n- Eventuele specifieke wensen of opmerkingen\n\nMail uw bestanden naar: info@elevizion.nl\nVermeld uw bedrijfsnaam in het onderwerp.\n\nZodra we alles binnen hebben, maken we de advertentie en nemen we contact op als er vragen zijn.\n\nMet vriendelijke groet,\nTeam Elevizion`,
+            });
+            await storage.updateAdvertiser(updatedAdvertiser.id, { whatnowEmailSentAt: new Date() });
+            whatnowEmailSent = true;
+            console.log(`[Portal] What-now email sent to advertiser ${updatedAdvertiser.id}`);
+          } catch (emailError: any) {
+            console.error('[Portal] What-now email failed:', emailError.message);
+          }
         }
       }
       
@@ -549,7 +689,8 @@ export async function registerRoutes(
         message: "Gegevens succesvol opgeslagen",
         advertiser: updatedAdvertiser,
         moneybirdLinked,
-        emailSent,
+        confirmationEmailSent,
+        whatnowEmailSent,
       });
     } catch (error: any) {
       res.status(400).json({ message: error.message });
