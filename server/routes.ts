@@ -775,6 +775,321 @@ export async function registerRoutes(
   });
 
   // ============================================================================
+  // LOCATION ONBOARDING (Quick Create + Self-Service Portal)
+  // ============================================================================
+
+  // Get next available location code
+  app.get("/api/locations/next-code", async (_req, res) => {
+    try {
+      const nextCode = await storage.getNextLocationCode();
+      res.json({ locationCode: nextCode });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Quick create location with auto-generated code + portal token
+  app.post("/api/locations/quick-create", async (req, res) => {
+    try {
+      const quickCreateSchema = z.object({
+        name: z.string().min(1, "Locatienaam is verplicht"),
+        email: z.string().email("Geldig e-mailadres is verplicht"),
+        street: z.string().optional(),
+        houseNumber: z.string().optional(),
+        zipcode: z.string().optional(),
+        city: z.string().optional(),
+      });
+      
+      const data = quickCreateSchema.parse(req.body);
+      
+      // Generate next location code (EVZ-LOC-###)
+      const locationCode = await storage.getNextLocationCode();
+      
+      // Create location with pending_details status
+      const location = await storage.createLocation({
+        name: data.name,
+        email: data.email,
+        street: data.street || null,
+        houseNumber: data.houseNumber || null,
+        zipcode: data.zipcode || null,
+        city: data.city || null,
+        locationCode,
+        status: "pending_details",
+        onboardingStatus: "draft",
+        piStatus: "not_installed",
+        yodeckStatus: "not_linked",
+      });
+      
+      // Generate portal token (valid for 7 days)
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      
+      await storage.createLocationToken({
+        locationId: location.id,
+        tokenHash,
+        expiresAt,
+      });
+      
+      // Log onboarding event
+      await storage.createLocationOnboardingEvent({
+        locationId: location.id,
+        eventType: "location_created",
+        eventData: { method: "quick_create", email: data.email },
+      });
+      
+      // Build portal URL
+      const baseUrl = process.env.PUBLIC_PORTAL_URL 
+        || (req.headers.origin ? req.headers.origin : null)
+        || (req.headers.host ? `https://${req.headers.host}` : null)
+        || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : null)
+        || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      const portalUrl = `${baseUrl}/locatie-portal/${rawToken}`;
+      
+      console.log(`[Location Portal] Link created for location ${location.id} (${locationCode}), NO email sent (awaiting explicit action)`);
+      
+      res.status(201).json({
+        location,
+        portalUrl,
+        expiresAt,
+      });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Send location portal invite email (explicit action - idempotent)
+  app.post("/api/locations/:id/send-portal-email", async (req, res) => {
+    try {
+      const location = await storage.getLocation(req.params.id);
+      if (!location) {
+        return res.status(404).json({ message: "Locatie niet gevonden" });
+      }
+
+      if (!location.email) {
+        return res.status(400).json({ message: "Locatie heeft geen e-mailadres" });
+      }
+
+      // Check if already sent (idempotent)
+      if (location.inviteEmailSentAt) {
+        return res.status(200).json({ 
+          message: "Uitnodigingsmail was al eerder verstuurd",
+          alreadySent: true,
+          sentAt: location.inviteEmailSentAt 
+        });
+      }
+
+      // Generate new token for email
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      
+      await storage.createLocationToken({
+        locationId: location.id,
+        tokenHash,
+        expiresAt,
+      });
+
+      const baseUrl = process.env.PUBLIC_PORTAL_URL 
+        || (req.headers.origin ? req.headers.origin : null)
+        || (req.headers.host ? `https://${req.headers.host}` : null)
+        || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : null)
+        || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      const portalUrl = `${baseUrl}/locatie-portal/${rawToken}`;
+
+      // Send the email
+      const contactName = location.name || "Locatiebeheerder";
+      const locationCode = location.locationCode || "N/A";
+      await sendEmail({
+        to: location.email,
+        subject: "Vul de locatiegegevens in voor Elevizion",
+        templateKey: "location_portal_invite",
+        entityType: "location",
+        entityId: location.id,
+        html: `
+          <div style="font-family: Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto;">
+            <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
+              <h1 style="color: white; margin: 0; font-size: 24px;">Elevizion</h1>
+              <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
+            </div>
+            <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
+              <h2 style="color: #1e3a5f; margin-top: 0;">Nieuwe Schermlocatie: ${locationCode}</h2>
+              <p>Beste ${contactName},</p>
+              <p>We zijn bijna klaar om uw digitale scherm te installeren! Voordat we verder kunnen gaan, hebben wij nog enkele locatiegegevens van u nodig.</p>
+              <p>Klik op onderstaande knop om de gegevens in te vullen:</p>
+              <div style="text-align: center; margin: 30px 0;">
+                <a href="${portalUrl}" style="background: #10b981; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">Locatiegegevens Invullen</a>
+              </div>
+              <p style="font-size: 12px; color: #666;">Deze link is 7 dagen geldig.</p>
+              <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+            </div>
+            <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
+              <p>© ${new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
+            </div>
+          </div>
+        `,
+        text: `Beste ${contactName},\n\nWe zijn bijna klaar om uw digitale scherm (${locationCode}) te installeren!\n\nKlik op deze link om uw locatiegegevens in te vullen: ${portalUrl}\n\nDeze link is 7 dagen geldig.\n\nMet vriendelijke groet,\nTeam Elevizion`,
+      });
+
+      // Update location with sent timestamp
+      await storage.updateLocation(location.id, { 
+        inviteEmailSentAt: new Date(),
+        onboardingStatus: "invited",
+      });
+
+      // Log event
+      await storage.createLocationOnboardingEvent({
+        locationId: location.id,
+        eventType: "invite_email_sent",
+        eventData: { email: location.email, portalUrl },
+      });
+
+      console.log(`[Location Portal] Invite email sent to ${location.email} for location ${location.id}`);
+      
+      res.json({ 
+        message: "Uitnodigingsmail verstuurd",
+        sentAt: new Date(),
+        portalUrl,
+      });
+    } catch (error: any) {
+      console.error("[Location Portal] Error sending invite:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get location onboarding events
+  app.get("/api/locations/:id/onboarding-events", async (req, res) => {
+    try {
+      const events = await storage.getLocationOnboardingEvents(req.params.id);
+      res.json(events);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // PUBLIC LOCATION PORTAL (No auth required)
+  // ============================================================================
+
+  // Validate location portal token
+  app.get("/api/public/location-portal/:token", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const tokenRecord = await storage.getLocationTokenByHash(tokenHash);
+      
+      if (!tokenRecord) {
+        return res.status(404).json({ message: "Ongeldige of verlopen link" });
+      }
+      
+      // Check expiry
+      if (new Date(tokenRecord.expiresAt) < new Date()) {
+        return res.status(410).json({ message: "Deze link is verlopen" });
+      }
+      
+      // Check if already used
+      if (tokenRecord.usedAt) {
+        return res.status(410).json({ message: "Deze link is al gebruikt" });
+      }
+      
+      // Get location
+      const location = await storage.getLocation(tokenRecord.locationId);
+      if (!location) {
+        return res.status(404).json({ message: "Locatie niet gevonden" });
+      }
+      
+      // Return location info for form pre-fill
+      res.json({
+        locationCode: location.locationCode,
+        name: location.name,
+        email: location.email,
+        street: location.street,
+        houseNumber: location.houseNumber,
+        zipcode: location.zipcode,
+        city: location.city,
+        visitorsPerWeek: location.visitorsPerWeek,
+        openingHours: location.openingHours,
+        branche: location.branche,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Submit location details via portal
+  app.post("/api/public/location-portal/:token", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const tokenRecord = await storage.getLocationTokenByHash(tokenHash);
+      
+      if (!tokenRecord) {
+        return res.status(404).json({ message: "Ongeldige of verlopen link" });
+      }
+      
+      // Check expiry
+      if (new Date(tokenRecord.expiresAt) < new Date()) {
+        return res.status(410).json({ message: "Deze link is verlopen" });
+      }
+      
+      // Check if already used
+      if (tokenRecord.usedAt) {
+        return res.status(410).json({ message: "Deze link is al gebruikt" });
+      }
+      
+      // Mark token as used BEFORE update (race condition prevention)
+      await storage.markLocationTokenUsed(tokenRecord.id);
+      
+      // Validate submission data
+      const portalDataSchema = z.object({
+        name: z.string().min(1, "Locatienaam is verplicht"),
+        contactName: z.string().optional(),
+        phone: z.string().optional(),
+        street: z.string().min(1, "Straat is verplicht"),
+        houseNumber: z.string().min(1, "Huisnummer is verplicht"),
+        zipcode: z.string().min(1, "Postcode is verplicht"),
+        city: z.string().min(1, "Plaats is verplicht"),
+        visitorsPerWeek: z.number().min(0).optional(),
+        openingHours: z.string().optional(),
+        branche: z.string().optional(),
+      });
+      
+      const data = portalDataSchema.parse(req.body);
+      
+      // Update location with submitted data
+      const location = await storage.updateLocation(tokenRecord.locationId, {
+        name: data.name,
+        contactName: data.contactName,
+        phone: data.phone,
+        street: data.street,
+        houseNumber: data.houseNumber,
+        zipcode: data.zipcode,
+        city: data.city,
+        visitorsPerWeek: data.visitorsPerWeek,
+        openingHours: data.openingHours,
+        branche: data.branche,
+        status: "pending_pi",
+        onboardingStatus: "details_completed",
+      });
+      
+      // Log event
+      await storage.createLocationOnboardingEvent({
+        locationId: tokenRecord.locationId,
+        eventType: "details_submitted",
+        eventData: { submittedFields: Object.keys(data) },
+      });
+      
+      console.log(`[Location Portal] Details submitted for location ${tokenRecord.locationId}`);
+      
+      res.json({ 
+        message: "Gegevens succesvol opgeslagen",
+        location,
+      });
+    } catch (error: any) {
+      console.error("[Location Portal] Error submitting details:", error);
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
   // SITES (Unified entity: 1 site = 1 screen location)
   // ============================================================================
 
