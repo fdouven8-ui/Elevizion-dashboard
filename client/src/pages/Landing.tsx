@@ -219,80 +219,80 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="py-20 md:py-28 bg-slate-50/50">
+      <section className="py-20 md:py-28 bg-emerald-50/40">
         <div className="container mx-auto px-4">
           <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-3">Zo werkt het</h2>
-          <p className="text-center text-slate-400 mb-14 max-w-md mx-auto">
+          <p className="text-center text-slate-500 mb-14 max-w-md mx-auto">
             In drie stappen naar zichtbaarheid
           </p>
           <div className="grid md:grid-cols-3 gap-12 max-w-4xl mx-auto">
             <div className="text-center">
-              <div className="w-14 h-14 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto mb-5">
+              <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-5">
                 <Handshake className="h-6 w-6" />
               </div>
-              <div className="text-xs text-slate-400 font-medium mb-2 uppercase tracking-wider">Stap 1</div>
+              <div className="text-xs text-emerald-600 font-semibold mb-2 uppercase tracking-wider">Stap 1</div>
               <h3 className="font-semibold text-slate-800 mb-2">Kennismaken</h3>
-              <p className="text-sm text-slate-400 leading-relaxed">We bespreken je doelen en adviseren welke locaties passen.</p>
+              <p className="text-sm text-slate-500 leading-relaxed">We bespreken je doelen en adviseren welke locaties passen.</p>
             </div>
             <div className="text-center">
-              <div className="w-14 h-14 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto mb-5">
+              <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-5">
                 <Monitor className="h-6 w-6" />
               </div>
-              <div className="text-xs text-slate-400 font-medium mb-2 uppercase tracking-wider">Stap 2</div>
+              <div className="text-xs text-emerald-600 font-semibold mb-2 uppercase tracking-wider">Stap 2</div>
               <h3 className="font-semibold text-slate-800 mb-2">Plaatsing & planning</h3>
-              <p className="text-sm text-slate-400 leading-relaxed">Wij maken de content en plannen de campagne.</p>
+              <p className="text-sm text-slate-500 leading-relaxed">Wij maken de content en plannen de campagne.</p>
             </div>
             <div className="text-center">
-              <div className="w-14 h-14 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto mb-5">
+              <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-5">
                 <Play className="h-6 w-6" />
               </div>
-              <div className="text-xs text-slate-400 font-medium mb-2 uppercase tracking-wider">Stap 3</div>
+              <div className="text-xs text-emerald-600 font-semibold mb-2 uppercase tracking-wider">Stap 3</div>
               <h3 className="font-semibold text-slate-800 mb-2">Live + rapportage</h3>
-              <p className="text-sm text-slate-400 leading-relaxed">Je advertentie draait en je krijgt inzicht in bereik.</p>
+              <p className="text-sm text-slate-500 leading-relaxed">Je advertentie draait en je krijgt inzicht in bereik.</p>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="py-20 md:py-28">
+      <section className="py-20 md:py-28 bg-slate-50/60">
         <div className="container mx-auto px-4">
           <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-3">Pakketten</h2>
-          <p className="text-center text-slate-400 mb-14 max-w-lg mx-auto">
+          <p className="text-center text-slate-500 mb-14 max-w-lg mx-auto">
             Indicatiepakketten. We stemmen altijd af op locatie, doelgroep en budget.
           </p>
           <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
-            <Card className="border border-slate-150">
+            <Card className="border border-slate-200 bg-white">
               <CardHeader className="text-center pb-2">
-                <CardTitle className="text-base font-semibold text-slate-700">Starter</CardTitle>
-                <p className="text-sm text-slate-400">Om te beginnen</p>
+                <CardTitle className="text-base font-semibold text-slate-800">Starter</CardTitle>
+                <p className="text-sm text-slate-500">Om te beginnen</p>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-2.5 text-sm text-slate-500 mb-6">
+                <ul className="space-y-2.5 text-sm text-slate-600 mb-6">
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>1 schermlocatie</span>
                   </li>
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Meerdere keren per uur zichtbaar</span>
                   </li>
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Maandelijkse looptijd</span>
                   </li>
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Basis rapportage</span>
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Interesse%20in%20Starter%20pakket">
-                  <Button variant="outline" className="w-full border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">Meer info</Button>
+                  <Button variant="outline" className="w-full border-emerald-600 text-emerald-600 hover:bg-emerald-50 transition-colors">Meer info</Button>
                 </a>
               </CardContent>
             </Card>
 
-            <Card className="border-2 border-emerald-500 relative bg-emerald-50/30">
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-xs font-medium px-4 py-1 rounded-full">
+            <Card className="border-2 border-emerald-600 relative bg-white shadow-lg">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-xs font-semibold px-4 py-1 rounded-full">
                 Populair
               </div>
               <CardHeader className="text-center pb-2">
@@ -324,32 +324,32 @@ export default function Landing() {
               </CardContent>
             </Card>
 
-            <Card className="border border-slate-150">
+            <Card className="border border-slate-200 bg-white">
               <CardHeader className="text-center pb-2">
-                <CardTitle className="text-base font-semibold text-slate-700">Premium</CardTitle>
-                <p className="text-sm text-slate-400">Maximaal bereik</p>
+                <CardTitle className="text-base font-semibold text-slate-800">Premium</CardTitle>
+                <p className="text-sm text-slate-500">Maximaal bereik</p>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-2.5 text-sm text-slate-500 mb-6">
+                <ul className="space-y-2.5 text-sm text-slate-600 mb-6">
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Meerdere schermen naar wens</span>
                   </li>
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Voorrang op toplocaties</span>
                   </li>
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Volledige ontwerp service</span>
                   </li>
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Uitgebreide rapportage</span>
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Interesse%20in%20Premium%20pakket">
-                  <Button variant="outline" className="w-full border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">Meer info</Button>
+                  <Button variant="outline" className="w-full border-emerald-600 text-emerald-600 hover:bg-emerald-50 transition-colors">Meer info</Button>
                 </a>
               </CardContent>
             </Card>
