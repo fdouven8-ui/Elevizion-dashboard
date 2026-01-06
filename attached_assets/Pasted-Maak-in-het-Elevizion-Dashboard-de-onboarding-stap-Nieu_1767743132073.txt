@@ -1,0 +1,185 @@
+Maak in het Elevizion Dashboard de onboarding-stap “Nieuwe schermlocatie” opnieuw/uitgebreider, maar zonder grote refactor (houd bestaande structuur + UI stijl aan). Dit moet los staan van PI/Yodeck, want bij het aanmaken is er nog geen PI geïnstalleerd.
+
+Doel
+
+Ik wil dat ik een Nieuwe Schermlocatie kan aanmaken met minimale basisinfo, waarna het systeem automatisch een veilige onboarding-link genereert die ik direct kan mailen naar de locatie-contactpersoon. Via die link vullen zij zelf alle contact- en locatiegegevens in. Later, wanneer de PI is geïnstalleerd, koppel ik Yodeck aan deze locatie en moet alles soepel doorlopen.
+
+Nieuwe flow: Schermlocatie onboarding (2 fases)
+Fase A — “Locatie aanmaken (intern)”
+
+In het dashboard > Onboarding > Nieuwe Schermlocatie:
+
+Velden die IK invul (minimaal):
+
+Locatie/Bedrijfsnaam (display name)
+
+Plaats + eventueel straat (mag minimaal)
+
+Contact email (verplicht, voor mail)
+
+Contactnaam (optioneel)
+
+Telefoon (optioneel)
+
+Gemiddeld aantal bezoekers per week (verplicht: number, >=0)
+
+Opmerking (optioneel)
+
+Na opslaan:
+
+Maak record aan in DB met status: PENDING_DETAILS of PENDING_PI
+
+Genereer unieke LOCATION_ID (EVZ-LOC-001) en (optioneel) alvast SCREEN_ID reserveerbaar (EVZ-001) óf pas later, maar zorg dat we één centrale ID hebben voor koppelingen.
+
+Genereer een secure onboarding token (random, lang, uniek, hashed opslaan in DB, met expiry bijv. 14 dagen)
+
+Bouw onboarding URL zoals: https://elevizion.nl/onboarding/locatie/<token> (of bestaande base url uit config)
+
+Toon meteen na opslaan:
+
+“Kopieer link”
+
+“E-mail verzenden” knop
+
+Belangrijk:
+
+Er mag GEEN e-mail automatisch verstuurd worden bij het enkel aanmaken; alleen wanneer ik echt op E-mail verzenden klik.
+
+Log actie in audit/log tabel (created, email_sent, completed, etc.)
+
+Fase B — “Klant vult gegevens in via link”
+
+Maak een publieke onboarding pagina (token-based, geen login nodig):
+
+URL met token opent een formulier voor locatiegegevens.
+
+Formulier velden (door klant in te vullen / aan te vullen):
+
+Bedrijfsnaam (prefill, bewerkbaar)
+
+Volledig adres (straat, nr, postcode, plaats)
+
+Contactpersoon naam
+
+E-mail
+
+Telefoon
+
+Openingstijden (optioneel)
+
+Branche/type zaak (optioneel)
+
+Gemiddeld bezoekers per week (prefill, bewerkbaar)
+
+Extra notities (optioneel)
+
+Na submit:
+
+Markeer locatie status naar DETAILS_COMPLETED / READY_FOR_PI
+
+Toon “Bedankt” pagina met duidelijke tekst: “Wij plannen installatie / neem contact op…”
+
+Stuur 1 interne notificatie-mail naar info@elevizion.nl
+ met samenvatting + link naar locatie in dashboard.
+
+E-mail templates
+
+Mail “Aanvraag gegevens schermlocatie”
+
+Onderwerp: “Vul uw gegevens in voor uw Elevizion scherm”
+
+Inhoud: korte uitleg + knop/link naar onboarding URL
+
+Geen marketingpraat; helder en professioneel.
+
+(Optioneel) Reminder mail
+
+Alleen vanuit dashboard handmatig te sturen (button “Stuur reminder”).
+
+PI / Yodeck koppeling later (belangrijk)
+
+Voeg in de locatie detailpagina (intern dashboard) een sectie “Installatie & Koppelingen” toe met statussen:
+
+PI status: NOT_INSTALLED / INSTALLED
+
+Yodeck status: NOT_LINKED / LINKED
+
+Laat mij later een actie doen: “Koppel Yodeck device”
+
+Input: Yodeck device id of selecteer uit ingelezen Yodeck devices
+
+Bij koppelen:
+
+Update locatie record met yodeck identifiers
+
+Zet status naar ACTIVE (alleen als details compleet + yodeck linked)
+
+Zorg dat bestaande sync-logica netjes doorloopt (geen dubbele of missing data)
+
+Datamodel (minimaal toevoegen, liefst migratie)
+
+Maak/gebruik een tabel zoals screen_locations (of jouw bestaande naming) met o.a.:
+
+id (uuid)
+
+location_id (EVZ-LOC-###)
+
+screen_id (optioneel/reserve)
+
+company_name
+
+address fields
+
+contact_name/email/phone
+
+visitors_per_week (int)
+
+status (enum)
+
+pi_status (enum)
+
+yodeck_device_id (nullable)
+
+onboarding_token_hash (nullable)
+
+onboarding_token_expires_at
+
+created_at/updated_at
+
+En een onboarding_events/log tabel (optioneel lichtgewicht) voor audit.
+
+API endpoints (voorbeeld)
+
+POST /api/onboarding/locations (intern) -> create + generate token + return link
+
+POST /api/onboarding/locations/:id/send-email (intern) -> verstuurt mail
+
+GET /api/public/onboarding/location/:token -> haalt prefill data op (token validatie)
+
+POST /api/public/onboarding/location/:token -> submit, update locatie, invalidate token
+
+Validatie & UX eisen
+
+Bezoekers/week is verplicht, integer, toon foutmelding
+
+Token is single-use of wordt ongeldig na submit (of na expiry)
+
+Als token ongeldig: nette “Link verlopen” pagina met instructie om contact op te nemen
+
+Houd UI consistent met huidige onboarding (zelfde layout/components)
+
+Geen grote herstructurering van de app; alleen deze flow toevoegen/aanpassen
+
+Acceptatiecriteria
+
+Ik kan een schermlocatie aanmaken zonder PI/Yodeck.
+
+Er wordt pas gemaild als ik op “E-mail verzenden” klik.
+
+Klant kan via link gegevens invullen; status verandert correct.
+
+Later kan ik Yodeck koppelen en dan loopt alles door zonder dat data kwijt raakt.
+
+Bezoekers/week staat overal correct opgeslagen en zichtbaar in locatie-overzicht + detail.
+
+Implementeer dit end-to-end inclusief migratie, routes, UI, en mail sending via bestaande mailer. Voeg waar nodig tests of minimale checks toe, maar hou het pragmatisch.

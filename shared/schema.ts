@@ -110,18 +110,23 @@ export const portalTokens = pgTable("portal_tokens", {
  * Locations - Partner businesses that host screens
  * These earn revenue share based on screen time at their location
  * isPlaceholder: true means this was auto-created from Yodeck import and needs Moneybird linking
- * source: where this location came from (manual, yodeck)
+ * source: where this location came from (manual, yodeck, onboarding)
  */
 export const locations = pgTable("locations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  locationCode: text("location_code").unique(), // EVZ-LOC-001 format - central identifier
   name: text("name").notNull(),
   address: text("address"), // Made nullable for placeholder locations
   street: text("street"),
+  houseNumber: text("house_number"),
   zipcode: text("zipcode"),
   city: text("city"), // Plaats - used for filtering screens
   contactName: text("contact_name"), // Made nullable for placeholder locations
   email: text("email"), // Made nullable for placeholder locations
   phone: text("phone"),
+  visitorsPerWeek: integer("visitors_per_week"), // Gemiddeld aantal bezoekers per week
+  openingHours: text("opening_hours"), // Openingstijden (optioneel)
+  branche: text("branche"), // Branche/type zaak
   revenueSharePercent: decimal("revenue_share_percent", { precision: 5, scale: 2 }).notNull().default("10.00"),
   minimumPayoutAmount: decimal("minimum_payout_amount", { precision: 10, scale: 2 }).notNull().default("25.00"),
   bankAccountIban: text("bank_account_iban"),
@@ -130,13 +135,44 @@ export const locations = pgTable("locations", {
   moneybirdSyncStatus: text("moneybird_sync_status").default("not_linked"), // not_linked | pending | synced | failed
   moneybirdSyncError: text("moneybird_sync_error"),
   moneybirdLastSyncAt: timestamp("moneybird_last_sync_at"),
+  // PI / Yodeck installation status
+  piStatus: text("pi_status").default("not_installed"), // not_installed | installed
+  yodeckDeviceId: text("yodeck_device_id"), // Linked Yodeck device ID
+  yodeckStatus: text("yodeck_status").default("not_linked"), // not_linked | linked
   isPlaceholder: boolean("is_placeholder").default(false), // Auto-created from Yodeck, needs Moneybird linking
-  source: text("source").default("manual"), // manual, yodeck - where this location came from
-  status: text("status").notNull().default("active"), // active, paused, terminated
-  onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | in_progress | completed
+  source: text("source").default("manual"), // manual, yodeck, onboarding
+  status: text("status").notNull().default("pending_details"), // pending_details | pending_pi | ready_for_pi | active | paused | terminated
+  onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | details_completed | completed
+  // Email tracking
+  inviteEmailSentAt: timestamp("invite_email_sent_at"),
+  reminderEmailSentAt: timestamp("reminder_email_sent_at"),
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * Location Tokens - Secure tokens for location onboarding portal
+ * Used for sending "complete your location details" links to location contacts
+ */
+export const locationTokens = pgTable("location_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  locationId: varchar("location_id").notNull().references(() => locations.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull(), // SHA256 hash of the token
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"), // When the token was used (null = unused)
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * Location Onboarding Events - Audit log for location onboarding actions
+ */
+export const locationOnboardingEvents = pgTable("location_onboarding_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  locationId: varchar("location_id").notNull().references(() => locations.id, { onDelete: "cascade" }),
+  eventType: text("event_type").notNull(), // created | invite_sent | reminder_sent | details_submitted | pi_installed | yodeck_linked | completed
+  eventData: jsonb("event_data"), // Additional data for the event
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
 /**
@@ -1184,6 +1220,8 @@ export const insertYodeckCreativeSchema = createInsertSchema(yodeckCreatives).om
 export const insertAdvertiserSchema = createInsertSchema(advertisers).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPortalTokenSchema = createInsertSchema(portalTokens).omit({ id: true, createdAt: true });
 export const insertLocationSchema = createInsertSchema(locations).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertLocationTokenSchema = createInsertSchema(locationTokens).omit({ id: true, createdAt: true });
+export const insertLocationOnboardingEventSchema = createInsertSchema(locationOnboardingEvents).omit({ id: true, createdAt: true });
 export const insertScreenGroupSchema = createInsertSchema(screenGroups).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertScreenSchema = createInsertSchema(screens).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertSyncLogSchema = createInsertSchema(syncLogs).omit({ id: true, createdAt: true });
@@ -1239,6 +1277,12 @@ export type InsertPortalToken = z.infer<typeof insertPortalTokenSchema>;
 
 export type Location = typeof locations.$inferSelect;
 export type InsertLocation = z.infer<typeof insertLocationSchema>;
+
+export type LocationToken = typeof locationTokens.$inferSelect;
+export type InsertLocationToken = z.infer<typeof insertLocationTokenSchema>;
+
+export type LocationOnboardingEvent = typeof locationOnboardingEvents.$inferSelect;
+export type InsertLocationOnboardingEvent = z.infer<typeof insertLocationOnboardingEventSchema>;
 
 export type ScreenGroup = typeof screenGroups.$inferSelect;
 export type InsertScreenGroup = z.infer<typeof insertScreenGroupSchema>;
