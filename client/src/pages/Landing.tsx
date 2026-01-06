@@ -8,7 +8,8 @@ import {
 } from "@/components/ui/accordion";
 import { 
   Monitor, MapPin, Eye, Clock, CheckCircle, Mail, 
-  ArrowRight, Building2, Megaphone, Handshake, Play
+  ArrowRight, Building2, Megaphone, Handshake, Play,
+  Scissors, Dumbbell, Coffee
 } from "lucide-react";
 
 export default function Landing() {
@@ -72,9 +73,9 @@ export default function Landing() {
               Lokale schermreclame die écht opvalt.
             </h1>
             <p className="text-lg md:text-xl text-slate-600 mb-8 max-w-2xl mx-auto">
-              Elevizion plaatst schermen in drukbezochte zaken en verkoopt advertentieruimte aan lokale bedrijven.
+              Elevizion plaatst digitale schermen op drukbezochte locaties en helpt lokale bedrijven zichtbaar worden bij hun eigen doelgroep — precies waar aandacht is.
             </p>
-            <div className="flex flex-col sm:flex-row gap-3 justify-center mb-10">
+            <div className="flex flex-col sm:flex-row gap-3 justify-center mb-4">
               <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
                 <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-6 w-full sm:w-auto shadow-lg shadow-emerald-200" data-testid="button-cta-mediakit">
                   <Mail className="h-4 w-4" />
@@ -92,18 +93,21 @@ export default function Landing() {
                 Scherm aanbieden
               </Button>
             </div>
+            <p className="text-sm text-slate-500 mb-10">
+              Snel reactie • We regelen ontwerp & planning • Duidelijke afspraken
+            </p>
             <div className="flex flex-wrap justify-center gap-6 text-sm text-slate-600">
               <div className="flex items-center gap-2">
                 <Eye className="h-4 w-4 text-emerald-600" />
-                <span>Lokale zichtbaarheid</span>
+                <span>Zichtbaar bij lokaal publiek</span>
               </div>
               <div className="flex items-center gap-2">
                 <Clock className="h-4 w-4 text-emerald-600" />
-                <span>Vaste looptijd, duidelijke prijs</span>
+                <span>Vaste prijs & looptijd (geen verrassingen)</span>
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle className="h-4 w-4 text-emerald-600" />
-                <span>Wij regelen planning & plaatsing</span>
+                <span>Volledig verzorgd: planning & plaatsing</span>
               </div>
             </div>
           </div>
@@ -118,11 +122,14 @@ export default function Landing() {
           </p>
           <div className="grid md:grid-cols-2 gap-6 max-w-4xl mx-auto">
             <Card className="border-2 hover:border-emerald-200 transition-colors">
-              <CardHeader className="pb-4">
+              <CardHeader className="pb-2">
                 <div className="w-12 h-12 rounded-lg bg-emerald-100 flex items-center justify-center mb-3">
                   <Megaphone className="h-6 w-6 text-emerald-600" />
                 </div>
                 <CardTitle className="text-xl">Voor adverteerders</CardTitle>
+                <p className="text-sm text-slate-500 mt-1">
+                  Ideaal voor ondernemers die lokaal willen groeien zonder verspilling aan online advertentiebudget.
+                </p>
               </CardHeader>
               <CardContent className="space-y-4">
                 <ul className="space-y-3 text-slate-600">
@@ -136,7 +143,7 @@ export default function Landing() {
                   </li>
                   <li className="flex items-start gap-2">
                     <CheckCircle className="h-5 w-5 text-emerald-500 flex-shrink-0 mt-0.5" />
-                    <span>Zichtbaar waar je doelgroep komt</span>
+                    <span>Zichtbaar waar je doelgroep écht komt</span>
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Adverteren%20via%20Elevizion">
@@ -149,25 +156,28 @@ export default function Landing() {
             </Card>
             
             <Card id="scherm-aanbieden" className="border-2 hover:border-blue-200 transition-colors">
-              <CardHeader className="pb-4">
+              <CardHeader className="pb-2">
                 <div className="w-12 h-12 rounded-lg bg-blue-100 flex items-center justify-center mb-3">
                   <Building2 className="h-6 w-6 text-blue-600" />
                 </div>
                 <CardTitle className="text-xl">Voor locaties</CardTitle>
+                <p className="text-sm text-slate-500 mt-1">
+                  Wij plaatsen een scherm dat past bij jouw zaak en regelen alles van content tot onderhoud.
+                </p>
               </CardHeader>
               <CardContent className="space-y-4">
                 <ul className="space-y-3 text-slate-600">
                   <li className="flex items-start gap-2">
                     <CheckCircle className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
-                    <span>Gratis scherm en plaatsing (afhankelijk van model)</span>
+                    <span>Scherm en plaatsing vaak kosteloos (afhankelijk van model)</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <CheckCircle className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
-                    <span>Extra omzet via commissie op reclame-inkomsten</span>
+                    <span>Maandelijkse vergoeding of commissie op inkomsten</span>
                   </li>
                   <li className="flex items-start gap-2">
                     <CheckCircle className="h-5 w-5 text-blue-500 flex-shrink-0 mt-0.5" />
-                    <span>Wij regelen alle content en onderhoud</span>
+                    <span>Wij regelen content, updates en onderhoud</span>
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Scherm%20beschikbaar%20stellen">
@@ -178,6 +188,25 @@ export default function Landing() {
                 </a>
               </CardContent>
             </Card>
+          </div>
+        </div>
+      </section>
+
+      <section className="py-14 md:py-16 bg-slate-800 text-white">
+        <div className="container mx-auto px-4">
+          <div className="max-w-3xl mx-auto text-center">
+            <h2 className="text-2xl md:text-3xl font-bold mb-3">
+              Online advertenties worden weggeklikt. Onze schermen niet.
+            </h2>
+            <p className="text-slate-300 mb-6 max-w-xl mx-auto">
+              Je boodschap komt in beeld op plekken waar mensen wachten, kijken en besluiten.
+            </p>
+            <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
+              <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700">
+                <Mail className="h-4 w-4" />
+                Vraag mediakit aan
+              </Button>
+            </a>
           </div>
         </div>
       </section>
@@ -195,7 +224,7 @@ export default function Landing() {
               </div>
               <div className="text-sm text-emerald-600 font-medium mb-1">Stap 1</div>
               <h3 className="font-semibold text-lg mb-2">Kennismaken</h3>
-              <p className="text-sm text-slate-600">We bespreken je wensen en mogelijkheden</p>
+              <p className="text-sm text-slate-600">We bespreken je doelen en adviseren welke locaties passen (vrijblijvend).</p>
             </div>
             <div className="text-center">
               <div className="w-14 h-14 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto mb-4 shadow-lg shadow-emerald-200">
@@ -203,7 +232,7 @@ export default function Landing() {
               </div>
               <div className="text-sm text-emerald-600 font-medium mb-1">Stap 2</div>
               <h3 className="font-semibold text-lg mb-2">Plaatsing & planning</h3>
-              <p className="text-sm text-slate-600">Wij maken de content en plannen de campagne</p>
+              <p className="text-sm text-slate-600">Wij maken of optimaliseren de content en plannen de campagne.</p>
             </div>
             <div className="text-center">
               <div className="w-14 h-14 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto mb-4 shadow-lg shadow-emerald-200">
@@ -211,7 +240,7 @@ export default function Landing() {
               </div>
               <div className="text-sm text-emerald-600 font-medium mb-1">Stap 3</div>
               <h3 className="font-semibold text-lg mb-2">Live + rapportage</h3>
-              <p className="text-sm text-slate-600">Je advertentie draait en je krijgt inzicht in bereik</p>
+              <p className="text-sm text-slate-600">Live op scherm + inzicht in plaatsing en bereik (rapportage).</p>
             </div>
           </div>
         </div>
@@ -221,7 +250,7 @@ export default function Landing() {
         <div className="container mx-auto px-4">
           <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-900 mb-4">Pakketten</h2>
           <p className="text-center text-slate-600 mb-12 max-w-xl mx-auto">
-            Kies het pakket dat bij jou past
+            Deze pakketten zijn een indicatie. We stemmen de campagne altijd af op locatie, doelgroep en budget.
           </p>
           <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
             <Card className="border-2">
@@ -237,7 +266,7 @@ export default function Landing() {
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-emerald-500" />
-                    <span>10 seconden per rotatie</span>
+                    <span>Je advertentie verschijnt meerdere keren per uur</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-emerald-500" />
@@ -270,7 +299,7 @@ export default function Landing() {
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-emerald-500" />
-                    <span>15 seconden per rotatie</span>
+                    <span>Meer zendtijd per uur, langere spots</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-emerald-500" />
@@ -278,7 +307,7 @@ export default function Landing() {
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-emerald-500" />
-                    <span>Design support inbegrepen</span>
+                    <span>Ontwerp inbegrepen</span>
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Interesse%20in%20Local%20Plus%20pakket">
@@ -296,19 +325,19 @@ export default function Landing() {
                 <ul className="space-y-3 text-sm text-slate-600 mb-6">
                   <li className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-emerald-500" />
-                    <span>Onbeperkt schermen</span>
+                    <span>Meerdere schermen naar wens</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-emerald-500" />
-                    <span>Premium locaties</span>
+                    <span>Voorrang op premium locaties</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-emerald-500" />
-                    <span>Volledige design service</span>
+                    <span>Volledige ontwerp service</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <CheckCircle className="h-4 w-4 text-emerald-500" />
-                    <span>Uitgebreide analytics</span>
+                    <span>Uitgebreide rapportage</span>
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Interesse%20in%20Premium%20pakket">
@@ -327,6 +356,44 @@ export default function Landing() {
                 <ArrowRight className="h-4 w-4" />
               </Button>
             </a>
+          </div>
+        </div>
+      </section>
+
+      <section className="py-16 md:py-20 bg-white border-y">
+        <div className="container mx-auto px-4">
+          <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-900 mb-4">Waar je ons tegenkomt</h2>
+          <p className="text-center text-slate-600 mb-12 max-w-xl mx-auto">
+            Onze schermen staan op plekken waar mensen wachten en kijken
+          </p>
+          <div className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
+            <Card className="border bg-slate-50">
+              <CardContent className="pt-6 text-center">
+                <div className="w-12 h-12 rounded-lg bg-emerald-100 flex items-center justify-center mx-auto mb-4">
+                  <Scissors className="h-6 w-6 text-emerald-600" />
+                </div>
+                <h3 className="font-semibold mb-1">Wachtruimtes & balies</h3>
+                <p className="text-sm text-slate-600">Kappers, tandartsen, praktijken</p>
+              </CardContent>
+            </Card>
+            <Card className="border bg-slate-50">
+              <CardContent className="pt-6 text-center">
+                <div className="w-12 h-12 rounded-lg bg-blue-100 flex items-center justify-center mx-auto mb-4">
+                  <Dumbbell className="h-6 w-6 text-blue-600" />
+                </div>
+                <h3 className="font-semibold mb-1">Sportscholen & studio's</h3>
+                <p className="text-sm text-slate-600">Fitness, yoga, dansstudio's</p>
+              </CardContent>
+            </Card>
+            <Card className="border bg-slate-50">
+              <CardContent className="pt-6 text-center">
+                <div className="w-12 h-12 rounded-lg bg-amber-100 flex items-center justify-center mx-auto mb-4">
+                  <Coffee className="h-6 w-6 text-amber-600" />
+                </div>
+                <h3 className="font-semibold mb-1">Horeca & retail</h3>
+                <p className="text-sm text-slate-600">Cafés, winkels, restaurants</p>
+              </CardContent>
+            </Card>
           </div>
         </div>
       </section>
@@ -376,7 +443,7 @@ export default function Landing() {
                   Wat als ik mijn content wil aanpassen?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600">
-                  Content aanpassen kan altijd. Stuur je nieuwe materiaal en wij zorgen dat het binnen 24 uur wordt bijgewerkt.
+                  Content aanpassen kan altijd. Stuur je nieuwe materiaal en wij zorgen dat het snel wordt bijgewerkt.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-6" className="bg-white rounded-lg border px-4">
@@ -392,7 +459,32 @@ export default function Landing() {
         </div>
       </section>
 
-      <section id="contact" className="py-16 md:py-20 bg-gradient-to-br from-slate-900 to-slate-800 text-white">
+      <section className="py-16 md:py-20 bg-gradient-to-br from-emerald-600 to-emerald-700 text-white">
+        <div className="container mx-auto px-4">
+          <div className="max-w-2xl mx-auto text-center">
+            <h2 className="text-2xl md:text-3xl font-bold mb-3">Klaar om lokaal zichtbaar te worden?</h2>
+            <p className="text-emerald-100 mb-8">
+              Wij regelen de schermen, planning en content. Jij wordt gezien.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
+                <Button size="lg" className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto">
+                  <Mail className="h-4 w-4" />
+                  Vraag mediakit aan
+                </Button>
+              </a>
+              <a href="mailto:info@elevizion.nl?subject=Scherm%20beschikbaar%20stellen">
+                <Button size="lg" variant="outline" className="gap-2 border-2 border-white/30 hover:bg-white/10 text-white w-full sm:w-auto">
+                  <MapPin className="h-4 w-4" />
+                  Scherm aanbieden
+                </Button>
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="contact" className="py-16 md:py-20 bg-slate-900 text-white">
         <div className="container mx-auto px-4">
           <div className="max-w-2xl mx-auto text-center">
             <h2 className="text-2xl md:text-3xl font-bold mb-4">Contact</h2>

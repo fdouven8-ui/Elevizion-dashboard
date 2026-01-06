@@ -1,0 +1,85 @@
+Je gaat de bestaande Elevizion.nl landingpage VERBETEREN met KLEINE AANPASSINGEN (geen redesign, geen nieuwe pagina’s, geen SaaS look). Houd de huidige structuur, spacing en components grotendeels hetzelfde. Doel: minder “saai/veilig”, meer ‘impact’, meer vertrouwen en betere conversie.
+
+BELANGRIJK:
+- Verander NIET de routing, geen grote refactors, geen nieuwe design system.
+- Bewaar huidige kleuren (groen/neutral) en typografie als basis.
+- Alleen: copy verbeteringen + 2–3 subtiele visuele “interrupties” + meer real-world trust.
+- Houd het informatief (geen “software”, “platform”, “dashboard”, “start trial” taal).
+
+TAKEN (VOER ALLES UIT):
+
+1) HERO COPY VERSTERKEN (boven de vouw)
+- Laat de H1 staan (“Lokale schermreclame die écht opvalt.”) of maak alleen minimale tweak als nodig.
+- Vervang de subtekst door een sterkere, menselijkere variant die benefits benoemt:
+  Voorstel subtekst:
+  “Elevizion plaatst digitale schermen op drukbezochte locaties en helpt lokale bedrijven zichtbaar worden bij hun eigen doelgroep — precies waar aandacht is.”
+- Voeg onder de knoppen een korte microcopy (1 regel) toe die drempels wegneemt:
+  “Binnen 24 uur reactie • We regelen ontwerp & planning • Duidelijke afspraken”
+  (geen fake claims; als 24 uur niet kan, maak het “Snel reactie”)
+
+2) USP REGEL AANPASSEN (3 bullets onder hero)
+- Huidige bullets herschrijven naar resultaatgericht, zelfde aantal bullets:
+  - “Zichtbaar bij lokaal publiek”
+  - “Vaste prijs & looptijd (geen verrassingen)”
+  - “Volledig verzorgd: planning & plaatsing”
+- Houd iconen en layout hetzelfde.
+
+3) ‘VOOR WIE?’ KAARTEN MEER CONCREET MAKEN
+- Houd de 2 kaarten (“Voor adverteerders” en “Voor locaties”) exact dezelfde layout.
+- Voeg per kaart 1 korte zin (boven de bullets of onder de titel) die het concreter maakt:
+  Adverteerders zin:
+  “Ideaal voor ondernemers die lokaal willen groeien zonder verspilling aan online advertentiebudget.”
+  Locaties zin:
+  “Wij plaatsen een scherm dat past bij jouw zaak en regelen alles van content tot onderhoud.”
+- Pas bullettekst licht aan waar nodig, maar behoud dezelfde hoeveelheid en stijl.
+
+4) “INTERRUPT” SECTIE TOEVOEGEN (subtiel, niet schreeuwerig)
+- Voeg 1 full-width sectie toe tussen “Voor wie?” en het stappenplan OF tussen stappenplan en pakketten.
+- Deze sectie moet visueel anders zijn (subtiel contrast), bijv. lichtgrijs of donkerder vlak met dezelfde merkaccenten.
+- Inhoud (korte, krachtige 2 regels + kleine toelichting):
+  Titel: “Online advertenties worden weggeklikt. Onze schermen niet.”
+  Tekst: “Je boodschap komt in beeld op plekken waar mensen wachten, kijken en besluiten.”
+- Voeg 1 CTA knop toe die linkt naar “Vraag mediakit aan” (zelfde button component).
+
+5) STAPPENPLAN MICROCOPY MENSELIJKER
+- Houd de 3 stappen (iconen/structuur) hetzelfde.
+- Pas alleen de beschrijving aan zodat het minder ‘glad’ en meer geruststellend is:
+  Stap 1: “We bespreken je doelen en adviseren welke locaties passen (vrijblijvend).”
+  Stap 2: “Wij maken/optimaliseren de content en plannen de campagne.”
+  Stap 3: “Live op scherm + inzicht in plaatsing en bereik (rapportage).”
+
+6) PAKKETTEN: MINDER SaaS FEEL, MEER ‘INDICATIE’
+- Laat de 3 pakketten staan (geen herstructurering).
+- Voeg boven de pakketten (onder de titel “Pakketten”) een korte zin toe:
+  “Deze pakketten zijn een indicatie. We stemmen de campagne altijd af op locatie, doelgroep en budget.”
+- Vervang technische termen waar mogelijk:
+  “10 seconden per rotatie” → “Je advertentie verschijnt meerdere keren per uur”
+  “15 seconden per rotatie” → idem (iets hoger/meer aandacht)
+  Maar: behoud de betekenis, geen onjuiste claims.
+
+7) TRUST / REAL WORLD TOEVOEGEN (zonder nieuwe pagina)
+- Voeg een kleine sectie toe vlak voor FAQ met 3 trust items (cards of bullets, simpel):
+  Titel: “Waar je ons tegenkomt”
+  Bullets (voorbeeld):
+  - “Wachtruimtes & balies (kappers, tandarts, praktijken)”
+  - “Sportscholen & studio’s”
+  - “Horeca & retail”
+- Als er al een plek is voor images: voeg 1–3 placeholder blokken met “Locatiefoto (binnenkort)” OF gebruik bestaande assets als aanwezig. Geen stockfoto’s toevoegen zonder assets.
+
+8) EINDE: STERKE AFSLUITENDE CTA
+- Voeg onder de FAQ een eindsectie toe met korte headline + CTA’s:
+  Headline: “Klaar om lokaal zichtbaar te worden?”
+  Tekst: “Wij regelen de schermen, planning en content. Jij wordt gezien.”
+  Knoppen: “Vraag mediakit aan” + “Scherm aanbieden”
+- Houd styling consistent met de rest.
+
+9) UITVOERING & KWALITEIT
+- Zorg dat alle teksten NL zijn en consistent in tone-of-voice.
+- Check responsive (mobile): spacing blijft netjes, buttons niet te breed, headings schalen goed.
+- Geen performance zwaarder maken: geen video’s, geen grote libs.
+- Gebruik bestaande componenten en CSS classes; voeg alleen minimale nieuwe styles toe voor de interrupt-sectie (bijv. background + padding).
+
+OPLEVERING:
+- Pas de code toe in de bestaande landingpage componenten.
+- Geef een korte samenvatting van exact wat je hebt aangepast (per sectie).
+- Geen extra features, geen nieuwe routes, geen redesign.
