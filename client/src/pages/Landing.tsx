@@ -200,31 +200,21 @@ export default function Landing() {
         </div>
       </section>
 
-      <section className="py-16 md:py-20 bg-slate-800 text-white overflow-hidden">
+      <section className="py-16 md:py-20 bg-slate-800 text-white">
         <div className="container mx-auto px-4">
-          <div className="grid md:grid-cols-2 gap-10 items-center max-w-5xl mx-auto">
-            <div className="text-center md:text-left">
-              <h2 className="text-2xl md:text-3xl font-bold mb-4 leading-tight">
-                Online advertenties worden weggeklikt. Onze schermen niet.
-              </h2>
-              <p className="text-slate-300 mb-8 leading-relaxed">
-                Je boodschap komt in beeld waar mensen wachten, kijken en besluiten.
-              </p>
-              <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
-                <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 transition-colors">
-                  <Mail className="h-4 w-4" />
-                  Vraag mediakit aan
-                </Button>
-              </a>
-            </div>
-            <div className="hidden md:block">
-              <img 
-                src="/elevizion-screen-cafe.png" 
-                alt="Digitaal scherm in horecagelegenheid" 
-                className="rounded-lg shadow-xl w-full max-w-md mx-auto"
-                loading="lazy"
-              />
-            </div>
+          <div className="max-w-2xl mx-auto text-center">
+            <h2 className="text-2xl md:text-3xl font-bold mb-4 leading-tight">
+              Online advertenties worden weggeklikt. Onze schermen niet.
+            </h2>
+            <p className="text-slate-300 mb-8 leading-relaxed">
+              Je boodschap komt in beeld waar mensen wachten, kijken en besluiten.
+            </p>
+            <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
+              <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 transition-colors">
+                <Mail className="h-4 w-4" />
+                Vraag mediakit aan
+              </Button>
+            </a>
           </div>
         </div>
       </section>
