@@ -80,7 +80,7 @@ export default function Landing() {
             <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-6 leading-tight drop-shadow-lg" data-testid="hero-title">
               Lokale schermreclame die écht opvalt.
             </h1>
-            <p className="text-base sm:text-lg md:text-xl text-white/85 mb-8 max-w-xl mx-auto leading-relaxed">
+            <p className="text-base sm:text-lg md:text-xl text-white/80 mb-8 max-w-xl mx-auto leading-relaxed">
               Digitale schermen op drukbezochte locaties. Zichtbaar bij jouw doelgroep, precies waar aandacht is.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center mb-5">
@@ -101,20 +101,20 @@ export default function Landing() {
                 Scherm aanbieden
               </Button>
             </div>
-            <p className="text-sm text-white/60 mb-12">
+            <p className="text-sm text-white/50 mb-12">
               Snel reactie • Ontwerp inbegrepen • Duidelijke afspraken
             </p>
-            <div className="flex flex-wrap justify-center gap-x-8 gap-y-3 text-sm text-white/70">
+            <div className="flex flex-wrap justify-center gap-x-8 gap-y-3 text-sm text-white/60">
               <div className="flex items-center gap-2">
-                <Eye className="h-4 w-4 text-white/50" />
+                <Eye className="h-4 w-4 text-white/40" />
                 <span>Lokaal publiek</span>
               </div>
               <div className="flex items-center gap-2">
-                <Clock className="h-4 w-4 text-white/50" />
+                <Clock className="h-4 w-4 text-white/40" />
                 <span>Vaste prijs & looptijd</span>
               </div>
               <div className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4 text-white/50" />
+                <CheckCircle className="h-4 w-4 text-white/40" />
                 <span>Volledig verzorgd</span>
               </div>
             </div>
@@ -131,8 +131,8 @@ export default function Landing() {
           <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
             <Card className="border border-slate-100 hover:border-slate-200 transition-colors">
               <CardHeader className="pb-3">
-                <div className="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center mb-3">
-                  <Megaphone className="h-5 w-5 text-emerald-500" />
+                <div className="w-10 h-10 rounded-lg bg-slate-50 flex items-center justify-center mb-3">
+                  <Megaphone className="h-5 w-5 text-slate-400" />
                 </div>
                 <CardTitle className="text-lg font-semibold text-slate-800">Voor adverteerders</CardTitle>
                 <p className="text-sm text-slate-400 mt-1 leading-relaxed">
@@ -142,15 +142,15 @@ export default function Landing() {
               <CardContent className="space-y-4">
                 <ul className="space-y-2.5 text-slate-500 text-sm">
                   <li className="flex items-start gap-2.5">
-                    <Check className="h-4 w-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0 mt-0.5" />
                     <span>Bereik klanten in jouw regio</span>
                   </li>
                   <li className="flex items-start gap-2.5">
-                    <Check className="h-4 w-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0 mt-0.5" />
                     <span>Herhaling zorgt voor herkenning</span>
                   </li>
                   <li className="flex items-start gap-2.5">
-                    <Check className="h-4 w-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                    <Check className="h-4 w-4 text-slate-300 flex-shrink-0 mt-0.5" />
                     <span>Zichtbaar waar je doelgroep komt</span>
                   </li>
                 </ul>
@@ -203,10 +203,10 @@ export default function Landing() {
       <section className="py-16 md:py-20 bg-slate-800 text-white">
         <div className="container mx-auto px-4">
           <div className="max-w-2xl mx-auto text-center">
-            <h2 className="text-2xl md:text-3xl font-bold mb-4 leading-tight">
+            <h2 className="text-2xl md:text-3xl font-bold mb-4 leading-tight text-white">
               Online advertenties worden weggeklikt. Onze schermen niet.
             </h2>
-            <p className="text-slate-400 mb-8 leading-relaxed">
+            <p className="text-white/70 mb-8 leading-relaxed">
               Je boodschap komt in beeld waar mensen wachten, kijken en besluiten.
             </p>
             <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
@@ -227,26 +227,26 @@ export default function Landing() {
           </p>
           <div className="grid md:grid-cols-3 gap-12 max-w-4xl mx-auto">
             <div className="text-center">
-              <div className="w-14 h-14 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-5">
+              <div className="w-14 h-14 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto mb-5">
                 <Handshake className="h-6 w-6" />
               </div>
-              <div className="text-xs text-emerald-600 font-medium mb-2 uppercase tracking-wider">Stap 1</div>
+              <div className="text-xs text-slate-400 font-medium mb-2 uppercase tracking-wider">Stap 1</div>
               <h3 className="font-semibold text-slate-800 mb-2">Kennismaken</h3>
               <p className="text-sm text-slate-400 leading-relaxed">We bespreken je doelen en adviseren welke locaties passen.</p>
             </div>
             <div className="text-center">
-              <div className="w-14 h-14 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-5">
+              <div className="w-14 h-14 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto mb-5">
                 <Monitor className="h-6 w-6" />
               </div>
-              <div className="text-xs text-emerald-600 font-medium mb-2 uppercase tracking-wider">Stap 2</div>
+              <div className="text-xs text-slate-400 font-medium mb-2 uppercase tracking-wider">Stap 2</div>
               <h3 className="font-semibold text-slate-800 mb-2">Plaatsing & planning</h3>
               <p className="text-sm text-slate-400 leading-relaxed">Wij maken de content en plannen de campagne.</p>
             </div>
             <div className="text-center">
-              <div className="w-14 h-14 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-5">
+              <div className="w-14 h-14 rounded-full bg-slate-100 text-slate-500 flex items-center justify-center mx-auto mb-5">
                 <Play className="h-6 w-6" />
               </div>
-              <div className="text-xs text-emerald-600 font-medium mb-2 uppercase tracking-wider">Stap 3</div>
+              <div className="text-xs text-slate-400 font-medium mb-2 uppercase tracking-wider">Stap 3</div>
               <h3 className="font-semibold text-slate-800 mb-2">Live + rapportage</h3>
               <p className="text-sm text-slate-400 leading-relaxed">Je advertentie draait en je krijgt inzicht in bereik.</p>
             </div>
@@ -261,9 +261,9 @@ export default function Landing() {
             Indicatiepakketten. We stemmen altijd af op locatie, doelgroep en budget.
           </p>
           <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
-            <Card className="border border-slate-100">
+            <Card className="border border-slate-150">
               <CardHeader className="text-center pb-2">
-                <CardTitle className="text-base font-semibold text-slate-800">Starter</CardTitle>
+                <CardTitle className="text-base font-semibold text-slate-700">Starter</CardTitle>
                 <p className="text-sm text-slate-400">Om te beginnen</p>
               </CardHeader>
               <CardContent>
@@ -286,35 +286,35 @@ export default function Landing() {
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Interesse%20in%20Starter%20pakket">
-                  <Button variant="outline" className="w-full border-slate-200 transition-colors">Meer info</Button>
+                  <Button variant="outline" className="w-full border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">Meer info</Button>
                 </a>
               </CardContent>
             </Card>
 
-            <Card className="border-2 border-emerald-500 relative">
+            <Card className="border-2 border-emerald-500 relative bg-emerald-50/30">
               <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-xs font-medium px-4 py-1 rounded-full">
                 Populair
               </div>
               <CardHeader className="text-center pb-2">
                 <CardTitle className="text-base font-semibold text-slate-800">Local Plus</CardTitle>
-                <p className="text-sm text-slate-400">Meest gekozen</p>
+                <p className="text-sm text-slate-500">Meest gekozen</p>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-2.5 text-sm text-slate-500 mb-6">
+                <ul className="space-y-2.5 text-sm text-slate-600 mb-6">
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>3 schermlocaties</span>
                   </li>
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Meer zendtijd, langere spots</span>
                   </li>
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Flexibele looptijd</span>
                   </li>
                   <li className="flex items-center gap-2.5">
-                    <Check className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+                    <Check className="h-4 w-4 text-emerald-500 flex-shrink-0" />
                     <span>Ontwerp inbegrepen</span>
                   </li>
                 </ul>
@@ -324,9 +324,9 @@ export default function Landing() {
               </CardContent>
             </Card>
 
-            <Card className="border border-slate-100">
+            <Card className="border border-slate-150">
               <CardHeader className="text-center pb-2">
-                <CardTitle className="text-base font-semibold text-slate-800">Premium</CardTitle>
+                <CardTitle className="text-base font-semibold text-slate-700">Premium</CardTitle>
                 <p className="text-sm text-slate-400">Maximaal bereik</p>
               </CardHeader>
               <CardContent>
@@ -349,7 +349,7 @@ export default function Landing() {
                   </li>
                 </ul>
                 <a href="mailto:info@elevizion.nl?subject=Interesse%20in%20Premium%20pakket">
-                  <Button variant="outline" className="w-full border-slate-200 transition-colors">Meer info</Button>
+                  <Button variant="outline" className="w-full border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors">Meer info</Button>
                 </a>
               </CardContent>
             </Card>
@@ -470,8 +470,8 @@ export default function Landing() {
       <section className="py-20 md:py-28 bg-emerald-600 text-white">
         <div className="container mx-auto px-4">
           <div className="max-w-xl mx-auto text-center">
-            <h2 className="text-2xl md:text-3xl font-bold mb-4">Klaar om lokaal zichtbaar te worden?</h2>
-            <p className="text-emerald-100 mb-8 leading-relaxed">
+            <h2 className="text-2xl md:text-3xl font-bold mb-4 text-white">Klaar om lokaal zichtbaar te worden?</h2>
+            <p className="text-white/80 mb-8 leading-relaxed">
               Wij regelen de schermen, planning en content. Jij wordt gezien.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
@@ -495,7 +495,7 @@ export default function Landing() {
       <section id="contact" className="py-20 md:py-28 bg-slate-900 text-white">
         <div className="container mx-auto px-4">
           <div className="max-w-xl mx-auto text-center">
-            <h2 className="text-2xl md:text-3xl font-bold mb-4">Contact</h2>
+            <h2 className="text-2xl md:text-3xl font-bold mb-4 text-white">Contact</h2>
             <p className="text-slate-500 mb-8">
               Mail ons en we reageren snel.
             </p>

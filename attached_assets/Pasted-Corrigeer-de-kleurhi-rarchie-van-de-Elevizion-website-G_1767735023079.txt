@@ -1,0 +1,59 @@
+Corrigeer de kleurhiërarchie van de Elevizion website.
+GEEN redesign, GEEN nieuwe content, GEEN nieuwe secties.
+
+PROBLEEM DAT OPGELOST MOET WORDEN:
+- Te veel groene accenten tegelijk
+- Onvoldoende onderscheid tussen focus- en ondersteunende elementen
+- CTA’s, iconen en cards trekken evenveel aandacht
+
+DOEL:
+- Rust
+- Duidelijke focus per sectie
+- Groen alleen gebruiken waar actie nodig is
+
+INSTRUCTIES:
+
+1) KLEURROLLEN DUIDELIJK MAKEN
+- Primair groen = ALLEEN voor:
+  - hoofd-CTA’s (bijv. “Vraag mediakit aan”)
+  - actieve / geselecteerde elementen
+- Secundair groen (lichtere tint of opacity) = ALLEEN voor:
+  - iconen
+  - checkmarks
+- Geen groen gebruiken voor gewone tekst of decoratie.
+
+2) DONKERBLAUWE SECTIE (STATEMENT BLOK)
+- Houd de donkere achtergrond.
+- Maak de headline volledig wit (#FFFFFF).
+- Subtekst lichter wit/grijs (opacity ±70–80%).
+- CTA groen laten, maar zorg voor voldoende contrast met achtergrond.
+
+3) ‘ZO WERKT HET’ SECTIE
+- Icon-cirkels: verlaag groene intensiteit (lichtere tint of lagere opacity).
+- Stapnummers en titels donker (tekstkleur), NIET groen.
+- Groen alleen als accent, niet als hoofdtoon.
+
+4) PAKKETTEN SECTIE
+- Slechts ÉÉN kaart mag visueel dominant zijn (Local Plus).
+- Die kaart:
+  - groene border of subtiele groene background tint
+  - CTA groen
+- Andere kaarten:
+  - neutrale border (grijs)
+  - CTA neutraal (outline of lichte grijstint)
+- Verwijder groen uit bullets van niet-geselecteerde kaarten.
+
+5) ALGEMENE REGELS
+- Per sectie maximaal 1 groen focuspunt.
+- Verwijder dubbele accenten (bijv. groene icon + groene titel + groene knop).
+- Behoud voldoende witruimte; geen extra decoratieve kleuren toevoegen.
+
+6) CONSISTENTIE
+- Zorg dat exact dezelfde groentint overal wordt gebruikt.
+- Zelfde hover-kleur voor alle primaire CTA’s.
+- Zelfde icon-kleur binnen dezelfde context.
+
+OPLEVERING:
+- Pas dit toe binnen bestaande styles/components.
+- Geen layout wijzigen.
+- Geef kort aan welke kleurkeuzes zijn aangepast en waarom.
