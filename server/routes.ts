@@ -210,6 +210,215 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
   
   // ============================================================================
+  // WEBSITE LEADS (Public endpoints for lead capture forms)
+  // ============================================================================
+  
+  // Rate limiting map for spam prevention
+  const leadRateLimits = new Map<string, { count: number; resetAt: number }>();
+  const LEAD_RATE_LIMIT = 5; // Max 5 leads per hour per IP
+  const LEAD_RATE_WINDOW = 60 * 60 * 1000; // 1 hour
+  
+  function checkLeadRateLimit(ip: string): boolean {
+    const now = Date.now();
+    const record = leadRateLimits.get(ip);
+    if (!record || now > record.resetAt) {
+      leadRateLimits.set(ip, { count: 1, resetAt: now + LEAD_RATE_WINDOW });
+      return true;
+    }
+    if (record.count >= LEAD_RATE_LIMIT) {
+      return false;
+    }
+    record.count++;
+    return true;
+  }
+  
+  // Advertiser lead schema with validation
+  const advertiserLeadSchema = z.object({
+    goal: z.enum(["Meer klanten", "Naamsbekendheid", "Actie promoten"]),
+    region: z.string().min(1, "Regio is verplicht"),
+    companyName: z.string().min(1, "Bedrijfsnaam is verplicht"),
+    contactName: z.string().min(1, "Naam is verplicht"),
+    phone: z.string().optional(),
+    email: z.string().email().optional(),
+    budgetIndication: z.string().optional(),
+    remarks: z.string().optional(),
+    honeypot: z.string().optional(), // Spam trap - should be empty
+  }).refine(data => data.phone || data.email, {
+    message: "Vul minstens een telefoonnummer of e-mailadres in",
+  });
+  
+  // Screen location lead schema with validation
+  const screenLeadSchema = z.object({
+    businessType: z.enum(["Kapper/Barbershop", "Gym/Sportschool", "Horeca", "Retail", "Overig"]),
+    city: z.string().min(1, "Plaats is verplicht"),
+    companyName: z.string().min(1, "Bedrijfsnaam is verplicht"),
+    contactName: z.string().min(1, "Contactpersoon is verplicht"),
+    phone: z.string().min(1, "Telefoonnummer is verplicht"),
+    email: z.string().email().optional().or(z.literal("")),
+    visitorsPerWeek: z.string().optional(),
+    remarks: z.string().optional(),
+    honeypot: z.string().optional(), // Spam trap - should be empty
+  });
+  
+  // POST /api/leads/advertiser - Create advertiser lead
+  app.post("/api/leads/advertiser", async (req, res) => {
+    try {
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      
+      // Rate limit check
+      if (!checkLeadRateLimit(ip)) {
+        return res.status(429).json({ message: "Te veel aanvragen. Probeer het later opnieuw." });
+      }
+      
+      // Validate input
+      const result = advertiserLeadSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error.errors[0].message });
+      }
+      
+      const data = result.data;
+      
+      // Honeypot check (spam trap)
+      if (data.honeypot) {
+        return res.status(200).json({ success: true }); // Silently accept spam
+      }
+      
+      // Insert into database using raw query (since we added tables directly)
+      const { db } = await import("./db");
+      const leadResult = await db.execute(sql`
+        INSERT INTO advertiser_leads (goal, region, company_name, contact_name, phone, email, budget_indication, remarks)
+        VALUES (${data.goal}, ${data.region}, ${data.companyName}, ${data.contactName}, ${data.phone || null}, ${data.email || null}, ${data.budgetIndication || null}, ${data.remarks || null})
+        RETURNING id
+      `);
+      
+      // Send notification email to info@elevizion.nl
+      const contact = data.email || data.phone || "Niet opgegeven";
+      await sendEmail({
+        to: "info@elevizion.nl",
+        subject: `[Lead Adverteren] ${data.companyName} - ${data.region}`,
+        html: `
+          <h2>Nieuwe adverteerder lead via website</h2>
+          <table style="border-collapse: collapse; width: 100%;">
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Doel:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.goal}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Regio:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.region}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Bedrijfsnaam:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.companyName}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Naam:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.contactName}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Telefoon:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.phone || "Niet opgegeven"}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>E-mail:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.email || "Niet opgegeven"}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Budget:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.budgetIndication || "Niet opgegeven"}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Opmerking:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.remarks || "Geen"}</td></tr>
+          </table>
+        `,
+        templateKey: "lead_advertiser",
+      });
+      
+      // Send confirmation email to user if email provided
+      if (data.email) {
+        await sendEmail({
+          to: data.email,
+          subject: "Bedankt voor je interesse in Elevizion",
+          html: `
+            <h2>Hallo ${data.contactName},</h2>
+            <p>Bedankt voor je interesse in adverteren via Elevizion!</p>
+            <p>We hebben je aanvraag ontvangen en nemen zo snel mogelijk contact met je op.</p>
+            <p><strong>Je gegevens:</strong></p>
+            <ul>
+              <li>Bedrijf: ${data.companyName}</li>
+              <li>Regio: ${data.region}</li>
+              <li>Doel: ${data.goal}</li>
+            </ul>
+            <p>Met vriendelijke groet,<br>Team Elevizion</p>
+          `,
+          templateKey: "lead_advertiser_confirmation",
+        });
+      }
+      
+      res.json({ success: true, message: "Bedankt! We nemen snel contact op." });
+    } catch (error: any) {
+      console.error("Error creating advertiser lead:", error);
+      res.status(500).json({ message: "Er ging iets mis. Probeer het later opnieuw." });
+    }
+  });
+  
+  // POST /api/leads/screen-location - Create screen location lead
+  app.post("/api/leads/screen-location", async (req, res) => {
+    try {
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      
+      // Rate limit check
+      if (!checkLeadRateLimit(ip)) {
+        return res.status(429).json({ message: "Te veel aanvragen. Probeer het later opnieuw." });
+      }
+      
+      // Validate input
+      const result = screenLeadSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error.errors[0].message });
+      }
+      
+      const data = result.data;
+      
+      // Honeypot check (spam trap)
+      if (data.honeypot) {
+        return res.status(200).json({ success: true }); // Silently accept spam
+      }
+      
+      // Insert into database
+      const { db } = await import("./db");
+      await db.execute(sql`
+        INSERT INTO screen_leads (business_type, city, company_name, contact_name, phone, email, visitors_per_week, remarks)
+        VALUES (${data.businessType}, ${data.city}, ${data.companyName}, ${data.contactName}, ${data.phone}, ${data.email || null}, ${data.visitorsPerWeek || null}, ${data.remarks || null})
+      `);
+      
+      // Send notification email to info@elevizion.nl
+      await sendEmail({
+        to: "info@elevizion.nl",
+        subject: `[Lead Schermlocatie] ${data.companyName} - ${data.city}`,
+        html: `
+          <h2>Nieuwe schermlocatie lead via website</h2>
+          <table style="border-collapse: collapse; width: 100%;">
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Type zaak:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.businessType}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Plaats:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.city}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Bedrijfsnaam:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.companyName}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Contactpersoon:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.contactName}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Telefoon:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.phone}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>E-mail:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.email || "Niet opgegeven"}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Bezoekers/week:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.visitorsPerWeek || "Niet opgegeven"}</td></tr>
+            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Opmerking:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.remarks || "Geen"}</td></tr>
+          </table>
+        `,
+        templateKey: "lead_screen_location",
+      });
+      
+      // Send confirmation email to user if email provided
+      if (data.email) {
+        await sendEmail({
+          to: data.email,
+          subject: "Bedankt voor je interesse in een Elevizion scherm",
+          html: `
+            <h2>Hallo ${data.contactName},</h2>
+            <p>Bedankt voor je interesse in een digitaal scherm van Elevizion!</p>
+            <p>We hebben je aanvraag ontvangen en nemen zo snel mogelijk contact met je op om de mogelijkheden te bespreken.</p>
+            <p><strong>Je gegevens:</strong></p>
+            <ul>
+              <li>Bedrijf: ${data.companyName}</li>
+              <li>Plaats: ${data.city}</li>
+              <li>Type: ${data.businessType}</li>
+            </ul>
+            <p>Met vriendelijke groet,<br>Team Elevizion</p>
+          `,
+          templateKey: "lead_screen_confirmation",
+        });
+      }
+      
+      res.json({ success: true, message: "Bedankt! We nemen snel contact op." });
+    } catch (error: any) {
+      console.error("Error creating screen lead:", error);
+      res.status(500).json({ message: "Er ging iets mis. Probeer het later opnieuw." });
+    }
+  });
+  
+  // ============================================================================
   // ADVERTISERS
   // ============================================================================
   
