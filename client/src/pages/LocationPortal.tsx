@@ -288,17 +288,22 @@ export default function LocationPortal() {
               </div>
 
               <div className="border-t pt-4 mt-4">
-                <h3 className="font-medium mb-3">Extra Informatie (optioneel)</h3>
+                <h3 className="font-medium mb-3">Extra Informatie</h3>
                 <div className="space-y-3">
                   <div className="space-y-2">
-                    <Label>Bezoekers per week (schatting)</Label>
+                    <Label>Bezoekers per week (schatting) *</Label>
                     <Input 
                       type="number"
                       value={formData.visitorsPerWeek}
                       onChange={(e) => setFormData({ ...formData, visitorsPerWeek: e.target.value })}
                       placeholder="500"
+                      required
+                      min="1"
                       data-testid="input-visitors"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Dit helpt ons de juiste adverteerders te vinden voor uw locatie
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label>Openingstijden</Label>

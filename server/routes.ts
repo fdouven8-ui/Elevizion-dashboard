@@ -1038,7 +1038,7 @@ export async function registerRoutes(
       // Mark token as used BEFORE update (race condition prevention)
       await storage.markLocationTokenUsed(tokenRecord.id);
       
-      // Validate submission data
+      // Validate submission data - visitorsPerWeek is required
       const portalDataSchema = z.object({
         name: z.string().min(1, "Locatienaam is verplicht"),
         contactName: z.string().optional(),
@@ -1047,12 +1047,15 @@ export async function registerRoutes(
         houseNumber: z.string().min(1, "Huisnummer is verplicht"),
         zipcode: z.string().min(1, "Postcode is verplicht"),
         city: z.string().min(1, "Plaats is verplicht"),
-        visitorsPerWeek: z.number().min(0).optional(),
+        visitorsPerWeek: z.number().min(1, "Bezoekers per week is verplicht"),
         openingHours: z.string().optional(),
         branche: z.string().optional(),
       });
       
       const data = portalDataSchema.parse(req.body);
+      
+      // Get current location for locationCode
+      const existingLocation = await storage.getLocation(tokenRecord.locationId);
       
       // Update location with submitted data
       const location = await storage.updateLocation(tokenRecord.locationId, {
@@ -1078,6 +1081,45 @@ export async function registerRoutes(
       });
       
       console.log(`[Location Portal] Details submitted for location ${tokenRecord.locationId}`);
+      
+      // Send internal notification email to info@elevizion.nl
+      try {
+        const locationCode = existingLocation?.locationCode || location?.locationCode || "Unknown";
+        await sendEmail({
+          to: "info@elevizion.nl",
+          subject: `[Locatie Onboarding] ${data.name} (${locationCode}) heeft gegevens ingevuld`,
+          html: `
+            <h2>Nieuwe locatie onboarding voltooid</h2>
+            <p>Een klant heeft de locatiegegevens ingevuld via de portal.</p>
+            <hr>
+            <h3>Locatie Details</h3>
+            <ul>
+              <li><strong>Locatiecode:</strong> ${locationCode}</li>
+              <li><strong>Naam:</strong> ${data.name}</li>
+              <li><strong>Contactpersoon:</strong> ${data.contactName || "-"}</li>
+              <li><strong>Telefoon:</strong> ${data.phone || "-"}</li>
+            </ul>
+            <h3>Adres</h3>
+            <p>${data.street} ${data.houseNumber}<br>${data.zipcode} ${data.city}</p>
+            <h3>Extra Info</h3>
+            <ul>
+              <li><strong>Bezoekers per week:</strong> ${data.visitorsPerWeek}</li>
+              <li><strong>Openingstijden:</strong> ${data.openingHours || "-"}</li>
+              <li><strong>Branche:</strong> ${data.branche || "-"}</li>
+            </ul>
+            <hr>
+            <p>De locatie staat nu op status <strong>pending_pi</strong> (wacht op installatie).</p>
+            <p><a href="https://elevizion.nl/locations/${tokenRecord.locationId}">Bekijk in dashboard</a></p>
+          `,
+          templateKey: "location_onboarding_completed",
+          entityType: "location",
+          entityId: tokenRecord.locationId,
+        });
+        console.log(`[Location Portal] Internal notification sent to info@elevizion.nl`);
+      } catch (emailError) {
+        console.error(`[Location Portal] Failed to send internal notification:`, emailError);
+        // Don't fail the request if email fails
+      }
       
       res.json({ 
         message: "Gegevens succesvol opgeslagen",
