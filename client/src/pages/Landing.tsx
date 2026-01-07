@@ -84,10 +84,10 @@ export default function Landing() {
               Digitale schermen op drukbezochte locaties. Zichtbaar bij jouw doelgroep, precies waar aandacht is.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center mb-5">
-              <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
-                <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-8 py-6 w-full sm:w-auto text-base font-medium shadow-lg shadow-emerald-900/20 transition-colors" data-testid="button-cta-mediakit">
-                  <Mail className="h-5 w-5" />
-                  Vraag mediakit aan
+              <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
+                <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-8 py-6 w-full sm:w-auto text-base font-medium shadow-lg shadow-emerald-900/20 transition-colors" data-testid="button-cta-adverteren">
+                  <Megaphone className="h-5 w-5" />
+                  Ik wil adverteren
                 </Button>
               </a>
               <Button 
@@ -98,7 +98,7 @@ export default function Landing() {
                 data-testid="button-cta-partner"
               >
                 <MapPin className="h-5 w-5" />
-                Scherm aanbieden
+                Ik wil een scherm op mijn locatie
               </Button>
             </div>
             <p className="text-sm text-white/50 mb-12">
@@ -160,10 +160,10 @@ export default function Landing() {
                     <span>Zichtbaar waar je doelgroep komt</span>
                   </li>
                 </ul>
-                <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
+                <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
                   <Button className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 mt-4 transition-colors font-semibold shadow-lg">
-                    <Mail className="h-4 w-4" />
-                    Vraag mediakit aan
+                    <Megaphone className="h-4 w-4" />
+                    Ik wil adverteren
                   </Button>
                 </a>
               </CardContent>
@@ -200,10 +200,10 @@ export default function Landing() {
                     <span>Wij regelen content en onderhoud</span>
                   </li>
                 </ul>
-                <a href="mailto:info@elevizion.nl?subject=Scherm%20aanbieden">
+                <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20een%20scherm%20op%20mijn%20locatie">
                   <Button variant="outline" className="w-full gap-2 border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white mt-4 transition-colors font-semibold">
                     <MapPin className="h-4 w-4" />
-                    Scherm aanbieden
+                    Ik wil een scherm op mijn locatie
                   </Button>
                 </a>
               </CardContent>
@@ -222,10 +222,10 @@ export default function Landing() {
             <p className="text-white/80 mb-8 leading-relaxed text-lg">
               Je boodschap komt in beeld waar mensen wachten, kijken en besluiten.
             </p>
-            <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
+            <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
               <Button size="lg" className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20">
-                <Mail className="h-5 w-5" />
-                Vraag mediakit aan
+                <Megaphone className="h-5 w-5" />
+                Ik wil adverteren
               </Button>
             </a>
           </div>
@@ -404,9 +404,9 @@ export default function Landing() {
             Prijs afhankelijk van locatie en looptijd.
           </p>
           <div className="text-center mt-3">
-            <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
+            <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
               <Button variant="link" className="text-emerald-600 gap-1 transition-colors">
-                Vraag mediakit aan
+                Start met adverteren
                 <ArrowRight className="h-4 w-4" />
               </Button>
             </a>
@@ -522,16 +522,16 @@ export default function Landing() {
               Wij regelen de schermen, planning en content. Jij wordt gezien.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <a href="mailto:info@elevizion.nl?subject=Mediakit%20aanvragen">
+              <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
                 <Button size="lg" className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8 shadow-xl">
-                  <Mail className="h-5 w-5" />
-                  Vraag mediakit aan
+                  <Megaphone className="h-5 w-5" />
+                  Ik wil adverteren
                 </Button>
               </a>
-              <a href="mailto:info@elevizion.nl?subject=Scherm%20aanbieden">
+              <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20een%20scherm%20op%20mijn%20locatie">
                 <Button size="lg" variant="outline" className="gap-2 border-2 border-white/40 hover:bg-white/20 text-white w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8">
                   <MapPin className="h-5 w-5" />
-                  Scherm aanbieden
+                  Ik wil een scherm op mijn locatie
                 </Button>
               </a>
             </div>

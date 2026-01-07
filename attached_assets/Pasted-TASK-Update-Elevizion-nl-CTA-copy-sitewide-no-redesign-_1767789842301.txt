@@ -1,0 +1,36 @@
+TASK: Update Elevizion.nl CTA copy sitewide (no redesign)
+
+Context:
+On Elevizion.nl we currently use “Mediakit” wording (e.g. “Vraag mediakit aan”, “Download mediakit”, etc.). I want to replace all “mediakit” related copy across the entire website with clearer, entrepreneur-friendly language:
+- Primary CTA for advertisers: “Ik wil adverteren”
+- Secondary CTA for screen locations: “Ik wil een scherm op mijn locatie”
+
+Requirements:
+1) Replace CTA button labels and link texts everywhere on the site:
+   - “Vraag mediakit aan” -> “Ik wil adverteren”
+   - Any variants like “Mediakit”, “Media kit”, “Media-kit”, “Download mediakit”, “Mediakit aanvragen”, “Vraag media kit aan” etc. should be replaced with the new advertiser CTA or removed if redundant.
+2) Update navigation/menu items if they reference mediakit:
+   - Use: “Adverteren” and “Ik wil adverteren” where appropriate (menu stays short: “Adverteren”).
+   - Use: “Scherm aanbieden” and “Ik wil een scherm op mijn locatie” where appropriate (menu stays short: “Scherm aanbieden”).
+3) Keep the design and layout the same. Do NOT redesign sections, spacing, or styling. Only change text labels + relevant routes/links.
+4) Ensure both CTAs point to the correct pages:
+   - “Ik wil adverteren” should link to the advertiser flow/page (existing “Adverteren” page or the current mediakit route if that’s what exists now).
+   - “Ik wil een scherm op mijn locatie” should link to the screen-location flow/page (existing “Scherm aanbieden” page).
+   If a “mediakit” page exists only as a lead capture page, keep the functionality but rename the page/heading/button text to “Ik wil adverteren” and update any internal route names cleanly (301 not needed in code, just internal links updated).
+5) Update headings and small helper text where “mediakit” is mentioned:
+   - Example: “Vraag de mediakit aan” -> “Start met adverteren” or “Ik wil adverteren”
+   - Example: “Ontvang de mediakit” -> “Ontvang info & start met adverteren”
+   Keep the rest of the sentence structure as intact as possible.
+6) Run a project-wide search for: mediakit, "media kit", "media-kit", "media kit aanvragen", etc. and update them consistently.
+7) After changes, verify:
+   - Homepage hero now has buttons:
+     Primary: “Ik wil adverteren”
+     Secondary: “Ik wil een scherm op mijn locatie”
+   - No remaining “mediakit” text anywhere (pages/components/footer/forms).
+   - Links work and route names aren’t broken.
+8) Output:
+   - Provide a brief summary of files changed and what was updated.
+   - Do not add new features. Do not change copy beyond mediakit-related text unless necessary for consistency.
+
+Important:
+Keep everything minimal. Only text and link/route adjustments that are required.
