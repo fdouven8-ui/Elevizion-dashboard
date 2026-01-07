@@ -58,6 +58,22 @@ The "Nieuwe Adverteerder" dialog has 2 modes via tabs:
 - **onboardingStatus States**: `draft` → `invited` → `completed`
 - **source Field**: Tracks advertiser origin (`quick_create`, `manual`, etc.)
 
+#### Location Onboarding System (January 2026)
+- **Location Code Format**: `EVZ-LOC-###` (e.g., EVZ-LOC-001), auto-incremented via `getNextLocationCode()`
+- **Location Tokens**: `location_tokens` table mirrors portal_tokens pattern with SHA256 hash, 7-day expiry, one-time use
+- **Location Onboarding Events**: `location_onboarding_events` table tracks all onboarding actions (location_created, invite_email_sent, details_submitted)
+- **Extended Location Fields**: houseNumber, visitorsPerWeek, openingHours, branche, piStatus (not_installed|installed), yodeckStatus (not_linked|linked), inviteEmailSentAt, reminderEmailSentAt
+- **Quick Create Flow**: POST `/api/locations/quick-create` creates location + generates portal link
+- **Public Portal Page**: `/locatie-portal/:token` allows customers to fill in location details (no auth)
+- **Onboarding Wizard**: New "Nieuwe Locatie" option in /onboarding page with emerald-themed wizard
+- **Status Flow**: pending_details → pending_pi → ready_for_pi → active
+- **API Endpoints**:
+  - GET `/api/locations/next-code` - Preview next location code
+  - POST `/api/locations/quick-create` - Create location + portal link
+  - POST `/api/locations/:id/send-portal-email` - Send invite email (idempotent)
+  - GET `/api/locations/:id/onboarding-events` - View onboarding timeline
+  - GET/POST `/api/public/location-portal/:token` - Public portal validation and submission
+
 #### New Unified Entities Architecture (December 2024)
 - **entities table**: Centralized table for both ADVERTISERS and SCREENS with:
   - `entity_type`: ADVERTISER or SCREEN
