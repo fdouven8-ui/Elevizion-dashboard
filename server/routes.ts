@@ -137,6 +137,70 @@ export async function registerRoutes(
   registerAuthRoutes(app);
   
   // ============================================================================
+  // SEO & PUBLIC ROUTES (no auth required)
+  // ============================================================================
+  
+  const SITE_URL = "https://elevizion.nl";
+  
+  // robots.txt
+  app.get("/robots.txt", (_req, res) => {
+    res.type("text/plain");
+    res.send(`# Elevizion robots.txt
+User-agent: *
+Allow: /
+
+# Block dashboard and API routes
+Disallow: /dashboard
+Disallow: /onboarding
+Disallow: /screens
+Disallow: /locations
+Disallow: /advertisers
+Disallow: /placements
+Disallow: /finance
+Disallow: /settings
+Disallow: /content-inventory
+Disallow: /yodeck
+Disallow: /entities
+Disallow: /sync-logs
+Disallow: /email-center
+Disallow: /data-health
+Disallow: /api/
+Disallow: /portal/
+Disallow: /locatie-portal/
+
+Sitemap: ${SITE_URL}/sitemap.xml
+`);
+  });
+  
+  // sitemap.xml
+  app.get("/sitemap.xml", (_req, res) => {
+    const lastmod = new Date().toISOString().split("T")[0];
+    res.type("application/xml");
+    res.send(`<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>${SITE_URL}/</loc>
+    <lastmod>${lastmod}</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>${SITE_URL}/login</loc>
+    <lastmod>${lastmod}</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.3</priority>
+  </url>
+</urlset>`);
+  });
+  
+  // Google Search Console verification (supports both HTML file and meta tag)
+  app.get("/google:verificationId.html", (req, res) => {
+    const verificationId = req.params.verificationId;
+    res.type("text/html");
+    res.send(`google-site-verification: google${verificationId}.html`);
+  });
+  
+  // ============================================================================
   // ADVERTISERS
   // ============================================================================
   

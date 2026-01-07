@@ -3,8 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
-    <title>Elevizion - Digital Signage Reclame</title>
-    <meta name="description" content="Bereik jouw doelgroep op de beste locaties met Elevizion. Digital signage reclame op strategische locaties in Nederland." />
+    <title>Elevizion - Lokale Schermreclame op Digitale Schermen</title>
+    <meta name="description" content="Bereik jouw lokale doelgroep met digitale schermreclame op drukbezochte locaties. Elevizion verzorgt adverteren op schermen bij sportscholen, kappers en cafés in Nederland." />
+    
+    <!-- Canonical URL -->
+    <link rel="canonical" href="https://elevizion.nl/" />
+    
+    <!-- Robots -->
+    <meta name="robots" content="index, follow" />
 
     <!-- PWA / Add to Home Screen -->
     <link rel="manifest" href="/manifest.json" />
@@ -14,22 +20,66 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Elevizion" />
-    <link rel="apple-touch-icon" href="/app-icon.jpg" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    
+    <!-- Favicon set -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="icon" href="/favicon.ico" />
     
     <!-- Prevent phone number detection -->
     <meta name="format-detection" content="telephone=no" />
 
-    <meta property="og:title" content="Elevizion - Digital Signage Reclame" />
-    <meta property="og:description" content="Bereik jouw doelgroep op de beste locaties met Elevizion. Digital signage reclame op strategische locaties in Nederland." />
+    <!-- Open Graph -->
+    <meta property="og:title" content="Elevizion - Lokale Schermreclame op Digitale Schermen" />
+    <meta property="og:description" content="Bereik jouw lokale doelgroep met digitale schermreclame op drukbezochte locaties. Adverteren bij sportscholen, kappers en cafés." />
     <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://elevizion.nl/" />
+    <meta property="og:image" content="https://elevizion.nl/opengraph.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="Elevizion" />
+    <meta property="og:locale" content="nl_NL" />
+    
+    <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Elevizion - Digital Signage Reclame" />
-    <meta name="twitter:description" content="Bereik jouw doelgroep op de beste locaties met Elevizion. Digital signage reclame op strategische locaties in Nederland." />
+    <meta name="twitter:title" content="Elevizion - Lokale Schermreclame op Digitale Schermen" />
+    <meta name="twitter:description" content="Bereik jouw lokale doelgroep met digitale schermreclame op drukbezochte locaties." />
+    <meta name="twitter:image" content="https://elevizion.nl/opengraph.jpg" />
 
-    <link rel="icon" type="image/png" href="/favicon.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Preconnect for fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet" />
+    
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Organization",
+      "name": "Elevizion",
+      "url": "https://elevizion.nl",
+      "logo": "https://elevizion.nl/elevizion-logo.png",
+      "description": "Lokale schermreclame op digitale schermen bij drukbezochte locaties in Nederland.",
+      "email": "info@elevizion.nl",
+      "address": {
+        "@type": "PostalAddress",
+        "addressCountry": "NL"
+      },
+      "areaServed": {
+        "@type": "Country",
+        "name": "Netherlands"
+      }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebSite",
+      "name": "Elevizion",
+      "url": "https://elevizion.nl"
+    }
+    </script>
   </head>
   <body>
     <div id="root"></div>

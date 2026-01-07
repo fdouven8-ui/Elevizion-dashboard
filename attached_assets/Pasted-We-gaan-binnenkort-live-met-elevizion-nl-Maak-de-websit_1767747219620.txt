@@ -1,0 +1,145 @@
+We gaan binnenkort live met elevizion.nl. Maak de website technisch en inhoudelijk klaar voor Google Search / SEO en zorg dat de site publiek toegankelijk is (geen auth wall, geen robots-blocks). Werk netjes, zonder grote redesign.
+
+1) Publiek toegankelijk + geen blokkades
+
+Controleer dat de landingpage en alle publieke pagina’s zonder login te openen zijn.
+
+Verwijder/voorkom per ongeluk blokkeren via:
+
+X-Robots-Tag: noindex
+
+<meta name="robots" content="noindex,nofollow">
+
+robots.txt die disallowt
+
+Basic auth / middleware die alles afschermt
+
+Zorg dat alleen echte privé routes (dashboard) achter login zitten, maar / en publieke pagina’s niet.
+
+2) Robots.txt + sitemap.xml
+
+Voeg https://elevizion.nl/robots.txt toe met:
+
+User-agent: *
+
+Allow: /
+
+Sitemap: https://elevizion.nl/sitemap.xml
+
+Disallow alleen dashboard/privé paden (bijv. /dashboard, /onboarding, /api/* indien nodig)
+
+Genereer https://elevizion.nl/sitemap.xml
+
+Automatisch voor alle publieke routes (home, pricing, contact, about, etc.)
+
+Correcte canonical URLs met https + domain
+
+3) SEO basis per pagina (title, description, og tags)
+
+Voor elke publieke pagina:
+
+Unieke <title> (max ~60 chars) met merknaam “Elevizion”
+
+<meta name="description"> (max ~155 chars)
+
+Canonical tag: <link rel="canonical" href="...">
+
+Open Graph tags:
+
+og:title, og:description, og:url, og:type, og:image
+
+Twitter card tags
+
+Voeg een nette OG image toe (bv. 1200x630) vanuit bestaande brand assets of maak een simpele (logo + tagline).
+
+4) Favicon + logo/icoon voor Google (Search/SERP)
+
+Zorg voor volledige favicon set en juiste links in <head>:
+
+favicon.ico
+
+apple-touch-icon (180x180)
+
+icon PNG 32x32 en 16x16
+
+site.webmanifest
+
+Gebruik het Elevizion logo als basis (liefst vierkant voor favicon).
+
+Zorg dat deze assets publiek bereikbaar zijn (bijv. /public).
+
+5) Structured data (JSON-LD)
+
+Voeg JSON-LD schema toe op de homepage:
+
+Organization of LocalBusiness (kies meest passend)
+
+name: Elevizion
+
+url: https://elevizion.nl
+
+logo: https://elevizion.nl/
+<path-to-logo>
+
+sameAs (alleen invullen als we echte socials hebben)
+
+Voeg ook WebSite schema toe met potentialAction (SearchAction) als we interne search hebben; anders alleen WebSite.
+
+6) Performance / Core Web Vitals quick wins
+
+Zorg dat afbeeldingen geoptimaliseerd zijn (webp waar kan), lazy-loading waar passend
+
+Vermijd onnodige grote JS bundles op landingpage
+
+Zorg dat fonts netjes laden (preload indien nodig)
+
+Check dat pages snel laden op mobiel
+
+7) Content SEO (minimaal, geen fluff)
+
+Voeg op homepage duidelijke H1 met kern: digitale schermen / lokale advertenties / Elevizion netwerk
+
+Gebruik correcte H-structuur (H1 -> H2 -> H3)
+
+Voeg footer met bedrijfsnaam + contact email (info@elevizion.nl
+) en (optioneel) plaats/regio
+
+Zorg voor interne links (home -> contact/pricing)
+
+8) Google Search Console & verificatie klaarzetten
+
+Maak endpoint/route mogelijk om een verificatie bestand te hosten:
+
+support google-site-verification HTML file in root (bijv. /googlexxxx.html)
+
+OF voeg mogelijkheid om verification meta tag in <head> te zetten via env/config.
+
+9) Deploy checks
+
+Zorg dat de site via HTTPS draait en geen mixed content heeft
+
+Redirect http -> https
+
+Redirect non-www -> www of andersom (kies 1 canonical)
+
+404 pagina netjes
+
+Geen console errors in production
+
+Output die ik wil van jou (Replit)
+
+Welke files je hebt aangepast
+
+Welke publieke routes in sitemap zitten
+
+De uiteindelijke URLs van:
+
+/robots.txt
+
+/sitemap.xml
+
+favicon/icon paths
+
+og:image path
+
+Voer dit nu door.

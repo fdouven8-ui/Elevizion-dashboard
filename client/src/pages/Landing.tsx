@@ -559,14 +559,39 @@ export default function Landing() {
         </div>
       </section>
 
-      <footer className="py-8 bg-slate-950 text-slate-600">
-        <div className="container mx-auto px-4 text-center">
-          <div className="flex flex-col sm:flex-row justify-center items-center gap-4">
-            <span className="text-sm">&copy; {new Date().getFullYear()} Elevizion</span>
-            <span className="hidden sm:inline text-slate-800">•</span>
-            <a href="mailto:info@elevizion.nl" className="text-sm hover:text-white transition-colors">
-              info@elevizion.nl
-            </a>
+      <footer className="py-12 bg-slate-950 text-slate-500">
+        <div className="container mx-auto px-4">
+          <div className="max-w-4xl mx-auto">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
+              <div>
+                <h3 className="font-semibold text-white mb-3">Elevizion</h3>
+                <p className="text-sm leading-relaxed">
+                  Lokale schermreclame op digitale schermen bij drukbezochte locaties in Nederland.
+                </p>
+              </div>
+              <div>
+                <h3 className="font-semibold text-white mb-3">Snel naar</h3>
+                <ul className="space-y-2 text-sm">
+                  <li><a href="#adverteren" className="hover:text-white transition-colors">Adverteren</a></li>
+                  <li><a href="#scherm-aanbieden" className="hover:text-white transition-colors">Scherm aanbieden</a></li>
+                  <li><a href="#contact" className="hover:text-white transition-colors">Contact</a></li>
+                </ul>
+              </div>
+              <div>
+                <h3 className="font-semibold text-white mb-3">Contact</h3>
+                <ul className="space-y-2 text-sm">
+                  <li>
+                    <a href="mailto:info@elevizion.nl" className="hover:text-white transition-colors">
+                      info@elevizion.nl
+                    </a>
+                  </li>
+                  <li className="text-slate-600">Nederland</li>
+                </ul>
+              </div>
+            </div>
+            <div className="border-t border-slate-800 pt-6 text-center text-sm">
+              <p>&copy; {new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
+            </div>
           </div>
         </div>
       </footer>
