@@ -26,7 +26,7 @@ import {
   ExternalLink
 } from "lucide-react";
 
-type WizardType = "screen" | "advertiser" | "ad" | null;
+type WizardType = "screen" | "advertiser" | "ad" | "location" | null;
 
 interface Location {
   id: string;
@@ -1005,6 +1005,209 @@ function NewAdWizard({ onBack }: { onBack: () => void }) {
   );
 }
 
+function NewLocationOnboardingWizard({ onBack }: { onBack: () => void }) {
+  const { toast } = useToast();
+  const [formData, setFormData] = useState({
+    name: "",
+    email: "",
+    street: "",
+    houseNumber: "",
+    zipcode: "",
+    city: "",
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [portalLink, setPortalLink] = useState<{ url: string; expiresAt: string; locationCode: string } | null>(null);
+
+  const onQuickSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    
+    try {
+      const res = await apiRequest("POST", "/api/locations/quick-create", formData);
+      const data = await res.json();
+      
+      if (res.ok) {
+        setPortalLink({
+          url: data.portalUrl,
+          expiresAt: data.expiresAt,
+          locationCode: data.location.locationCode,
+        });
+        toast({
+          title: "Locatie aangemaakt!",
+          description: `${data.location.locationCode} is aangemaakt. Stuur de link naar de klant.`,
+        });
+      } else {
+        throw new Error(data.message || "Er is iets misgegaan");
+      }
+    } catch (error: any) {
+      toast({
+        title: "Fout",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const copyPortalLink = () => {
+    if (portalLink) {
+      navigator.clipboard.writeText(portalLink.url);
+      toast({ title: "Link gekopieerd!" });
+    }
+  };
+
+  return (
+    <div className="max-w-xl mx-auto">
+      <div className="mb-6">
+        <Button variant="ghost" onClick={onBack}>
+          <ArrowLeft className="mr-2 h-4 w-4" /> Terug
+        </Button>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MapPin className="h-5 w-5" />
+            Nieuwe Schermlocatie
+          </CardTitle>
+          <CardDescription>
+            Snelle aanmaak met portal-link voor klant self-service
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {portalLink ? (
+            <div className="space-y-4">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4 text-center">
+                <CheckCircle className="h-12 w-12 text-emerald-600 mx-auto mb-2" />
+                <h3 className="font-semibold text-lg text-emerald-800">Locatie Aangemaakt!</h3>
+                <p className="text-emerald-700 font-mono text-lg mt-1">{portalLink.locationCode}</p>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Portal Link (stuur naar klant)</Label>
+                <div className="flex gap-2">
+                  <Input 
+                    value={portalLink.url} 
+                    readOnly 
+                    className="font-mono text-xs"
+                    data-testid="input-portal-link"
+                  />
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    size="icon"
+                    onClick={copyPortalLink}
+                    data-testid="button-copy-link"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Geldig tot {new Date(portalLink.expiresAt).toLocaleDateString("nl-NL")}
+                </p>
+              </div>
+
+              <div className="flex gap-2 pt-4">
+                <Button variant="outline" onClick={onBack}>
+                  Terug naar Onboarding
+                </Button>
+                <Button onClick={() => window.open(portalLink.url, '_blank')}>
+                  <ExternalLink className="mr-2 h-4 w-4" /> Link Openen
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={onQuickSubmit} className="space-y-4">
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm text-emerald-800">
+                <p className="font-medium">Snelle aanmaak met invul-link</p>
+                <p className="mt-1 text-emerald-700">
+                  Vul minimale gegevens in. De klant ontvangt een link om locatiedetails zelf aan te vullen.
+                </p>
+              </div>
+              
+              <div className="space-y-2">
+                <Label>Locatienaam *</Label>
+                <Input 
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="Sportschool FitLife"
+                  required
+                  data-testid="input-location-name"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>E-mail (voor portal link) *</Label>
+                <Input 
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="info@fitlife.nl"
+                  required
+                  data-testid="input-location-email"
+                />
+              </div>
+
+              <div className="border-t pt-4 mt-4">
+                <p className="text-sm text-muted-foreground mb-3">Optioneel: bekende adresgegevens</p>
+                <div className="grid grid-cols-4 gap-2">
+                  <div className="col-span-3">
+                    <Label>Straat</Label>
+                    <Input 
+                      value={formData.street}
+                      onChange={(e) => setFormData({ ...formData, street: e.target.value })}
+                      placeholder="Hoofdstraat"
+                      data-testid="input-street"
+                    />
+                  </div>
+                  <div>
+                    <Label>Nr.</Label>
+                    <Input 
+                      value={formData.houseNumber}
+                      onChange={(e) => setFormData({ ...formData, houseNumber: e.target.value })}
+                      placeholder="123"
+                      data-testid="input-house-number"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-2">
+                  <div>
+                    <Label>Postcode</Label>
+                    <Input 
+                      value={formData.zipcode}
+                      onChange={(e) => setFormData({ ...formData, zipcode: e.target.value })}
+                      placeholder="1234 AB"
+                      data-testid="input-zipcode"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <Label>Plaats</Label>
+                    <Input 
+                      value={formData.city}
+                      onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                      placeholder="Amsterdam"
+                      data-testid="input-city"
+                    />
+                  </div>
+                </div>
+              </div>
+              
+              <Button 
+                type="submit" 
+                className="w-full bg-emerald-600 hover:bg-emerald-700" 
+                disabled={isSubmitting || !formData.name || !formData.email}
+                data-testid="button-submit-location"
+              >
+                {isSubmitting ? "Aanmaken..." : "Locatie Aanmaken + Link Genereren"}
+              </Button>
+            </form>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 export default function Onboarding() {
   const [activeWizard, setActiveWizard] = useState<WizardType>(null);
 
@@ -1020,6 +1223,10 @@ export default function Onboarding() {
     return <NewAdWizard onBack={() => setActiveWizard(null)} />;
   }
 
+  if (activeWizard === "location") {
+    return <NewLocationOnboardingWizard onBack={() => setActiveWizard(null)} />;
+  }
+
   return (
     <div className="space-y-6">
       <div>
@@ -1027,7 +1234,14 @@ export default function Onboarding() {
         <p className="text-muted-foreground">Snel nieuwe items toevoegen met guided wizards</p>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-3">
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+        <WizardCard
+          title="Nieuwe Locatie"
+          description="Start onboarding voor nieuwe schermlocatie met portal-link"
+          icon={MapPin}
+          onClick={() => setActiveWizard("location")}
+          color="emerald"
+        />
         <WizardCard
           title="Nieuw Scherm"
           description="Voeg een nieuw scherm toe met EVZ-ID en koppel aan Yodeck"

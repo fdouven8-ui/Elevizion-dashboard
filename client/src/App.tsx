@@ -24,6 +24,7 @@ import Entities from "@/pages/Entities";
 import SyncLogs from "@/pages/SyncLogs";
 import EmailCenter from "@/pages/EmailCenter";
 import AdvertiserPortal from "@/pages/AdvertiserPortal";
+import LocationPortal from "@/pages/LocationPortal";
 import DataHealthPage from "@/pages/DataHealthPage";
 import NotFound from "@/pages/not-found";
 
@@ -62,6 +63,7 @@ function Router() {
       <Route path="/" component={Landing} />
       <Route path="/login" component={Login} />
       <Route path="/portal/:token" component={AdvertiserPortal} />
+      <Route path="/locatie-portal/:token" component={LocationPortal} />
       <Route component={DashboardRouter} />
     </Switch>
   );
