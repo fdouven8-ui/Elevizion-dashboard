@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -8,10 +8,11 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { 
-  Monitor, MapPin, Megaphone, Mail, ArrowLeft,
+  Monitor, MapPin, Megaphone, ArrowLeft,
   Scissors, Dumbbell, Coffee, Check, Building2
 } from "lucide-react";
 import { Link } from "wouter";
+import { AdvertiserLeadModal, ScreenLeadModal } from "@/components/LeadModals";
 
 interface CityData {
   name: string;
@@ -61,6 +62,8 @@ const cityData: Record<string, CityData> = {
 
 export default function LocalLanding({ city }: { city: string }) {
   const data = cityData[city] || cityData.limburg;
+  const [advertiserModalOpen, setAdvertiserModalOpen] = useState(false);
+  const [screenModalOpen, setScreenModalOpen] = useState(false);
   
   useEffect(() => {
     document.title = `Digital Signage in ${data.name} | Schermreclame | Elevizion`;
@@ -105,12 +108,14 @@ export default function LocalLanding({ city }: { city: string }) {
               {data.description}
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <a href={`mailto:info@elevizion.nl?subject=Adverteren%20in%20${encodeURIComponent(data.name)}`}>
-                <Button size="lg" className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto font-semibold py-6 px-8 shadow-xl">
-                  <Megaphone className="h-5 w-5" />
-                  Ik wil adverteren in {data.name}
-                </Button>
-              </a>
+              <Button 
+                size="lg" 
+                className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto font-semibold py-6 px-8 shadow-xl"
+                onClick={() => setAdvertiserModalOpen(true)}
+              >
+                <Megaphone className="h-5 w-5" />
+                Ik wil adverteren in {data.name}
+              </Button>
             </div>
           </div>
         </div>
@@ -260,12 +265,14 @@ export default function LocalLanding({ city }: { city: string }) {
             <p className="text-slate-300 mb-8">
               Vraag vrijblijvend informatie aan en ontdek welke schermlocaties beschikbaar zijn in {data.name}.
             </p>
-            <a href={`mailto:info@elevizion.nl?subject=Informatie%20aanvragen%20-%20${encodeURIComponent(data.name)}`}>
-              <Button size="lg" className="gap-2 bg-emerald-500 hover:bg-emerald-600 font-semibold py-6 px-8">
-                <Mail className="h-5 w-5" />
-                Neem contact op
-              </Button>
-            </a>
+            <Button 
+              size="lg" 
+              className="gap-2 bg-emerald-500 hover:bg-emerald-600 font-semibold py-6 px-8"
+              onClick={() => setAdvertiserModalOpen(true)}
+            >
+              <Megaphone className="h-5 w-5" />
+              Neem contact op
+            </Button>
           </div>
         </div>
       </section>
@@ -297,6 +304,9 @@ export default function LocalLanding({ city }: { city: string }) {
           </Link>
         </div>
       </footer>
+
+      <AdvertiserLeadModal open={advertiserModalOpen} onOpenChange={setAdvertiserModalOpen} />
+      <ScreenLeadModal open={screenModalOpen} onOpenChange={setScreenModalOpen} />
     </div>
   );
 }

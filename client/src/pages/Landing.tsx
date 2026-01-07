@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -12,8 +13,12 @@ import {
   Scissors, Dumbbell, Coffee, Check
 } from "lucide-react";
 import { Link } from "wouter";
+import { AdvertiserLeadModal, ScreenLeadModal } from "@/components/LeadModals";
 
 export default function Landing() {
+  const [advertiserModalOpen, setAdvertiserModalOpen] = useState(false);
+  const [screenModalOpen, setScreenModalOpen] = useState(false);
+
   const scrollToSection = (id: string) => {
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -86,17 +91,20 @@ export default function Landing() {
               Adverteer op digitale reclame schermen bij kappers, sportscholen en horeca in Limburg. Lokale zichtbaarheid voor jouw bedrijf.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center mb-5">
-              <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
-                <Button size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-8 py-6 w-full sm:w-auto text-base font-medium shadow-lg shadow-emerald-900/20 transition-colors" data-testid="button-cta-adverteren">
-                  <Megaphone className="h-5 w-5" />
-                  Ik wil adverteren
-                </Button>
-              </a>
+              <Button 
+                size="lg" 
+                className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-8 py-6 w-full sm:w-auto text-base font-medium shadow-lg shadow-emerald-900/20 transition-colors" 
+                data-testid="button-cta-adverteren"
+                onClick={() => setAdvertiserModalOpen(true)}
+              >
+                <Megaphone className="h-5 w-5" />
+                Ik wil adverteren
+              </Button>
               <Button 
                 size="lg" 
                 variant="outline" 
                 className="gap-2 border border-white/30 hover:bg-white/10 px-8 py-6 text-white text-base transition-colors"
-                onClick={() => scrollToSection('scherm-aanbieden')}
+                onClick={() => setScreenModalOpen(true)}
                 data-testid="button-cta-partner"
               >
                 <MapPin className="h-5 w-5" />
@@ -162,12 +170,13 @@ export default function Landing() {
                     <span>Zichtbaar waar je doelgroep komt</span>
                   </li>
                 </ul>
-                <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
-                  <Button className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 mt-4 transition-colors font-semibold shadow-lg">
-                    <Megaphone className="h-4 w-4" />
-                    Ik wil adverteren
-                  </Button>
-                </a>
+                <Button 
+                  className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 mt-4 transition-colors font-semibold shadow-lg"
+                  onClick={() => setAdvertiserModalOpen(true)}
+                >
+                  <Megaphone className="h-4 w-4" />
+                  Ik wil adverteren
+                </Button>
               </CardContent>
             </Card>
             
@@ -202,12 +211,14 @@ export default function Landing() {
                     <span>Wij regelen content en onderhoud</span>
                   </li>
                 </ul>
-                <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20een%20scherm%20op%20mijn%20locatie">
-                  <Button variant="outline" className="w-full gap-2 border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white mt-4 transition-colors font-semibold">
-                    <MapPin className="h-4 w-4" />
-                    Ik wil een scherm op mijn locatie
-                  </Button>
-                </a>
+                <Button 
+                  variant="outline" 
+                  className="w-full gap-2 border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white mt-4 transition-colors font-semibold"
+                  onClick={() => setScreenModalOpen(true)}
+                >
+                  <MapPin className="h-4 w-4" />
+                  Ik wil een scherm op mijn locatie
+                </Button>
               </CardContent>
             </Card>
           </div>
@@ -224,12 +235,14 @@ export default function Landing() {
             <p className="text-white/80 mb-8 leading-relaxed text-lg">
               Je boodschap komt in beeld waar mensen wachten, kijken en besluiten.
             </p>
-            <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
-              <Button size="lg" className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20">
-                <Megaphone className="h-5 w-5" />
-                Ik wil adverteren
-              </Button>
-            </a>
+            <Button 
+              size="lg" 
+              className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20"
+              onClick={() => setAdvertiserModalOpen(true)}
+            >
+              <Megaphone className="h-5 w-5" />
+              Ik wil adverteren
+            </Button>
           </div>
         </div>
       </section>
@@ -311,9 +324,13 @@ export default function Landing() {
                     <span>Basis rapportage</span>
                   </li>
                 </ul>
-                <a href="mailto:info@elevizion.nl?subject=Interesse%20in%20Starter%20pakket">
-                  <Button variant="outline" className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors font-semibold">Meer info</Button>
-                </a>
+                <Button 
+                  variant="outline" 
+                  className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors font-semibold"
+                  onClick={() => setAdvertiserModalOpen(true)}
+                >
+                  Meer info
+                </Button>
               </CardContent>
             </Card>
 
@@ -355,9 +372,12 @@ export default function Landing() {
                     <span className="font-medium">Ontwerp inbegrepen</span>
                   </li>
                 </ul>
-                <a href="mailto:info@elevizion.nl?subject=Interesse%20in%20Local%20Plus%20pakket">
-                  <Button className="w-full bg-emerald-600 hover:bg-emerald-700 transition-colors font-semibold text-base py-5 shadow-lg">Meer info</Button>
-                </a>
+                <Button 
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 transition-colors font-semibold text-base py-5 shadow-lg"
+                  onClick={() => setAdvertiserModalOpen(true)}
+                >
+                  Meer info
+                </Button>
               </CardContent>
             </Card>
 
@@ -396,9 +416,13 @@ export default function Landing() {
                     <span>Uitgebreide rapportage</span>
                   </li>
                 </ul>
-                <a href="mailto:info@elevizion.nl?subject=Interesse%20in%20Premium%20pakket">
-                  <Button variant="outline" className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors font-semibold">Meer info</Button>
-                </a>
+                <Button 
+                  variant="outline" 
+                  className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors font-semibold"
+                  onClick={() => setAdvertiserModalOpen(true)}
+                >
+                  Meer info
+                </Button>
               </CardContent>
             </Card>
           </div>
@@ -406,12 +430,14 @@ export default function Landing() {
             Prijs afhankelijk van locatie en looptijd.
           </p>
           <div className="text-center mt-3">
-            <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
-              <Button variant="link" className="text-emerald-600 gap-1 transition-colors">
-                Start met adverteren
-                <ArrowRight className="h-4 w-4" />
-              </Button>
-            </a>
+            <Button 
+              variant="link" 
+              className="text-emerald-600 gap-1 transition-colors"
+              onClick={() => setAdvertiserModalOpen(true)}
+            >
+              Start met adverteren
+              <ArrowRight className="h-4 w-4" />
+            </Button>
           </div>
         </div>
       </section>
@@ -549,18 +575,23 @@ export default function Landing() {
               Wij regelen de schermen, planning en content. Jij wordt gezien.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
-                <Button size="lg" className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8 shadow-xl">
-                  <Megaphone className="h-5 w-5" />
-                  Ik wil adverteren
-                </Button>
-              </a>
-              <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20een%20scherm%20op%20mijn%20locatie">
-                <Button size="lg" variant="outline" className="gap-2 border-2 border-white/40 hover:bg-white/20 text-white w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8">
-                  <MapPin className="h-5 w-5" />
-                  Ik wil een scherm op mijn locatie
-                </Button>
-              </a>
+              <Button 
+                size="lg" 
+                className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8 shadow-xl"
+                onClick={() => setAdvertiserModalOpen(true)}
+              >
+                <Megaphone className="h-5 w-5" />
+                Ik wil adverteren
+              </Button>
+              <Button 
+                size="lg" 
+                variant="outline" 
+                className="gap-2 border-2 border-white/40 hover:bg-white/20 text-white w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8"
+                onClick={() => setScreenModalOpen(true)}
+              >
+                <MapPin className="h-5 w-5" />
+                Ik wil een scherm op mijn locatie
+              </Button>
             </div>
           </div>
         </div>
@@ -576,12 +607,14 @@ export default function Landing() {
             <p className="text-slate-400 mb-8 text-lg">
               Mail ons en we reageren snel.
             </p>
-            <a href="mailto:info@elevizion.nl">
-              <Button size="lg" className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20">
-                <Mail className="h-5 w-5" />
-                info@elevizion.nl
-              </Button>
-            </a>
+            <Button 
+              size="lg" 
+              className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20"
+              onClick={() => setAdvertiserModalOpen(true)}
+            >
+              <Megaphone className="h-5 w-5" />
+              Neem contact op
+            </Button>
           </div>
         </div>
       </section>
@@ -619,9 +652,12 @@ export default function Landing() {
                 <h3 className="font-semibold text-white mb-3">Contact</h3>
                 <ul className="space-y-2 text-sm">
                   <li>
-                    <a href="mailto:info@elevizion.nl" className="hover:text-white transition-colors">
-                      info@elevizion.nl
-                    </a>
+                    <button 
+                      onClick={() => setAdvertiserModalOpen(true)}
+                      className="hover:text-white transition-colors text-left"
+                    >
+                      Contact opnemen
+                    </button>
                   </li>
                   <li className="text-slate-600">Limburg, Nederland</li>
                 </ul>
@@ -633,6 +669,9 @@ export default function Landing() {
           </div>
         </div>
       </footer>
+
+      <AdvertiserLeadModal open={advertiserModalOpen} onOpenChange={setAdvertiserModalOpen} />
+      <ScreenLeadModal open={screenModalOpen} onOpenChange={setScreenModalOpen} />
     </div>
   );
 }

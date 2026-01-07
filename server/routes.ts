@@ -7,6 +7,7 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { z } from "zod";
 import crypto from "crypto";
+import { sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import {
