@@ -1,0 +1,79 @@
+Pas de onboarding aan in het Elevizion Dashboard met deze eisen, zonder grote refactor en met behoud van huidige UI-stijl.
+
+1) Verwijder “Nieuw Scherm” uit Onboarding
+
+Op /onboarding moet de kaart/tegel “Nieuw Scherm” verdwijnen.
+
+De flow “scherm koppelen aan Yodeck” komt later als actie vanuit een locatie-detail (“Koppelen Yodeck/PI”), niet als onboarding tegel.
+
+2) Maak “Nieuwe Locatie” ultra-minimaal (alleen 2 velden)
+
+In de wizard/flow Nieuwe Locatie moet stap 1 alleen dit vragen:
+
+Bedrijfsnaam (verplicht)
+
+E-mail contactpersoon (verplicht)
+
+Verder niets verplicht maken vóór het versturen van de mail.
+
+3) Na opslaan: direct portal-link genereren + mailknop
+
+Na “Opslaan/Aanmaken”:
+
+Maak locatie record aan met status PENDING_DETAILS
+
+Genereer een secure token + portal URL: https://elevizion.nl/portal/locatie/<token>
+
+Toon 2 buttons:
+
+Kopieer link
+
+Verstuur e-mail
+
+Belangrijk: er mag geen e-mail automatisch verstuurd worden bij aanmaken. Alleen bij klik op Verstuur e-mail.
+
+4) Portal formulier: klant vult alle overige gegevens in
+
+Maak/gebruik publieke pagina op basis van token (geen login) waar de klant invult:
+
+Adres (straat, nr, postcode, plaats)
+
+Telefoon
+
+Contactnaam
+
+Gemiddeld bezoekers per week (verplicht nummer)
+
+Eventuele extra velden die we al wilden, maar ALLEEN hier (niet in stap 1)
+
+Na submit:
+
+Update locatie record volledig
+
+Status naar DETAILS_COMPLETED / READY_FOR_INSTALL
+
+Token ongeldig maken of markeren als gebruikt
+
+Stuur interne mail naar info@elevizion.nl met “Locatie gegevens compleet” + link naar locatie in dashboard
+
+5) Yodeck/PI koppeling later
+
+In locatie-detail (intern) een sectie “Installatie/Koppeling”:
+
+PI_INSTALLED (toggle/actie)
+
+YODECK_LINKED (koppel device)
+
+Als details compleet + yodeck linked → status ACTIVE
+
+Acceptatiecriteria
+
+Nieuwe Locatie kan ik aanmaken met alleen bedrijfsnaam + email.
+
+Daarna kan ik direct mailen met portal-link.
+
+Klant vult rest in via portal incl. bezoekers/week.
+
+“Nieuw Scherm” bestaat niet meer als onboarding tegel.
+
+Later kan ik yodeck/PI koppelen vanuit locatie zonder dat data stuk gaat.
