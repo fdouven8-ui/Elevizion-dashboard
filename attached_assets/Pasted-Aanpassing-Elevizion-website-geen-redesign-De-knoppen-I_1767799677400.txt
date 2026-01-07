@@ -1,0 +1,48 @@
+Aanpassing Elevizion website (geen redesign):
+De knoppen "Ik wil adverteren" en "Ik wil een scherm" mogen NIET meer mailto openen.
+Ik wil dat ze naar een mini-submenu/flow gaan (modal of dedicated pagina) waar de bezoeker met een paar klikken minimale gegevens invult en daarna een lead verstuurt.
+
+Maak 2 flows:
+
+FLOW A: "Ik wil adverteren"
+- UI: modal of /adverteren/start (kies wat het best past in huidige code)
+- Velden (minimaal):
+  1) Doel (dropdown): Meer klanten / Naamsbekendheid / Actie promoten
+  2) Regio/plaats (dropdown met Limburg plaatsen + "Anders")
+  3) Bedrijfsnaam (required)
+  4) Naam (required)
+  5) Contact (required: telefoon of e-mail, minstens 1 verplicht)
+  6) Budget indicatie (dropdown): €50 / €100 / €250 / €500+ per maand
+  7) Opmerking (optional)
+- CTA: "Verstuur aanvraag"
+
+FLOW B: "Ik wil een scherm"
+- UI: modal of /scherm/start
+- Velden (minimaal):
+  1) Type zaak (dropdown): Kapper/Barbershop, Gym, Horeca, Retail, Overig
+  2) Plaats (required)
+  3) Bedrijfsnaam (required)
+  4) Contactpersoon (required)
+  5) Telefoon (required)
+  6) E-mail (optional)
+  7) Gem. bezoekers per week (dropdown): 0–250 / 250–500 / 500–1000 / 1000+
+  8) Opmerking (optional)
+- CTA: "Vraag scherm aan"
+
+Verzenden / opslag:
+- Voeg 2 API endpoints toe:
+  POST /api/leads/advertiser
+  POST /api/leads/screen-location
+- Validatie server-side + client-side, spam-basis (honeypot veld + simpele rate limit).
+- Bij succes: toon success-state ("Bedankt! We nemen snel contact op.") + reset form.
+- Stuur automatisch een email naar info@elevizion.nl met onderwerp:
+  [Lead Adverteren] {bedrijfsnaam} - {plaats}
+  [Lead Schermlocatie] {bedrijfsnaam} - {plaats}
+  In de email body alle ingevulde velden netjes in lijstvorm.
+- Stuur optioneel ook een bevestigingsmail naar de gebruiker als email is ingevuld (korte nette template).
+
+Belangrijk:
+- Houd alle bestaande styling, kleuren en layout.
+- Geen grote refactor.
+- Hergebruik bestaande button components en styles.
+- Zorg dat de knop op de homepage nu linkt naar de juiste flow.

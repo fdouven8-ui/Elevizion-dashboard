@@ -1818,3 +1818,61 @@ export type InsertVerificationCode = z.infer<typeof insertVerificationCodeSchema
 
 export type OnboardingInviteToken = typeof onboardingInviteTokens.$inferSelect;
 export type InsertOnboardingInviteToken = z.infer<typeof insertOnboardingInviteTokenSchema>;
+
+// ============================================================================
+// WEBSITE LEADS
+// ============================================================================
+
+/**
+ * AdvertiserLeads - Leads from "Ik wil adverteren" form on website
+ */
+export const advertiserLeads = pgTable("advertiser_leads", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  goal: text("goal").notNull(), // Meer klanten / Naamsbekendheid / Actie promoten
+  region: text("region").notNull(), // Limburg plaatsen
+  companyName: text("company_name").notNull(),
+  contactName: text("contact_name").notNull(),
+  phone: text("phone"),
+  email: text("email"),
+  budgetIndication: text("budget_indication"), // €50 / €100 / €250 / €500+ per maand
+  remarks: text("remarks"),
+  status: text("status").notNull().default("new"), // new, contacted, converted, declined
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * ScreenLeads - Leads from "Ik wil een scherm" form on website
+ */
+export const screenLeads = pgTable("screen_leads", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  businessType: text("business_type").notNull(), // Kapper, Gym, Horeca, Retail, Overig
+  city: text("city").notNull(),
+  companyName: text("company_name").notNull(),
+  contactName: text("contact_name").notNull(),
+  phone: text("phone").notNull(),
+  email: text("email"),
+  visitorsPerWeek: text("visitors_per_week"), // 0-250 / 250-500 / 500-1000 / 1000+
+  remarks: text("remarks"),
+  status: text("status").notNull().default("new"), // new, contacted, converted, declined
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Lead Schemas
+export const insertAdvertiserLeadSchema = createInsertSchema(advertiserLeads).omit({
+  id: true,
+  status: true,
+  createdAt: true,
+});
+
+export const insertScreenLeadSchema = createInsertSchema(screenLeads).omit({
+  id: true,
+  status: true,
+  createdAt: true,
+});
+
+// Lead Types
+export type AdvertiserLead = typeof advertiserLeads.$inferSelect;
+export type InsertAdvertiserLead = z.infer<typeof insertAdvertiserLeadSchema>;
+
+export type ScreenLead = typeof screenLeads.$inferSelect;
+export type InsertScreenLead = z.infer<typeof insertScreenLeadSchema>;
