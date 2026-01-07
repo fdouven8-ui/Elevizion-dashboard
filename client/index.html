@@ -3,8 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
-    <title>Elevizion - Lokale Schermreclame op Digitale Schermen</title>
-    <meta name="description" content="Bereik jouw lokale doelgroep met digitale schermreclame op drukbezochte locaties. Elevizion verzorgt adverteren op schermen bij sportscholen, kappers en cafés in Nederland." />
+    <title>Digital Signage & Narrowcasting in Limburg | Elevizion</title>
+    <meta name="description" content="Adverteer op digitale reclame schermen in Limburg. Elevizion plaatst schermen bij kappers, sportscholen en horeca. Lokale zichtbaarheid voor jouw bedrijf." />
+    <meta name="keywords" content="digital signage, narrowcasting, digitale reclame schermen, schermreclame, lokale advertenties, adverteren Limburg" />
     
     <!-- Canonical URL -->
     <link rel="canonical" href="https://elevizion.nl/" />
@@ -31,8 +32,8 @@
     <meta name="format-detection" content="telephone=no" />
 
     <!-- Open Graph -->
-    <meta property="og:title" content="Elevizion - Lokale Schermreclame op Digitale Schermen" />
-    <meta property="og:description" content="Bereik jouw lokale doelgroep met digitale schermreclame op drukbezochte locaties. Adverteren bij sportscholen, kappers en cafés." />
+    <meta property="og:title" content="Digital Signage & Narrowcasting in Limburg | Elevizion" />
+    <meta property="og:description" content="Adverteer op digitale reclame schermen in Limburg. Lokale zichtbaarheid bij kappers, sportscholen en horeca." />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://elevizion.nl/" />
     <meta property="og:image" content="https://elevizion.nl/opengraph.jpg" />
@@ -43,8 +44,8 @@
     
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Elevizion - Lokale Schermreclame op Digitale Schermen" />
-    <meta name="twitter:description" content="Bereik jouw lokale doelgroep met digitale schermreclame op drukbezochte locaties." />
+    <meta name="twitter:title" content="Digital Signage & Narrowcasting in Limburg | Elevizion" />
+    <meta name="twitter:description" content="Adverteer op digitale reclame schermen in Limburg. Lokale zichtbaarheid voor jouw bedrijf." />
     <meta name="twitter:image" content="https://elevizion.nl/opengraph.jpg" />
 
     <!-- Preconnect for fonts -->
@@ -56,19 +57,33 @@
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
-      "@type": "Organization",
+      "@type": "LocalBusiness",
+      "@id": "https://elevizion.nl/#organization",
       "name": "Elevizion",
       "url": "https://elevizion.nl",
       "logo": "https://elevizion.nl/elevizion-logo.png",
-      "description": "Lokale schermreclame op digitale schermen bij drukbezochte locaties in Nederland.",
+      "image": "https://elevizion.nl/opengraph.jpg",
+      "description": "Digital signage en narrowcasting specialist in Limburg. Wij plaatsen digitale reclame schermen bij kappers, sportscholen en horeca voor lokale adverteerders.",
       "email": "info@elevizion.nl",
       "address": {
         "@type": "PostalAddress",
+        "addressRegion": "Limburg",
         "addressCountry": "NL"
       },
-      "areaServed": {
-        "@type": "Country",
-        "name": "Netherlands"
+      "areaServed": [
+        {"@type": "State", "name": "Limburg"},
+        {"@type": "City", "name": "Sittard"},
+        {"@type": "City", "name": "Maastricht"},
+        {"@type": "City", "name": "Heerlen"},
+        {"@type": "City", "name": "Roermond"},
+        {"@type": "City", "name": "Venlo"}
+      ],
+      "priceRange": "$$",
+      "openingHoursSpecification": {
+        "@type": "OpeningHoursSpecification",
+        "dayOfWeek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+        "opens": "09:00",
+        "closes": "17:00"
       }
     }
     </script>
@@ -77,7 +92,12 @@
       "@context": "https://schema.org",
       "@type": "WebSite",
       "name": "Elevizion",
-      "url": "https://elevizion.nl"
+      "url": "https://elevizion.nl",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": "https://elevizion.nl/?q={search_term_string}",
+        "query-input": "required name=search_term_string"
+      }
     }
     </script>
   </head>

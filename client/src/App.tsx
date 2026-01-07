@@ -26,6 +26,7 @@ import EmailCenter from "@/pages/EmailCenter";
 import AdvertiserPortal from "@/pages/AdvertiserPortal";
 import LocationPortal from "@/pages/LocationPortal";
 import DataHealthPage from "@/pages/DataHealthPage";
+import LocalLanding from "@/pages/LocalLanding";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -64,6 +65,12 @@ function Router() {
       <Route path="/login" component={Login} />
       <Route path="/portal/:token" component={AdvertiserPortal} />
       <Route path="/locatie-portal/:token" component={LocationPortal} />
+      <Route path="/regio/limburg">{() => <LocalLanding city="limburg" />}</Route>
+      <Route path="/regio/sittard">{() => <LocalLanding city="sittard" />}</Route>
+      <Route path="/regio/maastricht">{() => <LocalLanding city="maastricht" />}</Route>
+      <Route path="/regio/heerlen">{() => <LocalLanding city="heerlen" />}</Route>
+      <Route path="/regio/roermond">{() => <LocalLanding city="roermond" />}</Route>
+      <Route path="/regio/venlo">{() => <LocalLanding city="venlo" />}</Route>
       <Route component={DashboardRouter} />
     </Switch>
   );

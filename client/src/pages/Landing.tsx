@@ -11,6 +11,7 @@ import {
   ArrowRight, Building2, Megaphone, Handshake, Play,
   Scissors, Dumbbell, Coffee, Check
 } from "lucide-react";
+import { Link } from "wouter";
 
 export default function Landing() {
   const scrollToSection = (id: string) => {
@@ -24,9 +25,10 @@ export default function Landing() {
           <div className="flex items-center gap-2">
             <img 
               src="/elevizion-logo.png" 
-              alt="Elevizion" 
+              alt="Elevizion - Digital Signage en Narrowcasting in Limburg" 
               className="h-9 w-auto"
               data-testid="logo"
+              loading="lazy"
               onError={(e) => {
                 e.currentTarget.style.display = 'none';
                 const textEl = e.currentTarget.nextElementSibling as HTMLElement;
@@ -78,10 +80,10 @@ export default function Landing() {
         <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-2xl mx-auto text-center">
             <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-6 leading-tight drop-shadow-lg" data-testid="hero-title">
-              Lokale schermreclame die écht opvalt.
+              Digital signage die écht opvalt
             </h1>
             <p className="text-base sm:text-lg md:text-xl text-white/80 mb-8 max-w-xl mx-auto leading-relaxed">
-              Digitale schermen op drukbezochte locaties. Zichtbaar bij jouw doelgroep, precies waar aandacht is.
+              Adverteer op digitale reclame schermen bij kappers, sportscholen en horeca in Limburg. Lokale zichtbaarheid voor jouw bedrijf.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center mb-5">
               <a href="mailto:info@elevizion.nl?subject=Ik%20wil%20adverteren">
@@ -454,58 +456,83 @@ export default function Landing() {
 
       <section className="py-20 md:py-28 bg-gradient-to-b from-slate-50 to-white">
         <div className="container mx-auto px-4">
-          <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-3">Veelgestelde vragen</h2>
+          <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-3">Veelgestelde vragen over digital signage</h2>
           <p className="text-center text-slate-600 mb-14 max-w-md mx-auto">
-            Antwoord op de meest gestelde vragen
+            Alles over narrowcasting en schermreclame
           </p>
           <div className="max-w-2xl mx-auto">
             <Accordion type="single" collapsible className="space-y-3">
               <AccordionItem value="item-1" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
                 <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
-                  In welke regio zijn jullie actief?
+                  Wat is narrowcasting en digital signage?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  Voornamelijk in de Randstad. Neem contact op om te kijken of we actief zijn in jouw regio.
+                  Narrowcasting is het tonen van gerichte content op digitale schermen voor een specifieke doelgroep. 
+                  In tegenstelling tot TV-reclame (broadcasting) bereik je met narrowcasting precies de mensen die relevant zijn voor jouw business - 
+                  bijvoorbeeld bezoekers van een kapsalon of sportschool in jouw regio.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-2" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
                 <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
-                  Hoe lang loopt een campagne?
+                  Wat kost adverteren op digitale reclame schermen?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  Minimaal één maand. Langere campagnes zijn mogelijk met korting.
+                  De kosten voor schermreclame variëren van €75 tot €150 per maand per scherm, afhankelijk van locatie en looptijd. 
+                  Bij langere campagnes krijg je korting. Ontwerp is vaak inbegrepen. Neem contact op voor een vrijblijvende offerte.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-3" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
                 <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
-                  Maken jullie de advertentie ook op?
+                  In welke regio's zijn jullie actief?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  Ja, wij ontwerpen je advertentie op basis van je logo, video en teksten. Bij sommige pakketten inbegrepen.
+                  We zijn actief in Limburg met schermen in Sittard-Geleen, Maastricht, Heerlen, Roermond en Venlo. 
+                  Onze schermen hangen bij kappers, sportscholen, horeca en winkels in deze regio's.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-4" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
                 <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
-                  Kan ik meerdere locaties kiezen?
+                  Hoe lang loopt een campagne?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  Zeker. Je kunt specifieke locaties kiezen of een regio selecteren.
+                  Minimaal één maand. Langere campagnes zijn mogelijk met korting. 
+                  Je advertentie draait de hele dag, met herhaling voor maximale herkenning.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-5" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
                 <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
-                  Wat als ik mijn content wil aanpassen?
+                  Maken jullie de advertentie ook op?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  Content aanpassen kan altijd. Stuur nieuw materiaal en wij zorgen dat het snel wordt bijgewerkt.
+                  Ja, wij ontwerpen je advertentie op basis van je logo, video en teksten. 
+                  Bij de meeste pakketten is ontwerp inbegrepen. Je hoeft dus geen designer in te huren.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-6" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
                 <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
-                  Hoe kan ik een schermlocatie aanbieden?
+                  Hoeveel mensen zien mijn advertentie?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  Mail naar info@elevizion.nl met je locatiegegevens. We nemen contact op.
+                  Bereik varieert per locatie. Een drukbezochte kapsalon heeft 50-100 bezoekers per week, 
+                  een sportschool tot 200+ per dag. Je advertentie wordt meerdere keren per uur getoond voor maximale zichtbaarheid.
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="item-7" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
+                <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
+                  Kan ik meerdere locaties kiezen?
+                </AccordionTrigger>
+                <AccordionContent className="text-slate-600 text-sm pb-5">
+                  Zeker. Je kunt specifieke schermlocaties kiezen of een hele regio selecteren. 
+                  Ideaal voor lokale ondernemers die meerdere wijken of steden willen bereiken.
+                </AccordionContent>
+              </AccordionItem>
+              <AccordionItem value="item-8" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
+                <AccordionTrigger className="text-left hover:no-underline text-base font-semibold text-slate-800 py-5">
+                  Hoe kan ik een scherm op mijn locatie krijgen?
+                </AccordionTrigger>
+                <AccordionContent className="text-slate-600 text-sm pb-5">
+                  Heb je een kapsalon, sportschool, café of winkel? Wij plaatsen het scherm kosteloos en regelen het onderhoud. 
+                  Jij krijgt een deel van de advertentieinkomsten. Mail naar info@elevizion.nl voor meer informatie.
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
@@ -561,12 +588,12 @@ export default function Landing() {
 
       <footer className="py-12 bg-slate-950 text-slate-500">
         <div className="container mx-auto px-4">
-          <div className="max-w-4xl mx-auto">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
+          <div className="max-w-5xl mx-auto">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
               <div>
                 <h3 className="font-semibold text-white mb-3">Elevizion</h3>
                 <p className="text-sm leading-relaxed">
-                  Lokale schermreclame op digitale schermen bij drukbezochte locaties in Nederland.
+                  Digital signage en narrowcasting specialist in Limburg. Schermreclame bij kappers, sportscholen en horeca.
                 </p>
               </div>
               <div>
@@ -578,6 +605,17 @@ export default function Landing() {
                 </ul>
               </div>
               <div>
+                <h3 className="font-semibold text-white mb-3">Regio's</h3>
+                <ul className="space-y-2 text-sm">
+                  <li><Link href="/regio/limburg" className="hover:text-white transition-colors">Limburg</Link></li>
+                  <li><Link href="/regio/maastricht" className="hover:text-white transition-colors">Maastricht</Link></li>
+                  <li><Link href="/regio/sittard" className="hover:text-white transition-colors">Sittard-Geleen</Link></li>
+                  <li><Link href="/regio/heerlen" className="hover:text-white transition-colors">Heerlen</Link></li>
+                  <li><Link href="/regio/roermond" className="hover:text-white transition-colors">Roermond</Link></li>
+                  <li><Link href="/regio/venlo" className="hover:text-white transition-colors">Venlo</Link></li>
+                </ul>
+              </div>
+              <div>
                 <h3 className="font-semibold text-white mb-3">Contact</h3>
                 <ul className="space-y-2 text-sm">
                   <li>
@@ -585,12 +623,12 @@ export default function Landing() {
                       info@elevizion.nl
                     </a>
                   </li>
-                  <li className="text-slate-600">Nederland</li>
+                  <li className="text-slate-600">Limburg, Nederland</li>
                 </ul>
               </div>
             </div>
             <div className="border-t border-slate-800 pt-6 text-center text-sm">
-              <p>&copy; {new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
+              <p>&copy; {new Date().getFullYear()} Elevizion. Digital signage & narrowcasting in Limburg.</p>
             </div>
           </div>
         </div>

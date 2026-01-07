@@ -1,0 +1,49 @@
+Doel: maak Elevizion.nl SEO-proof zonder de hele website opnieuw te bouwen. Hou layout en design zoveel mogelijk hetzelfde. Voeg/verbeter alleen SEO-structuur, copy en metadata.
+
+Context:
+Elevizion is een lokaal digitaal advertentienetwerk (digital signage / narrowcasting) in Nederland (focus Limburg). We plaatsen schermen in lokale zaken (kapsalons/barbershops, gyms, horeca, winkels) en verkopen advertentieplekken aan lokale ondernemers. Bezoekers zien advertentie-loops op schermen.
+
+Taken (implementeren in code):
+1) Keyword strategie implementeren:
+   - Gebruik deze primary keywords: "digitale reclame schermen", "digital signage", "narrowcasting", "reclame op schermen", "lokale advertenties", "schermreclame".
+   - Secondary keywords door de content heen: "adverteren lokaal", "reclame in horeca", "reclame in kapsalon", "reclame in sportschool", "digitale schermen voor bedrijven", "advertenties op schermen".
+   - Local keywords verwerken: "Limburg", "Sittard", "Geleen", "Heerlen", "Maastricht", "Roermond", "Venlo" (natuurlijk in tekst, niet keyword-spam).
+
+2) Per pagina SEO metadata:
+   - Voeg per pagina unieke <title>, meta description, canonical, Open Graph + Twitter tags toe.
+   - Titelregels: max ±60 tekens, descriptions: ±155-160 tekens, met CTA.
+   - Voeg robots meta toe (index,follow) en sitemap.xml + robots.txt als die ontbreken.
+
+3) Pagina-structuur en headings:
+   - Zorg voor 1 duidelijke H1 per pagina.
+   - H2’s voor: Voor adverteerders, Voor schermlocaties, Werking, Voordelen, Veelgestelde vragen, Contact.
+   - Voeg een korte intro bovenaan met primary keyword + waardepropositie.
+
+4) Content uitbreiden (clean, premium, NL):
+   - Voeg tekstblokken toe die zowel adverteerders als schermlocaties aanspreken.
+   - Verwerk: “adverteren op schermen in Limburg”, “lokale zichtbaarheid”, “bereik in wachtruimtes/horeca/gyms”.
+   - Voeg FAQ sectie toe met 6-10 vragen + antwoorden (SEO-vragen zoals: wat is narrowcasting, kosten, hoe werkt plaatsing, welk bereik, waar hangen schermen, hoe adverteer ik).
+
+5) Local landingpages (lightweight):
+   - Maak eenvoudige SEO landingspages (of dynamische routes) voor: Limburg, Sittard, Maastricht, Heerlen, Roermond, Venlo.
+   - Elke pagina: unieke title/description, H1 “Adverteren op digitale schermen in {plaats}”, 2-3 korte secties, FAQ 3 vragen, CTA naar contact.
+   - Interne links: vanaf homepage naar “Locaties” of “Regio” en link onderling.
+
+6) Structured data (JSON-LD):
+   - Voeg Organization schema toe (Elevizion, website, contact).
+   - Voeg LocalBusiness of AdvertisingService schema toe (kies wat het best past).
+   - Voeg FAQPage schema toe op pagina’s met FAQ.
+
+7) Afbeeldingen:
+   - Voeg alt-teksten toe met natuurlijke keywords (bijv. “digital signage scherm in kapsalon in Limburg”).
+   - Optimaliseer lazy-loading waar mogelijk.
+
+8) Performance basics:
+   - Zorg dat images geoptimaliseerd/lazy-loaded zijn.
+   - Vermijd zware libraries; geen grote refactor.
+   - Check dat de site goed scoort op mobile.
+
+Output:
+- Pas de bestaande bestanden aan (bijv. Next.js/React routes of huidige structuur).
+- Geef mij na implementatie een korte lijst: welke pagina’s, welke titles/descriptions, en waar de landingspages zitten.
+- Geen redesign, geen nieuwe branding, alleen SEO en tekst/structuur verbeteren.
