@@ -48,6 +48,7 @@ import {
   sendContractEmail,
   sendSepaEmail,
   sendEmail,
+  baseEmailTemplate,
 } from "./email";
 import {
   generateSigningToken,
@@ -292,44 +293,92 @@ Sitemap: ${SITE_URL}/sitemap.xml
         RETURNING id
       `);
       
-      // Send notification email to info@elevizion.nl
-      const contact = data.email || data.phone || "Niet opgegeven";
+      // Send notification email to info@elevizion.nl (internal)
+      const { html: internalHtml, text: internalText } = baseEmailTemplate({
+        subject: `[Lead Adverteren] ${data.companyName} - ${data.region}`,
+        preheader: `Nieuwe adverteerder lead: ${data.companyName}`,
+        title: "Nieuwe Adverteerder Lead",
+        bodyHtml: `
+          <p>Er is een nieuwe adverteerder lead binnengekomen via de website:</p>
+          <table style="width:100%;border-collapse:collapse;margin:20px 0;background:#f9fafb;border-radius:6px;overflow:hidden;">
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;width:35%;">Doel</td>
+              <td style="padding:12px 16px;">${data.goal}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Regio</td>
+              <td style="padding:12px 16px;">${data.region}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Bedrijfsnaam</td>
+              <td style="padding:12px 16px;"><strong>${data.companyName}</strong></td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Contactpersoon</td>
+              <td style="padding:12px 16px;">${data.contactName}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Telefoon</td>
+              <td style="padding:12px 16px;">${data.phone || "<span style='color:#999;'>Niet opgegeven</span>"}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">E-mail</td>
+              <td style="padding:12px 16px;">${data.email || "<span style='color:#999;'>Niet opgegeven</span>"}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Budget</td>
+              <td style="padding:12px 16px;">${data.budgetIndication || "<span style='color:#999;'>Niet opgegeven</span>"}</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Opmerking</td>
+              <td style="padding:12px 16px;">${data.remarks || "<span style='color:#999;'>Geen</span>"}</td>
+            </tr>
+          </table>
+        `,
+        cta: { label: "Bekijk in Dashboard", url: "https://elevizion.nl/leads" },
+      });
+      
       await sendEmail({
         to: "info@elevizion.nl",
         subject: `[Lead Adverteren] ${data.companyName} - ${data.region}`,
-        html: `
-          <h2>Nieuwe adverteerder lead via website</h2>
-          <table style="border-collapse: collapse; width: 100%;">
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Doel:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.goal}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Regio:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.region}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Bedrijfsnaam:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.companyName}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Naam:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.contactName}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Telefoon:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.phone || "Niet opgegeven"}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>E-mail:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.email || "Niet opgegeven"}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Budget:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.budgetIndication || "Niet opgegeven"}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Opmerking:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.remarks || "Geen"}</td></tr>
-          </table>
-        `,
+        html: internalHtml,
+        text: internalText,
         templateKey: "lead_advertiser",
       });
       
       // Send confirmation email to user if email provided
       if (data.email) {
+        const { html: confirmHtml, text: confirmText } = baseEmailTemplate({
+          subject: "Bedankt voor je interesse in Elevizion",
+          preheader: "We hebben je aanvraag ontvangen en nemen snel contact op!",
+          title: "Bedankt voor je aanvraag!",
+          bodyHtml: `
+            <p>Hallo ${data.contactName},</p>
+            <p>Bedankt voor je interesse in adverteren via Elevizion! We hebben je aanvraag ontvangen en nemen zo snel mogelijk contact met je op.</p>
+            <table style="width:100%;border-collapse:collapse;margin:20px 0;background:#f9fafb;border-radius:6px;overflow:hidden;">
+              <tr style="border-bottom:1px solid #e5e7eb;">
+                <td style="padding:12px 16px;font-weight:600;color:#374151;width:35%;">Bedrijf</td>
+                <td style="padding:12px 16px;">${data.companyName}</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e5e7eb;">
+                <td style="padding:12px 16px;font-weight:600;color:#374151;">Regio</td>
+                <td style="padding:12px 16px;">${data.region}</td>
+              </tr>
+              <tr>
+                <td style="padding:12px 16px;font-weight:600;color:#374151;">Doel</td>
+                <td style="padding:12px 16px;">${data.goal}</td>
+              </tr>
+            </table>
+            <p>We streven ernaar om binnen 24 uur contact met je op te nemen.</p>
+          `,
+          footerNote: "Je ontvangt deze e-mail omdat je een aanvraag hebt ingediend via elevizion.nl",
+        });
+        
         await sendEmail({
           to: data.email,
           subject: "Bedankt voor je interesse in Elevizion",
-          html: `
-            <h2>Hallo ${data.contactName},</h2>
-            <p>Bedankt voor je interesse in adverteren via Elevizion!</p>
-            <p>We hebben je aanvraag ontvangen en nemen zo snel mogelijk contact met je op.</p>
-            <p><strong>Je gegevens:</strong></p>
-            <ul>
-              <li>Bedrijf: ${data.companyName}</li>
-              <li>Regio: ${data.region}</li>
-              <li>Doel: ${data.goal}</li>
-            </ul>
-            <p>Met vriendelijke groet,<br>Team Elevizion</p>
-          `,
+          html: confirmHtml,
+          text: confirmText,
           templateKey: "lead_advertiser_confirmation",
         });
       }
@@ -371,43 +420,92 @@ Sitemap: ${SITE_URL}/sitemap.xml
         VALUES (${data.businessType}, ${data.city}, ${data.companyName}, ${data.contactName}, ${data.phone}, ${data.email || null}, ${data.visitorsPerWeek || null}, ${data.remarks || null})
       `);
       
-      // Send notification email to info@elevizion.nl
+      // Send notification email to info@elevizion.nl (internal)
+      const { html: screenInternalHtml, text: screenInternalText } = baseEmailTemplate({
+        subject: `[Lead Schermlocatie] ${data.companyName} - ${data.city}`,
+        preheader: `Nieuwe schermlocatie lead: ${data.companyName}`,
+        title: "Nieuwe Schermlocatie Lead",
+        bodyHtml: `
+          <p>Er is een nieuwe schermlocatie lead binnengekomen via de website:</p>
+          <table style="width:100%;border-collapse:collapse;margin:20px 0;background:#f9fafb;border-radius:6px;overflow:hidden;">
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;width:35%;">Type zaak</td>
+              <td style="padding:12px 16px;">${data.businessType}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Plaats</td>
+              <td style="padding:12px 16px;">${data.city}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Bedrijfsnaam</td>
+              <td style="padding:12px 16px;"><strong>${data.companyName}</strong></td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Contactpersoon</td>
+              <td style="padding:12px 16px;">${data.contactName}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Telefoon</td>
+              <td style="padding:12px 16px;">${data.phone}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">E-mail</td>
+              <td style="padding:12px 16px;">${data.email || "<span style='color:#999;'>Niet opgegeven</span>"}</td>
+            </tr>
+            <tr style="border-bottom:1px solid #e5e7eb;">
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Bezoekers/week</td>
+              <td style="padding:12px 16px;">${data.visitorsPerWeek || "<span style='color:#999;'>Niet opgegeven</span>"}</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 16px;font-weight:600;color:#374151;">Opmerking</td>
+              <td style="padding:12px 16px;">${data.remarks || "<span style='color:#999;'>Geen</span>"}</td>
+            </tr>
+          </table>
+        `,
+        cta: { label: "Bekijk in Dashboard", url: "https://elevizion.nl/leads" },
+      });
+      
       await sendEmail({
         to: "info@elevizion.nl",
         subject: `[Lead Schermlocatie] ${data.companyName} - ${data.city}`,
-        html: `
-          <h2>Nieuwe schermlocatie lead via website</h2>
-          <table style="border-collapse: collapse; width: 100%;">
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Type zaak:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.businessType}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Plaats:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.city}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Bedrijfsnaam:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.companyName}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Contactpersoon:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.contactName}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Telefoon:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.phone}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>E-mail:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.email || "Niet opgegeven"}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Bezoekers/week:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.visitorsPerWeek || "Niet opgegeven"}</td></tr>
-            <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Opmerking:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.remarks || "Geen"}</td></tr>
-          </table>
-        `,
+        html: screenInternalHtml,
+        text: screenInternalText,
         templateKey: "lead_screen_location",
       });
       
       // Send confirmation email to user if email provided
       if (data.email) {
+        const { html: screenConfirmHtml, text: screenConfirmText } = baseEmailTemplate({
+          subject: "Bedankt voor je interesse in een Elevizion scherm",
+          preheader: "We hebben je aanvraag ontvangen en nemen snel contact op!",
+          title: "Bedankt voor je aanvraag!",
+          bodyHtml: `
+            <p>Hallo ${data.contactName},</p>
+            <p>Bedankt voor je interesse in een digitaal scherm van Elevizion! We hebben je aanvraag ontvangen en nemen zo snel mogelijk contact met je op om de mogelijkheden te bespreken.</p>
+            <table style="width:100%;border-collapse:collapse;margin:20px 0;background:#f9fafb;border-radius:6px;overflow:hidden;">
+              <tr style="border-bottom:1px solid #e5e7eb;">
+                <td style="padding:12px 16px;font-weight:600;color:#374151;width:35%;">Bedrijf</td>
+                <td style="padding:12px 16px;">${data.companyName}</td>
+              </tr>
+              <tr style="border-bottom:1px solid #e5e7eb;">
+                <td style="padding:12px 16px;font-weight:600;color:#374151;">Plaats</td>
+                <td style="padding:12px 16px;">${data.city}</td>
+              </tr>
+              <tr>
+                <td style="padding:12px 16px;font-weight:600;color:#374151;">Type zaak</td>
+                <td style="padding:12px 16px;">${data.businessType}</td>
+              </tr>
+            </table>
+            <p>We streven ernaar om binnen 24 uur contact met je op te nemen.</p>
+          `,
+          footerNote: "Je ontvangt deze e-mail omdat je een aanvraag hebt ingediend via elevizion.nl",
+        });
+        
         await sendEmail({
           to: data.email,
           subject: "Bedankt voor je interesse in een Elevizion scherm",
-          html: `
-            <h2>Hallo ${data.contactName},</h2>
-            <p>Bedankt voor je interesse in een digitaal scherm van Elevizion!</p>
-            <p>We hebben je aanvraag ontvangen en nemen zo snel mogelijk contact met je op om de mogelijkheden te bespreken.</p>
-            <p><strong>Je gegevens:</strong></p>
-            <ul>
-              <li>Bedrijf: ${data.companyName}</li>
-              <li>Plaats: ${data.city}</li>
-              <li>Type: ${data.businessType}</li>
-            </ul>
-            <p>Met vriendelijke groet,<br>Team Elevizion</p>
-          `,
+          html: screenConfirmHtml,
+          text: screenConfirmText,
           templateKey: "lead_screen_confirmation",
         });
       }
