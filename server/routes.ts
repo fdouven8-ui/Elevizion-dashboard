@@ -5708,13 +5708,85 @@ Sitemap: ${SITE_URL}/sitemap.xml
     res.json(lead);
   });
 
+  const websiteLeadSchema = z.object({
+    leadType: z.enum(["ADVERTEREN", "SCHERM"]),
+    companyName: z.string().min(1, "Bedrijfsnaam is verplicht"),
+    contactPerson: z.string().min(1, "Contactpersoon is verplicht"),
+    email: z.string().email("Ongeldig e-mailadres"),
+    phone: z.string().min(6, "Telefoonnummer is verplicht"),
+    honeypot: z.string().optional(),
+  });
+
   app.post("/api/leads", async (req, res) => {
     try {
-      const data = insertLeadSchema.parse(req.body);
-      const lead = await storage.createLead(data);
-      res.status(201).json(lead);
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      
+      if (!checkLeadRateLimit(ip)) {
+        return res.status(429).json({ message: "Te veel aanvragen. Probeer het later opnieuw." });
+      }
+      
+      const result = websiteLeadSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error.errors[0].message });
+      }
+      
+      const data = result.data;
+      
+      if (data.honeypot) {
+        return res.status(200).json({ success: true });
+      }
+      
+      const leadType = data.leadType === "ADVERTEREN" ? "advertiser" : "location";
+      const lead = await storage.createLead({
+        type: leadType,
+        companyName: data.companyName,
+        contactName: data.contactPerson,
+        email: data.email,
+        phone: data.phone,
+        status: "nieuw",
+        source: "website",
+      });
+      
+      const typeLabel = data.leadType === "ADVERTEREN" ? "Adverteren" : "Scherm";
+      const now = new Date().toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam" });
+      
+      try {
+        await sendEmail({
+          to: "info@elevizion.nl",
+          subject: `Nieuwe lead: ${typeLabel} - ${data.companyName}`,
+          html: `
+            <h2>Nieuwe lead via website</h2>
+            <table style="border-collapse: collapse; width: 100%;">
+              <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Type:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${typeLabel}</td></tr>
+              <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Bedrijfsnaam:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.companyName}</td></tr>
+              <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Contactpersoon:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.contactPerson}</td></tr>
+              <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>E-mail:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.email}</td></tr>
+              <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Telefoon:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${data.phone}</td></tr>
+              <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Datum/tijd:</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">${now}</td></tr>
+            </table>
+          `,
+          templateKey: "lead_notification",
+        });
+        
+        await sendEmail({
+          to: data.email,
+          subject: "We hebben je aanvraag ontvangen – Elevizion",
+          html: `
+            <h2>Hallo ${data.contactPerson},</h2>
+            <p>Bedankt! We hebben je aanvraag ontvangen.</p>
+            <p>We nemen binnen 1 werkdag contact met je op om de mogelijkheden te bespreken.</p>
+            <p>Met vriendelijke groet,<br>Team Elevizion</p>
+          `,
+          templateKey: "lead_confirmation",
+        });
+      } catch (emailError) {
+        console.warn("Email verzenden mislukt, lead is wel opgeslagen:", emailError);
+      }
+      
+      res.status(201).json({ success: true, id: lead.id });
     } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      console.error("Error creating lead:", error);
+      res.status(500).json({ message: "Er ging iets mis. Probeer het later opnieuw." });
     }
   });
 

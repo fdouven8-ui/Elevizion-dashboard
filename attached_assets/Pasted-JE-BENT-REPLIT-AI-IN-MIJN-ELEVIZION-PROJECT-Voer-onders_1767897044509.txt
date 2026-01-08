@@ -1,0 +1,65 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION PROJECT. Voer onderstaande wijziging uit ZONDER de hele app te refactoren en zonder onnodige nieuwe schermen/velden. Doel: de knoppen “Ik wil adverteren” en “Ik wil een scherm” mogen GEEN groot onboarding-menu meer openen. Ze moeten alleen een ultra-kort LEAD formulier tonen. Onboarding start pas later na contact.
+
+1) LANDINGPAGE / CTA FLOW
+- Zoek de CTA knoppen “Ik wil adverteren” en “Ik wil een scherm” (op elevizion.nl / de landingpage route/component).
+- Vervang de huidige navigatie naar het grote menu/onboarding door een route of modal naar een nieuw “LeadForm” (of herbruikbaar component).
+- Er mogen exact 4 verplichte velden zijn:
+  1. bedrijfsnaam (companyName) – required
+  2. contactpersoon (contactPerson) – required
+  3. emailadres (email) – required + valide email
+  4. telefoonnummer (phone) – required (basic validation)
+- Voeg 1 verborgen of automatisch veld toe: leadType = "ADVERTEREN" of "SCHERM" afhankelijk van welke knop is geklikt.
+- Geen extra velden tonen. Geen KvK, geen adres, geen bezoekers, geen contracten, geen Moneybird/Yodeck stappen.
+
+2) API ENDPOINT: LEADS OPSLAAN
+- Maak (of gebruik) een backend endpoint: POST /api/leads
+- Payload:
+  {
+    "leadType": "ADVERTEREN" | "SCHERM",
+    "companyName": "...",
+    "contactPerson": "...",
+    "email": "...",
+    "phone": "..."
+  }
+- Valideer server-side: alle velden required; email format check; leadType alleen 2 waarden.
+- Sla lead op in database (gebruik bestaande DB laag/ORM). Minimale velden:
+  id, leadType, companyName, contactPerson, email, phone, status, createdAt
+- Status default: "NEW"
+- Zorg dat dit GEEN onboarding records aanmaakt en GEEN Moneybird/Yodeck calls doet.
+
+3) DASHBOARD: LEADS OVERZICHT
+- Voeg in het admin dashboard een nieuw menu-item toe: “Leads”.
+- Toon een simpele tabellijst met:
+  createdAt, leadType, companyName, contactPerson, email, phone, status
+- Voeg een detailpagina of drawer toe waar ik minimaal de lead gegevens kan zien + status kan wijzigen:
+  NEW -> CONTACTED -> QUALIFIED -> WON -> LOST
+- Houd dit heel licht en consistent met bestaande UI.
+
+4) EMAIL NOTIFICATIES (ALS ER AL EMAIL INTEGRATIE IS)
+- Als er al Postmark/SMTP mail bestaat:
+  - Stuur mij (info@elevizion.nl) direct een notificatie mail bij nieuwe lead:
+    Subject: "Nieuwe lead: {leadType} - {companyName}"
+    Body bevat alle velden + datum/tijd
+  - Stuur de lead een automatische bevestiging:
+    Subject: "We hebben je aanvraag ontvangen – Elevizion"
+    Tekst: "Bedankt! We nemen binnen 1 werkdag contact met je op om de mogelijkheden te bespreken."
+- Als mail integratie nog niet stabiel is: implementeer het zo dat de lead in elk geval wordt opgeslagen, en log een waarschuwing als mail faalt. Lead opslaan mag nooit falen door email.
+
+5) UX / CONVERSIE
+- Formulier moet maximaal 1 scherm zijn, geen stappen.
+- Na succes: toon een korte bedankmelding + “We nemen snel contact op”.
+- Voeg basic loading + error states toe.
+- Zorg dat de oude grote menu/onboarding flow niet meer wordt gestart door deze CTA’s.
+
+6) BELANGRIJK
+- Maak geen extreme aanpassingen aan de bestaande app-architectuur.
+- Hergebruik bestaande componenten/styling waar mogelijk.
+- Zorg dat alles compileert en dat de nieuwe flow end-to-end werkt (CTA -> LeadForm -> POST /api/leads -> opslag -> zichtbaar in dashboard).
+- Voeg eventueel een kleine database migratie toe als er nog geen “leads” tabel/collectie bestaat.
+
+Lever op:
+- gewijzigde landingpage CTA’s
+- LeadForm component + route
+- /api/leads endpoint
+- Leads overzicht in dashboard
+- (optioneel) email notificaties indien aanwezig

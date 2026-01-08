@@ -22,6 +22,7 @@ import {
   Rocket,
   Euro,
   Mail,
+  UserPlus,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -37,6 +38,7 @@ interface MenuItem {
 
 const menuItems: MenuItem[] = [
   { title: "Home", url: "/dashboard", icon: LayoutDashboard, requiredPermissions: [PERMISSIONS.VIEW_HOME] },
+  { title: "Leads", url: "/leads", icon: UserPlus, requiredPermissions: [PERMISSIONS.VIEW_HOME] },
   { title: "Onboarding", url: "/onboarding", icon: Rocket, requiredPermissions: [PERMISSIONS.VIEW_ONBOARDING, PERMISSIONS.ONBOARD_ADVERTISERS, PERMISSIONS.ONBOARD_SCREENS], anyPermission: true },
   { title: "Schermen", url: "/screens", icon: Monitor, requiredPermissions: [PERMISSIONS.VIEW_SCREENS] },
   { title: "Adverteerders", url: "/advertisers", icon: Users, requiredPermissions: [PERMISSIONS.VIEW_ADVERTISERS] },

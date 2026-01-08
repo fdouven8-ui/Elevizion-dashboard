@@ -27,6 +27,7 @@ import AdvertiserPortal from "@/pages/AdvertiserPortal";
 import LocationPortal from "@/pages/LocationPortal";
 import DataHealthPage from "@/pages/DataHealthPage";
 import LocalLanding from "@/pages/LocalLanding";
+import Leads from "@/pages/Leads";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -34,6 +35,7 @@ function DashboardRouter() {
     <DashboardLayout>
       <Switch>
         <Route path="/dashboard" component={Home} />
+        <Route path="/leads" component={Leads} />
         <Route path="/onboarding" component={Onboarding} />
         <Route path="/onboarding/:wizard" component={Onboarding} />
         <Route path="/screens" component={Screens} />
