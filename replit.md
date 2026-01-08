@@ -152,4 +152,9 @@ Transactional outbox pattern ensures DB is Single Source of Truth for external A
     - **Database Tables**: `moneybird_contacts`, `moneybird_invoices`, `moneybird_payments` for synced data.
     - **Scheduled Sync**: 30-minute background sync with per-item error handling.
     - **Entity Linking**: Supports linking Moneybird contacts at screen, location, and advertiser levels, with auto-matching and a `ResolveWizard` for manual linking.
-- **SendGrid**: Email integration for contract confirmations and SEPA mandate requests.
+- **Postmark**: Email integration for contract confirmations and SEPA mandate requests.
+    - **Configuration**: `POSTMARK_SERVER_TOKEN` env var, consistent From: "Elevizion <info@elevizion.nl>"
+    - **Email Deliverability Tab**: Settings → E-mail shows DNS records (SPF, DKIM, DMARC) with copy-to-clipboard
+    - **API Endpoint**: `GET /api/email/config` returns email configuration and deliverability status
+    - **Plain-text Generation**: Auto-generates plain-text version from HTML for multipart emails
+    - **Template System**: Central `baseEmailTemplate()` wrapper with external logo and professional footer

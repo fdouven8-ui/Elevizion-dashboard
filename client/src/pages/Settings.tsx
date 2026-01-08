@@ -40,6 +40,8 @@ import {
   Key,
   UserPlus,
   Shield,
+  Mail,
+  Info,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -276,6 +278,179 @@ const INTEGRATION_INFO = {
     hasSync: false,
   },
 };
+
+interface EmailConfigData {
+  config: {
+    fromAddress: string;
+    replyToAddress: string;
+    provider: string;
+    domain: string;
+  };
+  deliverability: {
+    spf: { record: string; status: string; description: string };
+    dkim: { record: string; status: string; description: string };
+    dmarc: { record: string; status: string; description: string };
+    returnPath: { record: string; status: string; description: string };
+  };
+}
+
+function EmailDeliverabilityTab() {
+  const { toast } = useToast();
+  
+  const { data: emailConfig, isLoading } = useQuery<EmailConfigData>({
+    queryKey: ["/api/email/config"],
+    queryFn: async () => {
+      const res = await fetch("/api/email/config", { credentials: "include" });
+      if (!res.ok) throw new Error("Fout bij ophalen e-mail configuratie");
+      return res.json();
+    },
+  });
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast({ title: "Gekopieerd naar klembord" });
+  };
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="h-4 w-64" />
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <Skeleton className="h-20 w-full" />
+            <Skeleton className="h-20 w-full" />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const getStatusIcon = (status: string) => {
+    switch (status) {
+      case "configured":
+        return <CheckCircle className="h-4 w-4 text-green-500" />;
+      case "warning":
+        return <AlertTriangle className="h-4 w-4 text-yellow-500" />;
+      case "missing":
+        return <XCircle className="h-4 w-4 text-red-500" />;
+      default:
+        return <Info className="h-4 w-4 text-gray-500" />;
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case "configured":
+        return <Badge className="bg-green-100 text-green-800">Geconfigureerd</Badge>;
+      case "warning":
+        return <Badge className="bg-yellow-100 text-yellow-800">Aanbevolen</Badge>;
+      case "missing":
+        return <Badge variant="destructive">Ontbreekt</Badge>;
+      default:
+        return <Badge variant="outline">{status}</Badge>;
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="h-5 w-5" />
+            E-mail Configuratie
+          </CardTitle>
+          <CardDescription>
+            Afzender- en antwoordadressen voor alle uitgaande e-mails
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="p-4 border rounded-lg">
+              <Label className="text-sm text-muted-foreground">Van adres</Label>
+              <p className="font-medium mt-1">{emailConfig?.config?.fromAddress || "Elevizion <info@elevizion.nl>"}</p>
+            </div>
+            <div className="p-4 border rounded-lg">
+              <Label className="text-sm text-muted-foreground">Antwoord adres</Label>
+              <p className="font-medium mt-1">{emailConfig?.config?.replyToAddress || "info@elevizion.nl"}</p>
+            </div>
+            <div className="p-4 border rounded-lg">
+              <Label className="text-sm text-muted-foreground">E-mail provider</Label>
+              <p className="font-medium mt-1">{emailConfig?.config?.provider || "Postmark"}</p>
+            </div>
+            <div className="p-4 border rounded-lg">
+              <Label className="text-sm text-muted-foreground">Domein</Label>
+              <p className="font-medium mt-1">{emailConfig?.config?.domain || "elevizion.nl"}</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Shield className="h-5 w-5" />
+            E-mail Deliverability
+          </CardTitle>
+          <CardDescription>
+            DNS records voor optimale e-mail bezorging en spam-preventie
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {emailConfig?.deliverability && Object.entries(emailConfig.deliverability).map(([key, config]) => (
+            <div key={key} className="p-4 border rounded-lg space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {getStatusIcon(config.status)}
+                  <span className="font-medium uppercase">{key}</span>
+                </div>
+                {getStatusBadge(config.status)}
+              </div>
+              <p className="text-sm text-muted-foreground">{config.description}</p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 p-2 bg-muted rounded text-xs overflow-x-auto">
+                  {config.record}
+                </code>
+                <Button 
+                  variant="ghost" 
+                  size="sm"
+                  onClick={() => copyToClipboard(config.record)}
+                  data-testid={`copy-${key}-record`}
+                >
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+
+          <Separator className="my-4" />
+
+          <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
+            <h4 className="font-medium flex items-center gap-2 mb-2">
+              <Info className="h-4 w-4 text-blue-600" />
+              Tips voor betere bezorging
+            </h4>
+            <ul className="text-sm space-y-1 text-muted-foreground">
+              <li>• Zorg dat alle DNS records correct zijn ingesteld</li>
+              <li>• Gebruik consistente Van/Antwoord adressen</li>
+              <li>• Stuur geen grote hoeveelheden e-mails tegelijk</li>
+              <li>• Monitor bounce rates in Postmark dashboard</li>
+            </ul>
+          </div>
+
+          <Button variant="outline" asChild className="w-full">
+            <a href="https://account.postmarkapp.com" target="_blank" rel="noopener noreferrer">
+              <ExternalLink className="h-4 w-4 mr-2" />
+              Open Postmark Dashboard
+            </a>
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
 
 function IntegrationsTab() {
   const { toast } = useToast();
@@ -1515,7 +1690,7 @@ export default function Settings() {
       </div>
 
       <Tabs defaultValue="automations">
-        <TabsList className="grid w-full grid-cols-5">
+        <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="automations" className="gap-2">
             <Zap className="h-4 w-4" />
             <span className="hidden sm:inline">Automatiseringen</span>
@@ -1531,6 +1706,10 @@ export default function Settings() {
           <TabsTrigger value="integrations" className="gap-2">
             <Link2 className="h-4 w-4" />
             <span className="hidden sm:inline">Integraties</span>
+          </TabsTrigger>
+          <TabsTrigger value="email" className="gap-2">
+            <Mail className="h-4 w-4" />
+            <span className="hidden sm:inline">E-mail</span>
           </TabsTrigger>
           <TabsTrigger value="finance" className="gap-2">
             <Wallet className="h-4 w-4" />
@@ -2153,6 +2332,10 @@ export default function Settings() {
 
         <TabsContent value="integrations" className="mt-6">
           <IntegrationsTab />
+        </TabsContent>
+
+        <TabsContent value="email" className="mt-6">
+          <EmailDeliverabilityTab />
         </TabsContent>
 
         <TabsContent value="finance" className="mt-6">

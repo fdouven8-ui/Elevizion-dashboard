@@ -1,0 +1,72 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION PROJECT. Pas de e-mail flow aan zodat:
+1) het Elevizion logo netjes in alle uitgaande mails zit (professioneel, consistent),
+2) deliverability/SPAM-kans maximaal wordt verbeterd (DNS + headers + content),
+zonder grote refactor. Gebruik bestaande mailprovider (Postmark/SMTP/etc.) die al in de app zit.
+
+========================
+A) LOGO IN ALLE EMAILS
+========================
+1) Maak 1 centrale “email template wrapper” (layout) die ELKE mail gebruikt:
+- Header: Elevizion logo links (niet te groot)
+- Body: content
+- Footer: bedrijfsgegevens + afmeldtekst waar nodig + contact
+
+2) Logo implementatie (belangrijk voor deliverability):
+- Gebruik bij voorkeur een extern gehoste HTTPS afbeelding op mijn eigen domein:
+  https://elevizion.nl/assets/logo-email.png  (maak dit bestand aan of gebruik bestaand)
+- Voeg ALT tekst toe: “Elevizion”
+- Stel logo breedte in op ~140–180px en height auto.
+- Inline CSS gebruiken (voor mailclients), geen externe stylesheets.
+- Gebruik een “preheader” tekst (onzichtbaar bovenin) voor betere inbox placement.
+
+3) Voeg een nette tekst-versie (plain-text) toe voor elke email (multipart):
+- HTML + TEXT in dezelfde send call.
+
+========================
+B) MINDER SPAM: TECHNISCHE DELIVERABILITY CHECKLIST
+========================
+1) From / Reply-To consistent:
+- From: "Elevizion" <info@elevizion.nl>
+- Reply-To: info@elevizion.nl
+- Gebruik NOOIT een ander random from-adres.
+
+2) DKIM / SPF / DMARC afdwingen (in code + checks):
+- Voeg in de app een “Deliverability status check” toe in Instellingen:
+  - Toon of SPF/DKIM/DMARC records aanwezig lijken (basic check / instructietekst)
+  - Log een waarschuwing bij verzenden als domein niet correct is ingesteld.
+(Als automatisch checken niet kan: toon duidelijke checklist met exacte records.)
+
+3) Message headers:
+- Voeg Message-ID toe (provider doet vaak al).
+- Voeg List-Unsubscribe header toe ALS het marketing-achtige mails zijn.
+- Zorg dat elke mail een geldige “To” heeft en geen rare headers.
+
+4) Content regels om spam te vermijden:
+- Geen schreeuwerige woorden (“GRATIS!!!”, “NU KOPEN”).
+- Geen te grote afbeeldingen (logo klein).
+- Altijd duidelijke afzender + footer met bedrijfsinfo.
+- Vermijd alleen-image emails: altijd voldoende tekst.
+- Onderwerpregels kort en normaal.
+
+5) Verzenden via dedicated provider (als Postmark aanwezig):
+- Gebruik Postmark “Message Stream”:
+  - Transactional stream voor onboarding/leads bevestigingen.
+- Zorg dat tracking (open/click) standaard UIT staat tenzij nodig.
+
+========================
+C) MAILS DIE DIT MOETEN GEBRUIKEN
+========================
+Pas alle uitgaande mails in de app aan om de centrale template te gebruiken, minimaal:
+- Lead bevestiging naar klant
+- Lead notificatie naar info@elevizion.nl
+- Onboarding mails (links invullen)
+- “Wat nu?” mail
+
+========================
+D) OPLEVERING
+========================
+1) Eén herbruikbare email layout/template (HTML + TEXT)
+2) Logo toegevoegd in header (via https://elevizion.nl/assets/logo-email.png)
+3) Alle mail-sends gebruiken deze wrapper
+4) Deliverability verbeteringen: From/Reply-To consistent, headers waar nodig, plain-text toegevoegd
+5) In Instellingen: korte deliverability checklist/waarschuwing voor SPF/DKIM/DMARC (zodat ik dit kan fixen in DNS)

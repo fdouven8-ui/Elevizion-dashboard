@@ -3279,6 +3279,17 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // ============================================================================
+  // EMAIL DELIVERABILITY
+  // ============================================================================
+
+  app.get("/api/email/config", isAuthenticated, async (_req, res) => {
+    const { getEmailConfig, getDeliverabilityInfo } = await import("./email");
+    const config = getEmailConfig();
+    const deliverability = getDeliverabilityInfo();
+    res.json({ config, deliverability });
+  });
+
+  // ============================================================================
   // INTEGRATIONS
   // ============================================================================
 
