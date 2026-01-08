@@ -1,0 +1,43 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION PROJECT.
+Doel: onze emails zijn nu te basic. Maak een professionele, consistente email-setup en implementeer dit in ALLE standaard mails die de app verstuurt. GEEN grote refactor, maar wél netjes centraal geregeld zodat alle mails dezelfde layout + styling gebruiken.
+
+BELANGRIJK:
+- Ik upload 2 logo-afbeeldingen. Kies automatisch degene die het best past voor email (criteria: transparante achtergrond of rustige look, goed leesbaar op wit, niet te breed). Gebruik maar 1 logo in alle mails.
+- Zorg voor goede deliverability (minder kans op spam): proper From/Reply-To, plain-text versie, nette footer, geen spammy content, consistente headers.
+
+========================
+1) CENTRALE EMAIL TEMPLATE (WRAPPER) MAKEN
+========================
+Maak 1 herbruikbare email wrapper/template (bijv. /server/email/templates/layout.ts of /lib/email/layout.ts).
+Die wrapper ontvangt:
+- subject
+- preheader (korte preview tekst)
+- title (H1 in email)
+- bodyHtml (main content blok)
+- cta (optioneel: { label, url })
+- footerNote (optioneel)
+- brandColor (optioneel, default Elevizion groen)
+En output:
+- HTML versie (met inline CSS)
+- TEXT versie (plain text fallback)
+
+LAYOUT RICHTLIJNEN (rustig & premium):
+- Max width container: 600px
+- Achtergrond: lichtgrijs (#f6f7f9), container wit
+- Header: logo links (140–180px breed), subtiele scheidingslijn
+- Body: duidelijke typografie, voldoende witruimte, korte alinea’s
+- CTA button: afgerond, solide kleur (subtiel groen), ook altijd een “als de knop niet werkt” link eronder
+- Footer: Elevizion + contactgegevens + waarom je deze mail krijgt (transparantie)
+- Voeg altijd een preheader toe (verborgen in HTML maar zichtbaar voor clients)
+
+INLINE CSS:
+- Gebruik inline styles of een simpele inline-style aanpak zodat het in Gmail/Outlook goed werkt.
+- Geen externe CSS.
+
+========================
+2) LOGO INTEGRATIE (KIES 1 VAN DE 2 LOGOS)
+========================
+- Ik lever 2 logo bestanden aan (bijv. in /public/branding/logo1.png en /public/branding/logo2.png of vergelijkbaar).
+- Kies 1 “beste” logo voor email op basis van:
+  - werkt goed op witte achtergrond
+  - niet t

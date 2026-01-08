@@ -26,6 +26,208 @@ const EMAIL_CONFIG = {
   messageStream: "outbound", // Transactional stream
 };
 
+// Brand colors
+const BRAND = {
+  primary: "#1e3a5f",      // Dark blue
+  secondary: "#f8a12f",    // Orange
+  accent: "#10b981",       // Green (for CTAs)
+  background: "#f6f7f9",   // Light gray
+  white: "#ffffff",
+  text: "#333333",
+  muted: "#666666",
+  border: "#e5e7eb",
+};
+
+// Logo URL - hosted publicly for email clients
+const LOGO_URL = "https://elevizion.nl/branding/logo-email.png";
+
+// ============================================================================
+// CENTRAL EMAIL TEMPLATE WRAPPER
+// ============================================================================
+
+interface EmailTemplateOptions {
+  subject: string;
+  preheader?: string;
+  title?: string;
+  bodyHtml: string;
+  cta?: { label: string; url: string };
+  footerNote?: string;
+  showUnsubscribe?: boolean;
+}
+
+interface EmailTemplateResult {
+  html: string;
+  text: string;
+}
+
+export function baseEmailTemplate(options: EmailTemplateOptions): EmailTemplateResult {
+  const { subject, preheader, title, bodyHtml, cta, footerNote, showUnsubscribe } = options;
+  const year = new Date().getFullYear();
+  
+  // Preheader (hidden preview text for email clients)
+  const preheaderHtml = preheader 
+    ? `<div style="display:none;font-size:1px;color:#f6f7f9;line-height:1px;max-height:0px;max-width:0px;opacity:0;overflow:hidden;">${preheader}${"&nbsp;".repeat(100)}</div>`
+    : "";
+
+  // CTA button HTML
+  const ctaHtml = cta ? `
+    <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin: 28px 0;">
+      <tr>
+        <td align="left">
+          <a href="${cta.url}" target="_blank" style="display:inline-block;padding:14px 32px;background-color:${BRAND.accent};color:#ffffff;text-decoration:none;font-weight:600;font-size:16px;border-radius:6px;text-align:center;">
+            ${cta.label}
+          </a>
+        </td>
+      </tr>
+    </table>
+    <p style="margin:0 0 20px 0;font-size:13px;color:${BRAND.muted};">
+      Als de knop niet werkt, kopieer en plak deze link in je browser:<br>
+      <a href="${cta.url}" style="color:${BRAND.primary};word-break:break-all;">${cta.url}</a>
+    </p>
+  ` : "";
+
+  // Footer note
+  const footerNoteHtml = footerNote 
+    ? `<p style="margin:15px 0 0 0;font-size:12px;color:${BRAND.muted};font-style:italic;">${footerNote}</p>`
+    : "";
+
+  // Unsubscribe link (for marketing emails)
+  const unsubscribeHtml = showUnsubscribe
+    ? `<p style="margin:15px 0 0 0;"><a href="mailto:info@elevizion.nl?subject=Uitschrijven" style="color:${BRAND.muted};font-size:11px;">Uitschrijven van deze e-mails</a></p>`
+    : "";
+
+  const html = `
+<!DOCTYPE html>
+<html lang="nl" xmlns="http://www.w3.org/1999/xhtml" xmlns:o="urn:schemas-microsoft-com:office:office">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>${subject}</title>
+  <!--[if mso]>
+  <style type="text/css">
+    table { border-collapse: collapse; }
+    td { padding: 0; }
+  </style>
+  <![endif]-->
+</head>
+<body style="margin:0;padding:0;background-color:${BRAND.background};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;">
+  ${preheaderHtml}
+  
+  <!-- Outer container -->
+  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color:${BRAND.background};">
+    <tr>
+      <td align="center" style="padding:40px 20px;">
+        
+        <!-- Email container -->
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="600" style="max-width:600px;background-color:${BRAND.white};border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+          
+          <!-- Header with logo -->
+          <tr>
+            <td style="padding:28px 40px;border-bottom:1px solid ${BRAND.border};">
+              <img src="${LOGO_URL}" alt="Elevizion" width="160" style="display:block;max-width:160px;height:auto;" />
+            </td>
+          </tr>
+          
+          <!-- Main content -->
+          <tr>
+            <td style="padding:40px 40px 32px 40px;">
+              ${title ? `<h1 style="margin:0 0 24px 0;font-size:24px;font-weight:600;color:${BRAND.primary};line-height:1.3;">${title}</h1>` : ""}
+              
+              <div style="font-size:15px;line-height:1.7;color:${BRAND.text};">
+                ${bodyHtml}
+              </div>
+              
+              ${ctaHtml}
+            </td>
+          </tr>
+          
+          <!-- Footer -->
+          <tr>
+            <td style="padding:24px 40px;background-color:${BRAND.background};border-top:1px solid ${BRAND.border};">
+              <p style="margin:0 0 8px 0;font-size:13px;color:${BRAND.muted};">
+                Met vriendelijke groet,<br>
+                <strong style="color:${BRAND.primary};">Team Elevizion</strong>
+              </p>
+              <p style="margin:12px 0 0 0;font-size:12px;color:${BRAND.muted};">
+                Elevizion B.V. &bull; info@elevizion.nl &bull; elevizion.nl
+              </p>
+              ${footerNoteHtml}
+              ${unsubscribeHtml}
+            </td>
+          </tr>
+          
+        </table>
+        
+        <!-- Copyright -->
+        <p style="margin:24px 0 0 0;font-size:11px;color:${BRAND.muted};text-align:center;">
+          &copy; ${year} Elevizion B.V. Alle rechten voorbehouden.
+        </p>
+        
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+  `.trim();
+
+  // Generate plain text version
+  const text = generatePlainTextFromTemplate(options);
+
+  return { html, text };
+}
+
+function generatePlainTextFromTemplate(options: EmailTemplateOptions): string {
+  const { title, bodyHtml, cta, footerNote } = options;
+  const year = new Date().getFullYear();
+  
+  // Convert HTML body to plain text
+  const bodyText = bodyHtml
+    .replace(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi, "\n$1\n" + "=".repeat(30) + "\n")
+    .replace(/<p[^>]*>(.*?)<\/p>/gi, "$1\n\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<a[^>]*href="([^"]*)"[^>]*>(.*?)<\/a>/gi, "$2 ($1)")
+    .replace(/<strong>(.*?)<\/strong>/gi, "*$1*")
+    .replace(/<b>(.*?)<\/b>/gi, "*$1*")
+    .replace(/<li[^>]*>(.*?)<\/li>/gi, "• $1\n")
+    .replace(/<ul[^>]*>/gi, "\n")
+    .replace(/<\/ul>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&euro;/g, "€")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
+  let text = "";
+  
+  if (title) {
+    text += `${title}\n${"=".repeat(title.length)}\n\n`;
+  }
+  
+  text += bodyText;
+  
+  if (cta) {
+    text += `\n\n${cta.label}: ${cta.url}`;
+  }
+  
+  text += "\n\n" + "-".repeat(40);
+  text += "\nMet vriendelijke groet,";
+  text += "\nTeam Elevizion";
+  text += "\n\nElevizion B.V. | info@elevizion.nl | elevizion.nl";
+  
+  if (footerNote) {
+    text += `\n\n${footerNote}`;
+  }
+  
+  text += `\n\n© ${year} Elevizion B.V. Alle rechten voorbehouden.`;
+  
+  return text;
+}
+
 interface EmailConfig {
   to: string;
   subject: string;
@@ -220,7 +422,7 @@ interface ContractEmailData {
   screens: string[];
 }
 
-export function generateContractEmailHtml(data: ContractEmailData): string {
+export function generateContractEmail(data: ContractEmailData): EmailTemplateResult {
   const billingCycleNL = {
     monthly: "Maandelijks",
     quarterly: "Per Kwartaal", 
@@ -228,76 +430,59 @@ export function generateContractEmailHtml(data: ContractEmailData): string {
   }[data.billingCycle] || data.billingCycle;
 
   const screensHtml = data.screens.length > 0 
-    ? `<ul>${data.screens.map(s => `<li>${s}</li>`).join("")}</ul>`
-    : "<p>Nog geen schermen toegewezen</p>";
+    ? `<ul style="margin:12px 0;padding-left:20px;">${data.screens.map(s => `<li style="margin:4px 0;">${s}</li>`).join("")}</ul>`
+    : "<p style=\"color:#666;\">Nog geen schermen toegewezen</p>";
 
-  return `
-<!DOCTYPE html>
-<html lang="nl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Nieuw Contract - Elevizion</title>
-</head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-    <h1 style="color: white; margin: 0; font-size: 24px;">Elevizion</h1>
-    <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
-  </div>
-  
-  <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
-    <h2 style="color: #1e3a5f; margin-top: 0;">Welkom bij Elevizion!</h2>
-    
+  const bodyHtml = `
     <p>Beste ${data.contactName},</p>
     
     <p>Hartelijk dank voor uw vertrouwen in Elevizion. Hieronder vindt u de details van uw nieuwe reclamecontract:</p>
     
-    <div style="background: white; padding: 20px; border-radius: 8px; border-left: 4px solid #f8a12f; margin: 20px 0;">
-      <h3 style="color: #1e3a5f; margin-top: 0;">Contractgegevens</h3>
-      <table style="width: 100%; border-collapse: collapse;">
-        <tr>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Bedrijf:</strong></td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${data.advertiserName}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Contract:</strong></td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${data.contractName}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Maandprijs:</strong></td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;">€${data.monthlyPrice} (excl. ${data.vatPercent}% BTW)</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Facturatie:</strong></td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${billingCycleNL}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Startdatum:</strong></td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${data.startDate}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0;"><strong>Einddatum:</strong></td>
-          <td style="padding: 8px 0;">${data.endDate || "Doorlopend"}</td>
-        </tr>
-      </table>
-    </div>
+    <table style="width:100%;border-collapse:collapse;margin:20px 0;background:#f9fafb;border-radius:6px;overflow:hidden;">
+      <tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:12px 16px;font-weight:600;color:#374151;width:40%;">Bedrijf</td>
+        <td style="padding:12px 16px;">${data.advertiserName}</td>
+      </tr>
+      <tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:12px 16px;font-weight:600;color:#374151;">Contract</td>
+        <td style="padding:12px 16px;">${data.contractName}</td>
+      </tr>
+      <tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:12px 16px;font-weight:600;color:#374151;">Maandprijs</td>
+        <td style="padding:12px 16px;">&euro;${data.monthlyPrice} <span style="color:#666;">(excl. ${data.vatPercent}% BTW)</span></td>
+      </tr>
+      <tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:12px 16px;font-weight:600;color:#374151;">Facturatie</td>
+        <td style="padding:12px 16px;">${billingCycleNL}</td>
+      </tr>
+      <tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:12px 16px;font-weight:600;color:#374151;">Startdatum</td>
+        <td style="padding:12px 16px;">${data.startDate}</td>
+      </tr>
+      <tr>
+        <td style="padding:12px 16px;font-weight:600;color:#374151;">Einddatum</td>
+        <td style="padding:12px 16px;">${data.endDate || "Doorlopend"}</td>
+      </tr>
+    </table>
     
-    <div style="background: white; padding: 20px; border-radius: 8px; margin: 20px 0;">
-      <h3 style="color: #1e3a5f; margin-top: 0;">Toegewezen Schermen</h3>
-      ${screensHtml}
-    </div>
+    <p style="font-weight:600;margin:24px 0 8px 0;">Toegewezen Schermen</p>
+    ${screensHtml}
     
-    <p style="margin-top: 30px;">Heeft u vragen over uw contract? Neem gerust contact met ons op.</p>
-    
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
-  </div>
-  
-  <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-    <p>© ${new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
-  </div>
-</body>
-</html>
+    <p style="margin-top:24px;">Heeft u vragen over uw contract? Neem gerust contact met ons op.</p>
   `;
+
+  return baseEmailTemplate({
+    subject: `Uw Elevizion Contract: ${data.contractName}`,
+    preheader: `Welkom bij Elevizion! Uw contract ${data.contractName} is bevestigd.`,
+    title: "Welkom bij Elevizion!",
+    bodyHtml,
+    footerNote: "U ontvangt deze e-mail omdat u een reclamecontract heeft afgesloten bij Elevizion.",
+  });
+}
+
+// Legacy function for backwards compatibility
+export function generateContractEmailHtml(data: ContractEmailData): string {
+  return generateContractEmail(data).html;
 }
 
 interface SepaEmailData {
@@ -310,73 +495,59 @@ interface SepaEmailData {
   mandateReference?: string;
 }
 
-export function generateSepaEmailHtml(data: SepaEmailData): string {
+export function generateSepaEmail(data: SepaEmailData): EmailTemplateResult {
   const mandateRef = data.mandateReference || `ELV-${Date.now()}`;
   
-  return `
-<!DOCTYPE html>
-<html lang="nl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SEPA Machtiging - Elevizion</title>
-</head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
-  <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-    <h1 style="color: white; margin: 0; font-size: 24px;">Elevizion</h1>
-    <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
-  </div>
-  
-  <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
-    <h2 style="color: #1e3a5f; margin-top: 0;">SEPA Incassomachtiging</h2>
-    
+  const bodyHtml = `
     <p>Beste ${data.contactName},</p>
     
     <p>Om de maandelijkse betalingen voor uw reclamecontract automatisch te verwerken, hebben wij een SEPA incassomachtiging nodig.</p>
     
-    <div style="background: white; padding: 20px; border-radius: 8px; border-left: 4px solid #f8a12f; margin: 20px 0;">
-      <h3 style="color: #1e3a5f; margin-top: 0;">Machtigingsgegevens</h3>
-      <table style="width: 100%; border-collapse: collapse;">
-        <tr>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Incassant ID:</strong></td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;">NL00ZZZ000000000000</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Naam incassant:</strong></td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;">Elevizion B.V.</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Kenmerk machtiging:</strong></td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${mandateRef}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;"><strong>Bedrijfsnaam:</strong></td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #eee;">${data.advertiserName}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0;"><strong>Maandbedrag:</strong></td>
-          <td style="padding: 8px 0;">€${data.monthlyAmount} (incl. ${data.vatPercent}% BTW)</td>
-        </tr>
-      </table>
+    <table style="width:100%;border-collapse:collapse;margin:20px 0;background:#f9fafb;border-radius:6px;overflow:hidden;">
+      <tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:12px 16px;font-weight:600;color:#374151;width:40%;">Incassant ID</td>
+        <td style="padding:12px 16px;">NL00ZZZ000000000000</td>
+      </tr>
+      <tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:12px 16px;font-weight:600;color:#374151;">Naam incassant</td>
+        <td style="padding:12px 16px;">Elevizion B.V.</td>
+      </tr>
+      <tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:12px 16px;font-weight:600;color:#374151;">Kenmerk machtiging</td>
+        <td style="padding:12px 16px;">${mandateRef}</td>
+      </tr>
+      <tr style="border-bottom:1px solid #e5e7eb;">
+        <td style="padding:12px 16px;font-weight:600;color:#374151;">Bedrijfsnaam</td>
+        <td style="padding:12px 16px;">${data.advertiserName}</td>
+      </tr>
+      <tr>
+        <td style="padding:12px 16px;font-weight:600;color:#374151;">Maandbedrag</td>
+        <td style="padding:12px 16px;">&euro;${data.monthlyAmount} <span style="color:#666;">(incl. ${data.vatPercent}% BTW)</span></td>
+      </tr>
+    </table>
+    
+    <div style="background:#fef3c7;padding:16px;border-radius:6px;margin:20px 0;border-left:4px solid #f59e0b;">
+      <p style="margin:0;font-weight:600;color:#92400e;">Actie vereist</p>
+      <p style="margin:8px 0 0 0;color:#92400e;">Vul het bijgevoegde SEPA machtigingsformulier in en stuur het ondertekend retour naar <a href="mailto:administratie@elevizion.nl" style="color:#1e3a5f;">administratie@elevizion.nl</a></p>
     </div>
     
-    <div style="background: #fff3cd; padding: 15px; border-radius: 8px; margin: 20px 0; border: 1px solid #ffc107;">
-      <p style="margin: 0;"><strong>Actie vereist:</strong> Vul het bijgevoegde SEPA machtigingsformulier in en stuur het ondertekend retour naar <a href="mailto:administratie@elevizion.nl">administratie@elevizion.nl</a></p>
-    </div>
+    <p style="font-size:13px;color:#666;">Door ondertekening van dit formulier machtigt u Elevizion B.V. doorlopend incasso-opdrachten te sturen naar uw bank om een bedrag van uw rekening af te schrijven overeenkomstig de opdracht van Elevizion B.V.</p>
     
-    <p>Door ondertekening van dit formulier machtigt u Elevizion B.V. doorlopend incasso-opdrachten te sturen naar uw bank om een bedrag van uw rekening af te schrijven en aan uw bank om doorlopend een bedrag af te schrijven overeenkomstig de opdracht van Elevizion B.V.</p>
-    
-    <p style="margin-top: 30px;">Heeft u vragen? Neem gerust contact met ons op.</p>
-    
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
-  </div>
-  
-  <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-    <p>© ${new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
-  </div>
-</body>
-</html>
+    <p style="margin-top:24px;">Heeft u vragen? Neem gerust contact met ons op.</p>
   `;
+
+  return baseEmailTemplate({
+    subject: "SEPA Incassomachtiging - Elevizion",
+    preheader: "Verzoek om SEPA incassomachtiging voor uw Elevizion contract",
+    title: "SEPA Incassomachtiging",
+    bodyHtml,
+    footerNote: "U ontvangt deze e-mail omdat u een reclamecontract heeft afgesloten bij Elevizion.",
+  });
+}
+
+// Legacy function for backwards compatibility
+export function generateSepaEmailHtml(data: SepaEmailData): string {
+  return generateSepaEmail(data).html;
 }
 
 // Send contract confirmation email
@@ -384,10 +555,13 @@ export async function sendContractEmail(
   toEmail: string,
   data: ContractEmailData
 ): Promise<EmailResult> {
+  const { html, text } = generateContractEmail(data);
   return sendEmail({
     to: toEmail,
     subject: `Uw Elevizion Contract: ${data.contractName}`,
-    html: generateContractEmailHtml(data),
+    html,
+    text,
+    templateKey: "contract_confirmation",
   });
 }
 
@@ -396,9 +570,12 @@ export async function sendSepaEmail(
   toEmail: string,
   data: SepaEmailData
 ): Promise<EmailResult> {
+  const { html, text } = generateSepaEmail(data);
   return sendEmail({
     to: toEmail,
     subject: "SEPA Incassomachtiging - Elevizion",
-    html: generateSepaEmailHtml(data),
+    html,
+    text,
+    templateKey: "sepa_mandate_request",
   });
 }

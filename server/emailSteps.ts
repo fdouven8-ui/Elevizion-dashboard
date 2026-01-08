@@ -3,7 +3,7 @@
  * Each step defines templateKey, subject, and idempotency rules
  */
 
-import { sendEmail } from "./email";
+import { sendEmail, baseEmailTemplate as centralEmailTemplate } from "./email";
 import { storage } from "./storage";
 
 export type EmailStep = 
@@ -154,94 +154,21 @@ export async function sendStepEmail(params: SendStepEmailParams): Promise<{
   }
 }
 
-// Centrale email template met logo, preheader en professionele footer
+// Wrapper voor emailSteps die de centrale template uit email.ts gebruikt
 interface EmailTemplateOptions {
   preheader?: string;
   showUnsubscribe?: boolean;
 }
 
 export function baseEmailTemplate(content: string, options: EmailTemplateOptions = {}): string {
-  const { preheader = "", showUnsubscribe = false } = options;
-  const year = new Date().getFullYear();
-  
-  return `<!DOCTYPE html>
-<html lang="nl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="X-UA-Compatible" content="IE=edge">
-  <title>Elevizion</title>
-</head>
-<body style="margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6; color: #333333; background-color: #f4f4f4;">
-  <!--[if mso]><table width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td align="center"><![endif]-->
-  
-  <!-- Preheader (onzichtbaar, voor inbox preview) -->
-  <div style="display: none; max-height: 0; overflow: hidden; mso-hide: all;">
-    ${preheader || "Bericht van Elevizion - See Your Business Grow"}
-    &nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;
-  </div>
-  
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f4f4f4;">
-    <tr>
-      <td align="center" style="padding: 20px 10px;">
-        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08);">
-          
-          <!-- Header met logo -->
-          <tr>
-            <td style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 24px 30px; text-align: left;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td>
-                    <img src="https://elevizion.nl/assets/logo-email.png" alt="Elevizion" width="160" height="auto" style="display: block; max-width: 160px; height: auto; border: 0;" />
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          
-          <!-- Body content -->
-          <tr>
-            <td style="padding: 32px 30px; background-color: #ffffff;">
-              ${content}
-            </td>
-          </tr>
-          
-          <!-- Footer -->
-          <tr>
-            <td style="background-color: #f8f9fa; padding: 24px 30px; border-top: 1px solid #e9ecef;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td style="font-size: 13px; color: #6c757d; line-height: 1.5;">
-                    <p style="margin: 0 0 8px 0;"><strong>Elevizion</strong></p>
-                    <p style="margin: 0 0 4px 0;">E-mail: <a href="mailto:info@elevizion.nl" style="color: #1e3a5f; text-decoration: none;">info@elevizion.nl</a></p>
-                    <p style="margin: 0 0 4px 0;">Telefoon: <a href="tel:+31612345678" style="color: #1e3a5f; text-decoration: none;">+31 6 12 34 56 78</a></p>
-                    <p style="margin: 0;">Web: <a href="https://elevizion.nl" style="color: #1e3a5f; text-decoration: none;">elevizion.nl</a></p>
-                  </td>
-                </tr>
-                ${showUnsubscribe ? `
-                <tr>
-                  <td style="padding-top: 16px; font-size: 11px; color: #adb5bd;">
-                    <p style="margin: 0;">U ontvangt deze e-mail omdat u klant bent of contact heeft gehad met Elevizion.</p>
-                  </td>
-                </tr>
-                ` : ""}
-                <tr>
-                  <td style="padding-top: 16px; text-align: center; font-size: 11px; color: #adb5bd;">
-                    <p style="margin: 0;">&copy; ${year} Elevizion. Alle rechten voorbehouden.</p>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          
-        </table>
-      </td>
-    </tr>
-  </table>
-  
-  <!--[if mso]></td></tr></table><![endif]-->
-</body>
-</html>`;
+  // Gebruik de centrale template uit email.ts
+  const result = centralEmailTemplate({
+    subject: "Elevizion",
+    preheader: options.preheader,
+    bodyHtml: content,
+    showUnsubscribe: options.showUnsubscribe,
+  });
+  return result.html;
 }
 
 // Genereer plain-text versie van email content
