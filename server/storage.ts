@@ -72,6 +72,28 @@ import type {
   LocationOnboardingEvent, InsertLocationOnboardingEvent,
 } from "@shared/schema";
 
+// Lead query params for server-side filtering/pagination
+export interface LeadQueryParams {
+  q?: string;
+  type?: string;
+  status?: string;
+  onlyNew?: boolean;
+  dateRange?: "7" | "30" | "all";
+  sortBy?: "createdAt" | "companyName" | "status";
+  sortDir?: "asc" | "desc";
+  page?: number;
+  pageSize?: number;
+}
+
+export interface LeadQueryResult {
+  items: Lead[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  newCount: number;
+}
+
 export interface IStorage {
   // Advertisers
   getAdvertisers(): Promise<Advertiser[]>;
@@ -260,6 +282,7 @@ export interface IStorage {
 
   // Sales & Acquisitie (Leads, Surveys, Signatures)
   getLeads(): Promise<Lead[]>;
+  getLeadsPaginated(params: LeadQueryParams): Promise<LeadQueryResult>;
   getLead(id: string): Promise<Lead | undefined>;
   getLeadsByStatus(status: string): Promise<Lead[]>;
   getLeadsByType(type: string): Promise<Lead[]>;
@@ -1357,6 +1380,105 @@ export class DatabaseStorage implements IStorage {
 
   async getLeads(): Promise<Lead[]> {
     return await db.select().from(schema.leads).orderBy(desc(schema.leads.createdAt));
+  }
+
+  async getLeadsPaginated(params: LeadQueryParams): Promise<LeadQueryResult> {
+    const {
+      q,
+      type,
+      status,
+      onlyNew = false,
+      dateRange = "all",
+      sortBy = "createdAt",
+      sortDir = "desc",
+      page = 1,
+      pageSize = 25,
+    } = params;
+
+    // Build conditions array
+    const conditions = [];
+
+    // Text search (case-insensitive partial match)
+    if (q && q.trim()) {
+      const searchTerm = `%${q.trim()}%`;
+      conditions.push(sql`(
+        ${schema.leads.companyName} ILIKE ${searchTerm} OR
+        ${schema.leads.contactName} ILIKE ${searchTerm} OR
+        ${schema.leads.email} ILIKE ${searchTerm} OR
+        ${schema.leads.phone} ILIKE ${searchTerm}
+      )`);
+    }
+
+    // Type filter
+    if (type && type !== "all") {
+      conditions.push(eq(schema.leads.type, type));
+    }
+
+    // Status filter
+    if (status && status !== "all") {
+      conditions.push(eq(schema.leads.status, status));
+    }
+
+    // Only new filter
+    if (onlyNew) {
+      conditions.push(eq(schema.leads.status, "nieuw"));
+    }
+
+    // Date range filter
+    if (dateRange === "7") {
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+      conditions.push(gte(schema.leads.createdAt, sevenDaysAgo));
+    } else if (dateRange === "30") {
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      conditions.push(gte(schema.leads.createdAt, thirtyDaysAgo));
+    }
+
+    // Build WHERE clause
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    // Count total for filtered results
+    const [{ count: totalCount }] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(schema.leads)
+      .where(whereClause);
+
+    // Count new leads (global, not filtered)
+    const [{ count: newCount }] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(schema.leads)
+      .where(eq(schema.leads.status, "nieuw"));
+
+    // Build ORDER BY
+    const orderColumn = sortBy === "companyName" 
+      ? schema.leads.companyName 
+      : sortBy === "status" 
+        ? schema.leads.status 
+        : schema.leads.createdAt;
+    const orderFn = sortDir === "asc" ? sql`${orderColumn} ASC` : sql`${orderColumn} DESC`;
+
+    // Fetch paginated items
+    const offset = (page - 1) * pageSize;
+    const items = await db
+      .select()
+      .from(schema.leads)
+      .where(whereClause)
+      .orderBy(orderFn)
+      .limit(pageSize)
+      .offset(offset);
+
+    const total = Number(totalCount);
+    const totalPages = Math.ceil(total / pageSize);
+
+    return {
+      items,
+      total,
+      page,
+      pageSize,
+      totalPages,
+      newCount: Number(newCount),
+    };
   }
 
   async getLead(id: string): Promise<Lead | undefined> {

@@ -5697,7 +5697,26 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
-  app.get("/api/leads", async (_req, res) => {
+  app.get("/api/leads", async (req, res) => {
+    const { q, type, status, onlyNew, dateRange, sortBy, sortDir, page, pageSize } = req.query;
+    
+    // If any pagination/filter params provided, use paginated endpoint
+    if (q || type || status || onlyNew || dateRange || sortBy || sortDir || page || pageSize) {
+      const result = await storage.getLeadsPaginated({
+        q: q as string,
+        type: type as string,
+        status: status as string,
+        onlyNew: onlyNew === "true",
+        dateRange: dateRange as "7" | "30" | "all",
+        sortBy: sortBy as "createdAt" | "companyName" | "status",
+        sortDir: sortDir as "asc" | "desc",
+        page: page ? parseInt(page as string) : 1,
+        pageSize: pageSize ? parseInt(pageSize as string) : 25,
+      });
+      return res.json(result);
+    }
+    
+    // Legacy: return all leads as array for backwards compatibility
     const leads = await storage.getLeads();
     res.json(leads);
   });

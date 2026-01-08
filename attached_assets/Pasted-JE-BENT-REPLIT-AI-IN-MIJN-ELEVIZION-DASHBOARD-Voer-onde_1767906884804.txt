@@ -1,0 +1,174 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION DASHBOARD.
+Voer onderstaande verbeteringen uit aan het “Leads” scherm zodat het:
+- functioneel sterk is (zoeken, filteren, sorteren, paginatie)
+- visueel rustig, overzichtelijk en professioneel oogt
+- fijn hanteerbaar is bij veel leads
+ZONDER grote refactor of wijzigingen aan de bestaande app-architectuur.
+Hergebruik bestaande UI components en styling waar mogelijk.
+
+====================
+DOEL (SAMENVATTING)
+====================
+- Leads snel kunnen vinden en beoordelen
+- Geen drukke tabel met veel dropdowns
+- Details bekijken en status wijzigen via een klein detailpaneel (drawer)
+- Subtiele kleurcodes en badges, geen schreeuwerige UI
+
+====================
+1) UI – TOOLBAR BOVEN DE TABEL
+====================
+Voeg boven de tabel “Alle leads” een rustige, compacte toolbar toe met:
+
+- Zoekveld (debounce 300–500ms)
+  Placeholder: “Zoek bedrijf, contact, e-mail of telefoon…”
+- Filter Type (dropdown):
+  - Alle
+  - Adverteren
+  - Scherm
+- Filter Status (dropdown):
+  - Alle
+  - Nieuw
+  - Contacted
+  - Qualified
+  - Won
+  - Lost
+- Toggle / checkbox: “Alleen nieuwe”
+- Datumfilter:
+  - Laatste 7 dagen
+  - Laatste 30 dagen
+  - Alles
+- Sorteer dropdown:
+  - Datum (nieuw → oud) [default]
+  - Datum (oud → nieuw)
+  - Bedrijf (A → Z)
+  - Status
+- Reset filters knop
+
+Zorg dat de toolbar rustig oogt:
+- Alles in één rij of twee nette rijen
+- Geen felle kleuren
+- Subtiele borders en spacing
+
+====================
+2) TABEL – RUSTIG & OVERZICHTELIJK
+====================
+Vereenvoudig de tabelkolommen tot alleen het noodzakelijke:
+
+- Datum (compact, bijv. “8 jan 19:36”)
+- Type (kleine badge: Adverteren / Scherm)
+- Bedrijf
+- Contactpersoon
+- Status (kleine badge, GEEN dropdown)
+- Actie: “Bekijk”
+
+❌ Verwijder uit de tabel:
+- E-mail
+- Telefoon
+- Status dropdowns per rij
+
+✔ Maak hele rij klikbaar:
+- Klik op rij OF “Bekijk” opent detailpaneel
+
+====================
+3) STATUS – ALLEEN VIA DETAILPANEEL
+====================
+- In de tabel:
+  - Status = badge met subtiele kleur
+- Status wijzigen:
+  - Alleen mogelijk in het detailpaneel (drawer)
+- Na wijzigen:
+  - Toon korte toast “Status bijgewerkt”
+  - Refresh lijst zonder filters/pagina te resetten
+
+====================
+4) DETAILPANEEL (DRAWER) BIJ KLIK
+====================
+Bij klik op een lead:
+- Open een rechter-side drawer (voorkeur) of kleine modal
+
+Inhoud:
+- Bedrijfsnaam (titel)
+- Type (badge)
+- Status (dropdown – enige plek waar status kan worden gewijzigd)
+- Contactpersoon
+- E-mail (klikbaar mailto)
+- Telefoon (klikbaar tel)
+- Datum + tijd aanvraag
+- (optioneel) Notities veld
+
+UX:
+- Rustige layout
+- Logische volgorde
+- Sluiten met X of ESC
+
+====================
+5) SERVER-SIDE FILTERING / SORTING / PAGINATION
+====================
+Pas bestaande /api/leads (of maak /api/leads/list) aan zodat deze query params ondersteunt:
+
+- q= (search)
+- type=ADVERTEREN|SCHERM
+- status=NEW|CONTACTED|QUALIFIED|WON|LOST
+- onlyNew=true
+- dateRange=7|30|all
+- sortBy=createdAt|companyName|status
+- sortDir=asc|desc
+- page=1..n
+- pageSize=10|25|50
+
+Search moet case-insensitive partial match zijn op:
+- companyName
+- contactPerson
+- email
+- phone
+
+Response structuur:
+{
+  items: [...],
+  total,
+  page,
+  pageSize,
+  totalPages
+}
+
+====================
+6) PAGINATION & SNELFILTERS
+====================
+Onder de tabel:
+- Vorige / Volgende
+- “Pagina X van Y”
+- Page size selector (10 / 25 / 50)
+- “X resultaten”
+
+Boven rechts:
+- Badge “X nieuwe leads”
+- Badge is klikbaar:
+  - Zet filter onlyNew=true
+  - Sorteer automatisch op datum nieuw → oud
+
+====================
+7) UX DETAILS
+====================
+- Bewaar filters & sort in URL querystring
+- Loading state bij data fetch
+- Empty state:
+  “Geen leads gevonden met deze filters”
+- Alles moet snel aanvoelen en rustig ogen
+- GEEN extra dashboards, GEEN overbodige animaties
+
+====================
+8) BELANGRIJK
+====================
+- Geen grote refactor
+- Geen bestaande flows breken
+- Status updates blijven direct opgeslagen
+- End-to-end getest: filters → klik → detail → status wijzigen → terug naar lijst
+
+====================
+LEVER OP
+====================
+- Rustig, professioneel Leads overzicht
+- Toolbar met zoeken/filteren/sorteren
+- Subtiele badges i.p.v. dropdown chaos
+- Detail drawer voor alle lead-info + status
+- Server-side filtering & pagination
