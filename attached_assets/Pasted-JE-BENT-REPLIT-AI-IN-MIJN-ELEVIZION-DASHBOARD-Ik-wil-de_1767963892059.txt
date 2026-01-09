@@ -1,0 +1,74 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION DASHBOARD.
+Ik wil de linker sidebar rustiger en smaller maken. Het menu is nu te breed en te veel items. Pas alleen navigatie/layout aan (GEEN business logic wijzigingen). Hergebruik bestaande styling/componenten.
+
+DOEL
+- Sidebar smaller (compact) en rustiger
+- Minder top-level items
+- Logische groepering: Leads onder Onboarding, Email Center onder Instellingen, Instellingen onder Administrator (onderaan)
+
+========================
+1) SIDEBAR BREEDTE COMPACTER
+========================
+- Verklein de vaste sidebar width (bijv. van ~260–280px naar ~210–230px) zodat het minder ruimte pakt.
+- Zorg dat labels nog leesbaar zijn (geen rare afbrekingen).
+- Voeg eventueel “icon-only collapsed state” toe als dit al bestaat, maar als dat te veel is: alleen smaller maken is voldoende.
+- Houd padding/spacing consistent en rustig.
+
+========================
+2) MENU STRUCTUUR AANPASSEN (INFORMATIE-ARCHITECTUUR)
+========================
+Huidige top-level items (voorbeeld): Home, Leads, Onboarding, Schermen, Adverteerders, Plaatsingen, Financieel, Email Center, Instellingen
+
+Nieuwe structuur:
+A) Top-level (hoofd)
+- Home
+- Onboarding (met subitems)
+- Schermen
+- Adverteerders
+- Plaatsingen
+- Financieel
+
+B) Subitems onder Onboarding (accordion / expandable)
+- Nieuwe lead(s) / Leads  (route blijft hetzelfde: /leads)
+- Nieuw scherm (bestaande onboarding flow)
+- Nieuwe adverteerder (bestaande onboarding flow)
+- (optioneel) Plaatsingen koppelen (als die link bestaat)
+
+C) Administrator sectie (onderaan, gescheiden)
+- Administrator (label/sectie)
+  - Instellingen (route /settings)
+    - Email Center als subtab/subitem binnen Instellingen (route mag /settings/email of /settings?tab=email)
+(= Email Center niet meer als apart menu-item)
+
+Concreet:
+- Verwijder top-level “Leads” menu-item.
+- Maak “Leads” een subitem binnen “Onboarding”.
+- Verwijder top-level “Email Center” menu-item.
+- Verplaats Email Center naar Instellingen als subtab/subroute.
+
+========================
+3) INSTELLINGEN PAGINA: EMAIL CENTER INTEGREREN
+========================
+- In /settings:
+  - Voeg tabs/side-submenu toe: “Algemeen”, “Email Center” (en andere bestaande settings indien aanwezig)
+- Migreer de bestaande Email Center UI naar deze tab zonder inhoudelijke veranderingen.
+- Zorg dat bestaande routes niet breken:
+  - Als /email-center bestaat: laat die route bestaan maar redirect naar /settings/email (301/302 client-side is prima).
+
+========================
+4) UX DETAILS (RUSTIG)
+========================
+- Onboarding menu mag een uitklapbare sectie zijn met chevron.
+- Toon badges aantallen bij subitems waar relevant:
+  - Leads (bijv. “3” nieuwe leads) — klein en subtiel.
+- Active state moet duidelijk blijven.
+
+========================
+5) ACCEPTANCE CRITERIA
+========================
+- Sidebar is zichtbaar smaller en oogt rustiger
+- Leads staat onder Onboarding, niet meer top-level
+- Email Center zit onder Instellingen (als tab/subroute)
+- Instellingen staat onderaan in Administrator sectie
+- Alle bestaande pagina’s blijven bereikbaar (oude routes desnoods redirect)
+- Geen wijzigingen aan data/logic, alleen navigatie + layout

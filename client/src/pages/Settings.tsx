@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
@@ -1448,6 +1449,31 @@ function UsersManagementTab({ users, queryClient, toast }: { users: UserRole[]; 
 export default function Settings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [location, navigate] = useLocation();
+  
+  const validTabs = ["automations", "templates", "users", "integrations", "email", "finance"];
+  
+  // Parse query params for tab navigation
+  const getTabFromUrl = () => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    return tab && validTabs.includes(tab) ? tab : "automations";
+  };
+  
+  const [activeTab, setActiveTab] = useState(getTabFromUrl);
+  
+  // Update tab when URL changes (for browser back/forward)
+  useEffect(() => {
+    setActiveTab(getTabFromUrl());
+  }, [location]);
+  
+  // Sync URL when tab changes
+  const handleTabChange = (newTab: string) => {
+    setActiveTab(newTab);
+    const url = newTab === "automations" ? "/settings" : `/settings?tab=${newTab}`;
+    window.history.replaceState(null, "", url);
+  };
+  
   const [rules, setRules] = useState<AutomationRule[]>(defaultRules);
   const [activeHours, setActiveHours] = useState<ActiveHoursSettings>(defaultActiveHours);
   const [templateCategory, setTemplateCategory] = useState("all");
@@ -1689,7 +1715,7 @@ export default function Settings() {
         </Button>
       </div>
 
-      <Tabs defaultValue="automations">
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList className="grid w-full grid-cols-6">
           <TabsTrigger value="automations" className="gap-2">
             <Zap className="h-4 w-4" />

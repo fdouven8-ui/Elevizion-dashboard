@@ -1,8 +1,17 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import DashboardLayout from "@/components/layout/DashboardLayout";
+import { useEffect } from "react";
+
+function EmailCenterRedirect() {
+  const [, navigate] = useLocation();
+  useEffect(() => {
+    navigate("/settings?tab=email", { replace: true });
+  }, [navigate]);
+  return null;
+}
 
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
@@ -22,7 +31,6 @@ import ContentInventory from "@/pages/ContentInventory";
 import Yodeck from "@/pages/Yodeck";
 import Entities from "@/pages/Entities";
 import SyncLogs from "@/pages/SyncLogs";
-import EmailCenter from "@/pages/EmailCenter";
 import AdvertiserPortal from "@/pages/AdvertiserPortal";
 import LocationPortal from "@/pages/LocationPortal";
 import DataHealthPage from "@/pages/DataHealthPage";
@@ -52,7 +60,9 @@ function DashboardRouter() {
         <Route path="/yodeck" component={Yodeck} />
         <Route path="/entities" component={Entities} />
         <Route path="/sync-logs" component={SyncLogs} />
-        <Route path="/email-center" component={EmailCenter} />
+        <Route path="/email-center">
+          <EmailCenterRedirect />
+        </Route>
         <Route path="/data-health" component={DataHealthPage} />
         <Route component={NotFound} />
       </Switch>
