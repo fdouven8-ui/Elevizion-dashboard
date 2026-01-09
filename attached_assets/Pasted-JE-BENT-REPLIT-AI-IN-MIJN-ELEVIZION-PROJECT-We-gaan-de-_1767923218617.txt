@@ -1,0 +1,146 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION PROJECT.
+We gaan de complete “standaard mail” setup professionaliseren: afzender, opmaak, inhoud en velden. Dit moet in ALLE standaard mails in de app worden toegepast, zonder grote refactor. Centrale template/wrapper blijft het uitgangspunt.
+
+BELANGRIJKSTE WIJZIGINGEN
+1) Afzender moet NO-REPLY zijn (niet info@):
+   - From: "Elevizion" <noreply@elevizion.nl>
+   - Reply-To: info@elevizion.nl
+   - (zodat klanten kunnen antwoorden maar het technisch netjes is)
+2) Opmaak en inhoud moeten worden nagekeken en opgeschoond:
+   - Alleen tonen wat relevant is voor klant
+   - Interne velden NOOIT naar klant mailen (zoals EVZ nummer / interne ID / database keys)
+3) De mails moeten er rustig, premium en consistent uitzien (Gmail/Outlook proof):
+   - inline CSS
+   - max width 600px
+   - duidelijke hiërarchie (titel → uitleg → CTA → footer)
+   - altijd HTML + TEXT (multipart)
+4) Logo moet in elke mail (kies 1 van de 2 logo’s die ik heb aangeleverd en gebruik deze overal).
+
+========================
+A) CENTRALE EMAIL WRAPPER UPGRADE
+========================
+Update/maak één centrale email wrapper die ELKE mail gebruikt.
+- Inputs: subject, preheader, title, introText, bodyBlocks[], cta?, secondaryCta?, footerNote?
+- Output: html + text
+
+BodyBlocks structuur (voor consistentie):
+- type: "paragraph" | "bullets" | "divider" | "infoCard"
+- content: string[] (voor bullets/paragraph)
+- label/value pairs voor infoCard
+
+Visuele richtlijnen:
+- rustige achtergrond (#f6f7f9), witte container, subtiele borders
+- typografie: 16px body, 22–26px title, goede line-height
+- CTA button: subtiel groen, afgerond, niet te groot
+- Altijd “Als de knop niet werkt:” + URL als platte link eronder
+- Footer: Elevizion + contact (info@elevizion.nl) + waarom je deze mail krijgt
+
+========================
+B) AFZENDER / REPLY-TO CENTRAAL AFDWINGEN
+========================
+Maak één centrale config (bijv. /server/email/config.ts):
+- DEFAULT_FROM = "Elevizion <noreply@elevizion.nl>"
+- DEFAULT_REPLY_TO = "info@elevizion.nl"
+Pas alle email sends aan zodat:
+- from = DEFAULT_FROM
+- replyTo = DEFAULT_REPLY_TO
+Zorg dat geen enkele mail nog direct hardcoded "info@elevizion.nl" als from gebruikt.
+
+Let op: als mailprovider “sender signature” vereist, implementeer fallback:
+- als noreply nog niet geverifieerd is, log waarschuwing + gebruik tijdelijk noreply maar met reply-to correct.
+(Opslaan/verzenden mag niet falen door deze check.)
+
+========================
+C) CONTENT RULES: WAT NAAR KLANT WEL/NIET
+========================
+1) Klantmails (naar lead/adverteerder/schermlocatie):
+- WEL tonen:
+  - bedrijf / contactpersoon (als ingevuld)
+  - bevestiging wat we ontvangen hebben (kort)
+  - wat er nu gaat gebeuren (verwachting)
+  - hoe ze contact kunnen opnemen (Reply-To info@elevizion.nl)
+  - eventuele CTA link (alleen als nodig)
+- NIET tonen:
+  - EVZ nummer, interne id’s, database keys, technische statuscodes
+  - interne notities
+  - admin links (tenzij expliciet bedoeld)
+
+2) Interne mails (naar info@elevizion.nl / admin):
+- WEL tonen:
+  - alle lead velden (bedrijf/contact/email/telefoon/type)
+  - interne identifiers (EVZ nummer / leadId) MAG HIER WEL, maar netjes:
+    - label: “Interne referentie: EVZ-xxxx”
+  - CTA “Open lead in dashboard”
+
+Maak dus twee “views” per mailtype:
+- customer-facing template content (clean)
+- internal template content (includes internal ref)
+
+========================
+D) PAS ALLE STANDAARD EMAILS AAN
+========================
+Zoek alle plekken waar mails gestuurd worden en laat ze allemaal via de wrapper gaan.
+Minimaal:
+
+1) Lead bevestiging naar klant (CUSTOMER)
+- From noreply@elevizion.nl, Reply-To info@
+- Subject: "We hebben je aanvraag ontvangen – Elevizion"
+- Preheader: "We nemen binnen 1 werkdag contact met je op."
+- Title: "Aanvraag ontvangen"
+- Inhoud:
+  - "Bedankt {contactpersoon/bedrijf}! We hebben je aanvraag ontvangen."
+  - "Binnen 1 werkdag nemen we contact met je op om je wensen te bespreken."
+  - Bullet: "Wat kun je alvast klaarzetten?" (optioneel: korte 2 bullets, geen verplicht upload)
+- GEEN EVZ nummer in klantmail.
+
+2) Lead notificatie naar intern (INTERNAL)
+- Subject: "Nieuwe lead: {type} – {companyName}"
+- Title: "Nieuwe lead binnen"
+- InfoCard met alle velden + interne referentie EVZ-xxxx
+- CTA: "Open in dashboard" (link met leadId)
+
+3) Onboarding invul-link mails (CUSTOMER)
+- Clean content + CTA + fallback link
+- GEEN interne ref zichtbaar
+
+4) “Wat nu” mails (CUSTOMER)
+- Duidelijke volgende stappen (bullets)
+- Verwijs naar reply-to info@
+
+5) Overige standaard mails in app
+- Alles via wrapper
+- Controleer dat nergens interne velden in klantmails lekken.
+
+========================
+E) OPMAAK CHECK & FIX (GMAIL/OUTLOOK)
+========================
+- Gebruik inline CSS (niet afhankelijk van classes)
+- Test rendering door:
+  - voor elke mail een “preview HTML” te genereren en lokaal te openen
+  - (optioneel) een /admin/email-preview route die templates kan tonen met dummy data
+- Zorg dat logo, margins, button en font sizes overal goed staan.
+- Vermijd te brede tabellen; gebruik eenvoudige div-based layout.
+
+========================
+F) DELIVERABILITY (SPAM KANS OMLAAG)
+========================
+- Altijd HTML + TEXT
+- Consistent From noreply + Reply-To info
+- Voeg in footer: bedrijfsnaam + contact + waarom je deze mail krijgt
+- Geen overbodige tracking parameters in links
+- Voeg in Instellingen een checklist blok met SPF/DKIM/DMARC instructies voor elevizion.nl
+  - SPF: include van provider
+  - DKIM: provider keys
+  - DMARC start: v=DMARC1; p=none; rua=mailto:info@elevizion.nl
+(Alleen instructies tonen is genoeg.)
+
+========================
+G) ACCEPTANCE CRITERIA
+========================
+- Alle standaard mails komen vanaf noreply@elevizion.nl
+- Reply-To is info@elevizion.nl
+- Klantmails bevatten geen EVZ/interne ids
+- Interne mails mogen EVZ bevatten maar netjes gelabeld
+- Alle mails hebben dezelfde professionele opmaak + logo
+- Rendering is netjes in Gmail en acceptabel in Outlook
+- Implementatie is centraal en herbruikbaar (1 wrapper)
