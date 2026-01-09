@@ -23,8 +23,10 @@ import {
   Plus,
   MapPin,
   Copy,
-  ExternalLink
+  ExternalLink,
+  Link2
 } from "lucide-react";
+import { Link } from "wouter";
 
 type WizardType = "screen" | "advertiser" | "ad" | "location" | null;
 
@@ -1067,12 +1069,14 @@ export default function Onboarding() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold" data-testid="page-title">Onboarding</h1>
-        <p className="text-muted-foreground">Snel nieuwe items toevoegen met guided wizards</p>
+        <p className="text-muted-foreground">
+          Voeg een nieuw scherm of adverteerder toe. Koppel daarna geplaatste media via Plaatsingen.
+        </p>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-3">
+      <div className="grid gap-6 md:grid-cols-2">
         <WizardCard
-          title="Nieuwe Locatie"
+          title="Nieuw Scherm"
           description="Start onboarding voor nieuwe schermlocatie met portal-link"
           icon={MapPin}
           onClick={() => setActiveWizard("location")}
@@ -1085,28 +1089,28 @@ export default function Onboarding() {
           onClick={() => setActiveWizard("advertiser")}
           color="green"
         />
-        <WizardCard
-          title="Advertentie Plaatsen"
-          description="Bekijk hoe je via Yodeck advertenties plaatst en koppelt"
-          icon={Target}
-          onClick={() => setActiveWizard("ad")}
-          color="purple"
-        />
       </div>
 
-      <Card className="bg-muted/50">
-        <CardContent className="pt-6">
-          <div className="flex items-start gap-4">
-            <div className="p-2 bg-purple-100 rounded-lg">
-              <Target className="h-5 w-5 text-purple-600" />
+      <Card className="bg-muted/30 border-dashed">
+        <CardContent className="py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-orange-100 rounded-lg">
+                <Link2 className="h-5 w-5 text-orange-600" />
+              </div>
+              <div>
+                <h3 className="font-medium">Plaatsingen koppelen</h3>
+                <p className="text-sm text-muted-foreground">
+                  Koppel Yodeck media aan adverteerders voor facturatie
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-medium">Workflow: Yodeck → Plaatsingen</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                Advertenties worden in <strong>Yodeck</strong> geplaatst en automatisch gesynchroniseerd. 
-                Koppel ze daarna in <strong>Plaatsingen</strong> aan de juiste adverteerder voor facturatie.
-              </p>
-            </div>
+            <Link href="/placements">
+              <Button variant="outline" data-testid="button-goto-placements">
+                Ga naar Plaatsingen
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+            </Link>
           </div>
         </CardContent>
       </Card>

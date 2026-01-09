@@ -1,0 +1,44 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION DASHBOARD.
+Het huidige onboarding-menu bevat items die niet waardevol zijn/onnodig ogen. Maak het menu rustiger en logischer, zonder de flows “Nieuw scherm” en “Nieuwe adverteerder” te wijzigen.
+
+DOEL
+- Onboarding menu alleen tonen wat ik echt nodig heb.
+- “Nieuw scherm” en “Nieuwe adverteerder” blijven EXACT hetzelfde werken.
+- De 3e onboarding (advertentie/plaatsing/extra onboarding) moet NIET meer als “onboarding stap” in het menu staan als dat niet nodig is.
+- In plaats daarvan: één duidelijke actie die verwijst naar “Plaatsingen” (waar koppelen/archiveren gebeurt).
+
+WIJZIGINGEN
+
+1) ONBOARDING MENU OPSCHONEN
+- Laat alleen deze 2 items zichtbaar in het onboarding-menu:
+  - Nieuw scherm
+  - Nieuwe adverteerder
+- Verwijder/verberg alle overige onboarding-items uit het menu (dus niet verwijderen uit code als het risico geeft, maar uit UI navigatie halen).
+
+2) VERVANG 3E ITEM DOOR EEN SIMPELE LINK (GEEN ONBOARDING)
+- Voeg onder onboarding (of in hetzelfde menu, maar niet als stap) een nieuw item toe:
+  - Naam: “Plaatsingen koppelen”
+  - Icoon: link/chain of ads icon (subtiel)
+  - Actie: navigeer naar /placements
+- Dit item heeft GEEN form, GEEN stappen, GEEN onboarding UI. Alleen een route-link.
+
+3) “LEEGTE” OPLOSSEN (ALS ER EEN OVERZICHTPAGINA IS)
+- Als er een onboarding-overzichtspagina bestaat die nu leeg/saai wordt:
+  - Toon een compacte intro bovenaan:
+    - Titel: “Onboarding”
+    - Subtekst: “Voeg een nieuw scherm of adverteerder toe. Koppel daarna geplaatste media via Plaatsingen.”
+  - Toon 2 grote buttons:
+    - “Nieuw scherm”
+    - “Nieuwe adverteerder”
+  - En een kleinere link/button:
+    - “Ga naar Plaatsingen”
+
+4) BELANGRIJK
+- Wijzig GEEN logica/velden/flows van “Nieuw scherm” en “Nieuwe adverteerder”.
+- Geen grote refactor.
+- Alleen menu/UX opruimen + route-link toevoegen.
+
+OPLEVERING
+- Rustig onboarding-menu met alleen 2 echte onboarding acties
+- Extra navigatie “Plaatsingen koppelen” die direct naar Plaatsingen gaat
+- Alles compileert en werkt zoals voorheen
