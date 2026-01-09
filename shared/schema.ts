@@ -1491,12 +1491,15 @@ export const yodeckMediaLinks = pgTable("yodeck_media_links", {
   mediaType: text("media_type"), // video, image, app, etc.
   category: text("category").notNull().default("ad"), // ad, non_ad
   duration: integer("duration"), // Duration in seconds
+  // Status: UNLINKED (default), LINKED (has advertiser), ARCHIVED (hidden from default view)
+  status: text("status").notNull().default("UNLINKED"), // UNLINKED | LINKED | ARCHIVED
   // Linking fields (null until linked)
   advertiserId: varchar("advertiser_id").references(() => advertisers.id),
   placementId: varchar("placement_id").references(() => placements.id),
   // Tracking
   lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
   screenCount: integer("screen_count").default(1), // How many screens show this
+  archivedAt: timestamp("archived_at"), // When archived (null = not archived)
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

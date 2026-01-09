@@ -1,0 +1,103 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION DASHBOARD PROJECT.
+Belangrijk: pas onboarding NIET aan voor “Nieuw scherm” en “Nieuwe adverteerder”. Die moeten exact blijven zoals ze nu zijn.
+Alleen de 3e onboarding/flow (waar nu “Nieuwe ad”/advertentie aanmaken zit) moet aangepast worden.
+Daarnaast moet het submenu/menu “Plaatsingen” volledig aangepast worden naar de nieuwe werkwijze: Yodeck is leidend, dashboard koppelt Yodeck media aan adverteerders.
+
+DOEL
+- Onboarding stap 3: “Nieuwe ad” (of alles wat advertenties aanmaakt in de app) moet weg/worden vervangen.
+- Plaatsingen wordt de centrale plek voor:
+  1) automatisch inlezen van Yodeck geplaatste media/ads
+  2) koppelen aan adverteerder/contact (Moneybird)
+  3) overzicht + filters + archief
+
+========================
+1) ONBOARDING: ALLEEN STAP 3 AANPASSEN
+========================
+- Laat “Nieuw scherm” en “Nieuwe adverteerder” 100% ongemoeid.
+- Zoek de 3e flow/stap (die nu gaat over “Nieuwe ad” / advertentie aanmaken / placements creëren).
+- Verwijder daar ALLE functionaliteit waarbij de app zelf “ads” aanmaakt.
+- Vervang stap 3 door een korte instructie/afhandeling die past bij de nieuwe workflow, bv:
+  Titel: “Advertentie plaatsen (via Yodeck)”
+  Tekst (NL, kort):
+  - “Plaats de video in Yodeck in de juiste playlist (playlist = zaak/schermlocatie).”
+  - “Zodra de video in Yodeck staat, verschijnt deze automatisch in ‘Plaatsingen’ als ‘Niet gekoppeld’.”
+  - “Koppel hem daarna in ‘Plaatsingen’ aan de juiste adverteerder.”
+- Geen extra velden, geen uploads, geen nieuwe ad records in onboarding.
+- Als er mails/teksten gekoppeld zijn aan deze stap: pas alleen die stap-content aan (geen andere onboarding mails wijzigen).
+
+========================
+2) PLAATSINGEN MENU: VOLLEDIG AANPASSEN NAAR NIEUWE FLOW
+========================
+Context: de app leest Yodeck ads/media al in.
+Wij willen dat “Plaatsingen” NIET meer gebaseerd is op handmatig gemaakte ads, maar op Yodeck media die al geplaatst is.
+
+2.1 Datamodel (hergebruik als het al bestaat)
+- Gebruik bestaande “placements” structuur indien aanwezig.
+- Anders maak minimaal Placement aan:
+  - id
+  - yodeckMediaId (required)
+  - yodeckMediaName
+  - yodeckPlaylistId + yodeckPlaylistName (zaak/schermlocatie)
+  - yodeckScreenId (optioneel)
+  - advertiserId (Moneybird contact id of interne adverteerder id)
+  - status: UNLINKED | LINKED | ARCHIVED
+  - createdAt, updatedAt
+- Cruciaal: sync mag NOOIT gekoppelde advertiserId overschrijven.
+
+2.2 Sync (Yodeck -> Plaatsingen)
+- In de bestaande Yodeck sync:
+  - Voor elk relevant Yodeck media item dat op een playlist/scherm staat:
+    - upsert Placement (key op yodeckMediaId + playlistId/screenId afhankelijk van huidige structuur)
+    - zet status standaard UNLINKED als er nog geen advertiserId is
+    - update metadata (naam/playlist) maar behoud koppeling
+- Verwijder geen placements automatisch als media verdwijnt; markeer desnoods “inactive” of laat staan.
+
+2.3 UI: Plaatsingen overzicht (rustig + krachtig)
+- Maak een rustige tabel met kolommen:
+  - Datum (createdAt)
+  - Zaak/Playlist
+  - Media naam (Yodeck)
+  - Adverteerder (leeg indien niet gekoppeld)
+  - Status badge (Niet gekoppeld / Gekoppeld / Archief)
+  - Actie: “Bekijk” (of rij klikbaar)
+- Toolbar bovenaan:
+  - Zoek (media naam, zaak/playlist, adverteerder)
+  - Filter status: Alle / Niet gekoppeld / Gekoppeld / Archief
+  - Filter zaak/playlist (dropdown)
+  - Sort (datum nieuw→oud default, zaak A→Z, status)
+  - Toggle: “Toon archief” (default UIT)
+  - Reset filters
+- Paginatie (10/25/50)
+
+2.4 Detail drawer (koppelen & acties)
+- Klik op rij opent drawer rechts met:
+  - Yodeck info: media naam, playlist/zaak, eventueel duur
+  - Koppelen:
+    - Zoekbare dropdown “Kies adverteerder” (Moneybird contacts / interne adverteerders)
+    - Knop “Koppel”
+  - Acties:
+    - “Ontkoppel” -> advertiserId null, status UNLINKED
+    - “Archiveer” -> status ARCHIVED
+- Status wijzigen gebeurt alleen in drawer (geen dropdowns in tabel).
+
+2.5 API endpoints (server-side filter/sort/pagination)
+- GET /api/placements?q=&status=&playlistId=&sortBy=&sortDir=&page=&pageSize=
+- POST /api/placements/:id/link { advertiserId }
+- POST /api/placements/:id/unlink
+- POST /api/placements/:id/archive
+- Filtering/sorting/pagination server-side.
+
+========================
+3) BELANGRIJK
+========================
+- Onboarding “Nieuw scherm” en “Nieuwe adverteerder” NIET AANRAKEN.
+- Alleen onboarding stap 3 aanpassen + Plaatsingen menu aanpassen.
+- Geen grote refactor, hergebruik bestaande components.
+- Alles moet compileren en end-to-end werken:
+  Yodeck sync -> UNLINKED placements zichtbaar -> koppelen -> LINKED -> archiveren -> standaard verborgen maar terug te vinden.
+
+LEVER OP:
+- Onboarding stap 3 aangepast (zonder ads aanmaken)
+- Plaatsingen menu volledig volgens nieuwe workflow
+- Werkende koppelen/ontkoppelen/archiveren flow
+- Zoek/filter/sort/paginatie in Plaatsingen

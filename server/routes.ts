@@ -2503,17 +2503,29 @@ Sitemap: ${SITE_URL}/sitemap.xml
     res.json(placements);
   });
 
-  // New endpoint: Get all ads (from Yodeck media) with linked/unlinked status
-  // This shows ALL ads including those that are not yet linked to a placement
-  app.get("/api/placements/ads-view", async (_req, res) => {
+  // Get all ads (from Yodeck media) with linked/unlinked/archived status
+  // Supports filtering: ?status=UNLINKED|LINKED|ARCHIVED&includeArchived=true&q=search
+  app.get("/api/placements/ads-view", async (req, res) => {
     try {
+      const { status: statusFilter, includeArchived, q: searchQuery, playlistId } = req.query;
+      
       const mediaLinks = await storage.getYodeckMediaLinks();
       const screens = await storage.getScreens();
       const advertisers = await storage.getAdvertisers();
       const screenContentItems = await storage.getAllScreenContentItems();
       
       // Filter to only show ads (not non_ad content)
-      const ads = mediaLinks.filter(m => m.category === 'ad');
+      let ads = mediaLinks.filter(m => m.category === 'ad');
+      
+      // By default, hide archived unless explicitly requested
+      if (includeArchived !== 'true') {
+        ads = ads.filter(m => (m as any).status !== 'ARCHIVED');
+      }
+      
+      // Filter by status if specified
+      if (statusFilter && typeof statusFilter === 'string') {
+        ads = ads.filter(m => (m as any).status === statusFilter.toUpperCase());
+      }
       
       // Get locations for name lookup
       const locations = await storage.getLocations();
@@ -2540,9 +2552,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
       }
       
       // Build response with all ads
-      const result = ads.map(ad => {
+      let result = ads.map(ad => {
         const advertiser = ad.advertiserId ? advertisers.find(a => a.id === ad.advertiserId) : null;
         const screensPlaying = adScreenMap[ad.yodeckMediaId] || [];
+        // Use database status field, fall back to computed status for backwards compat
+        const dbStatus = (ad as any).status || (ad.advertiserId || ad.placementId ? 'LINKED' : 'UNLINKED');
         
         return {
           yodeckMediaId: ad.yodeckMediaId,
@@ -2553,15 +2567,26 @@ Sitemap: ${SITE_URL}/sitemap.xml
           advertiserId: ad.advertiserId,
           advertiserName: advertiser?.companyName || null,
           placementId: ad.placementId,
-          status: ad.advertiserId || ad.placementId ? 'linked' : 'unlinked',
+          status: dbStatus.toLowerCase() as 'linked' | 'unlinked' | 'archived',
           // Where it's playing
           screensCount: screensPlaying.length,
           screens: screensPlaying,
           // Timestamps
           lastSeenAt: ad.lastSeenAt,
           updatedAt: ad.updatedAt,
+          archivedAt: (ad as any).archivedAt || null,
         };
       });
+      
+      // Apply search filter
+      if (searchQuery && typeof searchQuery === 'string') {
+        const query = searchQuery.toLowerCase();
+        result = result.filter(r => 
+          r.name.toLowerCase().includes(query) ||
+          r.advertiserName?.toLowerCase().includes(query) ||
+          r.screens.some(s => s.locationName.toLowerCase().includes(query) || s.screenDisplayId.toLowerCase().includes(query))
+        );
+      }
       
       // Sort: unlinked first, then by name
       result.sort((a, b) => {
@@ -2570,13 +2595,18 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return a.name.localeCompare(b.name);
       });
       
+      // Count all statuses (before filtering for summary)
+      const allAds = mediaLinks.filter(m => m.category === 'ad');
+      const summary = {
+        total: allAds.filter(m => (m as any).status !== 'ARCHIVED').length,
+        linked: allAds.filter(m => (m as any).status === 'LINKED').length,
+        unlinked: allAds.filter(m => (m as any).status === 'UNLINKED' || !(m as any).status).length,
+        archived: allAds.filter(m => (m as any).status === 'ARCHIVED').length,
+      };
+      
       res.json({ 
         items: result,
-        summary: {
-          total: result.length,
-          linked: result.filter(r => r.status === 'linked').length,
-          unlinked: result.filter(r => r.status === 'unlinked').length,
-        }
+        summary,
       });
     } catch (error: any) {
       console.error("Error fetching ads view:", error);
@@ -2623,6 +2653,142 @@ Sitemap: ${SITE_URL}/sitemap.xml
       res.json(placement);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // YODECK MEDIA LINKS - Link/Unlink/Archive endpoints
+  // ============================================================================
+
+  // Link a Yodeck media item to an advertiser
+  app.post("/api/yodeck-media/:yodeckMediaId/link", async (req, res) => {
+    try {
+      const yodeckMediaId = parseInt(req.params.yodeckMediaId);
+      const { advertiserId } = req.body;
+      
+      if (!advertiserId) {
+        return res.status(400).json({ message: "advertiserId is vereist" });
+      }
+      
+      // Check if advertiser exists
+      const advertiser = await storage.getAdvertiser(advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      // Update the media link
+      const { db } = await import("./db");
+      const result = await db.execute(sql`
+        UPDATE yodeck_media_links 
+        SET advertiser_id = ${advertiserId}, 
+            status = 'LINKED',
+            updated_at = NOW()
+        WHERE yodeck_media_id = ${yodeckMediaId}
+        RETURNING *
+      `);
+      
+      if (result.rowCount === 0) {
+        return res.status(404).json({ message: "Media item niet gevonden" });
+      }
+      
+      res.json({ 
+        success: true, 
+        message: `Gekoppeld aan ${advertiser.companyName}`,
+        data: result.rows[0]
+      });
+    } catch (error: any) {
+      console.error("Error linking media:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Unlink a Yodeck media item from its advertiser
+  app.post("/api/yodeck-media/:yodeckMediaId/unlink", async (req, res) => {
+    try {
+      const yodeckMediaId = parseInt(req.params.yodeckMediaId);
+      
+      const { db } = await import("./db");
+      const result = await db.execute(sql`
+        UPDATE yodeck_media_links 
+        SET advertiser_id = NULL, 
+            status = 'UNLINKED',
+            updated_at = NOW()
+        WHERE yodeck_media_id = ${yodeckMediaId}
+        RETURNING *
+      `);
+      
+      if (result.rowCount === 0) {
+        return res.status(404).json({ message: "Media item niet gevonden" });
+      }
+      
+      res.json({ 
+        success: true, 
+        message: "Koppeling verwijderd",
+        data: result.rows[0]
+      });
+    } catch (error: any) {
+      console.error("Error unlinking media:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Archive a Yodeck media item
+  app.post("/api/yodeck-media/:yodeckMediaId/archive", async (req, res) => {
+    try {
+      const yodeckMediaId = parseInt(req.params.yodeckMediaId);
+      
+      const { db } = await import("./db");
+      const result = await db.execute(sql`
+        UPDATE yodeck_media_links 
+        SET status = 'ARCHIVED',
+            archived_at = NOW(),
+            updated_at = NOW()
+        WHERE yodeck_media_id = ${yodeckMediaId}
+        RETURNING *
+      `);
+      
+      if (result.rowCount === 0) {
+        return res.status(404).json({ message: "Media item niet gevonden" });
+      }
+      
+      res.json({ 
+        success: true, 
+        message: "Gearchiveerd",
+        data: result.rows[0]
+      });
+    } catch (error: any) {
+      console.error("Error archiving media:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Unarchive a Yodeck media item
+  app.post("/api/yodeck-media/:yodeckMediaId/unarchive", async (req, res) => {
+    try {
+      const yodeckMediaId = parseInt(req.params.yodeckMediaId);
+      
+      const { db } = await import("./db");
+      const result = await db.execute(sql`
+        UPDATE yodeck_media_links 
+        SET status = CASE WHEN advertiser_id IS NULL THEN 'UNLINKED' ELSE 'LINKED' END,
+            archived_at = NULL,
+            updated_at = NOW()
+        WHERE yodeck_media_id = ${yodeckMediaId}
+        RETURNING *
+      `);
+      
+      if (result.rowCount === 0) {
+        return res.status(404).json({ message: "Media item niet gevonden" });
+      }
+      
+      res.json({ 
+        success: true, 
+        message: "Uit archief gehaald",
+        data: result.rows[0]
+      });
+    } catch (error: any) {
+      console.error("Error unarchiving media:", error);
+      res.status(500).json({ message: error.message });
     }
   });
 

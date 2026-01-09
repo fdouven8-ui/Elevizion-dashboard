@@ -115,6 +115,23 @@ The "Nieuwe Adverteerder" dialog has 2 modes via tabs:
 - **Home KPI Data Pipeline**: Control room stats classify ads using `getYodeckMediaLinkStats()` to distinguish linked, unlinked, and non-ad content.
 - **Screen Content Items**: `screen_content_items` table tracks per-screen Yodeck media, populated during scheduled sync, and displayed on screen detail pages.
 
+### Yodeck Media Linking System (January 2026)
+Ads are managed via Yodeck-first workflow: content placed in Yodeck → auto-sync → link to advertiser in Plaatsingen menu.
+- **yodeck_media_links Status**: `UNLINKED` (default) | `LINKED` (has advertiserId) | `ARCHIVED` (hidden from default view)
+- **Database Columns**: `status` (varchar), `archivedAt` (timestamp) for tracking lifecycle
+- **API Endpoints**:
+  - `POST /api/yodeck-media/:yodeckMediaId/link` - Link media to advertiser (with advertiserId validation)
+  - `POST /api/yodeck-media/:yodeckMediaId/unlink` - Remove advertiser link
+  - `POST /api/yodeck-media/:yodeckMediaId/archive` - Hide from default view
+  - `POST /api/yodeck-media/:yodeckMediaId/unarchive` - Restore from archive
+  - `GET /api/placements/ads-view` - List ads with filtering (status, includeArchived, search)
+- **Plaatsingen Page** (`/placements`):
+  - Ads tab is primary view with drawer (Sheet) for linking/unlinking/archiving
+  - KPI cards: Totaal Ads, Gekoppeld, Niet Gekoppeld, Op Offline Schermen
+  - "Toon archief" toggle to show/hide archived items
+  - Drawer shows current status, screens playing on, advertiser selector, archive actions
+  - All buttons disabled during any mutation to prevent conflicting operations
+
 ### Production Stability Features
 - **Graceful Shutdown**: Handlers for SIGTERM/SIGINT with database and scheduler cleanup.
 - **Scheduled Background Sync**: 15-minute interval Yodeck content sync, with internal caching.

@@ -10,6 +10,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { 
@@ -26,7 +29,11 @@ import {
   ImageIcon,
   Video,
   ExternalLink,
-  LinkIcon
+  LinkIcon,
+  Archive,
+  ArchiveRestore,
+  Unlink,
+  Check
 } from "lucide-react";
 import {
   Command,
@@ -52,11 +59,12 @@ interface AdViewItem {
   advertiserId: string | null;
   advertiserName: string | null;
   placementId: string | null;
-  status: 'linked' | 'unlinked';
+  status: 'linked' | 'unlinked' | 'archived';
   screensCount: number;
   screens: Array<{ screenId: string; screenDisplayId: string; screenName: string; locationName: string; isOnline: boolean }>;
   lastSeenAt: string;
   updatedAt: string;
+  archivedAt: string | null;
   // Computed for filtering
   hasOfflineScreen?: boolean;
 }
@@ -67,6 +75,7 @@ interface AdsViewResponse {
     total: number;
     linked: number;
     unlinked: number;
+    archived: number;
   };
 }
 
@@ -153,16 +162,102 @@ export default function Placements() {
   const [adsSearchTerm, setAdsSearchTerm] = useState("");
   const [adsAdvertiserFilter, setAdsAdvertiserFilter] = useState<string>("");
   const [adsScreenFilter, setAdsScreenFilter] = useState<string>("");
+  const [showArchived, setShowArchived] = useState(false);
   const debouncedAdsSearch = useDebounce(adsSearchTerm, 250);
+  
+  // Drawer state for ad detail/linking
+  const [selectedAd, setSelectedAd] = useState<AdViewItem | null>(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [linkAdvertiserId, setLinkAdvertiserId] = useState<string>("");
 
-  // Ads View query
+  // Ads View query with archived filter
   const { data: adsViewData, isLoading: adsViewLoading } = useQuery<AdsViewResponse>({
-    queryKey: ["/api/placements/ads-view"],
+    queryKey: ["/api/placements/ads-view", showArchived],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/placements/ads-view");
+      const params = showArchived ? "?includeArchived=true" : "";
+      const res = await apiRequest("GET", `/api/placements/ads-view${params}`);
       return res.json();
     },
   });
+  
+  // Link mutation
+  const linkMutation = useMutation({
+    mutationFn: async ({ yodeckMediaId, advertiserId }: { yodeckMediaId: number; advertiserId: string }) => {
+      const res = await apiRequest("POST", `/api/yodeck-media/${yodeckMediaId}/link`, { advertiserId });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Gekoppeld", description: data.message });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/ads-view"] });
+      setIsDrawerOpen(false);
+      setSelectedAd(null);
+      setLinkAdvertiserId("");
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+  
+  // Unlink mutation
+  const unlinkMutation = useMutation({
+    mutationFn: async (yodeckMediaId: number) => {
+      const res = await apiRequest("POST", `/api/yodeck-media/${yodeckMediaId}/unlink`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Ontkoppeld", description: data.message });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/ads-view"] });
+      setIsDrawerOpen(false);
+      setSelectedAd(null);
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+  
+  // Archive mutation
+  const archiveMutation = useMutation({
+    mutationFn: async (yodeckMediaId: number) => {
+      const res = await apiRequest("POST", `/api/yodeck-media/${yodeckMediaId}/archive`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Gearchiveerd", description: data.message });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/ads-view"] });
+      setIsDrawerOpen(false);
+      setSelectedAd(null);
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+  
+  // Unarchive mutation
+  const unarchiveMutation = useMutation({
+    mutationFn: async (yodeckMediaId: number) => {
+      const res = await apiRequest("POST", `/api/yodeck-media/${yodeckMediaId}/unarchive`);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Uit archief gehaald", description: data.message });
+      queryClient.invalidateQueries({ queryKey: ["/api/placements/ads-view"] });
+      setIsDrawerOpen(false);
+      setSelectedAd(null);
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+  
+  // Check if any mutation is in progress (to disable conflicting buttons)
+  const isAnyMutationPending = linkMutation.isPending || unlinkMutation.isPending || archiveMutation.isPending || unarchiveMutation.isPending;
+  
+  // Open drawer for ad
+  const openAdDetail = (ad: AdViewItem) => {
+    setSelectedAd(ad);
+    setLinkAdvertiserId(ad.advertiserId || "");
+    setIsDrawerOpen(true);
+  };
 
   const { data: placements = [], isLoading } = useQuery<Placement[]>({
     queryKey: ["/api/placements"],
@@ -658,6 +753,22 @@ export default function Placements() {
                   </Select>
                 </div>
               </div>
+              
+              {/* Archive toggle row */}
+              <div className="flex items-center justify-end mt-4 pt-3 border-t">
+                <div className="flex items-center gap-2">
+                  <Switch 
+                    id="showArchived" 
+                    checked={showArchived}
+                    onCheckedChange={setShowArchived}
+                    data-testid="toggle-show-archived"
+                  />
+                  <Label htmlFor="showArchived" className="text-sm cursor-pointer flex items-center gap-1">
+                    <Archive className="h-3 w-3" />
+                    Toon archief {(adsViewData?.summary.archived ?? 0) > 0 && `(${adsViewData?.summary.archived})`}
+                  </Label>
+                </div>
+              </div>
             </CardContent>
           </Card>
 
@@ -760,29 +871,27 @@ export default function Placements() {
                           )}
                         </TableCell>
                         <TableCell>
-                          {ad.status === 'linked' ? (
+                          {ad.status === 'archived' ? (
+                            <Badge className="bg-gray-100 text-gray-600">
+                              <Archive className="h-3 w-3 mr-1" />
+                              Archief
+                            </Badge>
+                          ) : ad.status === 'linked' ? (
                             <Badge className="bg-green-100 text-green-800">Gekoppeld</Badge>
                           ) : (
                             <Badge className="bg-amber-100 text-amber-800">Niet gekoppeld</Badge>
                           )}
                         </TableCell>
                         <TableCell className="text-right">
-                          {ad.status === 'unlinked' ? (
-                            <Link href={`/onboarding/placement?mediaId=${ad.yodeckMediaId}`}>
-                              <Button 
-                                variant="outline" 
-                                size="sm"
-                                className="text-amber-600 border-amber-300 hover:bg-amber-50"
-                                data-testid={`button-link-ad-${ad.yodeckMediaId}`}
-                              >
-                                Koppelen
-                              </Button>
-                            </Link>
-                          ) : (
-                            <Button variant="ghost" size="sm" data-testid={`button-details-ad-${ad.yodeckMediaId}`}>
-                              Details
-                            </Button>
-                          )}
+                          <Button 
+                            variant={ad.status === 'unlinked' ? "outline" : "ghost"} 
+                            size="sm"
+                            className={ad.status === 'unlinked' ? "text-amber-600 border-amber-300 hover:bg-amber-50" : ""}
+                            onClick={() => openAdDetail(ad)}
+                            data-testid={`button-open-ad-${ad.yodeckMediaId}`}
+                          >
+                            {ad.status === 'unlinked' ? 'Koppelen' : 'Beheren'}
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -1090,6 +1199,156 @@ export default function Placements() {
       </div>
         </TabsContent>
       </Tabs>
+
+      {/* Ad Detail Drawer */}
+      <Sheet open={isDrawerOpen} onOpenChange={setIsDrawerOpen}>
+        <SheetContent className="sm:max-w-lg">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              {selectedAd?.mediaType?.includes("video") ? (
+                <Video className="h-5 w-5" />
+              ) : (
+                <ImageIcon className="h-5 w-5" />
+              )}
+              {selectedAd?.name}
+            </SheetTitle>
+            <SheetDescription>
+              Beheer de koppeling van deze ad met een adverteerder
+            </SheetDescription>
+          </SheetHeader>
+          
+          {selectedAd && (
+            <div className="py-6 space-y-6">
+              {/* Current Status */}
+              <div className="space-y-2">
+                <Label className="text-muted-foreground text-xs">Huidige status</Label>
+                <div>
+                  {selectedAd.status === 'archived' ? (
+                    <Badge className="bg-gray-100 text-gray-600">
+                      <Archive className="h-3 w-3 mr-1" />
+                      Gearchiveerd
+                    </Badge>
+                  ) : selectedAd.status === 'linked' ? (
+                    <Badge className="bg-green-100 text-green-800">
+                      <Check className="h-3 w-3 mr-1" />
+                      Gekoppeld aan {selectedAd.advertiserName}
+                    </Badge>
+                  ) : (
+                    <Badge className="bg-amber-100 text-amber-800">
+                      <AlertTriangle className="h-3 w-3 mr-1" />
+                      Niet gekoppeld
+                    </Badge>
+                  )}
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Playing On Screens */}
+              {selectedAd.screensCount > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Draait op {selectedAd.screensCount} scherm{selectedAd.screensCount > 1 ? 'en' : ''}</Label>
+                  <div className="flex flex-wrap gap-1">
+                    {selectedAd.screens.map((s, idx) => (
+                      <Link key={idx} href={`/screens/${s.screenId}`}>
+                        <Badge 
+                          variant="outline" 
+                          className={`cursor-pointer hover:bg-muted ${!s.isOnline ? "border-destructive text-destructive" : ""}`}
+                        >
+                          {s.locationName}
+                          {!s.isOnline && <WifiOff className="h-3 w-3 ml-1" />}
+                        </Badge>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <Separator />
+
+              {/* Link to Advertiser - only if not archived */}
+              {selectedAd.status !== 'archived' && (
+                <div className="space-y-3">
+                  <Label className="text-muted-foreground text-xs">Koppelen aan adverteerder</Label>
+                  <Select 
+                    value={linkAdvertiserId || "__none__"} 
+                    onValueChange={(v) => setLinkAdvertiserId(v === "__none__" ? "" : v)}
+                    disabled={isAnyMutationPending}
+                  >
+                    <SelectTrigger data-testid="select-link-advertiser">
+                      <SelectValue placeholder="Selecteer adverteerder..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Niet gekoppeld</SelectItem>
+                      {advertisers.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>{a.companyName || a.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  
+                  {linkAdvertiserId && linkAdvertiserId !== selectedAd.advertiserId && (
+                    <Button 
+                      className="w-full"
+                      onClick={() => linkMutation.mutate({ yodeckMediaId: selectedAd.yodeckMediaId, advertiserId: linkAdvertiserId })}
+                      disabled={isAnyMutationPending}
+                      data-testid="button-save-link"
+                    >
+                      <LinkIcon className="h-4 w-4 mr-2" />
+                      {linkMutation.isPending ? "Opslaan..." : "Koppeling opslaan"}
+                    </Button>
+                  )}
+                  
+                  {selectedAd.status === 'linked' && !linkAdvertiserId && (
+                    <Button 
+                      variant="outline"
+                      className="w-full text-amber-600 border-amber-300 hover:bg-amber-50"
+                      onClick={() => unlinkMutation.mutate(selectedAd.yodeckMediaId)}
+                      disabled={isAnyMutationPending}
+                      data-testid="button-unlink"
+                    >
+                      <Unlink className="h-4 w-4 mr-2" />
+                      {unlinkMutation.isPending ? "Ontkoppelen..." : "Koppeling verwijderen"}
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              <Separator />
+
+              {/* Archive/Unarchive Actions */}
+              <div className="space-y-3">
+                <Label className="text-muted-foreground text-xs">Archief</Label>
+                {selectedAd.status === 'archived' ? (
+                  <Button 
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => unarchiveMutation.mutate(selectedAd.yodeckMediaId)}
+                    disabled={isAnyMutationPending}
+                    data-testid="button-unarchive"
+                  >
+                    <ArchiveRestore className="h-4 w-4 mr-2" />
+                    {unarchiveMutation.isPending ? "Herstellen..." : "Uit archief halen"}
+                  </Button>
+                ) : (
+                  <Button 
+                    variant="outline"
+                    className="w-full text-muted-foreground"
+                    onClick={() => archiveMutation.mutate(selectedAd.yodeckMediaId)}
+                    disabled={isAnyMutationPending}
+                    data-testid="button-archive"
+                  >
+                    <Archive className="h-4 w-4 mr-2" />
+                    {archiveMutation.isPending ? "Archiveren..." : "Archiveren (verbergen)"}
+                  </Button>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Gearchiveerde ads zijn verborgen maar blijven beschikbaar via de "Toon archief" optie.
+                </p>
+              </div>
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }

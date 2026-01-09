@@ -753,43 +753,6 @@ function NewAdvertiserWizard({ onBack }: { onBack: () => void }) {
 }
 
 function NewAdWizard({ onBack }: { onBack: () => void }) {
-  const { toast } = useToast();
-  const [step, setStep] = useState(1);
-  const [formData, setFormData] = useState({
-    advertiserId: "",
-    creativeName: "",
-    creativeType: "image",
-    durationSeconds: 10,
-    selectedScreens: [] as string[],
-    startDate: "",
-    endDate: "",
-  });
-
-  const { data: advertisers = [] } = useQuery<Advertiser[]>({
-    queryKey: ["/api/advertisers"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/advertisers");
-      return res.json();
-    },
-  });
-
-  const { data: screens = [] } = useQuery<Screen[]>({
-    queryKey: ["/api/screens"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/screens");
-      return res.json();
-    },
-  });
-
-  const toggleScreen = (screenId: string) => {
-    setFormData(prev => ({
-      ...prev,
-      selectedScreens: prev.selectedScreens.includes(screenId)
-        ? prev.selectedScreens.filter(id => id !== screenId)
-        : [...prev.selectedScreens, screenId]
-    }));
-  };
-
   return (
     <div className="max-w-2xl mx-auto">
       <div className="mb-6">
@@ -801,204 +764,59 @@ function NewAdWizard({ onBack }: { onBack: () => void }) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Target className="h-5 w-5" />
-            Nieuwe Ad + Plaatsing
+            <Target className="h-5 w-5 text-purple-600" />
+            Advertentie Plaatsen
           </CardTitle>
-          <CardDescription>Stap {step} van 4</CardDescription>
+          <CardDescription>
+            Advertenties worden via Yodeck geplaatst en automatisch gesynchroniseerd
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {step === 1 && (
-            <div className="space-y-4">
-              <h3 className="font-medium">Creative Uploaden</h3>
-              
-              <div className="space-y-2">
-                <Label>Adverteerder</Label>
-                <Select 
-                  value={formData.advertiserId} 
-                  onValueChange={(v) => setFormData({ ...formData, advertiserId: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecteer adverteerder..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {advertisers.map((adv) => (
-                      <SelectItem key={adv.id} value={adv.id}>
-                        {adv.companyName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <Label>Creative Naam</Label>
-                <Input 
-                  value={formData.creativeName}
-                  onChange={(e) => setFormData({ ...formData, creativeName: e.target.value })}
-                  placeholder="Zomer Actie 2025"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Type</Label>
-                  <Select 
-                    value={formData.creativeType} 
-                    onValueChange={(v) => setFormData({ ...formData, creativeType: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="image">Afbeelding</SelectItem>
-                      <SelectItem value="video">Video</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Duur (seconden)</Label>
-                  <Input 
-                    type="number"
-                    value={formData.durationSeconds}
-                    onChange={(e) => setFormData({ ...formData, durationSeconds: parseInt(e.target.value) || 10 })}
-                  />
-                </div>
-              </div>
-
-              <div className="border-2 border-dashed rounded-lg p-8 text-center">
-                <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-                <p className="text-sm text-muted-foreground">
-                  Sleep bestand hierheen of klik om te uploaden
-                </p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  JPG, PNG, MP4 - Max 50MB
-                </p>
-              </div>
-
-              <Button 
-                className="w-full" 
-                onClick={() => setStep(2)}
-                disabled={!formData.advertiserId || !formData.creativeName}
-              >
-                Volgende <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            </div>
-          )}
-
-          {step === 2 && (
-            <div className="space-y-4">
-              <h3 className="font-medium">Selecteer Schermen</h3>
-              
-              <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                {screens.map((screen) => (
-                  <div
-                    key={screen.id}
-                    className={`flex items-center justify-between p-3 border rounded-lg cursor-pointer transition-colors ${
-                      formData.selectedScreens.includes(screen.id) 
-                        ? "border-blue-500 bg-blue-50" 
-                        : "hover:bg-muted"
-                    }`}
-                    onClick={() => toggleScreen(screen.id)}
-                  >
-                    <div className="flex items-center gap-3">
-                      {screen.status === "online" ? (
-                        <Wifi className="h-4 w-4 text-green-600" />
-                      ) : (
-                        <WifiOff className="h-4 w-4 text-red-600" />
-                      )}
-                      <div>
-                        <p className="font-mono font-medium">{screen.screenId}</p>
-                        <p className="text-sm text-muted-foreground">{screen.name}</p>
-                      </div>
-                    </div>
-                    {formData.selectedScreens.includes(screen.id) && (
-                      <CheckCircle className="h-5 w-5 text-blue-600" />
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <p className="text-sm text-muted-foreground">
-                {formData.selectedScreens.length} scherm(en) geselecteerd
+          <div className="space-y-4">
+            <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
+              <h3 className="font-semibold text-purple-900 flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-purple-600 text-white text-sm font-bold">1</span>
+                Plaats de video in Yodeck
+              </h3>
+              <p className="text-sm text-purple-800 mt-2 ml-8">
+                Upload de video of afbeelding in Yodeck en voeg deze toe aan de juiste playlist. 
+                De playlist-naam correspondeert met de zaak/schermlocatie.
               </p>
-
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setStep(1)}>
-                  <ArrowLeft className="mr-2 h-4 w-4" /> Terug
-                </Button>
-                <Button 
-                  className="flex-1" 
-                  onClick={() => setStep(3)}
-                  disabled={formData.selectedScreens.length === 0}
-                >
-                  Volgende <ArrowRight className="ml-2 h-4 w-4" />
-                </Button>
-              </div>
             </div>
-          )}
 
-          {step === 3 && (
-            <div className="space-y-4">
-              <h3 className="font-medium">Planning</h3>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Startdatum</Label>
-                  <Input 
-                    type="date"
-                    value={formData.startDate}
-                    onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Einddatum (optioneel)</Label>
-                  <Input 
-                    type="date"
-                    value={formData.endDate}
-                    onChange={(e) => setFormData({ ...formData, endDate: e.target.value })}
-                  />
-                </div>
-              </div>
-
-              <div className="p-4 bg-muted rounded-lg">
-                <p className="text-sm font-medium">Samenvatting</p>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {formData.creativeName} wordt geplaatst op {formData.selectedScreens.length} scherm(en)
-                </p>
-              </div>
-
-              <div className="flex gap-2">
-                <Button variant="outline" onClick={() => setStep(2)}>
-                  <ArrowLeft className="mr-2 h-4 w-4" /> Terug
-                </Button>
-                <Button className="flex-1" onClick={() => setStep(4)}>
-                  Plaatsing Aanmaken
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {step === 4 && (
-            <div className="text-center space-y-4">
-              <CheckCircle className="h-16 w-16 text-green-600 mx-auto" />
-              <h3 className="text-xl font-bold">Plaatsing Aangemaakt!</h3>
-              <p className="text-muted-foreground">
-                Nu draaiend op: {formData.selectedScreens.map(id => 
-                  screens.find(s => s.id === id)?.screenId
-                ).join(", ")}
+            <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
+              <h3 className="font-semibold text-purple-900 flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-purple-600 text-white text-sm font-bold">2</span>
+                Automatische synchronisatie
+              </h3>
+              <p className="text-sm text-purple-800 mt-2 ml-8">
+                Zodra de video in Yodeck staat, verschijnt deze automatisch in <strong>Plaatsingen</strong> 
+                met status "Niet gekoppeld". Dit gebeurt binnen enkele minuten.
               </p>
-              <div className="flex gap-2 justify-center">
-                <Button variant="outline" onClick={onBack}>
-                  Terug naar Onboarding
-                </Button>
-                <Button asChild>
-                  <a href="/placements">
-                    <Target className="mr-2 h-4 w-4" /> Bekijk Plaatsingen
-                  </a>
-                </Button>
-              </div>
             </div>
-          )}
+
+            <div className="p-4 bg-purple-50 border border-purple-200 rounded-lg">
+              <h3 className="font-semibold text-purple-900 flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-purple-600 text-white text-sm font-bold">3</span>
+                Koppel aan adverteerder
+              </h3>
+              <p className="text-sm text-purple-800 mt-2 ml-8">
+                Ga naar <strong>Plaatsingen</strong> en koppel de advertentie aan de juiste adverteerder. 
+                Zo weet het systeem wie gefactureerd moet worden.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-4">
+            <Button variant="outline" onClick={onBack}>
+              <ArrowLeft className="mr-2 h-4 w-4" /> Terug
+            </Button>
+            <Button className="flex-1" asChild>
+              <a href="/placements">
+                <Target className="mr-2 h-4 w-4" /> Ga naar Plaatsingen
+              </a>
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>
@@ -1268,8 +1086,8 @@ export default function Onboarding() {
           color="green"
         />
         <WizardCard
-          title="Nieuwe Ad + Plaatsing"
-          description="Upload creative en plaats op schermen - meest gebruikt"
+          title="Advertentie Plaatsen"
+          description="Bekijk hoe je via Yodeck advertenties plaatst en koppelt"
           icon={Target}
           onClick={() => setActiveWizard("ad")}
           color="purple"
@@ -1279,14 +1097,14 @@ export default function Onboarding() {
       <Card className="bg-muted/50">
         <CardContent className="pt-6">
           <div className="flex items-start gap-4">
-            <div className="p-2 bg-amber-100 rounded-lg">
-              <Building2 className="h-5 w-5 text-amber-600" />
+            <div className="p-2 bg-purple-100 rounded-lg">
+              <Target className="h-5 w-5 text-purple-600" />
             </div>
             <div>
-              <h3 className="font-medium">Tip: Meest gebruikte flow</h3>
+              <h3 className="font-medium">Workflow: Yodeck → Plaatsingen</h3>
               <p className="text-sm text-muted-foreground mt-1">
-                De meeste dagelijkse onboarding is: <strong>Nieuwe Ad + Plaatsing</strong>. 
-                Hiermee upload je snel een creative en plaats je deze op één of meerdere schermen.
+                Advertenties worden in <strong>Yodeck</strong> geplaatst en automatisch gesynchroniseerd. 
+                Koppel ze daarna in <strong>Plaatsingen</strong> aan de juiste adverteerder voor facturatie.
               </p>
             </div>
           </div>
