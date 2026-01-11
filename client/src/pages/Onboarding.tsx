@@ -27,6 +27,7 @@ import {
   Link2
 } from "lucide-react";
 import { Link } from "wouter";
+import { CompletenessProgress, useFieldStatus } from "@/components/CompletenessProgress";
 
 type WizardType = "screen" | "advertiser" | "ad" | "location" | null;
 
@@ -410,6 +411,18 @@ function NewScreenWizard({ onBack }: { onBack: () => void }) {
               ) : (
                 /* Nieuw Moneybird contact aanmaken */
                 <div className="space-y-4 border p-4 rounded-lg">
+                  <CompletenessProgress 
+                    fields={[
+                      { name: "company", label: "Bedrijfsnaam", required: true, filled: !!newContactData.company },
+                      { name: "city", label: "Plaats", required: true, filled: !!newContactData.city },
+                      { name: "address", label: "Adres", required: false, filled: !!newContactData.address },
+                      { name: "zipcode", label: "Postcode", required: false, filled: !!newContactData.zipcode },
+                      { name: "email", label: "E-mail", required: false, filled: !!newContactData.email },
+                      { name: "phone", label: "Telefoon", required: false, filled: !!newContactData.phone },
+                    ]}
+                    showDetails={false}
+                  />
+                  
                   <div className="space-y-2">
                     <Label>Bedrijfsnaam *</Label>
                     <Input 
@@ -700,6 +713,15 @@ function NewAdvertiserWizard({ onBack }: { onBack: () => void }) {
             </div>
           ) : (
             <form onSubmit={onQuickSubmit} className="space-y-4">
+              <CompletenessProgress 
+                fields={[
+                  { name: "companyName", label: "Bedrijfsnaam", required: true, filled: !!formData.companyName },
+                  { name: "email", label: "E-mail", required: true, filled: !!formData.email },
+                  { name: "contactName", label: "Contactpersoon", required: false, filled: !!formData.contactName },
+                ]}
+                showDetails={false}
+              />
+              
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
                 <p className="font-medium">Snelle aanmaak met invul-link</p>
                 <p className="mt-1 text-blue-700">
