@@ -124,10 +124,13 @@ export const locations = pgTable("locations", {
   contactName: text("contact_name"), // Made nullable for placeholder locations
   email: text("email"), // Made nullable for placeholder locations
   phone: text("phone"),
-  visitorsPerWeek: integer("visitors_per_week"), // Gemiddeld aantal bezoekers per week
+  visitorsPerWeek: integer("visitors_per_week"), // Gemiddeld aantal bezoekers per week - REQUIRED voor allocatie
   openingHours: text("opening_hours"), // Openingstijden (optioneel)
   branche: text("branche"), // Branche/type zaak
+  // Payout configuratie
+  payoutType: text("payout_type").notNull().default("revshare"), // revshare | fixed
   revenueSharePercent: decimal("revenue_share_percent", { precision: 5, scale: 2 }).notNull().default("10.00"),
+  fixedPayoutAmount: decimal("fixed_payout_amount", { precision: 10, scale: 2 }), // Alleen bij payoutType=fixed
   minimumPayoutAmount: decimal("minimum_payout_amount", { precision: 10, scale: 2 }).notNull().default("25.00"),
   bankAccountIban: text("bank_account_iban"),
   moneybirdContactId: text("moneybird_contact_id"), // Link to Moneybird contact (NOT unique - same contact can link to multiple locations)
@@ -146,6 +149,7 @@ export const locations = pgTable("locations", {
   // Email tracking
   inviteEmailSentAt: timestamp("invite_email_sent_at"),
   reminderEmailSentAt: timestamp("reminder_email_sent_at"),
+  lastReminderSentAt: timestamp("last_reminder_sent_at"), // Voor herinnering tracking
   notes: text("notes"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -1022,6 +1026,12 @@ export const leads = pgTable("leads", {
   followUpDate: date("follow_up_date"),
   convertedAt: timestamp("converted_at"), // Wanneer omgezet naar adverteerder/locatie
   convertedToId: varchar("converted_to_id"), // ID van de aangemaakte adverteerder/locatie
+  // Auto categorisatie (inferredCategory bepaald uit bedrijfsnaam)
+  category: text("category"), // Effective category (computed from finalCategory || inferredCategory)
+  inferredCategory: text("inferred_category"), // horeca, retail, zorg, sport, diensten, overig
+  inferredConfidence: decimal("inferred_confidence", { precision: 3, scale: 2 }), // 0.00 - 1.00
+  finalCategory: text("final_category"), // User-confirmed category (overrides inferred)
+  categoryUpdatedAt: timestamp("category_updated_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -1840,6 +1850,9 @@ export const advertiserLeads = pgTable("advertiser_leads", {
   budgetIndication: text("budget_indication"), // €50 / €100 / €250 / €500+ per maand
   remarks: text("remarks"),
   status: text("status").notNull().default("new"), // new, contacted, converted, declined
+  // Auto categorisatie
+  inferredCategory: text("inferred_category"), // horeca, retail, zorg, sport, diensten, overig
+  finalCategory: text("final_category"), // User-confirmed category
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -1857,6 +1870,88 @@ export const screenLeads = pgTable("screen_leads", {
   visitorsPerWeek: text("visitors_per_week"), // 0-250 / 250-500 / 500-1000 / 1000+
   remarks: text("remarks"),
   status: text("status").notNull().default("new"), // new, contacted, converted, declined
+  // Auto categorisatie (businessType is al category voor screen leads)
+  inferredCategory: text("inferred_category"), // Copied from businessType or inferred
+  finalCategory: text("final_category"), // User-confirmed category
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// ============================================================================
+// REVENUE ALLOCATION & PAYOUTS
+// ============================================================================
+
+/**
+ * RevenueAllocations - Monthly revenue allocation per screen
+ * Berekend uit Moneybird facturen en placements
+ */
+export const revenueAllocations = pgTable("revenue_allocations", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  periodYear: integer("period_year").notNull(),
+  periodMonth: integer("period_month").notNull(), // 1-12
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id),
+  screenId: varchar("screen_id").notNull().references(() => screens.id),
+  locationId: varchar("location_id").references(() => locations.id),
+  // Allocation berekening
+  screenDays: integer("screen_days").notNull(), // Aantal dagen dat adverteerder op scherm actief was
+  visitorWeight: decimal("visitor_weight", { precision: 4, scale: 2 }).notNull(), // Weight uit visitorsPerWeek staffel
+  weightOverride: decimal("weight_override", { precision: 4, scale: 2 }), // Optionele override
+  allocationScore: decimal("allocation_score", { precision: 12, scale: 4 }).notNull(), // screenDays * weight
+  totalScoreForAdvertiser: decimal("total_score_for_advertiser", { precision: 12, scale: 4 }).notNull(),
+  advertiserRevenueMonth: decimal("advertiser_revenue_month", { precision: 12, scale: 2 }).notNull(), // Totaal uit Moneybird
+  allocatedRevenue: decimal("allocated_revenue", { precision: 12, scale: 2 }).notNull(), // Toegewezen aan dit scherm
+  // Meta
+  moneybirdInvoiceIds: jsonb("moneybird_invoice_ids").$type<string[]>(), // Factuur IDs waaruit revenue komt
+  calculatedAt: timestamp("calculated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * LocationPayouts - Maandelijkse uitbetalingen per locatie
+ * Aggregeert RevenueAllocations naar payout per locatie
+ */
+export const locationPayouts = pgTable("location_payouts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  periodYear: integer("period_year").notNull(),
+  periodMonth: integer("period_month").notNull(), // 1-12
+  locationId: varchar("location_id").notNull().references(() => locations.id),
+  // Payout berekening
+  allocatedRevenueTotal: decimal("allocated_revenue_total", { precision: 12, scale: 2 }).notNull(), // Som van alle screen allocations
+  payoutType: text("payout_type").notNull(), // revshare | fixed (gekopieerd uit location contract)
+  revenueSharePercent: decimal("revenue_share_percent", { precision: 5, scale: 2 }), // % bij revshare
+  fixedAmount: decimal("fixed_amount", { precision: 10, scale: 2 }), // Bedrag bij fixed
+  payoutAmount: decimal("payout_amount", { precision: 12, scale: 2 }).notNull(), // Berekende uitbetaling
+  minimumThreshold: decimal("minimum_threshold", { precision: 10, scale: 2 }), // Minimum payout bedrag
+  carriedOver: boolean("carried_over").default(false), // Onder minimum, doorgeschoven
+  // Status
+  status: text("status").notNull().default("pending"), // pending | approved | paid | cancelled
+  approvedAt: timestamp("approved_at"),
+  approvedByUserId: varchar("approved_by_user_id"),
+  paidAt: timestamp("paid_at"),
+  paymentReference: text("payment_reference"),
+  // Meta
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * MonthlyReports - Gegenereerde en verstuurde rapporten
+ */
+export const monthlyReports = pgTable("monthly_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  periodYear: integer("period_year").notNull(),
+  periodMonth: integer("period_month").notNull(), // 1-12
+  reportType: text("report_type").notNull(), // advertiser | location
+  entityId: varchar("entity_id").notNull(), // advertiserId of locationId
+  entityName: text("entity_name"), // Naam voor logging
+  // Report content
+  reportData: jsonb("report_data"), // Gegenereerde report data
+  // Delivery status
+  status: text("status").notNull().default("draft"), // draft | generated | sent | failed
+  generatedAt: timestamp("generated_at"),
+  sentAt: timestamp("sent_at"),
+  sentToEmail: text("sent_to_email"),
+  errorMessage: text("error_message"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -1879,3 +1974,61 @@ export type InsertAdvertiserLead = z.infer<typeof insertAdvertiserLeadSchema>;
 
 export type ScreenLead = typeof screenLeads.$inferSelect;
 export type InsertScreenLead = z.infer<typeof insertScreenLeadSchema>;
+
+// Revenue Allocation & Payout Schemas
+export const insertRevenueAllocationSchema = createInsertSchema(revenueAllocations).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertLocationPayoutSchema = createInsertSchema(locationPayouts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertMonthlyReportSchema = createInsertSchema(monthlyReports).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Revenue Allocation & Payout Types
+export type RevenueAllocation = typeof revenueAllocations.$inferSelect;
+export type InsertRevenueAllocation = z.infer<typeof insertRevenueAllocationSchema>;
+
+export type LocationPayout = typeof locationPayouts.$inferSelect;
+export type InsertLocationPayout = z.infer<typeof insertLocationPayoutSchema>;
+
+export type MonthlyReport = typeof monthlyReports.$inferSelect;
+export type InsertMonthlyReport = z.infer<typeof insertMonthlyReportSchema>;
+
+// Lead Category Constants
+export const LEAD_CATEGORIES = [
+  "horeca",
+  "retail",
+  "zorg",
+  "sport",
+  "diensten",
+  "automotive",
+  "beauty",
+  "overig",
+] as const;
+export type LeadCategory = typeof LEAD_CATEGORIES[number];
+
+// Visitor Weight Staffels (for revenue allocation)
+export const VISITOR_WEIGHT_STAFFELS = [
+  { min: 0, max: 300, weight: 0.8 },
+  { min: 301, max: 700, weight: 1.0 },
+  { min: 701, max: 1500, weight: 1.2 },
+  { min: 1501, max: Infinity, weight: 1.5 },
+] as const;
+
+export function getVisitorWeight(visitorsPerWeek: number | null): number {
+  if (!visitorsPerWeek || visitorsPerWeek <= 0) return 1.0; // Default weight
+  for (const staffel of VISITOR_WEIGHT_STAFFELS) {
+    if (visitorsPerWeek >= staffel.min && visitorsPerWeek <= staffel.max) {
+      return staffel.weight;
+    }
+  }
+  return 1.5; // Max weight for very high traffic
+}

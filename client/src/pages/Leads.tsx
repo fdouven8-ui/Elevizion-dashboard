@@ -45,6 +45,7 @@ interface Lead {
   phone: string | null;
   status: string;
   source: string | null;
+  category: string | null;
   createdAt: string;
 }
 
@@ -65,8 +66,25 @@ const STATUS_OPTIONS = [
   { value: "verloren", label: "Verloren", color: "bg-red-50 text-red-700 border-red-200" },
 ];
 
+const CATEGORY_OPTIONS = [
+  { value: "horeca", label: "Horeca", color: "bg-orange-50 text-orange-700 border-orange-200" },
+  { value: "retail", label: "Retail", color: "bg-pink-50 text-pink-700 border-pink-200" },
+  { value: "zorg", label: "Zorg & Welzijn", color: "bg-rose-50 text-rose-700 border-rose-200" },
+  { value: "sport", label: "Sport & Fitness", color: "bg-cyan-50 text-cyan-700 border-cyan-200" },
+  { value: "diensten", label: "Zakelijke Diensten", color: "bg-slate-50 text-slate-700 border-slate-200" },
+  { value: "automotive", label: "Automotive", color: "bg-zinc-50 text-zinc-700 border-zinc-200" },
+  { value: "beauty", label: "Beauty & Wellness", color: "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" },
+  { value: "overig", label: "Overig", color: "bg-gray-50 text-gray-700 border-gray-200" },
+];
+
 function getStatusBadge(status: string) {
   const option = STATUS_OPTIONS.find(s => s.value === status) || STATUS_OPTIONS[0];
+  return <Badge variant="outline" className={`${option.color} text-xs font-medium`}>{option.label}</Badge>;
+}
+
+function getCategoryBadge(category: string | null | undefined) {
+  if (!category) return null;
+  const option = CATEGORY_OPTIONS.find(c => c.value === category.toLowerCase()) || CATEGORY_OPTIONS[CATEGORY_OPTIONS.length - 1];
   return <Badge variant="outline" className={`${option.color} text-xs font-medium`}>{option.label}</Badge>;
 }
 
@@ -109,6 +127,7 @@ export default function Leads() {
   const [searchInput, setSearchInput] = useState(params.get("q") || "");
   const [typeFilter, setTypeFilter] = useState(params.get("type") || "all");
   const [statusFilter, setStatusFilter] = useState(params.get("status") || "all");
+  const [categoryFilter, setCategoryFilter] = useState(params.get("category") || "all");
   const [onlyNew, setOnlyNew] = useState(params.get("onlyNew") === "true");
   const [dateRange, setDateRange] = useState(params.get("dateRange") || "all");
   const [sortBy, setSortBy] = useState(params.get("sortBy") || "createdAt");
@@ -129,6 +148,7 @@ export default function Leads() {
     if (debouncedSearch) p.set("q", debouncedSearch);
     if (typeFilter !== "all") p.set("type", typeFilter);
     if (statusFilter !== "all") p.set("status", statusFilter);
+    if (categoryFilter !== "all") p.set("category", categoryFilter);
     if (onlyNew) p.set("onlyNew", "true");
     if (dateRange !== "all") p.set("dateRange", dateRange);
     p.set("sortBy", sortBy);
@@ -136,7 +156,7 @@ export default function Leads() {
     p.set("page", page.toString());
     p.set("pageSize", pageSize.toString());
     return p.toString();
-  }, [debouncedSearch, typeFilter, statusFilter, onlyNew, dateRange, sortBy, sortDir, page, pageSize]);
+  }, [debouncedSearch, typeFilter, statusFilter, categoryFilter, onlyNew, dateRange, sortBy, sortDir, page, pageSize]);
 
   // Sync filters to URL
   useEffect(() => {
@@ -192,6 +212,7 @@ export default function Leads() {
     setSearchInput("");
     setTypeFilter("all");
     setStatusFilter("all");
+    setCategoryFilter("all");
     setOnlyNew(false);
     setDateRange("all");
     setSortBy("createdAt");
@@ -206,7 +227,7 @@ export default function Leads() {
     setPage(1);
   };
 
-  const hasActiveFilters = searchInput || typeFilter !== "all" || statusFilter !== "all" || onlyNew || dateRange !== "all";
+  const hasActiveFilters = searchInput || typeFilter !== "all" || statusFilter !== "all" || categoryFilter !== "all" || onlyNew || dateRange !== "all";
 
   return (
     <div className="space-y-4">
@@ -266,6 +287,19 @@ export default function Leads() {
               <SelectContent>
                 <SelectItem value="all">Alle statussen</SelectItem>
                 {STATUS_OPTIONS.map(opt => (
+                  <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            {/* Category filter */}
+            <Select value={categoryFilter} onValueChange={(v) => { setCategoryFilter(v); setPage(1); }}>
+              <SelectTrigger className="w-[150px] h-9 text-sm" data-testid="select-category">
+                <SelectValue placeholder="Categorie" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Alle categorieën</SelectItem>
+                {CATEGORY_OPTIONS.map(opt => (
                   <SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>
                 ))}
               </SelectContent>
@@ -348,6 +382,7 @@ export default function Leads() {
                   <TableHead className="w-[100px]">Datum</TableHead>
                   <TableHead className="w-[110px]">Type</TableHead>
                   <TableHead>Bedrijf</TableHead>
+                  <TableHead className="w-[140px]">Categorie</TableHead>
                   <TableHead>Contact</TableHead>
                   <TableHead className="w-[120px]">Status</TableHead>
                   <TableHead className="w-[80px] text-right">Actie</TableHead>
@@ -366,6 +401,7 @@ export default function Leads() {
                     </TableCell>
                     <TableCell className="py-3">{getTypeBadge(lead.type)}</TableCell>
                     <TableCell className="font-medium py-3">{lead.companyName}</TableCell>
+                    <TableCell className="py-3">{getCategoryBadge(lead.category)}</TableCell>
                     <TableCell className="py-3 text-muted-foreground">{lead.contactName}</TableCell>
                     <TableCell className="py-3">{getStatusBadge(lead.status)}</TableCell>
                     <TableCell className="text-right py-3">

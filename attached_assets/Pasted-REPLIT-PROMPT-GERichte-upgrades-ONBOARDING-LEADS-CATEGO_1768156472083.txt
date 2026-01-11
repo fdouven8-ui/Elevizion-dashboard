@@ -1,0 +1,109 @@
+REPLIT PROMPT — GERichte upgrades: ONBOARDING + LEADS CATEGORIE + CONTRACTEN + AUTO RAPPORTAGE + OMZET VERDELING PER SCHERM
+Context: Elevizion Dashboard bestaat al met Yodeck/Moneybird integraties en huidige menu’s. 
+Doel: Pas alleen de bestaande flows aan en voeg minimale logica/velden toe. GEEN grote refactor, geen nieuwe app-structuur, geen redesign. 
+Hou UI rustig met badges en weinig tekst.
+
+SCOPE (ALLEEN DIT):
+1) Onboarding verbeteren (smart + verplicht, niet door kunnen zonder ingevulde velden)
+2) Leads: categorie automatisch inschatten uit bedrijfsnaam en tonen als badge (aanpasbaar)
+3) Contracten: automatisch concept genereren uit pakket/afspraken + inzien/aanpassen + versies + na tekenen lock
+4) Rapportage: automatisch per maand mailen naar adverteerders én schermlocaties
+5) Omzet verdelen per scherm: “omzet van adverteerders die op dat scherm draaiden” → payout per locatie met bewijsregels
+
+-----------------------------------------
+1) ONBOARDING (VERPLICHT + SLIM)
+-----------------------------------------
+- Update bestaande onboarding schermen (geen nieuwe route-structuur):
+  A) Nieuwe adverteerder onboarding:
+    - minimal start: bedrijfsnaam + email
+    - daarna wizard in 2-3 stappen met required velden
+    - “Volgende” disabled tot required velden kloppen
+    - pakketkeuze REQUIRED (standard/premium/custom)
+    - startdatum/looptijd defaults
+  B) Nieuwe schermlocatie onboarding:
+    - bedrijfsnaam + email start
+    - visitorsPerWeek REQUIRED
+    - aantal schermen default 1
+    - payout keuze (revshare default) + % (default 10%) of fixed (als gekozen)
+- Voeg “completeness” status toe (bijv. % of simpel: incomplete/complete) + toon badge in dashboard.
+- Voeg reminder knop: “Stuur herinnering” (alleen mail template, geen extra complexiteit)
+
+-----------------------------------------
+2) LEADS CATEGORISATIE (AUTO + BADGE)
+-----------------------------------------
+- In leads overzicht/detail:
+  - voeg veld(en) toe: inferredCategory + confidence + finalCategory (optioneel)
+- Bij aanmaken lead:
+  - bepaal category uit bedrijfsnaam + evt notes (AI of simpele keywords fallback)
+  - toon badge “Categorie: X (auto)” + dropdown om te wijzigen/bevestigen
+- Geen scoring systeem bouwen nu; alleen categorie + confirm.
+
+-----------------------------------------
+3) CONTRACTEN (AUTO DRAFT + INZIEN + AANPASSEN + VERSIES)
+-----------------------------------------
+- Binnen bestaande advertiser/location detail pagina’s:
+  - voeg tab/sectie “Contract” toe (of gebruik bestaande documenten sectie)
+- Contract logica:
+  - Op basis van onboarding keuzes (pakket, revshare/fixed, screensCount, looptijd) → genereer contract DRAFT automatisch.
+  - DRAFT moet te previewen zijn (HTML of PDF) en te bewerken (alleen draft).
+  - Als je “verstuur ter ondertekening” doet:
+    - sla versie vast
+    - na tekenen: signed versie read-only
+    - wijzigingen daarna: “Nieuwe versie maken” (clone) i.p.v. overschrijven (audit trail).
+- Houd dit minimalistisch:
+  - 2–4 templates max (advertiser standard/premium, location revshare/fixed, multi-screen addendum)
+  - parameters opslaan zodat ze ook later bij berekeningen gebruikt worden.
+
+-----------------------------------------
+4) OMZET VERDELING PER SCHERM (KERN!)
+-----------------------------------------
+Doel: aantoonbaar per schermlocatie hoeveel omzet “op hun scherm” gedraaid heeft en wat hun payout is volgens contract.
+
+- Gebruik Moneybird facturen om per adverteerder per maand amountExVat te bepalen (als dit al ergens bestaat: hergebruik).
+- Bepaal per maand welke schermen actief waren voor die adverteerder (via placements met start/end).
+- Verdeel omzet over die schermen met weighted screen-days:
+  a) screenDays = aantal dagen dat adverteerder op dat scherm actief was in die maand
+  b) weight = uit visitorsPerWeek staffels (autoWeight), met optie screen weightOverride
+  c) score = screenDays * weight
+  d) allocatedRevenue(screen) = advertiserRevenueMonth * (score / totalScore)
+- Payout per locatie per maand:
+  - locationAllocated = som allocatedRevenue van screens op die locatie
+  - contract bepaalt payout:
+    - revshare: payout = locationAllocated * revSharePct
+    - fixed: payout = fixedAmount
+- Maak een “Uitbetalingen” overzicht in locatie detail:
+  - maand: allocated omzet ex btw, contract (%/fixed), payout, status (pending/paid)
+  - detailklik: bewijsregels per scherm: screenDays, weight, allocatedAmount
+
+- Staffels visitors/week → weight (simple):
+  0-300 => 0.8
+  301-700 => 1.0
+  701-1500 => 1.2
+  1501+ => 1.5
+
+-----------------------------------------
+5) AUTO RAPPORTAGE + AUTO MAIL (ADVERTEERDER EN LOCATIE)
+-----------------------------------------
+- Maandelijks (job/cron of handmatig “Genereer maandrapporten” knop):
+  - Adverteerder rapport:
+    - actieve schermen (lijst)
+    - factuurstatus (Moneybird)
+    - korte samenvatting (template, AI optioneel)
+  - Locatie rapport:
+    - allocated omzet ex btw
+    - payout bedrag + contract type
+    - status pending/paid
+    - bewijslink naar uitbetalingen detail
+- Automatisch e-mailen:
+  - stuur rapporten automatisch op vaste dag (instelling) OF start met “1 knop: verstuur alle rapporten”
+- Log report sent per maand zodat je ziet dat het gebeurd is.
+
+-----------------------------------------
+OUTPUT / DELIVERABLES
+-----------------------------------------
+- Voer bovenstaande aanpassingen door met minimale code-wijzigingen.
+- Laat zien:
+  1) welke bestaande pagina’s aangepast zijn (onboarding, leads, detail advertiser/location)
+  2) welke nieuwe velden/tables minimaal zijn toegevoegd
+  3) waar de allocation/payout berekening zit + hoe je die rerun-safe maakt
+- Geen nieuwe “grote modules”, geen redesign, geen extra features buiten scope.

@@ -77,6 +77,7 @@ export interface LeadQueryParams {
   q?: string;
   type?: string;
   status?: string;
+  category?: string;
   onlyNew?: boolean;
   dateRange?: "7" | "30" | "all";
   sortBy?: "createdAt" | "companyName" | "status";
@@ -1387,6 +1388,7 @@ export class DatabaseStorage implements IStorage {
       q,
       type,
       status,
+      category,
       onlyNew = false,
       dateRange = "all",
       sortBy = "createdAt",
@@ -1417,6 +1419,11 @@ export class DatabaseStorage implements IStorage {
     // Status filter
     if (status && status !== "all") {
       conditions.push(eq(schema.leads.status, status));
+    }
+
+    // Category filter
+    if (category && category !== "all") {
+      conditions.push(sql`${schema.leads.category} = ${category}`);
     }
 
     // Only new filter

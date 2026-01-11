@@ -286,11 +286,15 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(200).json({ success: true }); // Silently accept spam
       }
       
+      // Auto-determine category from company name
+      const { inferLeadCategory } = await import("./services/leadCategoryService");
+      const categoryResult = inferLeadCategory(data.companyName, data.remarks);
+      
       // Insert into database using raw query (since we added tables directly)
       const { db } = await import("./db");
       const leadResult = await db.execute(sql`
-        INSERT INTO advertiser_leads (goal, region, company_name, contact_name, phone, email, budget_indication, remarks)
-        VALUES (${data.goal}, ${data.region}, ${data.companyName}, ${data.contactName}, ${data.phone || null}, ${data.email || null}, ${data.budgetIndication || null}, ${data.remarks || null})
+        INSERT INTO advertiser_leads (goal, region, company_name, contact_name, phone, email, budget_indication, remarks, inferred_category)
+        VALUES (${data.goal}, ${data.region}, ${data.companyName}, ${data.contactName}, ${data.phone || null}, ${data.email || null}, ${data.budgetIndication || null}, ${data.remarks || null}, ${categoryResult.category})
         RETURNING id
       `);
       
@@ -400,11 +404,17 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(200).json({ success: true }); // Silently accept spam
       }
       
+      // Auto-determine category from company name and business type
+      const { inferLeadCategory } = await import("./services/leadCategoryService");
+      const categoryResult = inferLeadCategory(data.companyName, data.remarks);
+      // For screen leads, use businessType as primary category if more confident
+      const inferredCategory = data.businessType === "Overig" ? categoryResult.category : data.businessType.toLowerCase().replace(/\//g, "_");
+      
       // Insert into database
       const { db } = await import("./db");
       const screenLeadResult = await db.execute(sql`
-        INSERT INTO screen_leads (business_type, city, company_name, contact_name, phone, email, visitors_per_week, remarks)
-        VALUES (${data.businessType}, ${data.city}, ${data.companyName}, ${data.contactName}, ${data.phone}, ${data.email || null}, ${data.visitorsPerWeek || null}, ${data.remarks || null})
+        INSERT INTO screen_leads (business_type, city, company_name, contact_name, phone, email, visitors_per_week, remarks, inferred_category)
+        VALUES (${data.businessType}, ${data.city}, ${data.companyName}, ${data.contactName}, ${data.phone}, ${data.email || null}, ${data.visitorsPerWeek || null}, ${data.remarks || null}, ${inferredCategory})
         RETURNING id
       `);
       
@@ -6071,6 +6081,85 @@ Sitemap: ${SITE_URL}/sitemap.xml
   app.delete("/api/leads/:id", async (req, res) => {
     await storage.deleteLead(req.params.id);
     res.status(204).send();
+  });
+
+  // Advertiser leads endpoints
+  app.get("/api/advertiser-leads", async (_req, res) => {
+    try {
+      const { db } = await import("./db");
+      const result = await db.execute(sql`
+        SELECT * FROM advertiser_leads ORDER BY created_at DESC
+      `);
+      res.json(result.rows);
+    } catch (error: any) {
+      console.error("Error fetching advertiser leads:", error);
+      res.status(500).json({ message: "Fout bij ophalen leads" });
+    }
+  });
+
+  app.patch("/api/advertiser-leads/:id/category", async (req, res) => {
+    try {
+      const { category } = req.body;
+      const { LEAD_CATEGORIES } = await import("@shared/schema");
+      if (!LEAD_CATEGORIES.includes(category)) {
+        return res.status(400).json({ message: "Ongeldige categorie" });
+      }
+      const { db } = await import("./db");
+      await db.execute(sql`
+        UPDATE advertiser_leads 
+        SET final_category = ${category} 
+        WHERE id = ${parseInt(req.params.id)}
+      `);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error updating advertiser lead category:", error);
+      res.status(500).json({ message: "Fout bij updaten categorie" });
+    }
+  });
+
+  // Screen leads endpoints
+  app.get("/api/screen-leads", async (_req, res) => {
+    try {
+      const { db } = await import("./db");
+      const result = await db.execute(sql`
+        SELECT * FROM screen_leads ORDER BY created_at DESC
+      `);
+      res.json(result.rows);
+    } catch (error: any) {
+      console.error("Error fetching screen leads:", error);
+      res.status(500).json({ message: "Fout bij ophalen leads" });
+    }
+  });
+
+  app.patch("/api/screen-leads/:id/category", async (req, res) => {
+    try {
+      const { category } = req.body;
+      const { LEAD_CATEGORIES } = await import("@shared/schema");
+      if (!LEAD_CATEGORIES.includes(category)) {
+        return res.status(400).json({ message: "Ongeldige categorie" });
+      }
+      const { db } = await import("./db");
+      await db.execute(sql`
+        UPDATE screen_leads 
+        SET final_category = ${category} 
+        WHERE id = ${parseInt(req.params.id)}
+      `);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("Error updating screen lead category:", error);
+      res.status(500).json({ message: "Fout bij updaten categorie" });
+    }
+  });
+
+  // Lead categories helper endpoint
+  app.get("/api/lead-categories", async (_req, res) => {
+    const { LEAD_CATEGORIES } = await import("@shared/schema");
+    const { getCategoryLabel } = await import("./services/leadCategoryService");
+    const categories = LEAD_CATEGORIES.map(cat => ({
+      value: cat,
+      label: getCategoryLabel(cat)
+    }));
+    res.json(categories);
   });
 
   // Lead activities
