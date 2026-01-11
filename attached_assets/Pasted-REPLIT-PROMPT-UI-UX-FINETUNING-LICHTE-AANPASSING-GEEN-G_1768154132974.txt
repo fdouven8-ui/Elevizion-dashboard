@@ -1,0 +1,88 @@
+REPLIT PROMPT — UI/UX FINETUNING (LICHTE AANPASSING, GEEN GROTE REFACTOR)
+
+Doel:
+Verfijn het uiterlijk van het Elevizion Dashboard: rustig, modern, weinig tekst, maar wel duidelijk. Voeg “een beetje kleur” toe via accenten en badges, zonder drukke UI. Hou alle bestaande functionaliteit en data-structuur exact hetzelfde.
+
+Belangrijk:
+- GEEN grote redesign/rebuild, geen nieuwe pagina-structuur, geen nieuwe flows.
+- Alleen styling + kleine UX verbeteringen (spacing, typografie, labels, states).
+- Houd de app snel en licht: geen zware animaties, geen grote libraries toevoegen.
+- Laat alle bestaande routes, component-namen en API-calls intact.
+
+1) Design tokens (centrale styling)
+Maak (of update) 1 centrale plek voor theme/tokens:
+- Neutrale basis (wit/lichte grijs tinten) + 1 primary accent kleur (bijv. teal/blauw) + 1 secundaire accent kleur (bijv. oranje of paars) voor highlights.
+- Gebruik kleur spaarzaam:
+  - Primary: buttons, actieve menu-item, links, geselecteerde states
+  - ✅ Success (groen), ⚠️ Warning (geel/oranje), ❌ Error (rood), Info (blauw) alleen voor status/badges
+- Consistente radius (bijv. 12px), zachte schaduw, dunne borders.
+- Typography: duidelijke hiërarchie:
+  - Pagina titel (groot)
+  - Section title (medium)
+  - Body (normaal)
+  - Secondary text (kleiner + grijs)
+
+2) Layout rustiger maken
+- Max-width voor content (bijv. 1200–1400px) en meer witruimte.
+- Cards uniform: gelijke padding, gelijke hoogte waar logisch.
+- Tabellen: meer breathing room (row height + zebra/hover subtiel).
+- Verwijder overbodige tekstblokken: vervang door subtiele helper text of icon tooltips.
+
+3) Linker menu verfijnen (rust + compact)
+- Maak sidebar iets compacter (kleiner breed), met duidelijke icon + label.
+- Actieve menu-item: subtiele background tint + accent border/indicator.
+- Submenu’s (Onboarding, Instellingen, Administrator):
+  - Gebruik collapsible groepen met duidelijke heading
+  - Standaard alleen de belangrijkste groepen avoid “menu overload”
+- Voeg bovenin een kleine “search / quick find” (alleen UI, hoeft niet perfect) om items/klanten/schermen sneller te vinden als dat al bestaat.
+
+4) KPI’s & status in 1 oogopslag (min tekst, max duidelijk)
+- KPI cards: enkel:
+  - label (kort)
+  - waarde (groot)
+  - kleine trend/extra info (optioneel, 1 regel max)
+- Gebruik badges/chips voor status:
+  - Scherm: Online/Offline
+  - Ad: Gekoppeld/Niet gekoppeld
+  - Factuur: Open/Betaald/Achterstallig
+- Gebruik kleur alleen in de badge + mini accent (niet hele card vollopen met kleur).
+
+5) Knoppen & acties (minder tekst, duidelijker)
+- Primair: 1 duidelijke primaire knop per pagina (“Nieuw”, “Opslaan”, “Verzenden”)
+- Secundair: outline/ghost stijl
+- Destructief: rood met confirm dialog
+- Acties in tabellen: gebruik icon buttons met tooltip i.p.v. lange tekstlinks.
+
+6) Formulieren (minder vermoeiend)
+- Input velden: duidelijke labels, optional helper text alleen waar nodig.
+- Groepeer velden in sections met kleine kopjes.
+- Validatie: inline, kort en duidelijk.
+- Bij onboarding: duidelijke progress indicator (stap 1/2/3) maar minimalistisch.
+
+7) Consistentie & polish
+- Zorg dat elk scherm dezelfde:
+  - page header (titel links, acties rechts)
+  - breadcrumb (optioneel) of subtiele back-link
+  - loading states (skeletons of spinners) consistent
+  - empty states: 1 zin + knop “Toevoegen” (geen grote uitleg)
+
+8) Concrete deliverables die je nu moet uitvoeren
+- Pas de globale theme/tokens toe op:
+  - Sidebar + menu states
+  - Page headers
+  - Cards/KPI blokken
+  - Tabellen
+  - Buttons
+  - Forms
+  - Badges/status chips
+- Houd bestaande component structuur aan; refactor alleen waar nodig om styling te hergebruiken.
+- Voeg geen nieuwe “features”, alleen UI polish.
+
+9) Acceptatiecriteria
+- Dashboard oogt rustiger en moderner met subtiele kleur-accenten.
+- Minder tekst op scherm, maar status/actie blijft direct duidelijk.
+- Sidebar compacter en overzichtelijker (minder “breed” gevoel).
+- Alles blijft exact werken zoals voorheen (zelfde routes, data, integraties).
+- Performance blijft gelijk of beter.
+
+Voer dit nu door in de codebase en laat de belangrijkste gewijzigde bestanden zien (theme/tokens + sidebar + 1–2 representatieve pagina’s zoals Overzicht en Plaatsingen) zodat ik het snel kan beoordelen.

@@ -127,15 +127,15 @@ export function AppSidebar() {
   const canViewSettings = hasAnyPermission(PERMISSIONS.MANAGE_USERS, PERMISSIONS.EDIT_SYSTEM_SETTINGS, PERMISSIONS.MANAGE_TEMPLATES, PERMISSIONS.MANAGE_INTEGRATIONS);
 
   return (
-    <Sidebar collapsible="icon" className="border-r border-border/50">
-      <SidebarHeader className="pb-2">
+    <Sidebar collapsible="icon" className="border-r border-sidebar-border/30">
+      <SidebarHeader className="pb-3 pt-1">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
+            <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground px-2">
               <img 
                 src="/elevizion-logo.png" 
                 alt="Elevizion" 
-                className="h-6 w-auto object-contain"
+                className="h-5 w-auto object-contain"
               />
             </SidebarMenuButton>
           </SidebarMenuItem>
@@ -153,11 +153,11 @@ export function AppSidebar() {
                   <SidebarMenuButton 
                     asChild 
                     tooltip="Home"
-                    className={`h-8 rounded-md transition-all ${isActive("/dashboard") ? 'bg-primary/10 font-medium border-l-2 border-primary' : 'hover:bg-muted/30'}`}
+                    className={`h-9 rounded-lg transition-colors ${isActive("/dashboard") ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
                   >
                     <Link href="/dashboard" data-testid="nav-dashboard">
-                      <LayoutDashboard className={`h-4 w-4 ${isActive("/dashboard") ? 'text-primary' : 'text-muted-foreground'}`} />
-                      <span className="text-sm">Home</span>
+                      <LayoutDashboard className="h-4 w-4" />
+                      <span className="text-[13px]">Home</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -170,22 +170,22 @@ export function AppSidebar() {
                     <CollapsibleTrigger asChild>
                       <SidebarMenuButton 
                         tooltip="Onboarding"
-                        className={`h-8 rounded-md transition-all ${(isActive("/onboarding") || isActive("/leads")) ? 'bg-primary/10 font-medium' : 'hover:bg-muted/30'}`}
+                        className={`h-9 rounded-lg transition-colors ${(isActive("/onboarding") || isActive("/leads")) ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
                       >
-                        <Rocket className={`h-4 w-4 ${(isActive("/onboarding") || isActive("/leads")) ? 'text-primary' : 'text-muted-foreground'}`} />
-                        <span className="text-sm flex-1">Onboarding</span>
-                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                        <Rocket className="h-4 w-4" />
+                        <span className="text-[13px] flex-1">Onboarding</span>
+                        <ChevronDown className="h-3.5 w-3.5 opacity-60 transition-transform group-data-[state=open]/collapsible:rotate-180" />
                       </SidebarMenuButton>
                     </CollapsibleTrigger>
                     <CollapsibleContent>
-                      <SidebarMenuSub className="ml-4 mt-1 space-y-0.5">
+                      <SidebarMenuSub className="ml-3 mt-1 space-y-0.5 border-l border-sidebar-border/30 pl-2">
                         <SidebarMenuSubItem>
-                          <SidebarMenuSubButton asChild className={`h-7 text-xs ${isActive("/leads") ? 'bg-muted font-medium' : ''}`}>
+                          <SidebarMenuSubButton asChild className={`h-8 text-[12px] rounded-md ${isActive("/leads") ? 'bg-sidebar-primary/20 text-sidebar-primary-foreground font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/30'}`}>
                             <Link href="/leads" data-testid="nav-leads">
                               <UserPlus className="h-3.5 w-3.5" />
                               <span>Leads</span>
                               {newLeadsCount > 0 && (
-                                <Badge variant="secondary" className="ml-auto h-4 px-1.5 text-[10px] font-medium">
+                                <Badge className="ml-auto h-4 px-1.5 text-[10px] font-medium bg-orange-500 text-white border-0">
                                   {newLeadsCount}
                                 </Badge>
                               )}
@@ -193,7 +193,7 @@ export function AppSidebar() {
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
                         <SidebarMenuSubItem>
-                          <SidebarMenuSubButton asChild className={`h-7 text-xs ${isActive("/onboarding") ? 'bg-muted font-medium' : ''}`}>
+                          <SidebarMenuSubButton asChild className={`h-8 text-[12px] rounded-md ${isActive("/onboarding") ? 'bg-sidebar-primary/20 text-sidebar-primary-foreground font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/30'}`}>
                             <Link href="/onboarding" data-testid="nav-onboarding">
                               <MapPin className="h-3.5 w-3.5" />
                               <span>Nieuw scherm</span>
@@ -212,11 +212,11 @@ export function AppSidebar() {
                   <SidebarMenuButton 
                     asChild 
                     tooltip={item.title}
-                    className={`h-8 rounded-md transition-all ${isActive(item.url) ? 'bg-primary/10 font-medium border-l-2 border-primary' : 'hover:bg-muted/30'}`}
+                    className={`h-9 rounded-lg transition-colors ${isActive(item.url) ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
                   >
                     <Link href={item.url} data-testid={`nav-${item.url.replace('/', '')}`}>
-                      <item.icon className={`h-4 w-4 ${isActive(item.url) ? 'text-primary' : 'text-muted-foreground'}`} />
-                      <span className="text-sm">{item.title}</span>
+                      <item.icon className="h-4 w-4" />
+                      <span className="text-[13px]">{item.title}</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -228,10 +228,10 @@ export function AppSidebar() {
         {/* Administrator Section */}
         {canViewSettings && (
           <>
-            <SidebarSeparator className="my-2" />
+            <SidebarSeparator className="my-3 opacity-30" />
             <SidebarGroup className="py-1">
-              <SidebarGroupLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/60 px-2">
-                Administrator
+              <SidebarGroupLabel className="text-[10px] uppercase tracking-wider text-sidebar-foreground/40 px-3 mb-1">
+                Admin
               </SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu className="gap-0.5">
@@ -239,11 +239,11 @@ export function AppSidebar() {
                     <SidebarMenuButton 
                       asChild 
                       tooltip="Instellingen"
-                      className={`h-8 rounded-md transition-all ${isActive("/settings") ? 'bg-primary/10 font-medium border-l-2 border-primary' : 'hover:bg-muted/30'}`}
+                      className={`h-9 rounded-lg transition-colors ${isActive("/settings") ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
                     >
                       <Link href="/settings" data-testid="nav-settings">
-                        <Settings className={`h-4 w-4 ${isActive("/settings") ? 'text-primary' : 'text-muted-foreground'}`} />
-                        <span className="text-sm">Instellingen</span>
+                        <Settings className="h-4 w-4" />
+                        <span className="text-[13px]">Instellingen</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -254,31 +254,31 @@ export function AppSidebar() {
         )}
       </SidebarContent>
       
-      <SidebarFooter className="pt-2 pb-3">
+      <SidebarFooter className="pt-2 pb-3 border-t border-sidebar-border/20">
         <SidebarMenu className="gap-0.5">
           {isAuthenticated && user ? (
             <>
               <SidebarMenuItem>
-                <SidebarMenuButton className="cursor-default h-8">
-                  <Avatar className="h-5 w-5">
+                <SidebarMenuButton className="cursor-default h-9 hover:bg-transparent">
+                  <Avatar className="h-6 w-6">
                     <AvatarImage src={user.profileImageUrl || undefined} alt={getUserDisplayName()} />
-                    <AvatarFallback className="text-[10px]">{getUserInitials()}</AvatarFallback>
+                    <AvatarFallback className="text-[10px] bg-sidebar-primary/20 text-sidebar-primary">{getUserInitials()}</AvatarFallback>
                   </Avatar>
-                  <span className="truncate text-xs">{getUserDisplayName()}</span>
+                  <span className="truncate text-[12px] text-sidebar-foreground/80">{getUserDisplayName()}</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
               <SidebarMenuItem>
-                <SidebarMenuButton onClick={handleLogout} data-testid="button-logout" className="h-8 hover:bg-muted/30">
+                <SidebarMenuButton onClick={handleLogout} data-testid="button-logout" className="h-8 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 rounded-lg">
                   <LogOut className="h-4 w-4" />
-                  <span className="text-sm">Uitloggen</span>
+                  <span className="text-[12px]">Uitloggen</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </>
           ) : (
             <SidebarMenuItem>
-              <SidebarMenuButton onClick={handleLogin} data-testid="button-login" disabled={isLoading} className="h-8 hover:bg-muted/30">
+              <SidebarMenuButton onClick={handleLogin} data-testid="button-login" disabled={isLoading} className="h-9 text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 rounded-lg">
                 <LogIn className="h-4 w-4" />
-                <span className="text-sm">{isLoading ? "Laden..." : "Inloggen"}</span>
+                <span className="text-[13px]">{isLoading ? "Laden..." : "Inloggen"}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           )}

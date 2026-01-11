@@ -153,47 +153,47 @@ export default function Home() {
   const dataComplete = dataIssues === 0 && locationsTotal > 0;
 
   return (
-    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="space-y-8 max-w-6xl">
       <div>
-        <h1 className="text-2xl font-bold" data-testid="page-title">Home</h1>
-        <p className="text-muted-foreground">Overzicht van je Elevizion netwerk</p>
+        <h1 className="text-2xl font-semibold tracking-tight" data-testid="page-title">Home</h1>
+        <p className="text-sm text-muted-foreground mt-1">Overzicht van je netwerk</p>
       </div>
 
-      {/* KPI Cards - 3 uitklapbare kaarten */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* KPI Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         
-        {/* SCHERMEN (uitklapbaar) */}
+        {/* SCHERMEN */}
         {statsLoading ? (
-          <Card><CardContent className="pt-4"><Skeleton className="h-16 w-full" /></CardContent></Card>
+          <Card className="border-border/50"><CardContent className="pt-4"><Skeleton className="h-16 w-full" /></CardContent></Card>
         ) : (
           <ExpandableKpiCard
             title="Schermen"
-            icon={<Wifi className="h-5 w-5 text-emerald-600" />}
+            icon={<Wifi className="h-5 w-5 text-teal-600" />}
             mainValue={
               <div className="flex items-baseline gap-2">
-                <span className="text-emerald-600">{screensOnline}</span>
-                <span className="text-lg text-muted-foreground font-normal">/ {screensTotal}</span>
+                <span className="text-teal-600">{screensOnline}</span>
+                <span className="text-lg text-muted-foreground/70 font-normal">/ {screensTotal}</span>
               </div>
             }
             summary={screensOffline > 0 ? `${screensOffline} offline` : "Alles online"}
-            accentColor="bg-emerald-500"
+            accentColor="bg-teal-500"
             data-testid="kpi-schermen"
           >
-            <div className="space-y-2">
+            <div className="space-y-2.5 pt-1">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Online</span>
-                <span className="font-medium text-emerald-600">{screensOnline}</span>
+                <span className="font-medium text-teal-600">{screensOnline}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Offline</span>
-                <span className={`font-medium ${screensOffline > 0 ? 'text-red-600' : ''}`}>{screensOffline}</span>
+                <span className={`font-medium ${screensOffline > 0 ? 'text-red-500' : 'text-muted-foreground'}`}>{screensOffline}</span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Totaal</span>
                 <span className="font-medium">{screensTotal}</span>
               </div>
               <Link href="/screens">
-                <Button variant="outline" size="sm" className="w-full mt-2" data-testid="link-schermen">
+                <Button variant="outline" size="sm" className="w-full mt-3 h-8" data-testid="link-schermen">
                   Bekijk schermen
                   <ChevronRight className="h-4 w-4 ml-1" />
                 </Button>
@@ -202,20 +202,20 @@ export default function Home() {
           </ExpandableKpiCard>
         )}
 
-        {/* PLAATSINGEN & ADS (uitklapbaar) */}
+        {/* PLAATSINGEN & ADS */}
         {statsLoading ? (
-          <Card><CardContent className="pt-4"><Skeleton className="h-16 w-full" /></CardContent></Card>
+          <Card className="border-border/50"><CardContent className="pt-4"><Skeleton className="h-16 w-full" /></CardContent></Card>
         ) : (
           <ExpandableKpiCard
-            title="Plaatsingen & Ads"
-            icon={<Target className="h-5 w-5 text-blue-600" />}
+            title="Plaatsingen"
+            icon={<Target className="h-5 w-5 text-sky-600" />}
             mainValue={activePlacements}
-            summary={adsUnlinked > 0 ? `${adsUnlinked} ads niet gekoppeld` : `${adsTotal} ads totaal`}
-            accentColor="bg-blue-500"
-            className={adsUnlinked > 0 ? 'border-amber-300' : ''}
+            summary={adsUnlinked > 0 ? `${adsUnlinked} niet gekoppeld` : `${adsTotal} ads`}
+            accentColor="bg-sky-500"
+            className={adsUnlinked > 0 ? 'border-orange-200' : ''}
             data-testid="kpi-plaatsingen-ads"
           >
-            <div className="space-y-2">
+            <div className="space-y-2.5 pt-1">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Actieve plaatsingen</span>
                 <span className="font-medium">{activePlacements}</span>
@@ -226,12 +226,12 @@ export default function Home() {
               </div>
               {adsUnlinked > 0 && (
                 <div className="flex justify-between text-sm">
-                  <span className="text-amber-600">Niet gekoppeld</span>
-                  <span className="font-medium text-amber-600">{adsUnlinked}</span>
+                  <span className="text-orange-600">Niet gekoppeld</span>
+                  <span className="font-medium text-orange-600">{adsUnlinked}</span>
                 </div>
               )}
               <Link href="/placements">
-                <Button variant="outline" size="sm" className="w-full mt-2" data-testid="button-bekijk-details">
+                <Button variant="outline" size="sm" className="w-full mt-3 h-8" data-testid="button-bekijk-details">
                   Bekijk plaatsingen
                   <ChevronRight className="h-4 w-4 ml-1" />
                 </Button>
@@ -240,25 +240,25 @@ export default function Home() {
           </ExpandableKpiCard>
         )}
 
-        {/* BETALENDE ADVERTEERDERS (uitklapbaar) */}
+        {/* BETALENDE ADVERTEERDERS */}
         {statsLoading ? (
-          <Card><CardContent className="pt-4"><Skeleton className="h-16 w-full" /></CardContent></Card>
+          <Card className="border-border/50"><CardContent className="pt-4"><Skeleton className="h-16 w-full" /></CardContent></Card>
         ) : (
           <ExpandableKpiCard
-            title="Betalende adverteerders"
-            icon={<Users className="h-5 w-5 text-purple-600" />}
+            title="Adverteerders"
+            icon={<Users className="h-5 w-5 text-violet-600" />}
             mainValue={payingAdvertisers}
-            summary="Actieve klanten"
-            accentColor="bg-purple-500"
+            summary="Betalend"
+            accentColor="bg-violet-500"
             data-testid="kpi-adverteerders"
           >
-            <div className="space-y-2">
+            <div className="space-y-2.5 pt-1">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Betalend</span>
                 <span className="font-medium">{payingAdvertisers}</span>
               </div>
               <Link href="/advertisers?filter=paying">
-                <Button variant="outline" size="sm" className="w-full mt-2" data-testid="link-adverteerders">
+                <Button variant="outline" size="sm" className="w-full mt-3 h-8" data-testid="link-adverteerders">
                   Bekijk adverteerders
                   <ChevronRight className="h-4 w-4 ml-1" />
                 </Button>
@@ -270,19 +270,19 @@ export default function Home() {
 
       {/* Acties & Alerts Panel */}
       <div data-testid="acties-alerts-panel">
-        <h2 className="text-base font-medium mb-3">Acties & Alerts</h2>
+        <h2 className="text-lg font-medium mb-4">Acties</h2>
         {actionsLoading || statsLoading ? (
           <div className="space-y-3">
             <Skeleton className="h-14 w-full rounded-lg" />
             <Skeleton className="h-14 w-full rounded-lg" />
           </div>
         ) : !hasIssues ? (
-          <div className="text-center py-8 text-muted-foreground border rounded-lg bg-card">
-            <CheckCircle2 className="h-10 w-10 mx-auto mb-3 text-emerald-500 opacity-60" />
-            <p className="text-sm font-medium">Geen acties nodig — alles loopt.</p>
+          <div className="text-center py-10 text-muted-foreground border border-border/50 rounded-xl bg-card">
+            <CheckCircle2 className="h-10 w-10 mx-auto mb-3 text-teal-500/60" />
+            <p className="text-sm">Alles loopt</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             
             {/* Offline Schermen */}
             {offlineScreens.length > 0 && (
@@ -325,7 +325,7 @@ export default function Home() {
             {adsUnlinked > 0 && (
               <ExpandableCard
                 title="Ads niet gekoppeld"
-                icon={<LinkIcon className="h-4 w-4 text-amber-600" />}
+                icon={<LinkIcon className="h-4 w-4 text-orange-500" />}
                 countBadge={adsUnlinked}
                 variant="warning"
                 summaryLine={topUnlinkedAds.length > 0 
@@ -339,9 +339,9 @@ export default function Home() {
                     {topUnlinkedAds.map((ad) => (
                       <div 
                         key={ad.yodeckMediaId} 
-                        className="flex items-center gap-2 py-1 px-2 rounded bg-amber-50/50 text-sm"
+                        className="flex items-center gap-2 py-1.5 px-2 rounded bg-orange-50/50 text-sm"
                       >
-                        <Target className="h-3 w-3 text-amber-500 shrink-0" />
+                        <Target className="h-3 w-3 text-orange-400 shrink-0" />
                         <span className="truncate text-muted-foreground">{ad.name}</span>
                       </div>
                     ))}
@@ -353,7 +353,7 @@ export default function Home() {
                   </div>
                 )}
                 <Link href="/placements">
-                  <Button variant="outline" size="sm" className="w-full text-amber-600 border-amber-300 hover:bg-amber-50" data-testid="link-koppelen">
+                  <Button variant="outline" size="sm" className="w-full h-8 text-orange-600 border-orange-200 hover:bg-orange-50" data-testid="link-koppelen">
                     Koppelen
                     <ChevronRight className="h-3 w-3 ml-2" />
                   </Button>
@@ -366,105 +366,86 @@ export default function Home() {
 
       {/* Data Compleetheid Widget */}
       <div data-testid="data-compleetheid-panel">
-        <h2 className="text-base font-medium mb-3">Data Compleetheid</h2>
+        <h2 className="text-lg font-medium mb-4">Data Compleetheid</h2>
         {statsLoading ? (
           <Skeleton className="h-32 w-full rounded-lg" />
         ) : dataComplete ? (
-          <div className="text-center py-6 text-muted-foreground border rounded-lg bg-card">
-            <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-emerald-500 opacity-60" />
-            <p className="text-sm font-medium">Alle data compleet</p>
-            <p className="text-xs text-muted-foreground">{locationsTotal} locaties, allemaal met Moneybird en volledig adres</p>
+          <div className="text-center py-8 text-muted-foreground border border-border/50 rounded-xl bg-card">
+            <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-teal-500/60" />
+            <p className="text-sm">Alle data compleet</p>
           </div>
         ) : (
-          <Card>
-            <CardContent className="pt-4">
-              <div className="space-y-3">
+          <Card className="border-border/50">
+            <CardContent className="pt-5 pb-4">
+              <div className="space-y-4">
                 {/* Locaties zonder Moneybird */}
-                <div className="flex items-center justify-between py-2 border-b last:border-0">
+                <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-full ${locationsWithoutMoneybird > 0 ? 'bg-orange-100' : 'bg-green-100'}`}>
-                      <Database className={`h-4 w-4 ${locationsWithoutMoneybird > 0 ? 'text-orange-600' : 'text-green-600'}`} />
+                    <div className={`p-2 rounded-lg ${locationsWithoutMoneybird > 0 ? 'bg-orange-50' : 'bg-teal-50'}`}>
+                      <Database className={`h-4 w-4 ${locationsWithoutMoneybird > 0 ? 'text-orange-500' : 'text-teal-600'}`} />
                     </div>
-                    <div>
-                      <p className="text-sm font-medium">Locaties zonder Moneybird</p>
-                      <p className="text-xs text-muted-foreground">Koppel aan Moneybird voor factuurgegevens</p>
-                    </div>
+                    <span className="text-sm">Locaties zonder Moneybird</span>
                   </div>
                   <div className="flex items-center gap-2">
                     {locationsWithoutMoneybird > 0 ? (
                       <>
-                        <Badge variant="outline" className="text-orange-600 border-orange-600">{locationsWithoutMoneybird}</Badge>
+                        <Badge variant="outline" className="text-orange-600 border-orange-200 bg-orange-50/50">{locationsWithoutMoneybird}</Badge>
                         <Link href="/locations">
-                          <Button variant="ghost" size="sm">
-                            <ChevronRight className="h-4 w-4" />
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
                           </Button>
                         </Link>
                       </>
                     ) : (
-                      <Badge variant="outline" className="text-green-600 border-green-600">
-                        <CheckCircle2 className="h-3 w-3 mr-1" />
-                        OK
-                      </Badge>
+                      <Badge variant="outline" className="text-teal-600 border-teal-200 bg-teal-50/50">OK</Badge>
                     )}
                   </div>
                 </div>
 
                 {/* Locaties met onvolledig adres */}
-                <div className="flex items-center justify-between py-2 border-b last:border-0">
+                <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-full ${locationsAddressIncomplete > 0 ? 'bg-orange-100' : 'bg-green-100'}`}>
-                      <MapPin className={`h-4 w-4 ${locationsAddressIncomplete > 0 ? 'text-orange-600' : 'text-green-600'}`} />
+                    <div className={`p-2 rounded-lg ${locationsAddressIncomplete > 0 ? 'bg-orange-50' : 'bg-teal-50'}`}>
+                      <MapPin className={`h-4 w-4 ${locationsAddressIncomplete > 0 ? 'text-orange-500' : 'text-teal-600'}`} />
                     </div>
-                    <div>
-                      <p className="text-sm font-medium">Locaties met onvolledig adres</p>
-                      <p className="text-xs text-muted-foreground">Straat, postcode of plaats ontbreekt</p>
-                    </div>
+                    <span className="text-sm">Locaties onvolledig adres</span>
                   </div>
                   <div className="flex items-center gap-2">
                     {locationsAddressIncomplete > 0 ? (
                       <>
-                        <Badge variant="outline" className="text-orange-600 border-orange-600">{locationsAddressIncomplete}</Badge>
+                        <Badge variant="outline" className="text-orange-600 border-orange-200 bg-orange-50/50">{locationsAddressIncomplete}</Badge>
                         <Link href="/locations">
-                          <Button variant="ghost" size="sm">
-                            <ChevronRight className="h-4 w-4" />
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
                           </Button>
                         </Link>
                       </>
                     ) : (
-                      <Badge variant="outline" className="text-green-600 border-green-600">
-                        <CheckCircle2 className="h-3 w-3 mr-1" />
-                        OK
-                      </Badge>
+                      <Badge variant="outline" className="text-teal-600 border-teal-200 bg-teal-50/50">OK</Badge>
                     )}
                   </div>
                 </div>
 
                 {/* Schermen zonder locatie */}
-                <div className="flex items-center justify-between py-2">
+                <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className={`p-2 rounded-full ${screensWithoutLocation > 0 ? 'bg-orange-100' : 'bg-green-100'}`}>
-                      <Monitor className={`h-4 w-4 ${screensWithoutLocation > 0 ? 'text-orange-600' : 'text-green-600'}`} />
+                    <div className={`p-2 rounded-lg ${screensWithoutLocation > 0 ? 'bg-orange-50' : 'bg-teal-50'}`}>
+                      <Monitor className={`h-4 w-4 ${screensWithoutLocation > 0 ? 'text-orange-500' : 'text-teal-600'}`} />
                     </div>
-                    <div>
-                      <p className="text-sm font-medium">Schermen zonder locatie</p>
-                      <p className="text-xs text-muted-foreground">Koppel scherm aan een locatie</p>
-                    </div>
+                    <span className="text-sm">Schermen zonder locatie</span>
                   </div>
                   <div className="flex items-center gap-2">
                     {screensWithoutLocation > 0 ? (
                       <>
-                        <Badge variant="outline" className="text-orange-600 border-orange-600">{screensWithoutLocation}</Badge>
+                        <Badge variant="outline" className="text-orange-600 border-orange-200 bg-orange-50/50">{screensWithoutLocation}</Badge>
                         <Link href="/screens">
-                          <Button variant="ghost" size="sm">
-                            <ChevronRight className="h-4 w-4" />
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0">
+                            <ChevronRight className="h-4 w-4 text-muted-foreground" />
                           </Button>
                         </Link>
                       </>
                     ) : (
-                      <Badge variant="outline" className="text-green-600 border-green-600">
-                        <CheckCircle2 className="h-3 w-3 mr-1" />
-                        OK
-                      </Badge>
+                      <Badge variant="outline" className="text-teal-600 border-teal-200 bg-teal-50/50">OK</Badge>
                     )}
                   </div>
                 </div>
