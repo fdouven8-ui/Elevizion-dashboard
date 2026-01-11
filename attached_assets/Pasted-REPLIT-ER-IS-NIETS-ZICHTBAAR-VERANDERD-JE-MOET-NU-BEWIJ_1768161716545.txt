@@ -1,0 +1,64 @@
+REPLIT: ER IS NIETS ZICHTBAAR VERANDERD. JE MOET NU BEWIJZEN WAT JE HEBT GEBOUWD EN HET IN DE UI KOPPELEN.
+Context: Elevizion dashboard. Jij zei dat onboarding/leads categorie/contracten/payouts/reporting gedaan is, maar ik zie nergens categorieën of financieel overzicht of payouts. Dus: of het is niet gebouwd, of niet gemigreerd, of niet aan UI gekoppeld.
+
+HARD REQUIREMENTS (geen discussie):
+1) Maak ALLES zichtbaar in de bestaande UI: waar klik ik precies?
+2) Voeg geen nieuwe grote modules toe, alleen minimale UI hooks: tabs/secties op bestaande pagina’s.
+3) Voer DB migrations uit (of geef exact command + migration file) zodat velden/tables echt bestaan.
+4) Geef mij een concrete “Where to find it” lijst + welke files je hebt aangepast.
+
+STAP 1 — AUDIT & BEWIJS (MOET JE EERST DOEN)
+- Geef een korte lijst:
+  a) Welke database tabellen/velden zijn toegevoegd of gewijzigd (exacte namen)
+  b) Welke routes/pages bestaan hiervoor (exacte pathnames)
+  c) Welke componenten zijn aangepast
+- Toon de diff of noem exact de gewijzigde bestanden (minimaal 10 regels context per bestand):
+  - schema/prisma (of ORM model)
+  - migration files
+  - api endpoints/services
+  - UI pagina’s waar ik het moet zien
+
+STAP 2 — ALS IETS ONTBREEKT: BOUW HET NU AF (ZICHTBAAR)
+A) LEADS CATEGORIE BADGE
+- In leads tabel én lead detail:
+  - Toon badge “Categorie: X”
+  - Voeg dropdown om finalCategory te zetten
+- Als er geen leads zijn: toon empty state + knop “Testlead aanmaken”.
+- Voeg een knop “Maak testlead” die 1 lead in DB zet met bedrijfsnaam “Basil’s Barbershop” zodat ik categorie meteen zie.
+
+B) FINANCIEEL / UITBETALINGEN (PAYOUTS) ZICHTBAAR MAKEN
+- Onder bestaande menu “Financieel” (of op locatie detail):
+  - Voeg sectie “Uitbetalingen” of “Payouts” met tabel:
+    maand | locatie | allocated omzet (ex btw) | contract (%/fixed) | payout | status
+- Voeg “Genereer payouts (test)” knop die:
+  - een test maand maakt (YYYY-MM)
+  - 1 advertiser_month_revenue record
+  - 1 placement naar 1 scherm (als al bestaat) of koppelt aan bestaande
+  - allocation draait
+  - payout statement vult
+Zodat ik direct iets zie, ook zonder echte Moneybird data.
+
+C) ALLOCATION ENGINE KOPPELEN AAN UI
+- In locatie detail:
+  - tab/sectie “Uitbetalingen”
+  - detail view per maand met bewijsregels:
+    screenDays, weight, allocatedAmount
+- Als data ontbreekt: toon duidelijke “Nog geen allocations voor deze maand” + knop “Recalculate”.
+
+D) CONTRACTEN TAB ZICHTBAAR
+- In advertiser & location detail:
+  - tab/sectie “Contracten”
+  - lijst: draft/sent/signed + preview knop
+- Voeg “Genereer contract draft” knop zodat ik meteen iets zie.
+
+STAP 3 — GEEN VERBORGEN FEATURE FLAGS
+- Als je feature flags gebruikt: zet default AAN in dev en log ze in console.
+- Zorg dat alles toegankelijk is via bestaande sidebar items (Leads) of via tabs op bestaande detailpagina’s.
+
+STAP 4 — OUTPUT
+- Geef mij:
+  1) Klikpad: exact waar ik het vind (menu -> pagina -> tab)
+  2) Welke testknoppen je hebt toegevoegd en wat ze doen
+  3) Welke DB records worden aangemaakt
+  4) Welke 5 belangrijkste files aangepast zijn (pad + korte uitleg)
+Stop pas als ik categoriebadge én payouts tabel daadwerkelijk kan zien zonder echte data.

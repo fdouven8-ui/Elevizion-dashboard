@@ -33,6 +33,8 @@ import {
   MapPin,
   Link2,
   Shield,
+  FileText,
+  Wallet,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -54,7 +56,9 @@ const mainMenuItems: MenuItem[] = [
   { title: "Schermen", url: "/screens", icon: Monitor, requiredPermissions: [PERMISSIONS.VIEW_SCREENS] },
   { title: "Adverteerders", url: "/advertisers", icon: Users, requiredPermissions: [PERMISSIONS.VIEW_ADVERTISERS] },
   { title: "Plaatsingen", url: "/placements", icon: Target, requiredPermissions: [PERMISSIONS.VIEW_PLACEMENTS] },
+  { title: "Contracten", url: "/contracts", icon: FileText, requiredPermissions: [PERMISSIONS.VIEW_FINANCE] },
   { title: "Financieel", url: "/finance", icon: Euro, requiredPermissions: [PERMISSIONS.VIEW_FINANCE] },
+  { title: "Uitbetalingen", url: "/payouts", icon: Wallet, requiredPermissions: [PERMISSIONS.VIEW_FINANCE] },
 ];
 
 const onboardingSubItems = [

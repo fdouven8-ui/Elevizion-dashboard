@@ -31,7 +31,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { 
   UserPlus, Megaphone, MapPin, Phone, Mail, Building2, User, 
-  Calendar, Loader2, Search, X, ChevronLeft, ChevronRight 
+  Calendar, Loader2, Search, X, ChevronLeft, ChevronRight, Plus 
 } from "lucide-react";
 import { format } from "date-fns";
 import { nl } from "date-fns/locale";
@@ -165,7 +165,7 @@ export default function Leads() {
   }, [buildQueryString, navigate]);
 
   // Fetch leads with filters
-  const { data, isLoading, isFetching } = useQuery<LeadQueryResult>({
+  const { data, isLoading, isFetching, refetch } = useQuery<LeadQueryResult>({
     queryKey: ["/api/leads", buildQueryString()],
     queryFn: async () => {
       const res = await fetch(`/api/leads?${buildQueryString()}`);
@@ -229,6 +229,21 @@ export default function Leads() {
 
   const hasActiveFilters = searchInput || typeFilter !== "all" || statusFilter !== "all" || categoryFilter !== "all" || onlyNew || dateRange !== "all";
 
+  const createTestLeadMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/leads/create-test", { method: "POST" });
+      if (!res.ok) throw new Error((await res.json()).message || "Fout bij aanmaken");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Testlead aangemaakt", description: "Basil's Barbershop is toegevoegd als testlead" });
+      refetch();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Fout", description: err.message, variant: "destructive" });
+    },
+  });
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -240,15 +255,31 @@ export default function Leads() {
           </h1>
           <p className="text-sm text-muted-foreground">Website aanvragen beheren</p>
         </div>
-        {newCount > 0 && (
-          <Badge 
-            className="bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer transition-colors"
-            onClick={handleNewLeadsBadgeClick}
-            data-testid="badge-new-leads"
+        <div className="flex items-center gap-2">
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={() => createTestLeadMutation.mutate()}
+            disabled={createTestLeadMutation.isPending}
+            data-testid="button-create-test-lead"
           >
-            {newCount} nieuwe
-          </Badge>
-        )}
+            {createTestLeadMutation.isPending ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Plus className="h-4 w-4 mr-2" />
+            )}
+            Maak Testlead
+          </Button>
+          {newCount > 0 && (
+            <Badge 
+              className="bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer transition-colors"
+              onClick={handleNewLeadsBadgeClick}
+              data-testid="badge-new-leads"
+            >
+              {newCount} nieuwe
+            </Badge>
+          )}
+        </div>
       </div>
 
       {/* Toolbar */}

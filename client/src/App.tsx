@@ -36,6 +36,8 @@ import LocationPortal from "@/pages/LocationPortal";
 import DataHealthPage from "@/pages/DataHealthPage";
 import LocalLanding from "@/pages/LocalLanding";
 import Leads from "@/pages/Leads";
+import Payouts from "@/pages/Payouts";
+import Contracts from "@/pages/Contracts";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -55,6 +57,8 @@ function DashboardRouter() {
         <Route path="/placements" component={Placements} />
         <Route path="/placements/:id" component={PlacementDetail} />
         <Route path="/finance" component={Finance} />
+        <Route path="/payouts" component={Payouts} />
+        <Route path="/contracts" component={Contracts} />
         <Route path="/settings" component={Settings} />
         <Route path="/content-inventory" component={ContentInventory} />
         <Route path="/yodeck" component={Yodeck} />

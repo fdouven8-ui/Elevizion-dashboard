@@ -6268,6 +6268,37 @@ Sitemap: ${SITE_URL}/sitemap.xml
     res.status(204).send();
   });
 
+  // Create test lead endpoint for demo/testing
+  app.post("/api/leads/create-test", async (_req, res) => {
+    try {
+      const { inferCategory } = await import("./services/leadCategoryService");
+      const testCompanyName = "Basil's Barbershop";
+      const { category, confidence } = inferCategory(testCompanyName);
+      
+      const lead = await storage.createLead({
+        type: "advertiser",
+        companyName: testCompanyName,
+        contactName: "Basil van der Berg",
+        email: "basil@barbershop-test.nl",
+        phone: "06-12345678",
+        status: "nieuw",
+        source: "test",
+        category: category,
+        notes: `Auto-categorisatie: ${category} (${Math.round(confidence * 100)}% zekerheid) - Dit is een testlead`,
+      });
+      
+      res.status(201).json({ 
+        success: true, 
+        id: lead.id,
+        category,
+        confidence: Math.round(confidence * 100),
+      });
+    } catch (error: any) {
+      console.error("Error creating test lead:", error);
+      res.status(500).json({ message: error.message || "Fout bij aanmaken testlead" });
+    }
+  });
+
   // Advertiser leads endpoints
   app.get("/api/advertiser-leads", async (_req, res) => {
     try {
