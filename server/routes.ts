@@ -6271,9 +6271,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
   // Create test lead endpoint for demo/testing
   app.post("/api/leads/create-test", async (_req, res) => {
     try {
-      const { inferCategory } = await import("./services/leadCategoryService");
+      const { inferLeadCategory } = await import("./services/leadCategoryService");
       const testCompanyName = "Basil's Barbershop";
-      const { category, confidence } = inferCategory(testCompanyName);
+      const { category, confidence } = inferLeadCategory(testCompanyName);
       
       const lead = await storage.createLead({
         type: "advertiser",
@@ -6284,6 +6284,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
         status: "nieuw",
         source: "test",
         category: category,
+        inferredCategory: category,
+        inferredConfidence: String(confidence),
         notes: `Auto-categorisatie: ${category} (${Math.round(confidence * 100)}% zekerheid) - Dit is een testlead`,
       });
       
