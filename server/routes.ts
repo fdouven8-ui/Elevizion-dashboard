@@ -2419,6 +2419,42 @@ Sitemap: ${SITE_URL}/sitemap.xml
     res.json(contract);
   });
 
+  // Contract auto-draft endpoint
+  app.post("/api/contracts/draft", async (req, res) => {
+    try {
+      const { createContractDraft } = await import("./services/contractDraftService");
+      const result = await createContractDraft(req.body);
+      res.status(201).json(result);
+    } catch (error: any) {
+      console.error("Error creating contract draft:", error);
+      res.status(400).json({ message: error.message || "Fout bij aanmaken concept contract" });
+    }
+  });
+
+  // Create new contract version
+  app.post("/api/contracts/:id/new-version", async (req, res) => {
+    try {
+      const { createContractVersion } = await import("./services/contractDraftService");
+      const result = await createContractVersion(req.params.id, req.body);
+      res.status(201).json(result);
+    } catch (error: any) {
+      console.error("Error creating contract version:", error);
+      res.status(400).json({ message: error.message || "Fout bij aanmaken nieuwe versie" });
+    }
+  });
+
+  // Get all contract versions for an advertiser
+  app.get("/api/advertisers/:advertiserId/contract-versions", async (req, res) => {
+    try {
+      const { getContractVersions } = await import("./services/contractDraftService");
+      const versions = await getContractVersions(req.params.advertiserId);
+      res.json(versions);
+    } catch (error: any) {
+      console.error("Error fetching contract versions:", error);
+      res.status(500).json({ message: error.message || "Fout bij ophalen contractversies" });
+    }
+  });
+
   // Contract PDF download
   app.get("/api/contracts/:id/pdf", requirePermission("view_finance"), async (req, res) => {
     try {
@@ -3388,8 +3424,80 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // ============================================================================
-  // PAYOUTS
+  // REVENUE ALLOCATIONS & PAYOUTS
   // ============================================================================
+
+  // Revenue allocation endpoints
+  app.post("/api/revenue-allocations/calculate", async (req, res) => {
+    try {
+      const { calculateRevenueAllocations } = await import("./services/revenueAllocationService");
+      const { periodYear, periodMonth, advertiserId, dryRun } = req.body;
+      
+      if (!periodYear || !periodMonth) {
+        return res.status(400).json({ message: "periodYear en periodMonth zijn verplicht" });
+      }
+      
+      const result = await calculateRevenueAllocations({
+        periodYear: parseInt(periodYear),
+        periodMonth: parseInt(periodMonth),
+        advertiserId,
+        dryRun: dryRun === true,
+      });
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("Error calculating revenue allocations:", error);
+      res.status(500).json({ message: error.message || "Fout bij berekenen omzetverdeling" });
+    }
+  });
+
+  app.get("/api/revenue-allocations", async (req, res) => {
+    try {
+      const { getAllocationsForPeriod } = await import("./services/revenueAllocationService");
+      const { periodYear, periodMonth } = req.query;
+      
+      if (!periodYear || !periodMonth) {
+        return res.status(400).json({ message: "periodYear en periodMonth zijn verplicht" });
+      }
+      
+      const allocations = await getAllocationsForPeriod(
+        parseInt(periodYear as string),
+        parseInt(periodMonth as string)
+      );
+      
+      res.json(allocations);
+    } catch (error: any) {
+      console.error("Error fetching revenue allocations:", error);
+      res.status(500).json({ message: error.message || "Fout bij ophalen omzetverdeling" });
+    }
+  });
+
+  app.post("/api/location-payouts/calculate", async (req, res) => {
+    try {
+      const { calculateLocationPayouts } = await import("./services/revenueAllocationService");
+      const { periodYear, periodMonth, dryRun } = req.body;
+      
+      if (!periodYear || !periodMonth) {
+        return res.status(400).json({ message: "periodYear en periodMonth zijn verplicht" });
+      }
+      
+      const payouts = await calculateLocationPayouts(
+        parseInt(periodYear),
+        parseInt(periodMonth),
+        dryRun === true
+      );
+      
+      res.json(payouts);
+    } catch (error: any) {
+      console.error("Error calculating location payouts:", error);
+      res.status(500).json({ message: error.message || "Fout bij berekenen locatie payouts" });
+    }
+  });
+
+  app.get("/api/visitor-weight-staffels", async (_req, res) => {
+    const { getVisitorWeightStaffels } = await import("./services/revenueAllocationService");
+    res.json(getVisitorWeightStaffels());
+  });
 
   app.get("/api/payouts", async (_req, res) => {
     const payouts = await storage.getPayouts();
@@ -5503,6 +5611,83 @@ Sitemap: ${SITE_URL}/sitemap.xml
       }
     } catch (error: any) {
       res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Monthly reporting endpoints
+  app.post("/api/monthly-reports/generate", async (req, res) => {
+    try {
+      const { 
+        generateAdvertiserReports, 
+        generateLocationReports 
+      } = await import("./services/monthlyReportingService");
+      
+      const { periodYear, periodMonth, reportType, sendEmails } = req.body;
+      
+      if (!periodYear || !periodMonth) {
+        return res.status(400).json({ message: "periodYear en periodMonth zijn verplicht" });
+      }
+      
+      const results = {
+        advertiser: { generated: 0, sent: 0, errors: [] as string[] },
+        location: { generated: 0, sent: 0, errors: [] as string[] },
+      };
+      
+      if (!reportType || reportType === "advertiser") {
+        results.advertiser = await generateAdvertiserReports(
+          { year: parseInt(periodYear), month: parseInt(periodMonth) },
+          sendEmails === true
+        );
+      }
+      
+      if (!reportType || reportType === "location") {
+        results.location = await generateLocationReports(
+          { year: parseInt(periodYear), month: parseInt(periodMonth) },
+          sendEmails === true
+        );
+      }
+      
+      res.json(results);
+    } catch (error: any) {
+      console.error("Error generating monthly reports:", error);
+      res.status(500).json({ message: error.message || "Fout bij genereren rapporten" });
+    }
+  });
+
+  app.get("/api/monthly-reports", async (req, res) => {
+    try {
+      const { getReportsForPeriod } = await import("./services/monthlyReportingService");
+      const { periodYear, periodMonth, reportType } = req.query;
+      
+      if (!periodYear || !periodMonth) {
+        return res.status(400).json({ message: "periodYear en periodMonth zijn verplicht" });
+      }
+      
+      const reports = await getReportsForPeriod(
+        { year: parseInt(periodYear as string), month: parseInt(periodMonth as string) },
+        reportType as "advertiser" | "location" | undefined
+      );
+      
+      res.json(reports);
+    } catch (error: any) {
+      console.error("Error fetching monthly reports:", error);
+      res.status(500).json({ message: error.message || "Fout bij ophalen rapporten" });
+    }
+  });
+
+  app.post("/api/monthly-reports/:id/resend", async (req, res) => {
+    try {
+      const { resendReport } = await import("./services/monthlyReportingService");
+      const success = await resendReport(req.params.id);
+      
+      if (success) {
+        res.json({ message: "Rapport opnieuw verzonden" });
+      } else {
+        res.status(404).json({ message: "Rapport niet gevonden of geen e-mailadres" });
+      }
+    } catch (error: any) {
+      console.error("Error resending report:", error);
+      res.status(500).json({ message: error.message || "Fout bij verzenden rapport" });
     }
   });
 
