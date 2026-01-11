@@ -54,3 +54,41 @@ Core entities include: **Entities** (unified model for ADVERTISER + SCREEN), Sit
 - **Yodeck API**: Manages digital signage players, screen synchronization, content resolution, and detailed sync reporting.
 - **Moneybird**: Accounting and invoicing software for invoice generation, contact synchronization, and SEPA Direct Debit. Features include a dedicated client with pagination and rate limiting, scheduled background sync, and entity linking capabilities.
 - **Postmark**: Email integration for contract confirmations and SEPA mandate requests, with email deliverability status monitoring and a robust template system.
+
+## Recent Feature Additions (Jan 2026)
+
+### Lead Categorization System
+- Auto-categorizes leads using keyword-based classification into 8 categories (Horeca, Sport & Fitness, Retail, etc.)
+- Confidence scoring and user override capability via `finalCategory` field
+- Supports both `advertiser_leads` and `screen_leads` tables
+
+### Contract Auto-Draft & Versioning
+- `contractDraftService.ts`: Generates HTML contract templates from advertiser and package data
+- Versioning system for tracking signed contract changes with `contractEvents` table
+- API endpoints: `/api/contracts/draft`, `/api/contracts/:id/versions`
+
+### Revenue Allocation Engine
+- Weighted screen-days allocation based on visitor staffels:
+  - 0-300 visitors/week → ×0.8 weight
+  - 301-700 visitors/week → ×1.0 weight
+  - 701-1500 visitors/week → ×1.2 weight
+  - 1501+ visitors/week → ×1.5 weight
+- Location payouts with €25 minimum threshold and carry-over system
+- Database tables: `revenue_allocations`, `location_payouts`
+
+### Monthly Reporting Service
+- Automated report generation for advertisers (screens, invoices, spending) and locations (revenue, payouts)
+- Email templates with resend capability
+- Database table: `monthly_reports`
+- API endpoints: `/api/monthly-reports/generate`, `/api/monthly-reports/:id/resend`
+
+### Onboarding Improvements
+- CompletenessProgress component for visual form completion tracking
+- Required field indicators with progress percentage
+- Integrated in NewAdvertiserWizard and NewScreenWizard
+
+### Enhanced Payouts UI
+- Period selector (month/year) for historical data
+- Revenue allocations table with weighted scores
+- Visitor staffels explanation with visual cards
+- Integration with new allocation/payout calculation APIs
