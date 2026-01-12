@@ -1801,10 +1801,34 @@ export const contractDocuments = pgTable("contract_documents", {
   versionNumber: integer("version_number").notNull().default(1),
   renderedContent: text("rendered_content"), // HTML content
   pdfUrl: text("pdf_url"), // Object storage URL if PDF generated
-  status: text("status").notNull().default("draft"), // draft, sent, signed
+  status: text("status").notNull().default("draft"), // draft, sent, signed, declined, expired, cancelled
   signedAt: timestamp("signed_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  // SignRequest integration fields
+  signProvider: text("sign_provider"), // signrequest
+  signrequestDocumentId: text("signrequest_document_id"),
+  signrequestUrl: text("signrequest_url"), // View/sign URL
+  signStatus: text("sign_status").default("none"), // none, sent, signing, signed, declined, expired, cancelled
+  signedPdfUrl: text("signed_pdf_url"), // Storage URL for signed PDF
+  signedLogUrl: text("signed_log_url"), // Storage URL for signing log
+  sentAt: timestamp("sent_at"),
+});
+
+/**
+ * TermsAcceptance - Track acceptance of general terms/conditions for legal compliance
+ */
+export const termsAcceptance = pgTable("terms_acceptance", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  entityType: text("entity_type").notNull(), // advertiser, location
+  entityId: varchar("entity_id").notNull(),
+  acceptedAt: timestamp("accepted_at").notNull().defaultNow(),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  termsVersion: text("terms_version").notNull(), // e.g. "v1.0", "2024-01"
+  termsHash: text("terms_hash"), // SHA256 hash of the terms content
+  source: text("source").notNull().default("onboarding_checkbox"), // onboarding_checkbox, portal, manual
+  createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
 /**
@@ -1861,6 +1885,14 @@ export const insertContractDocumentSchema = createInsertSchema(contractDocuments
 });
 export type ContractDocument = typeof contractDocuments.$inferSelect;
 export type InsertContractDocument = z.infer<typeof insertContractDocumentSchema>;
+
+// Terms Acceptance Schema & Types
+export const insertTermsAcceptanceSchema = createInsertSchema(termsAcceptance).omit({
+  id: true,
+  createdAt: true,
+});
+export type TermsAcceptance = typeof termsAcceptance.$inferSelect;
+export type InsertTermsAcceptance = z.infer<typeof insertTermsAcceptanceSchema>;
 
 export type VerificationCode = typeof verificationCodes.$inferSelect;
 export type InsertVerificationCode = z.infer<typeof insertVerificationCodeSchema>;
