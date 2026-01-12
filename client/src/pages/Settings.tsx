@@ -1485,7 +1485,17 @@ export default function Settings() {
   const [previewTemplate, setPreviewTemplate] = useState<DbTemplate | null>(null);
   const [previewAdvertiserId, setPreviewAdvertiserId] = useState("");
   const [previewScreenId, setPreviewScreenId] = useState("");
-  const [previewResult, setPreviewResult] = useState<{ subject: string; body: string; format?: string; isDemo?: boolean; fullHtml?: string; plainText?: string } | null>(null);
+  const [previewResult, setPreviewResult] = useState<{ 
+    subject?: string; 
+    body?: string; 
+    format?: string; 
+    isDemo?: boolean; 
+    fullHtml?: string; 
+    plainText?: string;
+    success?: boolean;
+    message?: string;
+    debugInfo?: Record<string, unknown>;
+  } | null>(null);
   const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
   const [showVersions, setShowVersions] = useState<string | null>(null);
   const [emailLogPreviewId, setEmailLogPreviewId] = useState<string | null>(null);
@@ -2614,7 +2624,22 @@ export default function Settings() {
                       Preview kon niet worden geladen: {(previewTemplateMutation.error as Error)?.message || "Onbekende fout"}
                     </div>
                   )}
-                  {previewResult && (
+                  {/* Show error if success === false (server returned structured error) */}
+                  {previewResult && previewResult.success === false && (
+                    <div className="bg-destructive/10 text-destructive p-4 rounded-lg text-sm space-y-2">
+                      <div className="font-medium">Preview kon niet worden gegenereerd</div>
+                      <p>{previewResult.message || "Onbekende fout"}</p>
+                      {previewResult.debugInfo && (
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-xs opacity-70">Debug info</summary>
+                          <pre className="text-xs bg-destructive/5 p-2 rounded mt-1 overflow-auto">
+                            {JSON.stringify(previewResult.debugInfo, null, 2)}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                  )}
+                  {previewResult && previewResult.success !== false && (
                     <div className="space-y-3 mt-4">
                       {previewResult.isDemo && (
                         <div className="bg-amber-50 text-amber-800 p-2 rounded text-xs flex items-center gap-2">

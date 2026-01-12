@@ -1,0 +1,68 @@
+REPLIT PROMPT — FIX 500 ERROR BIJ TEMPLATE PREVIEW (advertiser_premium) + FAIL-SAFE RENDERING
+Context: In Instellingen > Templates → Template Preview (advertiser_premium) krijg ik “Preview kon niet worden geladen: 500 Internal Server Error” zodra ik op Preview Genereren klik. Dit moet je nu debuggen en structureel oplossen. Ik wil geen “works on my machine”; ik wil dat preview nooit meer 500 geeft, ook niet bij ontbrekende data.
+
+SCOPE:
+- Alleen preview endpoint + render pipeline + data mapping voor advertiser_premium (en soortgelijke templates).
+- Geen redesign.
+
+A) DEBUGGEN (MOET EERST)
+1) Vind de exacte request die faalt:
+- Welke endpoint URL wordt aangeroepen (bijv. POST /api/templates/:id/preview of /api/templates/preview)?
+- Log request payload (templateKey, advertiserId, screenId, etc.)
+2) Toon de echte error:
+- Open server logs / console: pak stacktrace
+- Voeg tijdelijke logging toe rond renderEmail/renderContract call:
+  - welke templateKey
+  - welke data keys aanwezig/missend
+  - welke stap faalt (DB fetch, render, sanitize, etc.)
+3) Reproduceer met dezelfde advertiserId en screenId uit UI (Bouwservice Douven + YDK-591896)
+
+B) WAARSCHIJNLIJKE OORZAKEN (FIXEN)
+Fix de oorzaak, meestal 1 van deze:
+1) Null/undefined veld:
+- code doet bv. advertiser.contact.name of screen.location.city terwijl het null is
+- Oplossen: optional chaining + defaults
+2) templateType mismatch:
+- advertiser_premium is contract template maar preview route behandelt het als email (of andersom)
+- Oplossen: template.type correct instellen + switch statement robust
+3) ontbrekende placeholder data:
+- renderTemplate verwacht keys die niet bestaan en crasht
+- Oplossen: renderTemplate mag nooit throwen; missing placeholders blijven als {{key}} staan of worden leeg met warning
+4) sanitize/iframe srcDoc crash door invalid HTML:
+- Oplossen: try/catch + fallback naar text preview
+
+C) FAIL-SAFE: PREVIEW MAG NOOIT 500 ZIJN
+1) De preview endpoint moet altijd 200 teruggeven met:
+- success: true/false
+- previewHtml (als gelukt)
+- errorMessage (menselijk) als niet gelukt
+- debugId (optioneel) om logs terug te vinden
+2) 500 alleen bij echte server down, niet bij data issues.
+- Alle render fouten afvangen met try/catch
+- Return een nette fout in JSON en toon in UI.
+
+D) UI VERBETERING (ZODAT IK WÉÉT WAT ER MIS IS)
+- Als preview faalt, toon:
+  - “Kon preview niet genereren: <errorMessage>”
+  - + “Missende velden: <lijst>” indien van toepassing
+- Voeg in dev een knop “Kopieer debug info” (endpoint + templateKey + ids)
+
+E) SPECIFIEK VOOR advertiser_premium
+- Controleer of deze template bedoeld is als CONTRACT:
+  - Zo ja: preview moet contract renderer gebruiken (A4 wrapper), niet email renderer
+- Zorg dat preview-data voor advertiser_premium compleet is:
+  - companyName, contactName, monthlyAmount, startDate, screensCount, city, signDate
+- Als een veld ontbreekt in DB:
+  - vul demo fallback (maar crash niet)
+
+ACCEPTATIECRITERIA
+1) Preview Genereren voor advertiser_premium werkt zonder 500.
+2) Als data ontbreekt, krijg ik een nette melding (geen server error).
+3) Dezelfde fix voorkomt 500 bij andere templates.
+
+OUTPUT
+- Noem exact:
+  - welk bestand de crash veroorzaakte
+  - wat de root cause was
+  - welke guards/fallbacks je hebt toegevoegd
+Stop pas als advertiser_premium preview werkt.

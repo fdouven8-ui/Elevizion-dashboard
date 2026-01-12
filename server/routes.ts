@@ -6694,11 +6694,33 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   app.post("/api/templates/:id/preview", async (req, res) => {
+    const debugInfo = {
+      templateId: req.params.id,
+      advertiserId: req.body?.advertiserId,
+      screenId: req.body?.screenId,
+      timestamp: new Date().toISOString(),
+    };
+    
     try {
       const template = await storage.getTemplate(req.params.id);
-      if (!template) return res.status(404).json({ message: "Template niet gevonden" });
+      if (!template) {
+        return res.status(404).json({ 
+          success: false,
+          message: "Template niet gevonden",
+          debugInfo,
+        });
+      }
       
-      const { advertiserId, screenId } = req.body;
+      // Ensure template body is not null/undefined
+      if (!template.body) {
+        return res.status(200).json({
+          success: false,
+          message: "Template body is leeg",
+          debugInfo: { ...debugInfo, templateName: template.name },
+        });
+      }
+      
+      const { advertiserId, screenId } = req.body || {};
       let data: Record<string, string> = {};
       
       // Demo data als geen adverteerder/scherm geselecteerd (zowel camelCase als snake_case)
@@ -6811,43 +6833,64 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       if (isEmailTemplate) {
         // Build email using centralized render engine (single source of truth)
-        const emailResult = await renderEmail({
-          subject: renderedSubject,
-          body: renderedBody,
-          data: mergedData,
-          contactName: mergedData.contactName || mergedData.contact_name,
-        });
-        
-        res.json({
-          subject: emailResult.subjectRendered,
-          body: emailResult.bodyRendered,
-          fullHtml: emailResult.finalHtmlRendered,
-          plainText: emailResult.textRendered,
-          format: "email",
-          placeholdersUsed: template.placeholders,
-          dataProvided: mergedData,
-          isDemo: Object.keys(data).length === 0,
-        });
+        try {
+          const emailResult = await renderEmail({
+            subject: renderedSubject,
+            body: renderedBody,
+            data: mergedData,
+            contactName: mergedData.contactName || mergedData.contact_name,
+          });
+          
+          res.json({
+            success: true,
+            subject: emailResult.subjectRendered,
+            body: emailResult.bodyRendered,
+            fullHtml: emailResult.finalHtmlRendered,
+            plainText: emailResult.textRendered,
+            format: "email",
+            placeholdersUsed: template.placeholders,
+            dataProvided: mergedData,
+            isDemo: Object.keys(data).length === 0,
+          });
+        } catch (renderError: any) {
+          console.error("[Template Preview] Email render error:", renderError);
+          res.json({
+            success: false,
+            message: `Email rendering mislukt: ${renderError.message}`,
+            debugInfo: { ...debugInfo, templateName: template.name, renderStage: "email" },
+          });
+        }
       } else if (isContractTemplate) {
         // Build contract using centralized render engine
-        const contractResult = await renderContract({
-          title: renderedSubject,
-          body: renderedBody,
-          data: mergedData,
-        });
-        
-        res.json({
-          subject: contractResult.title,
-          body: contractResult.bodyRendered,
-          fullHtml: contractResult.finalHtmlRendered,
-          format: "contract",
-          placeholdersUsed: template.placeholders,
-          dataProvided: mergedData,
-          isDemo: Object.keys(data).length === 0,
-        });
+        try {
+          const contractResult = await renderContract({
+            title: renderedSubject,
+            body: renderedBody,
+            data: mergedData,
+          });
+          
+          res.json({
+            success: true,
+            subject: contractResult.title,
+            body: contractResult.bodyRendered,
+            fullHtml: contractResult.finalHtmlRendered,
+            format: "contract",
+            placeholdersUsed: template.placeholders,
+            dataProvided: mergedData,
+            isDemo: Object.keys(data).length === 0,
+          });
+        } catch (renderError: any) {
+          console.error("[Template Preview] Contract render error:", renderError);
+          res.json({
+            success: false,
+            message: `Contract rendering mislukt: ${renderError.message}`,
+            debugInfo: { ...debugInfo, templateName: template.name, renderStage: "contract" },
+          });
+        }
       } else {
         // Other template types (internal, invoice, etc) - render as plain text
         res.json({
+          success: true,
           subject: renderedSubject,
           body: renderedBody,
           format: "text",
@@ -6857,7 +6900,17 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
     } catch (error: any) {
-      res.status(400).json({ message: error.message });
+      console.error("[Template Preview] Error:", error);
+      // Never return 500 - always return structured error response
+      res.status(200).json({ 
+        success: false,
+        message: error.message || "Onbekende fout bij preview genereren",
+        errorType: error.name || "Error",
+        debugInfo: {
+          ...debugInfo,
+          stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+        },
+      });
     }
   });
 
