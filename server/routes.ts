@@ -2614,6 +2614,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
           advertiserName: advertiser?.companyName || null,
           placementId: ad.placementId,
           status: dbStatus.toLowerCase() as 'linked' | 'unlinked' | 'archived',
+          // Match metadata
+          matchType: (ad as any).matchType || null,
+          matchConfidence: (ad as any).matchConfidence ? parseFloat((ad as any).matchConfidence) : null,
           // Where it's playing
           screensCount: screensPlaying.length,
           screens: screensPlaying,
@@ -2707,10 +2710,57 @@ Sitemap: ${SITE_URL}/sitemap.xml
   // ============================================================================
 
   // Link a Yodeck media item to an advertiser
+  // Get match suggestions for a Yodeck media item
+  app.get("/api/yodeck-media/:yodeckMediaId/match-suggestions", async (req, res) => {
+    try {
+      const yodeckMediaId = parseInt(req.params.yodeckMediaId);
+      const { db } = await import("./db");
+      const { findBestMatch, getSuggestedMatches } = await import("./services/adMatchingService");
+      
+      // Get the media item
+      const mediaResult = await db.execute(sql`
+        SELECT * FROM yodeck_media_links WHERE yodeck_media_id = ${yodeckMediaId}
+      `);
+      
+      if (mediaResult.rowCount === 0) {
+        return res.status(404).json({ message: "Media item niet gevonden" });
+      }
+      
+      const media = mediaResult.rows[0] as { name: string };
+      const advertisers = await storage.getAdvertisers();
+      
+      // Map advertisers with fallback name support
+      const advertiserData = advertisers.map(a => ({ 
+        id: a.id, 
+        companyName: a.companyName || "", 
+        name: a.name || "" 
+      }));
+      
+      // Get best match
+      const bestMatch = findBestMatch(media.name, advertiserData);
+      
+      // Get top 5 suggestions
+      const suggestions = getSuggestedMatches(media.name, advertiserData);
+      
+      res.json({
+        mediaName: media.name,
+        bestMatch,
+        suggestions: suggestions.map(s => ({
+          advertiserId: s.advertiser.id,
+          advertiserName: s.advertiser.companyName || s.advertiser.name,
+          score: Math.round(s.score * 100),
+        })),
+      });
+    } catch (error: any) {
+      console.error("Error getting match suggestions:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.post("/api/yodeck-media/:yodeckMediaId/link", async (req, res) => {
     try {
       const yodeckMediaId = parseInt(req.params.yodeckMediaId);
-      const { advertiserId } = req.body;
+      const { advertiserId, matchType = 'manual', matchConfidence } = req.body;
       
       if (!advertiserId) {
         return res.status(400).json({ message: "advertiserId is vereist" });
@@ -2722,12 +2772,15 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(404).json({ message: "Adverteerder niet gevonden" });
       }
       
-      // Update the media link
+      // Update the media link with matchType and matchConfidence
       const { db } = await import("./db");
+      const confidenceValue = matchConfidence !== undefined ? matchConfidence : null;
       const result = await db.execute(sql`
         UPDATE yodeck_media_links 
         SET advertiser_id = ${advertiserId}, 
             status = 'LINKED',
+            match_type = ${matchType},
+            match_confidence = ${confidenceValue},
             updated_at = NOW()
         WHERE yodeck_media_id = ${yodeckMediaId}
         RETURNING *

@@ -1,0 +1,54 @@
+REPLIT PROMPT — AUTO KOPPELEN ADS AAN ADVERTEERDERS + ZOEKBARE SELECT (GEEN EXTRA FEATURES)
+
+Context: In Ads & Plaatsingen moet ik nu handmatig een adverteerder kiezen uit een dropdown. Dit schaalt niet. Video’s krijgen meestal de bedrijfsnaam in de bestandsnaam en moeten automatisch gekoppeld worden aan de juiste adverteerder.
+
+SCOPE: Alleen dit onderdeel aanpassen. Geen nieuwe modules, geen redesign.
+
+DOEL:
+1) Ads automatisch koppelen aan adverteerders op basis van videonaam
+2) Als auto-koppeling niet zeker is: voorstel tonen
+3) Altijd kunnen zoeken in adverteerderslijst
+4) Handmatig koppelen blijft mogelijk, maar is uitzondering
+
+FUNCTIONEEL:
+A) AUTOMATISCHE MATCH
+- Bij het inladen of openen van een ad:
+  - Vergelijk video.name met advertiser.name
+  - Normaliseer strings (lowercase, verwijder extensies, cijfers, extra tekens)
+- Resultaat:
+  - 1 duidelijke match → auto-koppel (matchType='auto', confidence score)
+  - meerdere matches → voorstel (matchType='suggested')
+  - geen match → niet gekoppeld
+
+B) UI AANPASSING (rechterpaneel)
+- Toon bovenaan:
+  - “Koppeling status” met badge:
+    - Automatisch gekoppeld (groen)
+    - Voorstel (oranje)
+    - Niet gekoppeld (rood)
+- Dropdown “Koppelen aan adverteerder”:
+  - maak deze SEARCHABLE
+  - default selectie = auto/suggested match
+  - sorteer opties:
+    1. beste match
+    2. recent gebruikte adverteerders
+    3. alfabetisch
+
+C) HANDMATIGE OVERRIDE
+- Als gebruiker een andere adverteerder kiest:
+  - markeer matchType='manual'
+  - overschrijf automatische match
+- Sla dit expliciet op zodat auto-matching deze ad niet opnieuw overschrijft
+
+D) VEILIGHEID & FEEDBACK
+- Toon altijd:
+  - “Deze ad draait op X schermen”
+- Na koppelen:
+  - korte confirmatie (“Ad gekoppeld aan Bouwservice Douven”)
+
+E) OPLEVERING
+- Laat zien:
+  - welke match-logica je gebruikt
+  - welke velden zijn toegevoegd (matchType, confidence)
+  - welke UI component is aangepast
+- Geen andere delen van de app wijzigen.

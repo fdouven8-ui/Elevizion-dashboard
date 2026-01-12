@@ -65,8 +65,16 @@ interface AdViewItem {
   lastSeenAt: string;
   updatedAt: string;
   archivedAt: string | null;
+  matchType?: 'auto' | 'suggested' | 'manual' | null;
+  matchConfidence?: number | null;
   // Computed for filtering
   hasOfflineScreen?: boolean;
+}
+
+interface MatchSuggestion {
+  advertiserId: string;
+  advertiserName: string;
+  score: number;
 }
 
 interface AdsViewResponse {
@@ -169,6 +177,19 @@ export default function Placements() {
   const [selectedAd, setSelectedAd] = useState<AdViewItem | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [linkAdvertiserId, setLinkAdvertiserId] = useState<string>("");
+  const [advertiserSearchTerm, setAdvertiserSearchTerm] = useState("");
+  const [advertiserSearchOpen, setAdvertiserSearchOpen] = useState(false);
+  
+  // Query for match suggestions when a media item is selected
+  const { data: matchSuggestions } = useQuery<{ mediaName: string; bestMatch: any; suggestions: MatchSuggestion[] }>({
+    queryKey: ["/api/yodeck-media", selectedAd?.yodeckMediaId, "match-suggestions"],
+    queryFn: async () => {
+      if (!selectedAd) return { mediaName: "", bestMatch: null, suggestions: [] };
+      const res = await apiRequest("GET", `/api/yodeck-media/${selectedAd.yodeckMediaId}/match-suggestions`);
+      return res.json();
+    },
+    enabled: !!selectedAd && selectedAd.status !== 'archived',
+  });
 
   // Ads View query with archived filter
   const { data: adsViewData, isLoading: adsViewLoading } = useQuery<AdsViewResponse>({
@@ -182,8 +203,8 @@ export default function Placements() {
   
   // Link mutation
   const linkMutation = useMutation({
-    mutationFn: async ({ yodeckMediaId, advertiserId }: { yodeckMediaId: number; advertiserId: string }) => {
-      const res = await apiRequest("POST", `/api/yodeck-media/${yodeckMediaId}/link`, { advertiserId });
+    mutationFn: async ({ yodeckMediaId, advertiserId, matchType = 'manual', matchConfidence }: { yodeckMediaId: number; advertiserId: string; matchType?: string; matchConfidence?: number }) => {
+      const res = await apiRequest("POST", `/api/yodeck-media/${yodeckMediaId}/link`, { advertiserId, matchType, matchConfidence });
       return res.json();
     },
     onSuccess: (data) => {
@@ -1269,27 +1290,117 @@ export default function Placements() {
               {/* Link to Advertiser - only if not archived */}
               {selectedAd.status !== 'archived' && (
                 <div className="space-y-3">
-                  <Label className="text-muted-foreground text-xs">Koppelen aan adverteerder</Label>
-                  <Select 
-                    value={linkAdvertiserId || "__none__"} 
-                    onValueChange={(v) => setLinkAdvertiserId(v === "__none__" ? "" : v)}
-                    disabled={isAnyMutationPending}
-                  >
-                    <SelectTrigger data-testid="select-link-advertiser">
-                      <SelectValue placeholder="Selecteer adverteerder..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">Niet gekoppeld</SelectItem>
-                      {advertisers.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>{a.companyName || a.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-muted-foreground text-xs">Koppelen aan adverteerder</Label>
+                    {selectedAd.matchType && (
+                      <Badge variant="outline" className={
+                        selectedAd.matchType === 'auto' ? "border-green-300 text-green-700 bg-green-50" :
+                        selectedAd.matchType === 'suggested' ? "border-blue-300 text-blue-700 bg-blue-50" :
+                        "border-gray-300 text-gray-700"
+                      }>
+                        {selectedAd.matchType === 'auto' ? 'Auto-match' : 
+                         selectedAd.matchType === 'suggested' ? 'Suggestie' : 'Handmatig'}
+                        {selectedAd.matchConfidence && ` (${Math.round(selectedAd.matchConfidence * 100)}%)`}
+                      </Badge>
+                    )}
+                  </div>
+                  
+                  {/* Searchable advertiser selector */}
+                  <Popover open={advertiserSearchOpen} onOpenChange={setAdvertiserSearchOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={advertiserSearchOpen}
+                        className="w-full justify-between"
+                        disabled={isAnyMutationPending}
+                        data-testid="select-link-advertiser"
+                      >
+                        {linkAdvertiserId 
+                          ? advertisers.find(a => a.id === linkAdvertiserId)?.companyName || "Geselecteerd"
+                          : "Selecteer adverteerder..."}
+                        <X className={`ml-2 h-4 w-4 shrink-0 opacity-50 ${linkAdvertiserId ? "visible" : "invisible"}`} />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[300px] p-0" align="start">
+                      <Command>
+                        <CommandInput 
+                          placeholder="Zoek adverteerder..." 
+                          value={advertiserSearchTerm}
+                          onValueChange={setAdvertiserSearchTerm}
+                        />
+                        <CommandList>
+                          <CommandEmpty>Geen adverteerder gevonden.</CommandEmpty>
+                          
+                          {/* Match suggestions section */}
+                          {matchSuggestions?.suggestions && matchSuggestions.suggestions.length > 0 && (
+                            <CommandGroup heading="Suggesties o.b.v. ad naam">
+                              {matchSuggestions.suggestions.map((s) => (
+                                <CommandItem
+                                  key={`suggestion-${s.advertiserId}`}
+                                  value={s.advertiserName}
+                                  onSelect={() => {
+                                    const matchType = s.score >= 75 ? 'auto' : 'suggested';
+                                    const matchConfidence = s.score / 100; // Convert percentage to 0-1
+                                    setLinkAdvertiserId(s.advertiserId);
+                                    setAdvertiserSearchOpen(false);
+                                    // Auto-link if high confidence match
+                                    if (s.score >= 75) {
+                                      linkMutation.mutate({ 
+                                        yodeckMediaId: selectedAd.yodeckMediaId, 
+                                        advertiserId: s.advertiserId,
+                                        matchType,
+                                        matchConfidence
+                                      });
+                                    }
+                                  }}
+                                  className="flex items-center justify-between"
+                                >
+                                  <span>{s.advertiserName}</span>
+                                  <Badge 
+                                    variant="secondary" 
+                                    className={s.score >= 75 ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}
+                                  >
+                                    {s.score}%
+                                  </Badge>
+                                </CommandItem>
+                              ))}
+                            </CommandGroup>
+                          )}
+                          
+                          {/* All advertisers */}
+                          <CommandGroup heading="Alle adverteerders">
+                            <CommandItem
+                              value="__none__"
+                              onSelect={() => {
+                                setLinkAdvertiserId("");
+                                setAdvertiserSearchOpen(false);
+                              }}
+                            >
+                              <span className="text-muted-foreground">Niet gekoppeld</span>
+                            </CommandItem>
+                            {advertisers.map((a) => (
+                              <CommandItem
+                                key={a.id}
+                                value={a.companyName || a.name}
+                                onSelect={() => {
+                                  setLinkAdvertiserId(a.id);
+                                  setAdvertiserSearchOpen(false);
+                                }}
+                              >
+                                {a.companyName || a.name}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                   
                   {linkAdvertiserId && linkAdvertiserId !== selectedAd.advertiserId && (
                     <Button 
                       className="w-full"
-                      onClick={() => linkMutation.mutate({ yodeckMediaId: selectedAd.yodeckMediaId, advertiserId: linkAdvertiserId })}
+                      onClick={() => linkMutation.mutate({ yodeckMediaId: selectedAd.yodeckMediaId, advertiserId: linkAdvertiserId, matchType: 'manual' })}
                       disabled={isAnyMutationPending}
                       data-testid="button-save-link"
                     >

@@ -11,7 +11,7 @@
  */
 
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, decimal, timestamp, integer, boolean, jsonb, date, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, decimal, timestamp, integer, boolean, jsonb, date, uniqueIndex, doublePrecision } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -1207,6 +1207,9 @@ export const yodeckCreatives = pgTable("yodeck_creatives", {
   duration: integer("duration"), // Duration in seconds (-1 for dynamic/unknown)
   category: text("category").notNull().default("ad"), // ad, non_ad
   advertiserId: varchar("advertiser_id").references(() => advertisers.id), // Nullable - linked when known
+  matchType: text("match_type"), // auto, suggested, manual, none
+  matchConfidence: decimal("match_confidence", { precision: 3, scale: 2 }), // 0.00 - 1.00
+  suggestedAdvertiserId: varchar("suggested_advertiser_id").references(() => advertisers.id), // For suggested matches
   lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
@@ -1506,6 +1509,9 @@ export const yodeckMediaLinks = pgTable("yodeck_media_links", {
   // Linking fields (null until linked)
   advertiserId: varchar("advertiser_id").references(() => advertisers.id),
   placementId: varchar("placement_id").references(() => placements.id),
+  // Match metadata - how the ad-advertiser link was established
+  matchType: text("match_type"), // auto, suggested, manual, null
+  matchConfidence: doublePrecision("match_confidence"), // 0.0 - 1.0 similarity score
   // Tracking
   lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
   screenCount: integer("screen_count").default(1), // How many screens show this
