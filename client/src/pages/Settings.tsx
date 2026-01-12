@@ -43,6 +43,8 @@ import {
   Shield,
   Mail,
   Info,
+  FileCheck,
+  Download,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -1572,6 +1574,40 @@ export default function Settings() {
     enabled: !!showVersions,
   });
 
+  const [templateSubTab, setTemplateSubTab] = useState<"templates" | "email-logs" | "contract-docs">("templates");
+
+  const { data: emailLogs = [], isLoading: emailLogsLoading } = useQuery({
+    queryKey: ["/api/email-logs"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/email-logs?limit=50");
+      return res.json();
+    },
+    enabled: templateSubTab === "email-logs",
+  });
+
+  const { data: contractDocs = [], isLoading: contractDocsLoading } = useQuery({
+    queryKey: ["/api/contract-documents"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/contract-documents?limit=50");
+      return res.json();
+    },
+    enabled: templateSubTab === "contract-docs",
+  });
+
+  const seedTemplatesMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/templates/seed-defaults");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/templates"] });
+      toast({ title: `${data.created} standaard templates aangemaakt` });
+    },
+    onError: () => {
+      toast({ title: "Fout bij seeden", variant: "destructive" });
+    },
+  });
+
   const createTemplateMutation = useMutation({
     mutationFn: async (data: typeof newTemplate) => {
       const res = await apiRequest("POST", "/api/templates", data);
@@ -1970,6 +2006,34 @@ export default function Settings() {
         </TabsContent>
 
         <TabsContent value="templates" className="mt-6 space-y-6">
+          <div className="flex gap-2 mb-4">
+            <Button 
+              variant={templateSubTab === "templates" ? "default" : "outline"} 
+              size="sm"
+              onClick={() => setTemplateSubTab("templates")}
+            >
+              <FileText className="h-4 w-4 mr-2" />
+              Templates
+            </Button>
+            <Button 
+              variant={templateSubTab === "email-logs" ? "default" : "outline"} 
+              size="sm"
+              onClick={() => setTemplateSubTab("email-logs")}
+            >
+              <Mail className="h-4 w-4 mr-2" />
+              Email Logs
+            </Button>
+            <Button 
+              variant={templateSubTab === "contract-docs" ? "default" : "outline"} 
+              size="sm"
+              onClick={() => setTemplateSubTab("contract-docs")}
+            >
+              <FileCheck className="h-4 w-4 mr-2" />
+              Contract Docs
+            </Button>
+          </div>
+
+          {templateSubTab === "templates" && (
           <Card>
             <CardHeader>
               <div className="flex flex-col sm:flex-row justify-between gap-4">
@@ -1982,13 +2046,23 @@ export default function Settings() {
                     Beheer alle berichten en document templates
                   </CardDescription>
                 </div>
-                <Dialog open={isNewTemplateOpen} onOpenChange={setIsNewTemplateOpen}>
-                  <DialogTrigger asChild>
-                    <Button data-testid="button-new-template">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Nieuwe Template
-                    </Button>
-                  </DialogTrigger>
+                <div className="flex gap-2">
+                  <Button 
+                    variant="outline" 
+                    onClick={() => seedTemplatesMutation.mutate()}
+                    disabled={seedTemplatesMutation.isPending}
+                    data-testid="button-seed-templates"
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Standaard Templates
+                  </Button>
+                  <Dialog open={isNewTemplateOpen} onOpenChange={setIsNewTemplateOpen}>
+                    <DialogTrigger asChild>
+                      <Button data-testid="button-new-template">
+                        <Plus className="h-4 w-4 mr-2" />
+                        Nieuwe Template
+                      </Button>
+                    </DialogTrigger>
                   <DialogContent className="max-w-2xl">
                     <DialogHeader>
                       <DialogTitle>Nieuwe Template Aanmaken</DialogTitle>
@@ -2093,6 +2167,7 @@ export default function Settings() {
                     </div>
                   </DialogContent>
                 </Dialog>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -2201,6 +2276,131 @@ export default function Settings() {
               )}
             </CardContent>
           </Card>
+          )}
+
+          {/* Email Logs Tab */}
+          {templateSubTab === "email-logs" && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Mail className="h-5 w-5" />
+                  Email Logs
+                </CardTitle>
+                <CardDescription>
+                  Overzicht van verzonden emails en hun status
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {emailLogsLoading ? (
+                  <div className="space-y-3">
+                    <Skeleton className="h-12 w-full" />
+                    <Skeleton className="h-12 w-full" />
+                  </div>
+                ) : emailLogs.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <Mail className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                    <p>Geen emails verzonden</p>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Datum</TableHead>
+                        <TableHead>Template</TableHead>
+                        <TableHead>Ontvanger</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {emailLogs.map((log: any) => (
+                        <TableRow key={log.id}>
+                          <TableCell className="text-sm">
+                            {new Date(log.createdAt).toLocaleString("nl-NL")}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{log.templateKey}</Badge>
+                          </TableCell>
+                          <TableCell className="text-sm">{log.recipientEmail || "-"}</TableCell>
+                          <TableCell>
+                            <Badge variant={log.status === "sent" ? "default" : log.status === "failed" ? "destructive" : "secondary"}>
+                              {log.status === "sent" ? "Verzonden" : log.status === "failed" ? "Mislukt" : "In wachtrij"}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Contract Documents Tab */}
+          {templateSubTab === "contract-docs" && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <FileCheck className="h-5 w-5" />
+                  Contract Documenten
+                </CardTitle>
+                <CardDescription>
+                  Gegenereerde contracten en hun ondertekeningsstatus
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {contractDocsLoading ? (
+                  <div className="space-y-3">
+                    <Skeleton className="h-12 w-full" />
+                    <Skeleton className="h-12 w-full" />
+                  </div>
+                ) : contractDocs.length === 0 ? (
+                  <div className="text-center py-12 text-muted-foreground">
+                    <FileCheck className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                    <p>Geen contracten gegenereerd</p>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Datum</TableHead>
+                        <TableHead>Template</TableHead>
+                        <TableHead>Versie</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {contractDocs.map((doc: any) => (
+                        <TableRow key={doc.id}>
+                          <TableCell className="text-sm">
+                            {new Date(doc.createdAt).toLocaleString("nl-NL")}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant="outline">{doc.templateKey}</Badge>
+                          </TableCell>
+                          <TableCell>v{doc.versionNumber}</TableCell>
+                          <TableCell>
+                            <Badge variant={doc.status === "signed" ? "default" : doc.status === "sent" ? "secondary" : "outline"}>
+                              {doc.status === "draft" ? "Concept" : doc.status === "sent" ? "Verzonden" : "Ondertekend"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            {doc.pdfUrl && (
+                              <Button variant="ghost" size="sm" asChild>
+                                <a href={doc.pdfUrl} target="_blank" rel="noopener noreferrer">
+                                  <ExternalLink className="h-4 w-4" />
+                                </a>
+                              </Button>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* Edit Template Dialog */}
           <Dialog open={!!editingTemplate} onOpenChange={(open) => !open && setEditingTemplate(null)}>
