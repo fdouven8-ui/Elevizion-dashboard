@@ -6,7 +6,7 @@
 import { db } from "../db";
 import { templates, emailLogs } from "@shared/schema";
 import { eq } from "drizzle-orm";
-import { sendEmail, baseEmailTemplate, type BodyBlock } from "../email";
+import { sendEmail, buildEmailHtml } from "../email";
 
 interface TemplateEmailParams {
   templateKey: string;
@@ -36,13 +36,7 @@ function renderTemplate(template: string, data: Record<string, string>): string 
   return result;
 }
 
-/**
- * Convert plain text body to HTML paragraphs
- */
-function textToHtml(text: string): string {
-  const paragraphs = text.split('\n\n');
-  return paragraphs.map(p => `<p style="margin:0 0 16px 0;line-height:1.7;">${p.replace(/\n/g, '<br>')}</p>`).join('');
-}
+// Note: textToHtml is now imported from ../email for consistency
 
 /**
  * Send an email using a template from the database
@@ -91,26 +85,26 @@ export async function sendTemplateEmail(params: TemplateEmailParams): Promise<Te
     const renderedSubject = renderTemplate(template.subject || '', data);
     const renderedBody = renderTemplate(template.body, data);
 
-    // Create log entry with queued status
+    // Extract contact name for personalized greeting
+    const contactName = data.contactName || data.contact_name || 'klant';
+    
+    // Create log entry with queued status - store plain body + contact name for accurate preview
     const [log] = await db.insert(emailLogs).values({
       templateKey,
       toEmail: to,
       subjectRendered: renderedSubject,
-      bodyRendered: renderedBody,
+      bodyRendered: renderedBody, // Store plain body text, HTML is rebuilt for preview
+      contactName, // Store for accurate preview reconstruction
       status: 'queued',
       entityType: entityType || null,
       entityId: entityId || null,
     }).returning();
 
-    // Convert body to HTML using baseEmailTemplate with full Dutch branding
-    const contactName = data.contactName || data.contact_name || 'klant';
-    const emailContent = baseEmailTemplate({
+    // Build email using shared helper (single source of truth)
+    const emailContent = buildEmailHtml({
       subject: renderedSubject,
-      preheader: renderedBody.substring(0, 100),
-      title: renderedSubject,
-      introText: `Beste ${contactName},`,
-      bodyBlocks: [{ type: 'html', content: textToHtml(renderedBody) }],
-      footerNote: 'Met vriendelijke groet, Team Elevizion',
+      bodyText: renderedBody,
+      contactName,
     });
 
     const result = await sendEmail({

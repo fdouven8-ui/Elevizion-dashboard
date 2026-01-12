@@ -1785,6 +1785,7 @@ export const emailLogs = pgTable("email_logs", {
   // Rendered content for preview/audit
   subjectRendered: text("subject_rendered"),
   bodyRendered: text("body_rendered"),
+  contactName: text("contact_name"), // Stored for accurate preview reconstruction
   createdAt: timestamp("created_at").notNull().defaultNow(),
   sentAt: timestamp("sent_at"),
 });

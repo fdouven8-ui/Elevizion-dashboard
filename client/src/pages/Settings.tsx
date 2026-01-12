@@ -45,6 +45,7 @@ import {
   Info,
   FileCheck,
   Download,
+  Smartphone,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -1484,8 +1485,22 @@ export default function Settings() {
   const [previewTemplate, setPreviewTemplate] = useState<DbTemplate | null>(null);
   const [previewAdvertiserId, setPreviewAdvertiserId] = useState("");
   const [previewScreenId, setPreviewScreenId] = useState("");
-  const [previewResult, setPreviewResult] = useState<{ subject: string; body: string; format?: string; isDemo?: boolean } | null>(null);
+  const [previewResult, setPreviewResult] = useState<{ subject: string; body: string; format?: string; isDemo?: boolean; fullHtml?: string; plainText?: string } | null>(null);
+  const [previewMode, setPreviewMode] = useState<"desktop" | "mobile">("desktop");
   const [showVersions, setShowVersions] = useState<string | null>(null);
+  const [emailLogPreviewId, setEmailLogPreviewId] = useState<string | null>(null);
+  const [emailLogPreviewMode, setEmailLogPreviewMode] = useState<"desktop" | "mobile">("desktop");
+  
+  // Fetch email log preview with full HTML when selected
+  const { data: emailLogPreview, isLoading: emailLogPreviewLoading } = useQuery({
+    queryKey: ["/api/email-logs", emailLogPreviewId, "preview"],
+    queryFn: async () => {
+      if (!emailLogPreviewId) return null;
+      const res = await apiRequest("GET", `/api/email-logs/${emailLogPreviewId}/preview`);
+      return res.json();
+    },
+    enabled: !!emailLogPreviewId,
+  });
   const [isNewTemplateOpen, setIsNewTemplateOpen] = useState(false);
   const [newTemplate, setNewTemplate] = useState({ name: "", category: "whatsapp", subject: "", body: "" });
   const updateRuleThresholdType = (ruleId: string, thresholdType: "percentage" | "count") => {
@@ -2312,6 +2327,7 @@ export default function Settings() {
                         <TableHead>Template</TableHead>
                         <TableHead>Ontvanger</TableHead>
                         <TableHead>Status</TableHead>
+                        <TableHead></TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -2328,6 +2344,17 @@ export default function Settings() {
                             <Badge variant={log.status === "sent" ? "default" : log.status === "failed" ? "destructive" : "secondary"}>
                               {log.status === "sent" ? "Verzonden" : log.status === "failed" ? "Mislukt" : "In wachtrij"}
                             </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Button 
+                              variant="ghost" 
+                              size="icon"
+                              onClick={() => setEmailLogPreviewId(log.id)}
+                              title="Preview bekijken"
+                              data-testid={`button-preview-email-${log.id}`}
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))}
@@ -2404,6 +2431,79 @@ export default function Settings() {
               </CardContent>
             </Card>
           )}
+
+          {/* Email Log Preview Dialog */}
+          <Dialog open={!!emailLogPreviewId} onOpenChange={(open) => !open && setEmailLogPreviewId(null)}>
+            <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <Mail className="h-5 w-5" />
+                  Email Preview
+                </DialogTitle>
+                <DialogDescription>
+                  {emailLogPreview && `Verzonden op ${new Date(emailLogPreview.createdAt).toLocaleString("nl-NL")} naar ${emailLogPreview.toEmail}`}
+                </DialogDescription>
+              </DialogHeader>
+              {emailLogPreviewLoading ? (
+                <div className="space-y-3 py-8">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-64 w-full" />
+                </div>
+              ) : emailLogPreview ? (
+                <div className="space-y-3 flex-1 overflow-hidden flex flex-col">
+                  {emailLogPreview.subjectRendered && (
+                    <div>
+                      <Label>Onderwerp:</Label>
+                      <p className="bg-muted p-2 rounded text-sm">{emailLogPreview.subjectRendered}</p>
+                    </div>
+                  )}
+                  
+                  {emailLogPreview.fullHtml ? (
+                    <div className="flex-1 overflow-hidden flex flex-col">
+                      <div className="flex items-center justify-between mb-2">
+                        <Label>E-mail inhoud:</Label>
+                        <div className="flex gap-1 bg-muted p-1 rounded">
+                          <Button
+                            variant={emailLogPreviewMode === "desktop" ? "default" : "ghost"}
+                            size="sm"
+                            onClick={() => setEmailLogPreviewMode("desktop")}
+                            className="h-7 px-2"
+                          >
+                            <Monitor className="h-4 w-4 mr-1" />
+                            Desktop
+                          </Button>
+                          <Button
+                            variant={emailLogPreviewMode === "mobile" ? "default" : "ghost"}
+                            size="sm"
+                            onClick={() => setEmailLogPreviewMode("mobile")}
+                            className="h-7 px-2"
+                          >
+                            <Smartphone className="h-4 w-4 mr-1" />
+                            Mobiel
+                          </Button>
+                        </div>
+                      </div>
+                      <div className={`flex-1 bg-gray-100 rounded-lg p-4 flex justify-center overflow-auto ${emailLogPreviewMode === "mobile" ? "bg-gray-200" : ""}`}>
+                        <iframe
+                          srcDoc={emailLogPreview.fullHtml}
+                          className={`bg-white border rounded shadow-sm transition-all duration-300 ${
+                            emailLogPreviewMode === "desktop" ? "w-full max-w-[640px] h-[450px]" : "w-[375px] h-[500px]"
+                          }`}
+                          title="Email Preview"
+                          sandbox="allow-same-origin"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Mail className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                      <p>Geen preview beschikbaar voor deze email</p>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </DialogContent>
+          </Dialog>
 
           {/* Edit Template Dialog */}
           <Dialog open={!!editingTemplate} onOpenChange={(open) => !open && setEditingTemplate(null)}>
@@ -2515,9 +2615,10 @@ export default function Settings() {
                     </div>
                   )}
                   {previewResult && (
-                    <div className="space-y-2 mt-4">
+                    <div className="space-y-3 mt-4">
                       {previewResult.isDemo && (
                         <div className="bg-amber-50 text-amber-800 p-2 rounded text-xs flex items-center gap-2">
+                          <Info className="h-3 w-3" />
                           <span className="font-medium">Demo data</span> - Selecteer een adverteerder of scherm voor echte data
                         </div>
                       )}
@@ -2527,17 +2628,64 @@ export default function Settings() {
                           <p className="bg-muted p-2 rounded text-sm">{previewResult.subject}</p>
                         </div>
                       )}
-                      <div>
-                        <Label>Inhoud:</Label>
-                        {previewResult.format === "html" ? (
+                      
+                      {/* Email preview with full HTML wrapper */}
+                      {previewResult.format === "email" && previewResult.fullHtml && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <Label>E-mail Preview:</Label>
+                            <div className="flex gap-1 bg-muted p-1 rounded">
+                              <Button
+                                variant={previewMode === "desktop" ? "default" : "ghost"}
+                                size="sm"
+                                onClick={() => setPreviewMode("desktop")}
+                                className="h-7 px-2"
+                              >
+                                <Monitor className="h-4 w-4 mr-1" />
+                                Desktop
+                              </Button>
+                              <Button
+                                variant={previewMode === "mobile" ? "default" : "ghost"}
+                                size="sm"
+                                onClick={() => setPreviewMode("mobile")}
+                                className="h-7 px-2"
+                              >
+                                <Smartphone className="h-4 w-4 mr-1" />
+                                Mobiel
+                              </Button>
+                            </div>
+                          </div>
+                          <div className={`bg-gray-100 rounded-lg p-4 flex justify-center ${previewMode === "mobile" ? "bg-gray-200" : ""}`}>
+                            <iframe
+                              srcDoc={previewResult.fullHtml}
+                              className={`bg-white border rounded shadow-sm transition-all duration-300 ${
+                                previewMode === "desktop" ? "w-full max-w-[640px] h-[500px]" : "w-[375px] h-[600px]"
+                              }`}
+                              title="Email Preview"
+                              sandbox="allow-same-origin"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Contract/HTML preview */}
+                      {previewResult.format === "html" && (
+                        <div>
+                          <Label>Inhoud:</Label>
                           <div 
                             className="bg-white border p-4 rounded text-sm prose prose-sm max-w-none"
                             dangerouslySetInnerHTML={{ __html: previewResult.body }}
                           />
-                        ) : (
-                          <p className="bg-muted p-3 rounded text-sm whitespace-pre-wrap">{previewResult.body}</p>
-                        )}
-                      </div>
+                        </div>
+                      )}
+                      
+                      {/* Plain text preview */}
+                      {previewResult.format === "text" && (
+                        <div>
+                          <Label>Inhoud:</Label>
+                          <p className="bg-muted p-3 rounded text-sm whitespace-pre-wrap font-mono">{previewResult.body}</p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

@@ -51,6 +51,7 @@ import {
   sendSepaEmail,
   sendEmail,
   baseEmailTemplate,
+  buildEmailHtml,
   type BodyBlock,
 } from "./email";
 import {
@@ -6789,17 +6790,39 @@ Sitemap: ${SITE_URL}/sitemap.xml
         renderedSubject = renderedSubject.replace(new RegExp(placeholder.replace(/[{}]/g, "\\$&"), "g"), value);
       }
       
-      // Determine format based on category
-      const format = template.category === "contract" ? "html" : "text";
-
-      res.json({
-        subject: renderedSubject,
-        body: renderedBody,
-        format,
-        placeholdersUsed: template.placeholders,
-        dataProvided: mergedData,
-        isDemo: Object.keys(data).length === 0,
-      });
+      // Determine format and build full email preview for email templates
+      const isEmailTemplate = template.category === "email" || template.category === "whatsapp";
+      const isContractTemplate = template.category === "contract";
+      
+      if (isEmailTemplate) {
+        // Build email using shared helper (same as sendTemplateEmail)
+        const contactName = mergedData.contactName || mergedData.contact_name || "klant";
+        const fullEmail = buildEmailHtml({
+          subject: renderedSubject,
+          bodyText: renderedBody,
+          contactName,
+        });
+        
+        res.json({
+          subject: renderedSubject,
+          body: renderedBody,
+          fullHtml: fullEmail.html,
+          plainText: fullEmail.text,
+          format: "email",
+          placeholdersUsed: template.placeholders,
+          dataProvided: mergedData,
+          isDemo: Object.keys(data).length === 0,
+        });
+      } else {
+        res.json({
+          subject: renderedSubject,
+          body: renderedBody,
+          format: isContractTemplate ? "html" : "text",
+          placeholdersUsed: template.placeholders,
+          dataProvided: mergedData,
+          isDemo: Object.keys(data).length === 0,
+        });
+      }
     } catch (error: any) {
       res.status(400).json({ message: error.message });
     }
@@ -6891,6 +6914,33 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const [log] = await db.select().from(emailLogs).where(eq(emailLogs.id, req.params.id));
       if (!log) return res.status(404).json({ message: "Email log niet gevonden" });
       res.json(log);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get email log with full HTML preview (rebuilds email wrapper from stored body)
+  app.get("/api/email-logs/:id/preview", async (req, res) => {
+    try {
+      const [log] = await db.select().from(emailLogs).where(eq(emailLogs.id, req.params.id));
+      if (!log) return res.status(404).json({ message: "Email log niet gevonden" });
+      
+      // Rebuild full HTML from stored body using shared helper (same as send path)
+      let fullHtml = "";
+      if (log.bodyRendered) {
+        // Use stored contactName or fallback to "klant" for older logs
+        const emailContent = buildEmailHtml({
+          subject: log.subjectRendered || "",
+          bodyText: log.bodyRendered,
+          contactName: log.contactName || "klant",
+        });
+        fullHtml = emailContent.html;
+      }
+      
+      res.json({
+        ...log,
+        fullHtml,
+      });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

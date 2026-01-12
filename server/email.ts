@@ -424,6 +424,50 @@ export function getDeliverabilityInfo() {
   };
 }
 
+// ============================================================================
+// SHARED EMAIL BUILDER
+// ============================================================================
+// Single source of truth for building email HTML - used by both send and preview
+
+export interface BuildEmailOptions {
+  subject: string;
+  bodyText: string;  // Raw template body text (will be converted to HTML)
+  contactName?: string;  // For personalized intro
+}
+
+export function buildEmailHtml(options: BuildEmailOptions): { html: string; text: string } {
+  const { subject, bodyText, contactName = "klant" } = options;
+  
+  // Always convert text to HTML for consistent rendering
+  const bodyHtml = textToHtml(bodyText);
+  
+  return baseEmailTemplate({
+    subject,
+    preheader: bodyText.substring(0, 100),
+    title: subject,
+    introText: `Beste ${contactName},`,
+    bodyBlocks: [{ type: "html", content: bodyHtml }],
+    footerNote: "Met vriendelijke groet, Team Elevizion",
+  });
+}
+
+export function textToHtml(text: string): string {
+  if (!text) return "";
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const paragraphs = escaped.split(/\n\n+/);
+  return paragraphs.map(p => {
+    const withBreaks = p.replace(/\n/g, "<br>");
+    return `<p style="margin:0 0 16px 0;line-height:1.7;">${withBreaks}</p>`;
+  }).join("");
+}
+
+export function isHtmlContent(content: string): boolean {
+  return /<[a-z][\s\S]*>/i.test(content);
+}
+
 // Auto-generate plain text from HTML if not provided
 function htmlToPlainText(html: string): string {
   return html
