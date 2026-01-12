@@ -198,7 +198,7 @@ export default function Placements() {
   });
 
   // Ads View query with archived filter
-  const { data: adsViewData, isLoading: adsViewLoading } = useQuery<AdsViewResponse>({
+  const { data: adsViewData, isLoading: adsViewLoading, refetch: refetchAdsView } = useQuery<AdsViewResponse>({
     queryKey: ["/api/placements/ads-view", showArchived],
     queryFn: async () => {
       const params = showArchived ? "?includeArchived=true" : "";
@@ -706,7 +706,7 @@ export default function Placements() {
                     variant="outline"
                     size="sm"
                     className="text-xs h-7"
-                    onClick={() => adsViewQuery.refetch()}
+                    onClick={() => refetchAdsView()}
                     disabled={adsViewLoading}
                     data-testid="button-recalculate-suggestions"
                   >
