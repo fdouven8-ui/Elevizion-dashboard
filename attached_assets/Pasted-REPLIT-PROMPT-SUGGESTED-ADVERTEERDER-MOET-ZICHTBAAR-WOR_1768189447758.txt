@@ -1,0 +1,69 @@
+REPLIT PROMPT — “SUGGESTED ADVERTEERDER” MOET ZICHTBAAR WORDEN (ADS & PLAATSINGEN)
+Context: In Ads & Plaatsingen staan ads op “Niet gekoppeld”. Ik kan handmatig koppelen, maar er is geen “voorstel” zichtbaar. Ook als er geen match mogelijk is, wil ik minimaal “Geen voorstel” zien. Fix dit nu: match engine + UI.
+
+SCOPE: Alleen Ads & Plaatsingen koppeling verbeteren. Geen andere modules.
+
+HARD REQUIREMENTS
+1) Voor elke ad moet er een match-evaluatie zijn:
+   - suggestedAdvertiserId (nullable)
+   - suggestedAdvertiserName (derived)
+   - matchConfidence (0-100)
+   - matchStatus: 'none' | 'suggested' | 'auto' | 'manual'
+2) De UI moet het voorstel zichtbaar tonen op 2 plekken:
+   A) In de ads tabel (rij)
+   B) In het koppel-paneel (drawer)
+3) Als er geen match is: toon expliciet “Geen voorstel” (grijs badge) zodat ik weet dat het systeem het geprobeerd heeft.
+4) Suggested match mag NOOIT automatisch overschrijven als matchStatus='manual'.
+
+IMPLEMENTATIE
+A) MATCH ENGINE (licht, geen AI nodig)
+- Maak een functie `suggestAdvertiserForAd(adName, advertisers[])` die:
+  1) normaliseert strings: lowercase, verwijder extensie (.mp4 etc), verwijder dubbele spaties, verwijder tekens zoals - _ ( ) [ ]
+  2) probeert matchen op:
+     - substring: advertiserName in adName
+     - token overlap score (bijv. Jaccard / simple points per overeenkomend woord)
+  3) return:
+     - bestMatchAdvertiserId of null
+     - confidence score 0-100
+     - matchStatus:
+       - 'suggested' als confidence >= 60
+       - 'none' als < 60
+- (Optioneel) als confidence >= 85: status 'auto' MAAR KOPPEL NIET AUTOMATISCH, alleen label “Sterk voorstel”. Koppelen blijft pas definitief na user bevestiging.
+
+B) WANNEER WORDT DIT GEDRAAID
+- Bij het laden van Ads & Plaatsingen lijst:
+  - bereken suggestion per ad (alleen als ad niet manual gekoppeld is)
+  - sla resultaat op in DB of in een cached field (zodat het zichtbaar blijft)
+  - voeg een knop “Herbereken voorstellen” bovenin (klein) voor debug
+
+C) UI — ADS TABEL (BELANGRIJK)
+- In de kolom “Adverteerder” (nu —):
+  - toon 1 van de volgende badges:
+    - 🟢 Gekoppeld: <naam> (matchStatus manual/confirmed)
+    - 🟠 Voorstel: <naam> (xx%) + kleine knop “Accepteer”
+    - ⚪ Geen voorstel
+- Als user op “Accepteer” klikt:
+  - zet ad.advertiserId
+  - matchStatus='manual' of 'confirmed'
+  - update direct UI
+
+D) UI — KOPPEL DRAWER
+- Boven dropdown voeg blok toe:
+  “Voorstel”
+  - Als suggested: toon naam + confidence + knop “Gebruik voorstel”
+  - Als none: toon “Geen voorstel gevonden”
+- Dropdown moet searchable zijn:
+  - typen filtert adverteerders
+  - sorteer: suggested bovenaan, daarna recent, daarna alfabetisch
+
+E) DEBUG (ZODAT IK DIRECT WEET DAT HET WERKT)
+- Voeg onderaan in drawer een collapsible “Debug” (klein) alleen in dev:
+  - normalizedAdName
+  - top 3 matches met scores
+Zodat ik kan zien waarom er geen voorstel is bij sample ads.
+
+ACCEPTATIECRITERIA
+- Ik zie op de Ads lijst bij elke ad óf een “Voorstel: …” badge óf “Geen voorstel”.
+- In de drawer zie ik hetzelfde voorstel + “Gebruik voorstel”.
+- Search in dropdown werkt.
+- Niets overschrijft handmatige koppelingen.

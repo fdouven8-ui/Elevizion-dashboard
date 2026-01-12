@@ -2597,12 +2597,42 @@ Sitemap: ${SITE_URL}/sitemap.xml
         }
       }
       
-      // Build response with all ads
+      // Import matching service
+      const { findBestMatch } = await import("./services/adMatchingService");
+      
+      // Map advertisers with name fallback for matching
+      const advertiserData = advertisers.map(a => ({ 
+        id: a.id, 
+        companyName: a.companyName || "", 
+        name: (a as any).name || "" 
+      }));
+      
+      // Build response with all ads + suggestions
       let result = ads.map(ad => {
         const advertiser = ad.advertiserId ? advertisers.find(a => a.id === ad.advertiserId) : null;
         const screensPlaying = adScreenMap[ad.yodeckMediaId] || [];
         // Use database status field, fall back to computed status for backwards compat
         const dbStatus = (ad as any).status || (ad.advertiserId || ad.placementId ? 'LINKED' : 'UNLINKED');
+        
+        // Calculate suggestion for unlinked ads (or ads without manual match)
+        let suggestedAdvertiserId: string | null = null;
+        let suggestedAdvertiserName: string | null = null;
+        let suggestedConfidence: number | null = null;
+        let matchStatus: 'none' | 'suggested' | 'auto' | 'manual' = 'none';
+        
+        // Only calculate suggestions for unlinked ads or ads without existing manual match
+        const existingMatchType = (ad as any).matchType;
+        if (!ad.advertiserId && existingMatchType !== 'manual') {
+          const match = findBestMatch(ad.name, advertiserData);
+          if (match.advertiserId) {
+            suggestedAdvertiserId = match.advertiserId;
+            suggestedAdvertiserName = match.advertiserName || null;
+            suggestedConfidence = Math.round(match.confidence * 100);
+            matchStatus = match.matchType === 'auto' ? 'auto' : 'suggested';
+          }
+        } else if (ad.advertiserId) {
+          matchStatus = existingMatchType === 'manual' ? 'manual' : (existingMatchType || 'manual');
+        }
         
         return {
           yodeckMediaId: ad.yodeckMediaId,
@@ -2614,9 +2644,14 @@ Sitemap: ${SITE_URL}/sitemap.xml
           advertiserName: advertiser?.companyName || null,
           placementId: ad.placementId,
           status: dbStatus.toLowerCase() as 'linked' | 'unlinked' | 'archived',
-          // Match metadata
+          // Match metadata (from DB for linked ads)
           matchType: (ad as any).matchType || null,
           matchConfidence: (ad as any).matchConfidence ? parseFloat((ad as any).matchConfidence) : null,
+          // Suggested match (computed on-the-fly for unlinked ads)
+          suggestedAdvertiserId,
+          suggestedAdvertiserName,
+          suggestedConfidence,
+          matchStatus,
           // Where it's playing
           screensCount: screensPlaying.length,
           screens: screensPlaying,

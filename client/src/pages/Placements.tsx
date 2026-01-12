@@ -67,6 +67,11 @@ interface AdViewItem {
   archivedAt: string | null;
   matchType?: 'auto' | 'suggested' | 'manual' | null;
   matchConfidence?: number | null;
+  // Suggested match (computed on-the-fly)
+  suggestedAdvertiserId: string | null;
+  suggestedAdvertiserName: string | null;
+  suggestedConfidence: number | null;
+  matchStatus: 'none' | 'suggested' | 'auto' | 'manual';
   // Computed for filtering
   hasOfflineScreen?: boolean;
 }
@@ -842,9 +847,44 @@ export default function Placements() {
                         </TableCell>
                         <TableCell>
                           {ad.advertiserName ? (
-                            <span>{ad.advertiserName}</span>
+                            <div className="flex items-center gap-2">
+                              <Badge className="bg-green-100 text-green-800">
+                                <Check className="h-3 w-3 mr-1" />
+                                {ad.advertiserName}
+                              </Badge>
+                            </div>
+                          ) : ad.suggestedAdvertiserName ? (
+                            <div className="flex items-center gap-2">
+                              <Badge 
+                                className={ad.suggestedConfidence && ad.suggestedConfidence >= 75 
+                                  ? "bg-green-50 text-green-700 border border-green-200" 
+                                  : "bg-amber-50 text-amber-700 border border-amber-200"}
+                              >
+                                Voorstel: {ad.suggestedAdvertiserName} ({ad.suggestedConfidence}%)
+                              </Badge>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-2 text-xs"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  linkMutation.mutate({
+                                    yodeckMediaId: ad.yodeckMediaId,
+                                    advertiserId: ad.suggestedAdvertiserId!,
+                                    matchType: 'suggested',
+                                    matchConfidence: (ad.suggestedConfidence || 0) / 100
+                                  });
+                                }}
+                                disabled={linkMutation.isPending}
+                                data-testid={`button-accept-${ad.yodeckMediaId}`}
+                              >
+                                <Check className="h-3 w-3" />
+                              </Button>
+                            </div>
                           ) : (
-                            <span className="text-muted-foreground">—</span>
+                            <Badge variant="outline" className="text-muted-foreground">
+                              Geen voorstel
+                            </Badge>
                           )}
                         </TableCell>
                         <TableCell>
