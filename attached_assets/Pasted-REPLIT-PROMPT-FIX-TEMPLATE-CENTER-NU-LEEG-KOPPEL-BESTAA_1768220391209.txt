@@ -1,0 +1,28 @@
+REPLIT PROMPT — FIX TEMPLATE CENTER (NU LEEG) + KOPPEL BESTAANDE MAILS/CONTRACTEN AAN TEMPLATES + LOGS VULLEN
+Context: In Instellingen > Templates zie ik Template Center met knop “Standaard Templates”, tabs “Email Logs” en “Contract Docs”, maar alles is leeg. Tegelijk worden er al veel standaardmails verstuurd en contracten gegenereerd. Ik wil dit nu goed koppelen zodat:
+- Templates niet leeg zijn (defaults bestaan)
+- Alle standaard mails/contracten die nu al gebruikt worden, voortaan uit templates komen
+- Alles wat verstuurd/gegenereerd wordt zichtbaar is onder Email Logs en Contract Docs
+Maak dit werkend binnen de bestaande UI/route. Geen nieuwe menu’s, geen redesign.
+
+HARD REQUIREMENTS (MOET):
+1) “Standaard Templates” knop moet gegarandeerd templates aanmaken (seed) en daarna direct tonen in de lijst.
+2) Template Center moet minimaal deze defaults bevatten (categorieën zoals in UI: WhatsApp, Email, Contracten, Factuur/Offerte, Intern):
+   - Email: lead_bevestiging, onboarding_link, onboarding_reminder, onboarding_confirm, what_next, maandrapport_adverteerder, maandrapport_locatie
+   - Contracten: contract_locatie_revshare, contract_locatie_fixed, contract_adverteerder_standard, contract_adverteerder_premium
+   (Als je nu al andere mailtypes gebruikt, voeg die keys ook toe.)
+3) Bestaande e-mail verzending moet worden omgezet naar: templateKey lookup → render → send.
+   Geen hardcoded teksten meer voor die standaard flows.
+4) Email Logs tab moet ALTIJD gevuld worden wanneer een mail wordt verstuurd:
+   - log: templateKey, to, subjectRendered, bodyRendered, status, createdAt, relatedEntityType/id
+5) Contract Docs tab moet ALTIJD gevuld worden wanneer een contract wordt gegenereerd/verstuurd/gesigned:
+   - log/document: templateKey, entityType/id, version, renderedContent of pdfUrl, status, createdAt
+6) Ik moet templates kunnen openen, bewerken, opslaan, en bij de volgende mail/contract moet de nieuwe versie gebruikt worden.
+
+STAP 1 — DIAGNOSE WAAROM HET NU LEEG IS (EN FIX)
+- Controleer Template Center API/query: waarom komen er 0 templates terug?
+  Mogelijke oorzaken: verkeerde tabelnaam, filter op status='active' terwijl null, tenant/orgId mismatch, seed ontbreekt, knop call faalt.
+- Fix zodat lijst correct laadt en “Geen templates gevonden” alleen verschijnt als DB echt leeg is.
+
+STAP 2 — IMPLEMENTEER “STANDAARD TEMPLATES” KNOP ECHT (SEED)
+- De knop moe
