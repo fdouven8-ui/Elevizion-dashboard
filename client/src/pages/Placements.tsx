@@ -1330,6 +1330,51 @@ export default function Placements() {
               {/* Link to Advertiser - only if not archived */}
               {selectedAd.status !== 'archived' && (
                 <div className="space-y-3">
+                  {/* Suggestion Block */}
+                  <div className="space-y-2">
+                    <Label className="text-muted-foreground text-xs">Voorstel</Label>
+                    {selectedAd.suggestedAdvertiserName ? (
+                      <div className="flex items-center gap-2 p-3 rounded-lg border border-dashed bg-muted/30">
+                        <Badge 
+                          className={selectedAd.suggestedConfidence && selectedAd.suggestedConfidence >= 75 
+                            ? "bg-green-100 text-green-800 border-green-200" 
+                            : "bg-amber-100 text-amber-800 border-amber-200"}
+                        >
+                          {selectedAd.suggestedAdvertiserName} ({selectedAd.suggestedConfidence}%)
+                        </Badge>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="ml-auto"
+                          onClick={() => {
+                            linkMutation.mutate({
+                              yodeckMediaId: selectedAd.yodeckMediaId,
+                              advertiserId: selectedAd.suggestedAdvertiserId!,
+                              matchType: 'suggested',
+                              matchConfidence: (selectedAd.suggestedConfidence || 0) / 100
+                            });
+                          }}
+                          disabled={isAnyMutationPending}
+                          data-testid="button-use-suggestion"
+                        >
+                          <Check className="h-4 w-4 mr-1" />
+                          Gebruik voorstel
+                        </Button>
+                      </div>
+                    ) : selectedAd.status === 'linked' ? (
+                      <div className="flex items-center gap-2 p-3 rounded-lg border bg-green-50 border-green-200">
+                        <Check className="h-4 w-4 text-green-600" />
+                        <span className="text-sm text-green-800">Gekoppeld aan {selectedAd.advertiserName}</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 p-3 rounded-lg border border-dashed bg-muted/30">
+                        <Badge variant="outline" className="text-muted-foreground">
+                          Geen voorstel gevonden
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+                  
                   <div className="flex items-center justify-between">
                     <Label className="text-muted-foreground text-xs">Koppelen aan adverteerder</Label>
                     {selectedAd.matchType && (
