@@ -2475,12 +2475,12 @@ export default function Settings() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Adverteerder (optioneel)</Label>
-                      <Select value={previewAdvertiserId} onValueChange={setPreviewAdvertiserId}>
+                      <Select value={previewAdvertiserId || "none"} onValueChange={(v) => setPreviewAdvertiserId(v === "none" ? "" : v)}>
                         <SelectTrigger>
                           <SelectValue placeholder="Selecteer adverteerder..." />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Geen</SelectItem>
+                          <SelectItem value="none">Geen</SelectItem>
                           {advertisers.map((a) => (
                             <SelectItem key={a.id} value={a.id}>{a.companyName}</SelectItem>
                           ))}
@@ -2489,12 +2489,12 @@ export default function Settings() {
                     </div>
                     <div className="space-y-2">
                       <Label>Scherm (optioneel)</Label>
-                      <Select value={previewScreenId} onValueChange={setPreviewScreenId}>
+                      <Select value={previewScreenId || "none"} onValueChange={(v) => setPreviewScreenId(v === "none" ? "" : v)}>
                         <SelectTrigger>
                           <SelectValue placeholder="Selecteer scherm..." />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">Geen</SelectItem>
+                          <SelectItem value="none">Geen</SelectItem>
                           {screens.map((s) => (
                             <SelectItem key={s.id} value={s.id}>{s.screenId || s.name}</SelectItem>
                           ))}
