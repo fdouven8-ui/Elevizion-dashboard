@@ -2576,12 +2576,12 @@ export default function Settings() {
 
           {/* Preview Template Dialog */}
           <Dialog open={!!previewTemplate} onOpenChange={(open) => !open && setPreviewTemplate(null)}>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader>
-                <DialogTitle>Template Preview: {previewTemplate?.name}</DialogTitle>
+            <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+              <DialogHeader className="flex-shrink-0">
+                <DialogTitle className="text-base">Template Preview: {previewTemplate?.name}</DialogTitle>
               </DialogHeader>
               {previewTemplate && (
-                <div className="space-y-4 py-4">
+                <div className="flex-1 overflow-y-auto space-y-4 py-2 min-h-0">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label>Adverteerder (optioneel)</Label>

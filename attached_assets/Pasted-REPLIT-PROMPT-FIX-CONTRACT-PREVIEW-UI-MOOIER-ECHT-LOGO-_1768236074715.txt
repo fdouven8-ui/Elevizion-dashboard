@@ -1,0 +1,73 @@
+REPLIT PROMPT — FIX CONTRACT PREVIEW UI (MOOIER + ECHT LOGO) + MODAL SCROLL BUG (MOET ALTIJD PASSEN)
+Context: Contract preview werkt nu (A4), maar:
+- Styling/branding is nog niet netjes: er staat nog een “E” icoon in plaats van het echte logo, typography en layout ogen niet premium/strak.
+- De preview modal past niet volledig in het scherm en ik kan niet verder omlaag scrollen. Modal/overlay scroll is kapot. Dit moet 100% goed werken op elke schermhoogte.
+
+SCOPE:
+- Alleen Template Preview modal + contract render wrapper (A4) + branding header.
+- Geen wijzigingen aan rest van de app.
+
+A) FIX MODAL SCROLL (HARD)
+1) Modal container mag nooit buiten viewport “vastlopen”.
+- Zet modal shell:
+  - max-height: 90vh
+  - display: flex; flex-direction: column;
+2) Modal header (titel + sluitknop) fixed bovenin (niet scrollen).
+3) Modal body moet scrollen:
+  - overflow-y: auto
+  - padding behouden
+4) Binnen modal body:
+- Het preview gedeelte (iframe/container) moet ook kunnen scrollen als content groot is:
+  - geef preview wrapper een vaste hoogte: calc(90vh - headerHeight - formSectionHeight - padding)
+  - of gebruik flex: previewSection { flex: 1; min-height: 0; overflow: hidden } en iframe { height: 100% }
+5) Zorg dat de pagina achter de modal NIET scrollt, maar de modal wel (correct focus trap).
+6) Test: laptop 768px hoogte → ik moet overal bij kunnen en de preview kunnen scrollen.
+
+B) CONTRACT PREVIEW MOOIER (A4 WRAPPER)
+1) Maak een nette A4 “print-ready” wrapper:
+- A4 page look:
+  - wit papier, subtiele schaduw, grijze achtergrond eromheen
+  - margins/padding: 40px
+  - font: system font (of dezelfde als dashboard), 12–14px, line-height 1.6
+  - headings duidelijk: H1 22px, H2 16px, body 13–14px
+2) Layout:
+- Header bovenaan:
+  - links: echt Elevizion logo (img)
+  - rechts: bedrijfsgegevens (Elevizion B.V., KvK, btw, adres) klein
+- Titel gecentreerd of links, maar strak (geen felle blauwe schreeuwlijn).
+- Dunne scheidingslijn in accentkleur (subtiel).
+3) Verwijder de “E” avatar volledig in contract preview:
+- Gebruik hetzelfde branding.logoUrl als bij email:
+  - https://elevizion.nl/logo-email.png (of bestaand public asset pad)
+- Als logoUrl ontbreekt: fallback naar alleen tekst “Elevizion” (geen avatar).
+
+C) TEMPLATE CONTENT OPMAAK (ZONDER JURIDISCHE INHOUD TE VERANDEREN)
+- Zorg dat de contract template zelf niet 1 lange lap tekst is:
+  - zet paragrafen op nieuwe regels
+  - gebruik bullets voor pakket/prijs/startdatum/aantal schermen
+  - duidelijke onderteken sectie met 2 kolommen en handtekening lijnen
+- LET OP: verander niet de betekenis, alleen formatting en structuur.
+
+D) EXTRA POLISH (KLEIN)
+- Onderwerpveld bovenin hoeft niet zo groot; maak het compacter.
+- “Preview Genereren” knop blijft zichtbaar (sticky boven in body mag), maar neemt niet zoveel ruimte.
+- Zorg dat de modal breedte responsive is:
+  - max-width: 1100px
+  - op kleinere schermen: full width met padding
+
+ACCEPTATIECRITERIA
+1) Modal past altijd in het scherm en is volledig bruikbaar:
+- ik kan naar beneden scrollen in de modal
+- preview blijft scrollbaar
+2) Contract preview ziet er professioneel uit:
+- echt logo zichtbaar
+- geen “E” avatar
+- nette typografie/spacing/headers
+3) Geen rare felle kleuren; rustig met 1 accentkleur.
+
+OUTPUT
+- Noem welke files je aanpast:
+  - TemplatePreviewModal component
+  - contract wrapper / renderer (buildContractHtml)
+  - template seed/content formatting (alleen opmaak)
+Stop pas als bovenstaande punten zichtbaar kloppen.

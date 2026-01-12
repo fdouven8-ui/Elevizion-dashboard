@@ -353,40 +353,32 @@ function buildContractWrapper(options: ContractWrapperOptions): string {
       box-shadow: 0 4px 20px rgba(0,0,0,0.1);
     }
     .header {
-      text-align: center;
-      margin-bottom: 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 30px;
       padding-bottom: 20px;
-      border-bottom: 2px solid ${BRAND.primary};
+      border-bottom: 1px solid ${BRAND.border};
     }
-    .logo {
-      display: inline-block;
-      width: 60px;
-      height: 60px;
-      background: linear-gradient(135deg, ${BRAND.primary}, ${BRAND.primaryDark});
-      border-radius: 12px;
-      text-align: center;
-      line-height: 60px;
-      margin-bottom: 16px;
+    .header-left {
+      display: flex;
+      flex-direction: column;
     }
-    .logo span {
-      color: white;
-      font-size: 32px;
-      font-weight: bold;
-      font-family: Arial, sans-serif;
+    .logo-img {
+      height: 40px;
+      margin-bottom: 8px;
     }
-    .company-name {
+    .header-right {
+      text-align: right;
+      font-size: 9pt;
+      color: ${BRAND.muted};
+      line-height: 1.5;
+    }
+    .document-title {
       font-size: 18pt;
       font-weight: bold;
       color: ${BRAND.text};
-      margin: 8px 0;
-    }
-    .document-title {
-      font-size: 16pt;
-      font-weight: bold;
-      color: ${BRAND.primary};
-      margin: 24px 0 8px 0;
-      text-transform: uppercase;
-      letter-spacing: 1px;
+      margin: 20px 0 8px 0;
     }
     .document-date {
       font-size: 10pt;
@@ -475,10 +467,17 @@ function buildContractWrapper(options: ContractWrapperOptions): string {
     
     <!-- Header -->
     <div class="header">
-      <div class="logo"><span>E</span></div>
-      <div class="company-name">${COMPANY.name}</div>
-      <div class="document-title">${title}</div>
-      <div class="document-date">Datum: ${today}</div>
+      <div class="header-left">
+        <img src="${COMPANY.logoUrl}" alt="Elevizion" class="logo-img" />
+        <div class="document-title">${title}</div>
+        <div class="document-date">Datum: ${today}</div>
+      </div>
+      <div class="header-right">
+        <strong>${COMPANY.name}</strong><br>
+        ${COMPANY.address}<br>
+        KvK: ${COMPANY.kvk}<br>
+        ${COMPANY.email}
+      </div>
     </div>
     
     <!-- Content -->
