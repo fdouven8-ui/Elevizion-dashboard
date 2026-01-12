@@ -6699,6 +6699,35 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       const { advertiserId, screenId } = req.body;
       let data: Record<string, string> = {};
+      
+      // Demo data als geen adverteerder/scherm geselecteerd
+      const demoData: Record<string, string> = {
+        contactName: "Jan de Vries",
+        advertiser_name: "Demo Bedrijf B.V.",
+        contact_name: "Jan de Vries",
+        companyName: "Demo Bedrijf B.V.",
+        phone: "06-12345678",
+        email: "jan@demobedrijf.nl",
+        screen_id: "EVZ-001",
+        screen_name: "Fitness Centrum Maastricht",
+        location_name: "Sportcentrum Limburg",
+        locationName: "Sportcentrum Limburg",
+        onboardingLink: "https://elevizion.nl/onboarding/demo-token",
+        nextSteps: "1. Log in op je dashboard\n2. Upload je eerste advertentie\n3. Selecteer schermen",
+        step1: "Log in op je dashboard",
+        step2: "Upload je eerste advertentie", 
+        step3: "Selecteer schermen",
+        month: "januari 2026",
+        reportContent: "Dit is een voorbeeld maandrapport met statistieken.",
+        revSharePct: "25",
+        fixedAmount: "75",
+        startDate: "1 februari 2026",
+        signDate: "15 januari 2026",
+        termMonths: "12",
+        city: "Maastricht",
+        monthlyAmount: "199",
+        screensCount: "3",
+      };
 
       if (advertiserId) {
         const advertiser = await storage.getAdvertiser(advertiserId);
@@ -6722,20 +6751,28 @@ Sitemap: ${SITE_URL}/sitemap.xml
         }
       }
 
+      // Merge demo data with actual data (actual data overwrites demo data)
+      const mergedData = { ...demoData, ...data };
+      
       let renderedBody = template.body;
       let renderedSubject = template.subject || "";
       
-      for (const [key, value] of Object.entries(data)) {
+      for (const [key, value] of Object.entries(mergedData)) {
         const placeholder = `{{${key}}}`;
         renderedBody = renderedBody.replace(new RegExp(placeholder.replace(/[{}]/g, "\\$&"), "g"), value);
         renderedSubject = renderedSubject.replace(new RegExp(placeholder.replace(/[{}]/g, "\\$&"), "g"), value);
       }
+      
+      // Determine format based on category
+      const format = template.category === "contract" ? "html" : "text";
 
       res.json({
         subject: renderedSubject,
         body: renderedBody,
+        format,
         placeholdersUsed: template.placeholders,
-        dataProvided: data,
+        dataProvided: mergedData,
+        isDemo: Object.keys(data).length === 0,
       });
     } catch (error: any) {
       res.status(400).json({ message: error.message });

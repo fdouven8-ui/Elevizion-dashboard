@@ -1484,7 +1484,7 @@ export default function Settings() {
   const [previewTemplate, setPreviewTemplate] = useState<DbTemplate | null>(null);
   const [previewAdvertiserId, setPreviewAdvertiserId] = useState("");
   const [previewScreenId, setPreviewScreenId] = useState("");
-  const [previewResult, setPreviewResult] = useState<{ subject: string; body: string } | null>(null);
+  const [previewResult, setPreviewResult] = useState<{ subject: string; body: string; format?: string; isDemo?: boolean } | null>(null);
   const [showVersions, setShowVersions] = useState<string | null>(null);
   const [isNewTemplateOpen, setIsNewTemplateOpen] = useState(false);
   const [newTemplate, setNewTemplate] = useState({ name: "", category: "whatsapp", subject: "", body: "" });
@@ -1667,6 +1667,9 @@ export default function Settings() {
     },
     onSuccess: (data) => {
       setPreviewResult(data);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Preview kon niet worden geladen", description: error.message, variant: "destructive" });
     },
   });
 
@@ -2506,8 +2509,18 @@ export default function Settings() {
                     <Eye className="h-4 w-4 mr-2" />
                     Preview Genereren
                   </Button>
+                  {previewTemplateMutation.isError && (
+                    <div className="bg-destructive/10 text-destructive p-3 rounded-lg text-sm">
+                      Preview kon niet worden geladen: {(previewTemplateMutation.error as Error)?.message || "Onbekende fout"}
+                    </div>
+                  )}
                   {previewResult && (
                     <div className="space-y-2 mt-4">
+                      {previewResult.isDemo && (
+                        <div className="bg-amber-50 text-amber-800 p-2 rounded text-xs flex items-center gap-2">
+                          <span className="font-medium">Demo data</span> - Selecteer een adverteerder of scherm voor echte data
+                        </div>
+                      )}
                       {previewResult.subject && (
                         <div>
                           <Label>Onderwerp:</Label>
@@ -2516,7 +2529,14 @@ export default function Settings() {
                       )}
                       <div>
                         <Label>Inhoud:</Label>
-                        <p className="bg-muted p-3 rounded text-sm whitespace-pre-wrap">{previewResult.body}</p>
+                        {previewResult.format === "html" ? (
+                          <div 
+                            className="bg-white border p-4 rounded text-sm prose prose-sm max-w-none"
+                            dangerouslySetInnerHTML={{ __html: previewResult.body }}
+                          />
+                        ) : (
+                          <p className="bg-muted p-3 rounded text-sm whitespace-pre-wrap">{previewResult.body}</p>
+                        )}
                       </div>
                     </div>
                   )}
