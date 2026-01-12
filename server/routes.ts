@@ -6700,33 +6700,59 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const { advertiserId, screenId } = req.body;
       let data: Record<string, string> = {};
       
-      // Demo data als geen adverteerder/scherm geselecteerd
+      // Demo data als geen adverteerder/scherm geselecteerd (zowel camelCase als snake_case)
       const demoData: Record<string, string> = {
+        // Contact/Adverteerder - beide varianten
         contactName: "Jan de Vries",
-        advertiser_name: "Demo Bedrijf B.V.",
         contact_name: "Jan de Vries",
+        advertiserName: "Demo Bedrijf B.V.",
+        advertiser_name: "Demo Bedrijf B.V.",
         companyName: "Demo Bedrijf B.V.",
+        company_name: "Demo Bedrijf B.V.",
         phone: "06-12345678",
         email: "jan@demobedrijf.nl",
+        // Scherm/Locatie - beide varianten
+        screenId: "EVZ-001",
         screen_id: "EVZ-001",
+        screenName: "Fitness Centrum Maastricht",
         screen_name: "Fitness Centrum Maastricht",
-        location_name: "Sportcentrum Limburg",
         locationName: "Sportcentrum Limburg",
+        location_name: "Sportcentrum Limburg",
+        // Onboarding
         onboardingLink: "https://elevizion.nl/onboarding/demo-token",
+        onboarding_link: "https://elevizion.nl/onboarding/demo-token",
         nextSteps: "1. Log in op je dashboard\n2. Upload je eerste advertentie\n3. Selecteer schermen",
+        next_steps: "1. Log in op je dashboard\n2. Upload je eerste advertentie\n3. Selecteer schermen",
         step1: "Log in op je dashboard",
         step2: "Upload je eerste advertentie", 
         step3: "Selecteer schermen",
+        // Maandrapport
         month: "januari 2026",
         reportContent: "Dit is een voorbeeld maandrapport met statistieken.",
+        report_content: "Dit is een voorbeeld maandrapport met statistieken.",
+        // Contract specifiek - locatie revenue share
         revSharePct: "25",
+        rev_share_pct: "25",
+        revenueSharePercentage: "25",
+        // Contract specifiek - locatie vast bedrag
         fixedAmount: "75",
+        fixed_amount: "75",
+        fixedMonthly: "75",
+        // Contract data
         startDate: "1 februari 2026",
+        start_date: "1 februari 2026",
         signDate: "15 januari 2026",
+        sign_date: "15 januari 2026",
         termMonths: "12",
+        term_months: "12",
         city: "Maastricht",
+        // Adverteerder contract
         monthlyAmount: "199",
+        monthly_amount: "199",
         screensCount: "3",
+        screens_count: "3",
+        packageName: "Standaard",
+        package_name: "Standaard",
       };
 
       if (advertiserId) {

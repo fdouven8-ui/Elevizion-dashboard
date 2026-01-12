@@ -2032,7 +2032,7 @@ export default function Settings() {
               onClick={() => setTemplateSubTab("contract-docs")}
             >
               <FileCheck className="h-4 w-4 mr-2" />
-              Contract Docs
+              Gegenereerde Docs
             </Button>
           </div>
 
@@ -2344,10 +2344,10 @@ export default function Settings() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <FileCheck className="h-5 w-5" />
-                  Contract Documenten
+                  Gegenereerde Documenten
                 </CardTitle>
                 <CardDescription>
-                  Gegenereerde contracten en hun ondertekeningsstatus
+                  Documenten gegenereerd uit templates en hun status
                 </CardDescription>
               </CardHeader>
               <CardContent>
