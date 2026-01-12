@@ -21,8 +21,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useToast } from "@/hooks/use-toast";
 
 interface VisitorStaffel {
-  min: number;
-  max: number | null;
+  minVisitors: number;
+  maxVisitors: number | null;
   weight: number;
   label: string;
 }
@@ -427,8 +427,8 @@ export default function Payouts() {
                         <span className="text-sm text-muted-foreground">gewicht</span>
                       </div>
                       <p className="text-sm text-muted-foreground">
-                        {staffel.min.toLocaleString("nl-NL")}
-                        {staffel.max ? ` – ${staffel.max.toLocaleString("nl-NL")}` : "+"} bezoekers/week
+                        {staffel.minVisitors.toLocaleString("nl-NL")}
+                        {staffel.maxVisitors ? ` – ${staffel.maxVisitors.toLocaleString("nl-NL")}` : "+"} bezoekers/week
                       </p>
                     </CardContent>
                   </Card>
