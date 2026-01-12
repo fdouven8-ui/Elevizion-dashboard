@@ -686,7 +686,7 @@ export const integrationLogs = pgTable("integration_logs", {
  */
 export const integrationConfigs = pgTable("integration_configs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  service: text("service").notNull().unique(), // yodeck, moneybird, dropbox_sign
+  service: text("service").notNull().unique(), // yodeck, moneybird, signrequest
   isEnabled: boolean("is_enabled").notNull().default(false),
   status: text("status").notNull().default("not_configured"), // not_configured, connected, error
   lastTestedAt: timestamp("last_tested_at"),

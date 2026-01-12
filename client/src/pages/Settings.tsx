@@ -271,15 +271,15 @@ const INTEGRATION_INFO = {
     ],
     hasSync: true,
   },
-  dropbox_sign: {
-    name: "Dropbox Sign",
+  signrequest: {
+    name: "SignRequest",
     description: "Digitale handtekeningen voor contracten en mandaten",
     icon: FileText,
     color: "text-purple-600",
-    credentials: [
-      { key: "api_key", label: "API Key", placeholder: "Plak hier je Dropbox Sign API key" },
-    ],
+    credentials: [],
     hasSync: false,
+    externalUrl: "https://app.signrequest.com",
+    envVars: ["SIGNREQUEST_API_TOKEN", "SIGNREQUEST_SIGNER1_EMAIL"],
   },
 };
 
@@ -907,7 +907,7 @@ function IntegrationsTab() {
                         ? "https://app.yodeck.com"
                         : service === "moneybird"
                         ? "https://moneybird.com"
-                        : "https://app.hellosign.com"
+                        : "https://app.signrequest.com"
                     }
                     target="_blank"
                     rel="noopener noreferrer"
