@@ -6759,8 +6759,23 @@ Sitemap: ${SITE_URL}/sitemap.xml
       if (advertiserId) {
         const advertiser = await storage.getAdvertiser(advertiserId);
         if (advertiser) {
+          // Derive contact name with fallback chain
+          const contactName = 
+            advertiser.primaryContactName || 
+            advertiser.contactName || 
+            advertiser.attentionOf || 
+            (advertiser.firstName && advertiser.lastName 
+              ? `${advertiser.firstName} ${advertiser.lastName}`.trim()
+              : null) ||
+            advertiser.companyName;
+          
+          // Set both camelCase and snake_case variants
+          data.contactName = contactName;
+          data.contact_name = contactName;
+          data.advertiserName = advertiser.companyName;
           data.advertiser_name = advertiser.companyName;
-          data.contact_name = advertiser.contactName;
+          data.companyName = advertiser.companyName;
+          data.company_name = advertiser.companyName;
           data.phone = advertiser.phone || "";
           data.email = advertiser.email;
         }
@@ -6880,8 +6895,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
         { 
           name: "lead_confirmation", 
           category: "email", 
-          subject: "Bedankt voor je interesse - Elevizion", 
-          body: `Bedankt voor je interesse in Elevizion!
+          subject: "Bedankt voor je interesse", 
+          body: `Beste {{contactName}},
+
+Bedankt voor je interesse in Elevizion!
 
 We hebben je aanvraag ontvangen en zijn blij dat je overweegt om deel uit te maken van ons digitale netwerk.
 
@@ -6895,8 +6912,10 @@ Heb je in de tussentijd vragen? Neem gerust contact met ons op via info@elevizio
         { 
           name: "onboarding_link", 
           category: "email", 
-          subject: "Voltooi je registratie - Elevizion", 
-          body: `Welkom bij Elevizion!
+          subject: "Voltooi je registratie", 
+          body: `Beste {{contactName}},
+
+Welkom bij Elevizion!
 
 Fijn dat je bent begonnen met je registratie. Om je account te activeren en toegang te krijgen tot het dashboard, dien je nog enkele gegevens in te vullen.
 
@@ -6915,8 +6934,10 @@ Het invullen duurt ongeveer 5 minuten. Na voltooiing heb je direct toegang tot j
         { 
           name: "onboarding_reminder", 
           category: "email", 
-          subject: "Herinnering: Voltooi je registratie - Elevizion", 
-          body: `We zagen dat je registratie nog niet is voltooid.
+          subject: "Herinnering: Voltooi je registratie", 
+          body: `Beste {{contactName}},
+
+We zagen dat je registratie nog niet is voltooid.
 
 Je bent al begonnen, maar we missen nog enkele gegevens om je account te activeren. Klik op onderstaande link om verder te gaan waar je gebleven was:
 
@@ -6929,8 +6950,10 @@ Heb je hulp nodig of loop je ergens tegenaan? Neem gerust contact met ons op via
         { 
           name: "onboarding_completed", 
           category: "email", 
-          subject: "Registratie voltooid - Welkom bij Elevizion!", 
-          body: `Gefeliciteerd! Je registratie is succesvol afgerond.
+          subject: "Registratie voltooid - Welkom!", 
+          body: `Beste {{contactName}},
+
+Gefeliciteerd! Je registratie is succesvol afgerond.
 
 Je bent nu officieel onderdeel van het Elevizion netwerk. Hieronder vind je de volgende stappen om aan de slag te gaan:
 
@@ -6947,8 +6970,10 @@ Nogmaals welkom bij Elevizion!`
         { 
           name: "monthly_report", 
           category: "email", 
-          subject: "Maandrapport {{month}} - Elevizion", 
-          body: `Hierbij ontvang je het maandrapport voor {{month}}.
+          subject: "Maandrapport {{month}}", 
+          body: `Beste {{contactName}},
+
+Hierbij ontvang je het maandrapport voor {{month}}.
 
 In dit rapport vind je een overzicht van:
 - Je actieve advertenties en vertoningen
@@ -7159,8 +7184,10 @@ We wensen je een succesvolle maand!`
       ];
       
       let created = 0;
+      let updated = 0;
       for (const tpl of defaultTemplates) {
-        if (!existingKeys.includes(tpl.name)) {
+        const existing = existingTemplates.find(t => t.name === tpl.name);
+        if (!existing) {
           await storage.createTemplate({
             name: tpl.name,
             category: tpl.category,
@@ -7169,10 +7196,17 @@ We wensen je een succesvolle maand!`
             isEnabled: true,
           });
           created++;
+        } else {
+          // Update existing template with new defaults
+          await storage.updateTemplate(existing.id, {
+            subject: tpl.subject,
+            body: tpl.body,
+          });
+          updated++;
         }
       }
       
-      res.json({ message: `${created} standaard templates aangemaakt`, created });
+      res.json({ message: `${created} templates aangemaakt, ${updated} templates bijgewerkt`, created, updated });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

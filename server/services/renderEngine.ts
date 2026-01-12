@@ -33,6 +33,7 @@ const COMPANY = {
   website: "elevizion.nl",
   kvk: "12345678",
   address: "Maastricht, Nederland",
+  logoUrl: "https://elevizion.nl/logo-email.png",
 };
 
 // ============================================================================
@@ -237,10 +238,7 @@ function buildEmailWrapper(options: EmailWrapperOptions): string {
               <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
                 <tr>
                   <td style="text-align:center;">
-                    <div style="display:inline-block;width:48px;height:48px;background:linear-gradient(135deg,${BRAND.primary},${BRAND.primaryDark});border-radius:12px;text-align:center;line-height:48px;">
-                      <span style="color:${BRAND.white};font-size:24px;font-weight:bold;">E</span>
-                    </div>
-                    <div style="margin-top:12px;font-size:20px;font-weight:700;color:${BRAND.text};">Elevizion</div>
+                    <img src="${COMPANY.logoUrl}" alt="Elevizion" height="40" style="display:inline-block;border:0;outline:none;text-decoration:none;" />
                   </td>
                 </tr>
               </table>
@@ -251,17 +249,7 @@ function buildEmailWrapper(options: EmailWrapperOptions): string {
           <tr>
             <td class="content" style="padding:32px 40px;">
               
-              <!-- Title -->
-              <h1 style="margin:0 0 24px 0;font-size:24px;font-weight:700;color:${BRAND.text};line-height:1.3;">
-                ${subject}
-              </h1>
-              
-              <!-- Greeting -->
-              <p style="margin:0 0 20px 0;font-size:16px;color:${BRAND.text};line-height:1.7;">
-                Beste ${contactName},
-              </p>
-              
-              <!-- Body content -->
+              <!-- Body content (template defines its own greeting and structure) -->
               <div style="font-size:16px;color:${BRAND.text};line-height:1.7;">
                 ${bodyHtml}
               </div>
@@ -630,12 +618,12 @@ function bodyToHtml(body: string): string {
  * Generate plain text version of email.
  */
 function generateEmailPlainText(options: { subject: string; body: string; contactName: string }): string {
-  const { subject, body, contactName } = options;
+  const { subject, body } = options;
   const year = new Date().getFullYear();
   
   let text = "";
   text += `${subject}\n${"=".repeat(subject.length)}\n\n`;
-  text += `Beste ${contactName},\n\n`;
+  // Template body already contains greeting ("Beste ...") - don't add another
   text += body;
   text += "\n\n" + "-".repeat(40);
   text += "\nMet vriendelijke groet,";

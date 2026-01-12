@@ -1,0 +1,63 @@
+REPLIT PROMPT — FIX EMAIL PREVIEW: ECHTE ONTVANGERNAAM + GEEN DUBBELE AANHEF + ECHT LOGO (GEEN “E” AVATAR)
+Context: In Instellingen > Templates → Email Preview zie ik:
+- Ontvangernaam blijft “Jan de Vries” (demo) terwijl ik in de preview een echte adverteerder selecteer (Bouwservice Douven).
+- De aanhef “Beste …,” staat 2x.
+- Het logo bovenin is nog een ‘E’-icoon/avatar in plaats van het echte Elevizion logo.
+Ik wil dat dit 100% klopt en dat preview = daadwerkelijke mail output. Geen nieuwe UI voor logo upload.
+
+SCOPE:
+- Alleen email rendering + preview sample-data mapping + template body cleanup/guardrails.
+- Niet de hele templates module ombouwen.
+
+A) ECHTE LOGO TOEPASSEN IN EMAIL WRAPPER
+1) Voeg 1 vaste branding config toe en gebruik die in de email wrapper (preview + send):
+   brandName = "Elevizion"
+   logoUrl = "https://elevizion.nl/logo-email.png"
+   (Als deze URL niet bestaat, gebruik een bestaande logo asset uit de repo maar serve die via een echte public URL, niet via een React component)
+2) In wrapper:
+   - Als logoUrl aanwezig: render <img src="logoUrl" alt="Elevizion" height="36" style="display:block;border:0;outline:none;text-decoration:none;" />
+   - Verwijder/disable de initials/avatar fallback (“E”) in preview wanneer logoUrl bestaat
+3) Zet bovenin NIET nog een extra “Elevizion” tekst als het logo al duidelijk is.
+   - Of: toon brandName klein naast het logo, maar nooit beide groot onder elkaar.
+
+B) ONTVANGERNAAM MOET UIT DE GEKOZEN ENTITEIT KOMEN (NIET DEMO)
+1) Preview modal heeft dropdown “Adverteerder (optioneel)”. Wanneer gekozen:
+   - haal echte contactpersoon op in deze volgorde:
+     contactName = advertiser.primaryContactName || advertiser.contactName || advertiser.attentionOf || advertiser.personName || advertiser.firstName+lastName
+   - fallback: als geen contactnaam bekend: gebruik companyName (bv. “Bouwservice Douven”)
+2) Zorg dat de preview renderData voor templates ALTIJD deze velden bevat:
+   - {{contactName}} (echte naam of company fallback)
+   - {{companyName}}
+   - {{email}} (als beschikbaar)
+3) Verwijder hardcoded demo “Jan de Vries” uit sample data zodra er een echte advertiser geselecteerd is.
+
+C) GEEN DUBBELE AANHEF (“BESTE …,”) — ÉÉN BRON
+1) Bepaal één beleid (kies dit):
+   - Aanhef staat IN het template body (aanrader, meest flexibel)
+   - Wrapper voegt GEEN aanhef toe
+2) Fix bestaande template(s) die dubbel zijn:
+   - Zoek de lead_confirmation (en andere) template body en verwijder dubbele aanhef-regels zodat er maar 1 “Beste {{contactName}},” overblijft.
+   - Als wrapper toch een aanhef toevoegt: haal die uit wrapper weg.
+3) Voeg een guardrail toe:
+   - Als body al begint met “Beste” (case-insensitive) dan voeg wrapper nooit een aanhef toe (maar voorkeur blijft: wrapper voegt nooit aanhef toe).
+
+D) SUBJECT ≠ BODY TITEL (OPTIONEEL, MAAR NETJES)
+- Het is oké dat subject “Bedankt voor je interesse - Elevizion” is,
+  maar in body hoeft niet opnieuw “- Elevizion” tenzij jij dat wil.
+- Maak body H1: “Bedankt voor je interesse” (zonder - Elevizion) OF haal H1 weg als je geen kop wil.
+Kies 1 consistente stijl en pas de default template(s) aan.
+
+E) ACCEPTATIECRITERIA (MOET IK DIRECT ZIEN IN PREVIEW)
+1) Bovenin zie ik het echte Elevizion logo (geen ‘E’-avatar).
+2) “Beste …,” staat maar 1x.
+3) Als ik adverteerder Bouwservice Douven kies:
+   - contactName is NIET “Jan de Vries”
+   - maar de echte contactnaam uit de DB (of companyName als er geen contactpersoon is).
+4) Dezelfde rendered HTML wordt gebruikt voor preview en voor daadwerkelijke verzending.
+
+OUTPUT
+- Noem exact welke files zijn aangepast:
+  - branding config + email wrapper
+  - preview modal data mapping
+  - template seed/defaults (waar dubbele aanhef zat)
+Stop pas als alle acceptatiecriteria zichtbaar kloppen.
