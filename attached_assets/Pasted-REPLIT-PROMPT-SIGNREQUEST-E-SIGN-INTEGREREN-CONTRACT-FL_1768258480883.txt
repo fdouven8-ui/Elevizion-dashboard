@@ -1,0 +1,130 @@
+REPLIT PROMPT — SIGNREQUEST E-SIGN INTEGREREN (CONTRACT FLOW) + ALLEEN ALS ALGEMENE VOORWAARDEN AL GEAkKOORD ZIJN
+Context: Elevizion dashboard. Ik heb een SignRequest account. Ik wil dat contracten (adverteerders + schermlocaties) via SignRequest digitaal ondertekend worden wanneer dat nodig is.
+Belangrijk: de klant moet in onboarding eerst akkoord zijn gegaan met algemene voorwaarden via checkbox. Pas daarna mag er een contract ter ondertekening worden verstuurd.
+
+SCOPE (STRICT):
+- Alleen contract signing flow integreren via SignRequest + status updates in Contract Docs.
+- Geen redesign. Geen nieuwe grote modules.
+- Gebruik bestaande Contract Docs pagina en bestaande contract templates.
+
+DOEL (HARD):
+1) Bij “Verstuur ter ondertekening” op een contract:
+   - controleer dat Terms Accepted = true (met timestamp + ip) voor die klant
+   - genereer contract (PDF of HTML->PDF) + sla draft op in Contract Docs
+   - stuur document naar SignRequest met 2 signers (sequential):
+     Signer 1 = Elevizion (mijn teken-e-mail)
+     Signer 2 = Klant (contact email)
+   - update Contract Doc status naar SENT + sla signrequest identifiers op
+2) Webhook verwerkt status updates:
+   - getekend (signed) => download signed PDF + signing log, sla op, status SIGNED
+   - geweigerd/expired/cancelled => status DECLINED/EXPIRED
+3) Alles is audit-proof:
+   - bewaar: terms acceptance (version/hash, timestamp, ip, userAgent)
+   - bewaar: signrequest status, signedAt, signedPdfUrl, signingLogUrl (of content)
+4) UI:
+   - In Contract Doc detail: knop “Open SignRequest” (link), status badges, download signed PDF
+   - Blokkade: als terms niet geaccepteerd => knop “Verstuur ter ondertekening” disabled + duidelijke melding
+
+A) CONFIG / SECRETS
+1) Voeg in Replit secrets:
+   - SIGNREQUEST_API_TOKEN
+   - SIGNREQUEST_SIGNER1_EMAIL (mijn elevizion email waarmee ik teken)
+   - SIGNREQUEST_WEBHOOK_SECRET (als SignRequest signing secret ondersteunt; anders leeg)
+2) Voeg een settings record toe (of env vars) voor:
+   - fromName/fromEmail voor emails (optioneel)
+   - company/legal details (niet verplicht voor signing)
+
+B) DATABASE AANPASSING (MINIMAAL)
+1) contract_docs table uitbreiden met:
+   - signProvider: 'signrequest'
+   - signrequest_document_id (of id)
+   - signrequest_url (view url)
+   - signStatus: 'DRAFT'|'SENT'|'SIGNING'|'SIGNED'|'DECLINED'|'EXPIRED'|'CANCELLED'
+   - signed_pdf_url (storage url)
+   - signed_log_url (storage url) of signed_log_content
+   - sentAt, signedAt
+2) terms acceptance opslag (als dit nog niet bestaat):
+   - terms_acceptance table:
+     entityType ('advertiser'|'location'), entityId
+     acceptedAt, ip, userAgent
+     termsVersion (string) + termsHash (sha256) + source ('onboarding_checkbox')
+   - “Algemene voorwaarden akkoord” moet per entiteit terug te vinden zijn.
+
+C) CONTRACT GENERATION (VOOR SIGNREQUEST)
+- Voor signing moet je een PDF hebben (aanrader).
+- Gebruik bestaande contract template renderer (A4 wrapper) en genereer PDF server-side.
+- Sla PDF file op in storage (zelfde als je nu gebruikt voor docs) en bewaar url in contract_docs (draftPdfUrl).
+- Gebruik deze PDF als input naar SignRequest.
+
+D) SIGNREQUEST API INTEGRATIE
+1) Maak service layer: signrequestClient.ts/js
+- Authorization header met SIGNREQUEST_API_TOKEN (zie SignRequest API docs)
+- Functies:
+  - createSignRequest({pdfUrl OR fileUpload, signers[], subject, message, externalId})
+  - getDocumentStatus(documentId)
+  - downloadSignedPdf(documentId)
+2) Create request:
+- signers = [
+    {email: SIGNREQUEST_SIGNER1_EMAIL, order: 1, role: 'signer', name: 'Elevizion'},
+    {email: customerEmail, order: 2, role: 'signer', name: customerNameOrCompany}
+  ]
+- Zet “sequential signing” aan (order-based).
+- Zet external_id = contractDocId zodat je later altijd kunt mappen.
+
+E) WEBHOOK ENDPOINT (STATUS UPDATES)
+1) Voeg endpoint toe: POST /api/webhooks/signrequest
+- Verifieer request (signature/secret) als mogelijk, anders minimaal:
+  - check known document id
+  - rate limit
+  - log payload
+2) Op events/status changes:
+- If status == signed:
+  - download signed PDF + signing log
+  - sla op in storage
+  - update contract_docs: signStatus='SIGNED', signedAt, signed_pdf_url, signed_log_url
+- If declined/cancelled/expired:
+  - update signStatus accordingly
+3) Idempotent: webhook mag meerdere keren binnenkomen zonder dubbele opslag.
+
+F) UI WIJZIGINGEN (MINIMAAL)
+1) Contract Doc detail:
+- Status badge + timestamps
+- “Verstuur ter ondertekening” knop:
+  - disabled als termsAcceptance ontbreekt
+  - bij click: call /api/contracts/:id/send-for-signing
+- “Open SignRequest” link (signrequest_url)
+- Download knop voor signed PDF als beschikbaar
+2) In onboarding flows:
+- Zorg dat checkbox “Algemene voorwaarden” acceptance echt wordt opgeslagen in terms_acceptance met versie/hash.
+
+G) API ENDPOINTS (ELEVIZION)
+1) POST /api/contracts/:id/send-for-signing
+- Validaties:
+  - termsAcceptance bestaat
+  - contractDoc bestaat + status DRAFT
+  - klant email bestaat
+- Acties:
+  - generate pdf if missing
+  - send to SignRequest
+  - update status to SENT + store ids/urls
+2) GET /api/contracts/:id
+- return signing status + urls
+
+H) ACCEPTATIECRITERIA (MOET IK KUNNEN TESTEN)
+1) Maak contract doc (draft) → klik “Verstuur ter ondertekening”
+- zonder terms acceptance => geblokkeerd met melding
+- met terms acceptance => SignRequest request aangemaakt + status SENT zichtbaar
+2) Ik kan het signing proces afronden:
+- ik (Elevizion) teken → klant tekent
+- webhook zet status SIGNED
+- signed PDF verschijnt in Contract Docs en is te downloaden
+3) Geen hardcoded demo namen; klantnaam = contactName of bedrijfsnaam fallback.
+
+OUTPUT
+- Laat zien welke files zijn aangepast:
+  - signrequest client/service
+  - webhook endpoint
+  - contracts send-for-signing endpoint
+  - DB migration(s)
+  - UI contract doc detail changes
+Stop pas als end-to-end signing werkt.
