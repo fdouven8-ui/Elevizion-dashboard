@@ -2320,7 +2320,7 @@ export default function Settings() {
                           <TableCell>
                             <Badge variant="outline">{log.templateKey}</Badge>
                           </TableCell>
-                          <TableCell className="text-sm">{log.recipientEmail || "-"}</TableCell>
+                          <TableCell className="text-sm">{log.toEmail || "-"}</TableCell>
                           <TableCell>
                             <Badge variant={log.status === "sent" ? "default" : log.status === "failed" ? "destructive" : "secondary"}>
                               {log.status === "sent" ? "Verzonden" : log.status === "failed" ? "Mislukt" : "In wachtrij"}
