@@ -92,3 +92,22 @@ Core entities include: **Entities** (unified model for ADVERTISER + SCREEN), Sit
 - Revenue allocations table with weighted scores
 - Visitor staffels explanation with visual cards
 - Integration with new allocation/payout calculation APIs
+
+### Template Management System
+- Database-driven templates with `templates` table (name, category, subject, body)
+- 10 default templates seeded via `/api/templates/seed-defaults` (6 email, 4 contract)
+- Template categories: email, contract, whatsapp, invoice, internal
+- `{{placeholder}}` syntax for dynamic content rendering
+
+### Email Logging & Integration
+- `email_logs` table tracks all sent emails with status (queued/sent/failed)
+- `templateEmailService.ts`: Sends emails using database templates with Dutch branding
+- Full Postmark integration with provider message ID tracking
+- Settings UI tab "E-mail Logs" shows delivery history with Dutch status labels
+
+### Contract Document Generation
+- `contractTemplateService.ts`: Generates contracts from database templates
+- `contract_documents` table stores rendered HTML with versioning
+- API endpoints: `/api/contract-documents/generate`, `/api/contract-documents/:id/status`
+- Full HTML output with Elevizion styling and signature blocks
+- Status workflow: draft → sent → signed
