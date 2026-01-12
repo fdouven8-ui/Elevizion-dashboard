@@ -58,6 +58,7 @@ function DashboardRouter() {
         <Route path="/placements/:id" component={PlacementDetail} />
         <Route path="/finance" component={Finance} />
         <Route path="/payouts" component={Payouts} />
+        <Route path="/financieel" component={Payouts} />
         <Route path="/contracts" component={Contracts} />
         <Route path="/settings" component={Settings} />
         <Route path="/content-inventory" component={ContentInventory} />

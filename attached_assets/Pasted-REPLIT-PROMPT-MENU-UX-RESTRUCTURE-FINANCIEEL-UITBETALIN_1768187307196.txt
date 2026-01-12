@@ -1,0 +1,50 @@
+REPLIT PROMPT — MENU/UX RESTRUCTURE (FINANCIEEL + UITBETALINGEN MERGEN, CONTRACTEN ALS SUBMENU)
+Context: Elevizion dashboard (bestaande structuur). Screenshot toont pagina "Uitbetalingen & Omzetverdeling" met tabs (Omzetverdeling, Locatie Payouts, Bezoeker Staffels) en knoppen “Bereken Allocaties / Bereken Payouts”. Dit is in praktijk financieel. Ik wil dubbel menu “Financieel” en “Uitbetalingen” oplossen, en “Contracten” niet als hoofdmenu maar als submenu/onderdeel.
+
+DOEL (simpel):
+1) Maak 1 duidelijke hoofdmenu entry: “Financieel”
+2) Verplaats “Uitbetalingen” pagina onder Financieel (zelfde pagina/route mag blijven, alleen navigatie/labeling logisch)
+3) Maak “Contracten” geen hoofdmenu; maak het een submenu item onder “Financieel” OF onder “Instellingen / Admin” (voorkeur: Financieel → Contracten, omdat contracten invloed hebben op payouts)
+4) Zorg dat bestaande routes blijven werken (geen 404), eventueel redirects/aliases.
+
+CONCRETE WIJZIGINGEN:
+A) SIDEBAR / NAV
+- Voeg hoofditem “Financieel” toe (of gebruik bestaande) en maak het uitklapbaar met subitems:
+  - Financieel Overzicht (optioneel: kan gewoon dezelfde payouts pagina zijn als landing)
+  - Uitbetalingen & Omzetverdeling (link naar huidige payouts pagina)
+  - Contracten (link naar huidige contracten pagina)
+- Verwijder losse hoofditem “Uitbetalingen” (of rename naar subitem)
+- Verwijder losse hoofditem “Contracten” uit hoofdmenu (maar pagina blijft bestaan)
+- Zorg dat actieve state correct werkt:
+  - Als user op payouts pagina zit: Financieel groep open + subitem actief
+
+B) ROUTES / LINKS
+- Laat bestaande routes intact, maar maak aliases:
+  - /financieel → opent payouts pagina (of overzicht)
+  - /uitbetalingen blijft bestaan maar in menu niet meer als hoofditem
+  - /contracten blijft bestaan maar alleen toegankelijk via Financieel submenu
+- Als er een router config is: voeg redirects toe zodat oude bookmarks werken.
+
+C) PAGINA TITELS (KLEINE VERBETERING)
+- Op payouts pagina (nu “Uitbetalingen & Omzetverdeling”):
+  - breadcrumb: Dashboard > Financieel > Uitbetalingen
+  - titel mag blijven, maar subtitel korter: “Verdeling omzet & locatie-uitbetalingen.”
+- Zorg dat “Financieel” en “Uitbetalingen” niet dubbel in breadcrumbs/menu staat.
+
+D) UI RUST (KLEIN)
+- De huidige pagina is prima; alleen:
+  - Maak de tabs visueel iets duidelijker (subtiele actieve highlight)
+  - Voeg in empty state (zoals nu “Geen allocaties gevonden…”) 2 extra helper acties:
+    - Link “Ga naar Plaatsingen” (om te checken of er placements zijn)
+    - Link “Ga naar Adverteerders” (om te checken of er omzet is)
+  (Geen lange teksten, alleen 2 kleine links)
+
+E) OPLEVERING
+- Laat zien welke bestanden je hebt aangepast:
+  - Sidebar/Nav component
+  - Router/Routes config
+  - (optioneel) breadcrumbs component
+- Zorg dat na deploy:
+  - Menu logisch is (Financieel = alles met geld incl. payouts)
+  - Contracten is niet meer prominent, maar wel bereikbaar via submenu
+  - Geen routes kapot zijn

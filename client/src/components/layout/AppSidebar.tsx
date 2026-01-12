@@ -56,9 +56,11 @@ const mainMenuItems: MenuItem[] = [
   { title: "Schermen", url: "/screens", icon: Monitor, requiredPermissions: [PERMISSIONS.VIEW_SCREENS] },
   { title: "Adverteerders", url: "/advertisers", icon: Users, requiredPermissions: [PERMISSIONS.VIEW_ADVERTISERS] },
   { title: "Plaatsingen", url: "/placements", icon: Target, requiredPermissions: [PERMISSIONS.VIEW_PLACEMENTS] },
-  { title: "Contracten", url: "/contracts", icon: FileText, requiredPermissions: [PERMISSIONS.VIEW_FINANCE] },
-  { title: "Financieel", url: "/finance", icon: Euro, requiredPermissions: [PERMISSIONS.VIEW_FINANCE] },
-  { title: "Uitbetalingen", url: "/payouts", icon: Wallet, requiredPermissions: [PERMISSIONS.VIEW_FINANCE] },
+];
+
+const financieelSubItems = [
+  { title: "Uitbetalingen", url: "/payouts", icon: Wallet },
+  { title: "Contracten", url: "/contracts", icon: FileText },
 ];
 
 const onboardingSubItems = [
@@ -73,6 +75,9 @@ export function AppSidebar() {
   const { user, isAuthenticated, isLoading, logout, hasPermission, hasAnyPermission } = useAuth();
   const [onboardingOpen, setOnboardingOpen] = useState(
     location.startsWith("/onboarding") || location === "/leads"
+  );
+  const [financieelOpen, setFinancieelOpen] = useState(
+    location === "/payouts" || location === "/contracts" || location === "/finance" || location === "/financieel"
   );
 
   // Fetch lead count for badge
@@ -128,6 +133,7 @@ export function AppSidebar() {
 
   const visibleMainItems = mainMenuItems.filter(canViewItem);
   const canViewOnboarding = hasAnyPermission(PERMISSIONS.VIEW_ONBOARDING, PERMISSIONS.ONBOARD_ADVERTISERS, PERMISSIONS.ONBOARD_SCREENS);
+  const canViewFinance = hasPermission(PERMISSIONS.VIEW_FINANCE);
   const canViewSettings = hasAnyPermission(PERMISSIONS.MANAGE_USERS, PERMISSIONS.EDIT_SYSTEM_SETTINGS, PERMISSIONS.MANAGE_TEMPLATES, PERMISSIONS.MANAGE_INTEGRATIONS);
 
   return (
@@ -225,6 +231,41 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
+
+              {/* Financieel with collapsible subitems */}
+              {canViewFinance && (
+                <Collapsible open={financieelOpen} onOpenChange={setFinancieelOpen} className="group/collapsible">
+                  <SidebarMenuItem>
+                    <CollapsibleTrigger asChild>
+                      <SidebarMenuButton 
+                        tooltip="Financieel"
+                        className={`h-9 rounded-lg transition-colors ${(isActive("/payouts") || isActive("/contracts") || isActive("/finance") || isActive("/financieel")) ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
+                      >
+                        <Euro className="h-4 w-4" />
+                        <span className="text-[13px] flex-1">Financieel</span>
+                        <ChevronDown className="h-3.5 w-3.5 opacity-60 transition-transform group-data-[state=open]/collapsible:rotate-180" />
+                      </SidebarMenuButton>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent>
+                      <SidebarMenuSub className="ml-3 mt-1 space-y-0.5 border-l border-sidebar-border/30 pl-2">
+                        {financieelSubItems.map((subItem) => {
+                          const isSubItemActive = isActive(subItem.url) || (subItem.url === "/payouts" && isActive("/financieel"));
+                          return (
+                            <SidebarMenuSubItem key={subItem.url}>
+                              <SidebarMenuSubButton asChild className={`h-8 text-[12px] rounded-md ${isSubItemActive ? 'bg-sidebar-primary/20 text-sidebar-primary-foreground font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/30'}`}>
+                                <Link href={subItem.url} data-testid={`nav-${subItem.url.replace('/', '')}`}>
+                                  <subItem.icon className="h-3.5 w-3.5" />
+                                  <span>{subItem.title}</span>
+                                </Link>
+                              </SidebarMenuSubButton>
+                            </SidebarMenuSubItem>
+                          );
+                        })}
+                      </SidebarMenuSub>
+                    </CollapsibleContent>
+                  </SidebarMenuItem>
+                </Collapsible>
+              )}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

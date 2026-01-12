@@ -16,7 +16,8 @@ import { nl } from "date-fns/locale";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowRightLeft, Calculator, Euro, TrendingUp, Users, Loader2, RefreshCw, AlertCircle, CheckCircle2 } from "lucide-react";
+import { ArrowRightLeft, Calculator, Euro, TrendingUp, Users, Loader2, RefreshCw, AlertCircle, CheckCircle2, ChevronRight } from "lucide-react";
+import { Link } from "wouter";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 
@@ -172,10 +173,19 @@ export default function Payouts() {
 
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500" data-testid="payouts-page">
+      {/* Breadcrumbs */}
+      <nav className="flex items-center text-sm text-muted-foreground" aria-label="Breadcrumb">
+        <Link href="/dashboard" className="hover:text-foreground transition-colors">Dashboard</Link>
+        <ChevronRight className="h-4 w-4 mx-1" />
+        <span className="text-foreground font-medium">Financieel</span>
+        <ChevronRight className="h-4 w-4 mx-1" />
+        <span className="text-foreground">Uitbetalingen</span>
+      </nav>
+
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold tracking-tight font-heading">Uitbetalingen & Omzetverdeling</h1>
-          <p className="text-muted-foreground">Revenue allocation per scherm en locatie payouts.</p>
+          <p className="text-muted-foreground">Verdeling omzet & locatie-uitbetalingen.</p>
         </div>
         <div className="flex items-center gap-2">
           <Select value={selectedMonth.toString()} onValueChange={(v) => setSelectedMonth(parseInt(v))}>
@@ -304,10 +314,18 @@ export default function Payouts() {
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                 </div>
               ) : allocations.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-32 text-muted-foreground">
+                <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
                   <AlertCircle className="h-8 w-8 mb-2" />
                   <p>Geen allocaties gevonden voor {periodLabel}.</p>
-                  <p className="text-sm">Klik op "Bereken Allocaties" om de verdeling te berekenen.</p>
+                  <p className="text-sm mb-3">Klik op "Bereken Allocaties" om de verdeling te berekenen.</p>
+                  <div className="flex gap-3 text-sm">
+                    <Link href="/placements" className="text-primary hover:underline flex items-center gap-1">
+                      Ga naar Plaatsingen <ChevronRight className="h-3 w-3" />
+                    </Link>
+                    <Link href="/advertisers" className="text-primary hover:underline flex items-center gap-1">
+                      Ga naar Adverteerders <ChevronRight className="h-3 w-3" />
+                    </Link>
+                  </div>
                 </div>
               ) : (
                 <Table>
@@ -394,9 +412,17 @@ export default function Payouts() {
                   ))}
                   {payouts.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                      <TableCell colSpan={6} className="h-32 text-center text-muted-foreground">
                         <AlertCircle className="h-6 w-6 mx-auto mb-2" />
-                        Nog geen uitbetalingen gegenereerd.
+                        <p>Nog geen uitbetalingen gegenereerd.</p>
+                        <div className="flex justify-center gap-3 text-sm mt-3">
+                          <Link href="/placements" className="text-primary hover:underline flex items-center gap-1">
+                            Ga naar Plaatsingen <ChevronRight className="h-3 w-3" />
+                          </Link>
+                          <Link href="/advertisers" className="text-primary hover:underline flex items-center gap-1">
+                            Ga naar Adverteerders <ChevronRight className="h-3 w-3" />
+                          </Link>
+                        </div>
                       </TableCell>
                     </TableRow>
                   )}
