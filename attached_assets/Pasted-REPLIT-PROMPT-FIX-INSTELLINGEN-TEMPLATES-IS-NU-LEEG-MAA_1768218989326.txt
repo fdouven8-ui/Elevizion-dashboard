@@ -1,0 +1,96 @@
+REPLIT PROMPT — FIX “INSTELLINGEN > TEMPLATES” (IS NU LEEG) + MAAK CONTRACT & EMAIL TEMPLATES ZICHTBAAR/BEWERKBAAR
+Context: In het Elevizion dashboard bestaat al een menu: Instellingen > Templates. Die pagina is nu leeg. Ook kan ik de standaard e-mails en contracten die het systeem gebruikt (of genereert/verstuurt) nergens inzien of aanpassen. Ik wil dat jij dit fixt in de bestaande pagina/route, zonder nieuwe menu’s en zonder grote refactor.
+
+DOEL (HARD):
+1) Instellingen > Templates toont altijd content:
+   - Contract templates (minimaal 4: locatie revshare, locatie fixed, adverteerder standaard, adverteerder premium)
+   - Email templates (minimaal 6: lead bevestiging, onboarding link, onboarding reminder, onboarding bevestigd, “wat nu” mail, maandrapport)
+2) Ik kan templates openen, previewen, bewerken en opslaan.
+3) De app gebruikt bij volgende acties écht deze templates (geen hardcoded teksten meer).
+4) Ik kan ook terugzien wat er verstuurd/gegenereerd is:
+   - verstuurde mails (preview exact)
+   - gegenereerde contracten (preview/download), met status draft/signed
+
+SCOPE (STRICT):
+- Gebruik de bestaande Instellingen > Templates pagina en route. Maak die werkend.
+- GEEN nieuwe secties in de sidebar.
+- Alleen minimale DB + service wrappers + UI op die bestaande pagina.
+
+STAP 1 — WAAROM IS DE PAGINA LEEG? FIX DAT EERST
+1) Zoek waarom Instellingen > Templates leeg is:
+   - Is de query/endpoint kapot?
+   - Bestaat de DB tabel niet?
+   - Is er geen seed data?
+   - Wordt er gefilterd op ‘active’ terwijl alles null is?
+2) Fix het structureel zodat het nooit leeg blijft:
+   - Voeg seed toe (migration/seed script) die default templates aanmaakt als er 0 templates zijn.
+   - Als er toch 0 templates zijn: toon empty state met knop “Standaard templates aanmaken”.
+
+STAP 2 — DATA STRUCTUUR (MINIMAAL)
+A) contract_templates:
+- id, key (unique), name, category ('location'|'advertiser'), status ('active'|'archived')
+- bodyTemplate (HTML/markdown tekst)
+- updatedAt
+B) email_templates:
+- id, key (unique), name, status ('active'|'archived')
+- subjectTemplate, bodyTemplate
+- updatedAt
+
+(Als deze tabellen al bestaan: hergebruik ze exact. Pas alleen aan wat nodig is.)
+
+STAP 3 — UI OP DE BESTAANDE PAGINA “INSTELLINGEN > TEMPLATES”
+- Voeg tabs binnen deze pagina:
+  1) Email templates
+  2) Contract templates
+  3) Verzonden emails (log)
+  4) Gegenereerde contracten (log)
+- Layout rustig:
+  - links lijst met templates
+  - rechts preview + “Bewerken” knop
+- Editor:
+  - simpele text editor/textarea is genoeg
+  - Opslaan knop met success toast
+
+STAP 4 — LOGS ZODAT IK KAN CONTROLEREN WAT ER ÉCHT GEBEURT
+A) email_logs:
+- id, templateKey, to, subjectRendered, bodyRendered, status, createdAt, relatedEntityType, relatedEntityId
+B) contract_documents:
+- id, templateKey, entityType, entityId, versionNumber, renderedContent (html) en/of pdfUrl, status ('draft'|'sent'|'signed'), createdAt
+
+STAP 5 — KOPPEL DE TEMPLATES AAN BESTAANDE FLOWS (ZONDER GROTE WIJZIGINGEN)
+1) Maak 1 centrale helper/service:
+- renderTemplate(text, data) vervangt {{placeholders}}
+2) Email sending:
+- Vervang hardcoded email teksten door email_templates lookup op key:
+  - lead_confirmation
+  - onboarding_link
+  - onboarding_reminder
+  - onboarding_completed_confirmation
+  - what_next
+  - monthly_report
+- Na versturen: schrijf altijd email_logs met gerenderde subject/body.
+3) Contract generatie:
+- Vervang hardcoded contract tekst door contract_templates lookup op key.
+- Bij generatie: sla altijd contract_documents op zodat ik het terugzie.
+
+STAP 6 — PLACEHOLDERS (LAAT ZIEN WAT IK KAN GEBRUIKEN)
+In de template detail view:
+- Toon een compacte lijst “Beschikbare velden” (geen lange uitleg), bv:
+  {{companyName}}, {{contactName}}, {{email}}, {{address}}, {{kvk}}, {{iban}}, {{revSharePct}}, {{fixedAmount}}, {{screensCount}}, {{startDate}}, {{termMonths}}
+(Neem de velden die jij al in de DB hebt; toon alleen wat echt bestaat.)
+
+ACCEPTATIECRITERIA (MOET IK DIRECT ZIEN)
+- Instellingen > Templates is niet leeg: ik zie default templates zonder handmatig DB werk.
+- Ik kan een template aanpassen en opslaan.
+- Bij het versturen van onboarding mail wordt de inhoud uit templates gehaald en komt een record in “Verzonden emails”.
+- Bij het genereren van contract komt het document terug in “Gegenereerde contracten” met preview.
+- Alles blijft werken met bestaande routes/UI; geen nieuwe sidebar items.
+
+OPLEVERING
+- Laat de gewijzigde bestanden zien:
+  - Instellingen/Templates page component
+  - API endpoints voor templates + logs
+  - seed/migration
+  - mail sender wrapper
+  - contract generator wrapper
+Geen andere delen aanpassen.

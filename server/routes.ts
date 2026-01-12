@@ -7,7 +7,9 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { z } from "zod";
 import crypto from "crypto";
-import { sql } from "drizzle-orm";
+import { sql, desc, eq } from "drizzle-orm";
+import { db } from "./db";
+import { emailLogs, contractDocuments } from "@shared/schema";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import {
@@ -6760,6 +6762,101 @@ Sitemap: ${SITE_URL}/sitemap.xml
       res.status(201).json(duplicate);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
+    }
+  });
+
+  // Seed default templates
+  app.post("/api/templates/seed-defaults", async (_req, res) => {
+    try {
+      const existingTemplates = await storage.getTemplates();
+      const existingKeys = existingTemplates.map(t => t.name);
+      
+      const defaultTemplates = [
+        // Email templates
+        { name: "lead_confirmation", category: "email", subject: "Bedankt voor je interesse - Elevizion", body: "Beste {{contactName}},\n\nBedankt voor je interesse in Elevizion! We hebben je aanvraag ontvangen en nemen zo snel mogelijk contact met je op.\n\nMet vriendelijke groet,\nTeam Elevizion" },
+        { name: "onboarding_link", category: "email", subject: "Voltooi je registratie - Elevizion", body: "Beste {{contactName}},\n\nWelkom bij Elevizion! Klik op de onderstaande link om je registratie te voltooien:\n\n{{onboardingLink}}\n\nDeze link is 7 dagen geldig.\n\nMet vriendelijke groet,\nTeam Elevizion" },
+        { name: "onboarding_reminder", category: "email", subject: "Herinnering: Voltooi je registratie - Elevizion", body: "Beste {{contactName}},\n\nWe zagen dat je registratie nog niet is voltooid. Klik op de link hieronder om verder te gaan:\n\n{{onboardingLink}}\n\nHeb je vragen? Neem gerust contact met ons op.\n\nMet vriendelijke groet,\nTeam Elevizion" },
+        { name: "onboarding_completed", category: "email", subject: "Registratie voltooid - Welkom bij Elevizion!", body: "Beste {{contactName}},\n\nGefeliciteerd! Je registratie is voltooid. Je bent nu officieel onderdeel van het Elevizion netwerk.\n\n{{nextSteps}}\n\nMet vriendelijke groet,\nTeam Elevizion" },
+        { name: "what_next", category: "email", subject: "Volgende stappen - Elevizion", body: "Beste {{contactName}},\n\nHier zijn de volgende stappen om aan de slag te gaan met Elevizion:\n\n1. {{step1}}\n2. {{step2}}\n3. {{step3}}\n\nHeb je vragen? Neem gerust contact met ons op.\n\nMet vriendelijke groet,\nTeam Elevizion" },
+        { name: "monthly_report", category: "email", subject: "Maandrapport {{month}} - Elevizion", body: "Beste {{contactName}},\n\nHierbij je maandrapport voor {{month}}:\n\n{{reportContent}}\n\nMet vriendelijke groet,\nTeam Elevizion" },
+        // Contract templates
+        { name: "location_revshare", category: "contract", subject: "Locatie Overeenkomst - Revenue Share", body: "LOCATIE OVEREENKOMST\n\nTussen:\nElevizion B.V.\nen\n{{companyName}}\n\nBetreft: Plaatsing digitaal scherm op locatie {{locationName}}\n\nVoorwaarden:\n- Revenue share: {{revSharePct}}%\n- Startdatum: {{startDate}}\n- Looptijd: {{termMonths}} maanden\n\nGetekend te {{city}}, op {{signDate}}\n\n_________________________\n{{contactName}}" },
+        { name: "location_fixed", category: "contract", subject: "Locatie Overeenkomst - Vaste Vergoeding", body: "LOCATIE OVEREENKOMST\n\nTussen:\nElevizion B.V.\nen\n{{companyName}}\n\nBetreft: Plaatsing digitaal scherm op locatie {{locationName}}\n\nVoorwaarden:\n- Maandelijkse vergoeding: €{{fixedAmount}}\n- Startdatum: {{startDate}}\n- Looptijd: {{termMonths}} maanden\n\nGetekend te {{city}}, op {{signDate}}\n\n_________________________\n{{contactName}}" },
+        { name: "advertiser_standard", category: "contract", subject: "Advertentie Overeenkomst - Standaard", body: "ADVERTENTIE OVEREENKOMST\n\nTussen:\nElevizion B.V.\nen\n{{companyName}}\n\nBetreft: Advertentieplaatsing op Elevizion netwerk\n\nVoorwaarden:\n- Pakket: Standaard\n- Maandbedrag: €{{monthlyAmount}}\n- Startdatum: {{startDate}}\n- Aantal schermen: {{screensCount}}\n\nGetekend te {{city}}, op {{signDate}}\n\n_________________________\n{{contactName}}" },
+        { name: "advertiser_premium", category: "contract", subject: "Advertentie Overeenkomst - Premium", body: "ADVERTENTIE OVEREENKOMST\n\nTussen:\nElevizion B.V.\nen\n{{companyName}}\n\nBetreft: Advertentieplaatsing op Elevizion netwerk\n\nVoorwaarden:\n- Pakket: Premium\n- Maandbedrag: €{{monthlyAmount}}\n- Startdatum: {{startDate}}\n- Aantal schermen: {{screensCount}}\n- Exclusieve plaatsing: Ja\n\nGetekend te {{city}}, op {{signDate}}\n\n_________________________\n{{contactName}}" },
+      ];
+      
+      let created = 0;
+      for (const tpl of defaultTemplates) {
+        if (!existingKeys.includes(tpl.name)) {
+          await storage.createTemplate({
+            name: tpl.name,
+            category: tpl.category,
+            subject: tpl.subject,
+            body: tpl.body,
+            isEnabled: true,
+          });
+          created++;
+        }
+      }
+      
+      res.json({ message: `${created} standaard templates aangemaakt`, created });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // EMAIL LOGS
+  // ============================================================================
+
+  app.get("/api/email-logs", async (req, res) => {
+    try {
+      const { limit = 50, offset = 0 } = req.query;
+      const logs = await db.select().from(emailLogs)
+        .orderBy(desc(emailLogs.createdAt))
+        .limit(Number(limit))
+        .offset(Number(offset));
+      res.json(logs);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/email-logs/:id", async (req, res) => {
+    try {
+      const [log] = await db.select().from(emailLogs).where(eq(emailLogs.id, req.params.id));
+      if (!log) return res.status(404).json({ message: "Email log niet gevonden" });
+      res.json(log);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // CONTRACT DOCUMENTS
+  // ============================================================================
+
+  app.get("/api/contract-documents", async (req, res) => {
+    try {
+      const { limit = 50, offset = 0 } = req.query;
+      const docs = await db.select().from(contractDocuments)
+        .orderBy(desc(contractDocuments.createdAt))
+        .limit(Number(limit))
+        .offset(Number(offset));
+      res.json(docs);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/contract-documents/:id", async (req, res) => {
+    try {
+      const [doc] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, req.params.id));
+      if (!doc) return res.status(404).json({ message: "Contract document niet gevonden" });
+      res.json(doc);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
     }
   });
 

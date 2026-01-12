@@ -1782,8 +1782,28 @@ export const emailLogs = pgTable("email_logs", {
   status: text("status").notNull().default("queued"), // queued, sent, failed
   providerMessageId: text("provider_message_id"), // Postmark MessageID
   errorMessage: text("error_message"),
+  // Rendered content for preview/audit
+  subjectRendered: text("subject_rendered"),
+  bodyRendered: text("body_rendered"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   sentAt: timestamp("sent_at"),
+});
+
+/**
+ * ContractDocuments - Track all generated contracts for auditing
+ */
+export const contractDocuments = pgTable("contract_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  templateKey: text("template_key").notNull(), // location_revshare, location_fixed, advertiser_standard, advertiser_premium
+  entityType: text("entity_type").notNull(), // advertiser, location
+  entityId: varchar("entity_id").notNull(),
+  versionNumber: integer("version_number").notNull().default(1),
+  renderedContent: text("rendered_content"), // HTML content
+  pdfUrl: text("pdf_url"), // Object storage URL if PDF generated
+  status: text("status").notNull().default("draft"), // draft, sent, signed
+  signedAt: timestamp("signed_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
 /**
@@ -1831,6 +1851,15 @@ export const insertOnboardingInviteTokenSchema = createInsertSchema(onboardingIn
 // Email & Verification Types
 export type EmailLog = typeof emailLogs.$inferSelect;
 export type InsertEmailLog = z.infer<typeof insertEmailLogSchema>;
+
+// Contract Document Schema & Types
+export const insertContractDocumentSchema = createInsertSchema(contractDocuments).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type ContractDocument = typeof contractDocuments.$inferSelect;
+export type InsertContractDocument = z.infer<typeof insertContractDocumentSchema>;
 
 export type VerificationCode = typeof verificationCodes.$inferSelect;
 export type InsertVerificationCode = z.infer<typeof insertVerificationCodeSchema>;
