@@ -33,7 +33,8 @@ import {
   Archive,
   ArchiveRestore,
   Unlink,
-  Check
+  Check,
+  RefreshCw
 } from "lucide-react";
 import {
   Command,
@@ -700,9 +701,22 @@ export default function Placements() {
                     Wissen
                   </Button>
                 )}
-                <Badge variant="secondary" className="ml-auto">
-                  {filteredAds.length} / {adsViewData?.summary.total ?? 0} ads
-                </Badge>
+                <div className="flex items-center gap-2 ml-auto">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs h-7"
+                    onClick={() => adsViewQuery.refetch()}
+                    disabled={adsViewLoading}
+                    data-testid="button-recalculate-suggestions"
+                  >
+                    <RefreshCw className={`h-3 w-3 mr-1 ${adsViewLoading ? "animate-spin" : ""}`} />
+                    Herbereken
+                  </Button>
+                  <Badge variant="secondary">
+                    {filteredAds.length} / {adsViewData?.summary.total ?? 0} ads
+                  </Badge>
+                </div>
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
