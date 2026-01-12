@@ -550,32 +550,6 @@ export async function testMoneybirdConnection(credentials?: IntegrationCredentia
   }
 }
 
-export async function testDropboxSignConnection(credentials?: IntegrationCredentials): Promise<{ success: boolean; message: string; data?: any }> {
-  const apiKey = credentials?.api_key || process.env.DROPBOX_SIGN_API_KEY;
-  
-  if (!apiKey) {
-    return { success: false, message: "API key niet geconfigureerd" };
-  }
-
-  try {
-    const response = await fetch("https://api.hellosign.com/v3/account", {
-      headers: {
-        "Authorization": `Basic ${Buffer.from(apiKey + ":").toString("base64")}`,
-        "Accept": "application/json",
-      },
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      return { success: true, message: "Verbinding succesvol", data };
-    } else {
-      const error = await response.text();
-      return { success: false, message: `API Fout: ${response.status} - ${error}` };
-    }
-  } catch (error: any) {
-    return { success: false, message: `Verbinding mislukt: ${error.message}` };
-  }
-}
 
 export async function createMoneybirdInvoice(invoiceData: {
   contactName: string;

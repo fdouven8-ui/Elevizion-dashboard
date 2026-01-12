@@ -1,0 +1,116 @@
+REPLIT PROMPT — VERWIJDER DROPBOX SIGN COMPLEET + VERVANG DOOR SIGNREQUEST (VOLLEDIGE INTEGRATIE) + RAPPORTAGE WAT JE HEBT AANGEPAST
+Context: In het Elevizion dashboard staat onder Instellingen > Integraties “Dropbox Sign”. Dit moet HELEMAAL WEG. Ik heb een SignRequest account en vanaf nu is SignRequest de enige e-sign oplossing. Overal waar contracten gemaakt/verstuurd/ondertekend worden moet dit via SignRequest lopen. Inclusief alle stappen in onboarding en alle plekken in de app waar “Dropbox Sign” of signing/logica voorkomt. Daarnaast wil ik exact kunnen zien wat je hebt aangepast en waar ik het kan vinden.
+
+SCOPE (HARD):
+- Verwijder Dropbox Sign integratie UI + backend + secrets + services + routes + labels.
+- Voeg SignRequest integratie toe in dezelfde stijl/plek (Instellingen > Integraties).
+- Integreer SignRequest end-to-end in contractflow (draft → send-for-signing → signed PDF terug).
+- Geen redesign van hele app, alleen vervanging en koppeling.
+
+A) DROPBOX SIGN: VOLLEDIG VERWIJDEREN
+1) Zoek in de hele codebase op termen en verwijder/replace:
+- "Dropbox Sign", "DropboxSign", "HelloSign", "Hello Sign", "hellosign", "dropboxsign"
+- oude API calls, clients, webhook endpoints, config, env vars, database velden
+2) Instellingen > Integraties:
+- verwijder het kaartje/section “Dropbox Sign” volledig
+- verwijder de toggle/status “Niet geconfigureerd” voor Dropbox Sign
+- verwijder “Open Dropbox Sign” link en “Test verbinding” voor Dropbox Sign
+3) Database:
+- als er signing provider velden bestaan die Dropbox/HelloSign specific zijn:
+  - migreer naar generieke velden (provider='signrequest', providerDocumentId, providerUrl, status, signedPdfUrl, etc.)
+  - zorg dat bestaande records niet kapot gaan
+
+B) SIGNREQUEST: NIEUWE INTEGRATIE (IN PLAATS VAN DROPBOX SIGN)
+1) Voeg in Instellingen > Integraties een kaart toe: “SignRequest”
+- Status: Geconfigureerd / Niet geconfigureerd
+- Input: API token instellen (maar token NIET opslaan in plaintext DB; gebruik Replit Secrets)
+- Knoppen:
+  - “Test verbinding”
+  - “Open SignRequest”
+- Laat “Laatste test” datum zien
+2) Replit Secrets / env vars:
+- SIGNREQUEST_API_TOKEN (verplicht)
+- SIGNREQUEST_SIGNER1_EMAIL (mijn Elevizion teken-email)
+- SIGNREQUEST_WEBHOOK_SECRET (alleen als nodig)
+Zorg dat de UI duidelijk aangeeft welke env vars ontbreken.
+
+C) SIGNREQUEST CLIENT + SERVICES
+1) Maak een dedicated client module:
+- signrequestClient.ts/js
+- functies:
+  - testConnection()
+  - createSigningRequest(pdfBufferOrUrl, signers, subject, message, externalId)
+  - getStatus(documentId)
+  - downloadSignedPdf(documentId)
+  - (optioneel) fetchAuditLog(documentId)
+2) Error handling:
+- nooit silent fail; return duidelijke foutmelding aan UI
+- logging in server logs met correlation id
+
+D) CONTRACT FLOW: OVERAL SIGNREQUEST GEBRUIKEN
+1) Terms gating (vereiste):
+- Contract mag alleen naar signing als algemene voorwaarden checkbox al geaccepteerd is
+- Terms acceptance moet opgeslagen worden:
+  acceptedAt, ip, userAgent, termsVersion, termsHash, entityType, entityId
+- Als niet geaccepteerd:
+  - “Verstuur ter ondertekening” knop disabled + melding “Eerst akkoord algemene voorwaarden vereist”
+2) Contract aanmaken:
+- Genereer contract uit template (A4 HTML) en maak hieruit een PDF (server-side)
+- Sla draft op in Contract Docs met:
+  provider='signrequest', status='DRAFT', draftPdfUrl
+3) Versturen ter ondertekening:
+- Start SignRequest signing flow met SEQUENTIËLE signers:
+  - Signer 1: Elevizion (SIGNREQUEST_SIGNER1_EMAIL)
+  - Signer 2: Klant (contact email)
+- Update Contract Doc:
+  status='SENT', providerDocumentId, providerUrl, sentAt
+4) Webhook status updates:
+- Endpoint: POST /api/webhooks/signrequest
+- Verwerk events:
+  signed => download signed pdf + audit trail => status='SIGNED', signedAt, signedPdfUrl, auditLogUrl/content
+  declined/expired/cancelled => status overeenkomstig
+- Idempotent (zelfde event meerdere keren mag niet breken)
+
+E) UI: CONTRACT DOCS + CONTRACTEN PAGINA’S
+1) Contract Docs detail:
+- status badge, timestamps
+- knop “Open SignRequest” (providerUrl)
+- download signed PDF (signedPdfUrl)
+- knop “Verstuur ter ondertekening” (alleen als DRAFT en terms accepted)
+2) Overal waar nu “ondertekenen” of “send contract” staat:
+- vervang teksten: “Dropbox Sign” -> “SignRequest”
+- vervang links/CTA’s
+
+F) ONBOARDING INTEGRATIE (AUTOMATISCH WANNEER NODIG)
+1) In onboarding flows (adverteerder en schermlocatie):
+- Zodra onboarding afgerond is EN terms accepted = true:
+  - maak contract draft
+  - (optioneel) toon knop “Verstuur contract ter ondertekening”
+- Als jij wilt dat het automatisch verstuurd wordt:
+  - voeg setting toe in Instellingen > Automatiseringen:
+    “Contract automatisch versturen na onboarding” (default OFF)
+  - als ON => start signing automatisch
+2) Zorg dat dit niet “spammy” is:
+- verstuur slechts 1x, met duidelijke status
+
+G) RAPPORTAGE: LAAT PRECIES ZIEN WAT JE HEBT AANGEPAST
+Na implementatie moet je in de chat outputten:
+1) Een lijst met alle gewijzigde/nieuwe bestanden (pad + korte omschrijving)
+2) Welke routes/endpoints zijn verwijderd (Dropbox/HelloSign) en welke toegevoegd (SignRequest)
+3) Welke database migraties zijn gedaan (tabel/velden)
+4) Waar in de UI ik het terugzie:
+- Instellingen > Integraties: SignRequest kaart
+- Contract Docs: signing status + download
+- Onboarding: terms gating + contract trigger
+5) Welke environment variables ik moet instellen (exacte namen)
+
+ACCEPTATIECRITERIA (MOET KUNNEN)
+1) Dropbox Sign bestaat nergens meer in UI of code (zoekterm “dropbox” geeft niets relevants).
+2) SignRequest kaart zichtbaar + test verbinding werkt.
+3) Contract: DRAFT -> SENT -> SIGNED werkt end-to-end, signed PDF komt terug in Contract Docs.
+4) Zonder terms accepted kan ik niet versturen.
+5) Alle teksten/knoppen verwijzen naar SignRequest.
+
+LET OP
+- Verander niet de hele app. Houd het bij deze vervanging en wiring.
+- Als er al een generieke signing provider laag bestaat: gebruik die, maar zet provider op signrequest en verwijder dropbox provider.

@@ -41,10 +41,10 @@ import {
   getIntegrationStatus,
   testYodeckConnection,
   testMoneybirdConnection,
-  testDropboxSignConnection,
   syncYodeckScreens,
   getYodeckConfigStatus,
 } from "./integrations";
+import { testConnection as testSignRequestConnection } from "./services/signrequestClient";
 import {
   isEmailConfigured,
   sendContractEmail,
@@ -9239,7 +9239,7 @@ We wensen je een succesvolle maand!`
   // INTEGRATION CONFIGURATION
   // ============================================================================
 
-  const VALID_SERVICES = ["yodeck", "moneybird", "dropbox_sign"];
+  const VALID_SERVICES = ["yodeck", "moneybird", "signrequest"];
 
   app.get("/api/integrations", requirePermission("manage_integrations"), async (req, res) => {
     try {
@@ -9358,8 +9358,8 @@ We wensen je een succesvolle maand!`
 
         if (service === "moneybird") {
           testResult = await testMoneybirdConnection(credentials);
-        } else if (service === "dropbox_sign") {
-          testResult = await testDropboxSignConnection(credentials);
+        } else if (service === "signrequest") {
+          testResult = await testSignRequestConnection();
         }
       }
 
@@ -9438,7 +9438,7 @@ We wensen je een succesvolle maand!`
       const result: Record<string, Record<string, boolean>> = {
         yodeck: { api_key: false },
         moneybird: { access_token: false, admin_id: false },
-        dropbox_sign: { api_key: false },
+        signrequest: { api_token: false, signer_email: false },
       };
       
       for (const config of configs) {

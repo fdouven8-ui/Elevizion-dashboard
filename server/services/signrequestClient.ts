@@ -233,3 +233,41 @@ export function getElevizionSignerEmail(): string {
 export function isConfigured(): boolean {
   return !!(API_TOKEN && SIGNER1_EMAIL);
 }
+
+export async function testConnection(): Promise<{
+  success: boolean;
+  message: string;
+  data?: any;
+}> {
+  if (!API_TOKEN) {
+    return { success: false, message: "API token niet geconfigureerd (SIGNREQUEST_API_TOKEN)" };
+  }
+  if (!SIGNER1_EMAIL) {
+    return { success: false, message: "Signer email niet geconfigureerd (SIGNREQUEST_SIGNER1_EMAIL)" };
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}/teams/`, {
+      method: "GET",
+      headers: getHeaders(),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return { 
+        success: true, 
+        message: "Verbinding succesvol", 
+        data: { 
+          configured: true, 
+          signerEmail: SIGNER1_EMAIL,
+          teams: Array.isArray(data) ? data.length : (data.results?.length || 0)
+        } 
+      };
+    } else {
+      const error = await response.text();
+      return { success: false, message: `API Fout: ${response.status} - ${error}` };
+    }
+  } catch (error: any) {
+    return { success: false, message: `Verbinding mislukt: ${error.message}` };
+  }
+}
