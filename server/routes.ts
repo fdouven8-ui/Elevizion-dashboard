@@ -9,7 +9,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { sql, desc, eq } from "drizzle-orm";
 import { db } from "./db";
-import { emailLogs, contractDocuments } from "@shared/schema";
+import { emailLogs, contractDocuments, termsAcceptance } from "@shared/schema";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import {
@@ -7391,6 +7391,302 @@ We wensen je een succesvolle maand!`
       const { getContractDocuments } = await import("./services/contractTemplateService");
       const docs = await getContractDocuments(req.params.entityType, req.params.entityId);
       res.json(docs);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Check terms acceptance for entity
+  app.get("/api/terms-acceptance/:entityType/:entityId", async (req, res) => {
+    try {
+      const { entityType, entityId } = req.params;
+      const [acceptance] = await db.select().from(termsAcceptance)
+        .where(sql`entity_type = ${entityType} AND entity_id = ${entityId}`)
+        .orderBy(desc(termsAcceptance.acceptedAt))
+        .limit(1);
+      
+      res.json({ 
+        accepted: !!acceptance, 
+        acceptance: acceptance || null 
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Record terms acceptance
+  app.post("/api/terms-acceptance", async (req, res) => {
+    try {
+      const { entityType, entityId, termsVersion, termsHash, source } = req.body;
+      
+      if (!entityType || !entityId || !termsVersion) {
+        return res.status(400).json({ message: "entityType, entityId en termsVersion zijn verplicht" });
+      }
+
+      const ip = req.ip || req.headers["x-forwarded-for"] || "unknown";
+      const userAgent = req.headers["user-agent"] || "unknown";
+
+      const [acceptance] = await db.insert(termsAcceptance).values({
+        entityType,
+        entityId,
+        termsVersion,
+        termsHash: termsHash || null,
+        source: source || "onboarding_checkbox",
+        ip: String(ip),
+        userAgent: String(userAgent),
+      }).returning();
+
+      res.status(201).json(acceptance);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Send contract for signing via SignRequest
+  app.post("/api/contract-documents/:id/send-for-signing", async (req, res) => {
+    try {
+      const { id } = req.params;
+      
+      // Get contract document
+      const [doc] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, id));
+      if (!doc) {
+        return res.status(404).json({ message: "Contract document niet gevonden" });
+      }
+      
+      if (doc.status !== "draft" && doc.signStatus !== "none") {
+        return res.status(400).json({ message: "Contract is al verzonden of ondertekend" });
+      }
+
+      // Check terms acceptance
+      const [termsAcceptanceRecord] = await db.select().from(termsAcceptance)
+        .where(sql`entity_type = ${doc.entityType} AND entity_id = ${doc.entityId}`)
+        .orderBy(desc(termsAcceptance.acceptedAt))
+        .limit(1);
+      
+      if (!termsAcceptanceRecord) {
+        return res.status(400).json({ 
+          message: "Algemene voorwaarden moeten eerst geaccepteerd worden",
+          code: "TERMS_NOT_ACCEPTED"
+        });
+      }
+
+      // Get entity details for signer info
+      let customerEmail = "";
+      let customerName = "";
+      
+      if (doc.entityType === "advertiser") {
+        const advertiser = await storage.getAdvertiser(doc.entityId);
+        if (!advertiser) {
+          return res.status(404).json({ message: "Adverteerder niet gevonden" });
+        }
+        customerEmail = advertiser.email || advertiser.contactEmail || "";
+        customerName = advertiser.primaryContactName || advertiser.contactName || advertiser.companyName || "";
+      } else if (doc.entityType === "location") {
+        const location = await storage.getLocation(doc.entityId);
+        if (!location) {
+          return res.status(404).json({ message: "Locatie niet gevonden" });
+        }
+        customerEmail = location.email || "";
+        customerName = location.contactName || location.name || "";
+      }
+
+      if (!customerEmail) {
+        return res.status(400).json({ message: "Klant heeft geen e-mailadres" });
+      }
+
+      // Generate PDF from HTML content
+      const { generateContractPdf } = await import("./services/contractPdfService");
+      const pdfBuffer = await generateContractPdf(doc.renderedContent || "");
+
+      // Create sign request
+      const { createSignRequest, getElevizionSignerEmail } = await import("./services/signrequestClient");
+      const elevizionEmail = getElevizionSignerEmail();
+
+      const signResult = await createSignRequest({
+        pdfBuffer,
+        filename: `contract-${doc.id}.pdf`,
+        signers: [
+          { email: elevizionEmail, firstName: "Elevizion", order: 0 },
+          { email: customerEmail, firstName: customerName, order: 1 },
+        ],
+        subject: `Contract ter ondertekening: ${doc.templateKey}`,
+        message: "Graag uw handtekening zetten op bijgaand contract.",
+        externalId: doc.id,
+      });
+
+      if (!signResult.success) {
+        return res.status(500).json({ message: signResult.error || "SignRequest aanmaken mislukt" });
+      }
+
+      // Update contract document with SignRequest info
+      await db.update(contractDocuments)
+        .set({
+          status: "sent",
+          signProvider: "signrequest",
+          signrequestDocumentId: signResult.signrequestId,
+          signrequestUrl: signResult.signrequestUrl,
+          signStatus: "sent",
+          sentAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(contractDocuments.id, id));
+
+      res.json({ 
+        message: "Contract verzonden ter ondertekening",
+        signrequestId: signResult.signrequestId,
+        signrequestUrl: signResult.signrequestUrl,
+      });
+    } catch (error: any) {
+      console.error("[send-for-signing] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // SignRequest webhook endpoint
+  app.post("/api/webhooks/signrequest", async (req, res) => {
+    try {
+      const payload = req.body;
+      console.log("[SignRequest Webhook] Received:", JSON.stringify(payload).substring(0, 500));
+
+      const { document, status, uuid } = payload;
+      const externalId = payload.external_id || document?.external_id;
+
+      if (!externalId) {
+        console.warn("[SignRequest Webhook] No external_id found in payload");
+        return res.status(200).json({ received: true, warning: "no external_id" });
+      }
+
+      // Find contract document
+      const [doc] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, externalId));
+      if (!doc) {
+        console.warn("[SignRequest Webhook] Contract document not found:", externalId);
+        return res.status(200).json({ received: true, warning: "document not found" });
+      }
+
+      // Map SignRequest status codes
+      let signStatus = doc.signStatus || "sent";
+      let docStatus = doc.status;
+      let signedAt: Date | null = null;
+
+      // SignRequest status codes: si = signed, de = declined, ca = cancelled, ex = expired
+      if (status === "si" || payload.status === "signed") {
+        signStatus = "signed";
+        docStatus = "signed";
+        signedAt = new Date();
+        console.log("[SignRequest Webhook] Document signed:", externalId);
+      } else if (status === "de" || payload.status === "declined") {
+        signStatus = "declined";
+        docStatus = "declined";
+        console.log("[SignRequest Webhook] Document declined:", externalId);
+      } else if (status === "ca" || payload.status === "cancelled") {
+        signStatus = "cancelled";
+        docStatus = "cancelled";
+        console.log("[SignRequest Webhook] Document cancelled:", externalId);
+      } else if (status === "ex" || payload.status === "expired") {
+        signStatus = "expired";
+        docStatus = "expired";
+        console.log("[SignRequest Webhook] Document expired:", externalId);
+      } else if (status === "vi" || payload.status === "viewing") {
+        signStatus = "signing";
+        console.log("[SignRequest Webhook] Document being viewed:", externalId);
+      }
+
+      // Download signed PDF if signed
+      let signedPdfUrl: string | null = null;
+      if (signStatus === "signed" && payload.pdf) {
+        try {
+          const { downloadSignedPdf } = await import("./services/signrequestClient");
+          const pdfResult = await downloadSignedPdf(doc.signrequestDocumentId || uuid);
+          if (pdfResult.success && pdfResult.pdfBuffer) {
+            // Store PDF in object storage
+            const objectStorage = new ObjectStorageService();
+            const storagePath = `.private/contracts/signed-${doc.id}.pdf`;
+            await objectStorage.write(storagePath, pdfResult.pdfBuffer, {
+              contentType: "application/pdf",
+            });
+            signedPdfUrl = storagePath;
+            console.log("[SignRequest Webhook] Signed PDF stored:", storagePath);
+          }
+        } catch (pdfError) {
+          console.error("[SignRequest Webhook] Failed to download signed PDF:", pdfError);
+        }
+      }
+
+      // Update contract document
+      const updateData: any = {
+        signStatus,
+        status: docStatus,
+        updatedAt: new Date(),
+      };
+      if (signedAt) updateData.signedAt = signedAt;
+      if (signedPdfUrl) updateData.signedPdfUrl = signedPdfUrl;
+
+      await db.update(contractDocuments)
+        .set(updateData)
+        .where(eq(contractDocuments.id, externalId));
+
+      res.status(200).json({ received: true, status: signStatus });
+    } catch (error: any) {
+      console.error("[SignRequest Webhook] Error:", error);
+      res.status(200).json({ received: true, error: error.message });
+    }
+  });
+
+  // Get signing status for a contract
+  app.get("/api/contract-documents/:id/signing-status", async (req, res) => {
+    try {
+      const [doc] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, req.params.id));
+      if (!doc) {
+        return res.status(404).json({ message: "Contract document niet gevonden" });
+      }
+
+      // If we have a SignRequest ID, fetch fresh status
+      if (doc.signrequestDocumentId && doc.signStatus !== "signed") {
+        const { getSignRequestStatus } = await import("./services/signrequestClient");
+        const statusResult = await getSignRequestStatus(doc.signrequestDocumentId);
+        
+        if (statusResult.success) {
+          return res.json({
+            signStatus: doc.signStatus,
+            signrequestUrl: doc.signrequestUrl,
+            sentAt: doc.sentAt,
+            signedAt: doc.signedAt,
+            signedPdfUrl: doc.signedPdfUrl,
+            liveStatus: statusResult,
+          });
+        }
+      }
+
+      res.json({
+        signStatus: doc.signStatus || "none",
+        signrequestUrl: doc.signrequestUrl,
+        sentAt: doc.sentAt,
+        signedAt: doc.signedAt,
+        signedPdfUrl: doc.signedPdfUrl,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Download signed PDF
+  app.get("/api/contract-documents/:id/signed-pdf", async (req, res) => {
+    try {
+      const [doc] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, req.params.id));
+      if (!doc) {
+        return res.status(404).json({ message: "Contract document niet gevonden" });
+      }
+
+      if (!doc.signedPdfUrl) {
+        return res.status(404).json({ message: "Geen getekende PDF beschikbaar" });
+      }
+
+      const objectStorage = new ObjectStorageService();
+      const pdfBuffer = await objectStorage.read(doc.signedPdfUrl);
+      
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="contract-${doc.id}-signed.pdf"`);
+      res.send(pdfBuffer);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

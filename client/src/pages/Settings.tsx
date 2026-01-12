@@ -1449,6 +1449,74 @@ function UsersManagementTab({ users, queryClient, toast }: { users: UserRole[]; 
   );
 }
 
+function ContractSendButton({ docId, entityType, entityId }: { docId: string; entityType: string; entityId: string }) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [isLoading, setIsLoading] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    async function checkTerms() {
+      try {
+        const res = await apiRequest("GET", `/api/terms-acceptance/${entityType}/${entityId}`);
+        const data = await res.json();
+        setTermsAccepted(data.accepted);
+      } catch {
+        setTermsAccepted(false);
+      }
+    }
+    checkTerms();
+  }, [entityType, entityId]);
+
+  const handleSend = async () => {
+    if (!termsAccepted) {
+      toast({ 
+        title: "Algemene voorwaarden niet geaccepteerd",
+        description: "De klant moet eerst akkoord gaan met de algemene voorwaarden.",
+        variant: "destructive" 
+      });
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const res = await apiRequest("POST", `/api/contract-documents/${docId}/send-for-signing`);
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.message || "Fout bij verzenden");
+      }
+
+      toast({ title: "Contract verzonden ter ondertekening" });
+      queryClient.invalidateQueries({ queryKey: ["/api/contract-documents"] });
+    } catch (error: any) {
+      toast({ 
+        title: "Fout bij verzenden", 
+        description: error.message,
+        variant: "destructive" 
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  if (termsAccepted === null) {
+    return <Button variant="outline" size="sm" disabled><RefreshCw className="h-4 w-4 animate-spin" /></Button>;
+  }
+
+  return (
+    <Button 
+      variant="outline" 
+      size="sm" 
+      onClick={handleSend}
+      disabled={isLoading || !termsAccepted}
+      title={!termsAccepted ? "Algemene voorwaarden niet geaccepteerd" : "Verstuur ter ondertekening"}
+    >
+      {isLoading ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Mail className="h-4 w-4" />}
+    </Button>
+  );
+}
+
 export default function Settings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -2384,7 +2452,7 @@ export default function Settings() {
                   Gegenereerde Documenten
                 </CardTitle>
                 <CardDescription>
-                  Documenten gegenereerd uit templates en hun status
+                  Documenten gegenereerd uit templates en hun ondertekeningsstatus
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -2406,35 +2474,78 @@ export default function Settings() {
                         <TableHead>Template</TableHead>
                         <TableHead>Versie</TableHead>
                         <TableHead>Status</TableHead>
-                        <TableHead></TableHead>
+                        <TableHead>Ondertekening</TableHead>
+                        <TableHead>Acties</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {contractDocs.map((doc: any) => (
-                        <TableRow key={doc.id}>
-                          <TableCell className="text-sm">
-                            {new Date(doc.createdAt).toLocaleString("nl-NL")}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{doc.templateKey}</Badge>
-                          </TableCell>
-                          <TableCell>v{doc.versionNumber}</TableCell>
-                          <TableCell>
-                            <Badge variant={doc.status === "signed" ? "default" : doc.status === "sent" ? "secondary" : "outline"}>
-                              {doc.status === "draft" ? "Concept" : doc.status === "sent" ? "Verzonden" : "Ondertekend"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {doc.pdfUrl && (
-                              <Button variant="ghost" size="sm" asChild>
-                                <a href={doc.pdfUrl} target="_blank" rel="noopener noreferrer">
-                                  <ExternalLink className="h-4 w-4" />
-                                </a>
-                              </Button>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                      {contractDocs.map((doc: any) => {
+                        const signStatusLabel: Record<string, string> = {
+                          none: "-",
+                          sent: "Verzonden",
+                          signing: "Bezig...",
+                          signed: "Getekend",
+                          declined: "Afgewezen",
+                          expired: "Verlopen",
+                          cancelled: "Geannuleerd",
+                        };
+                        const signStatusVariant: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
+                          none: "outline",
+                          sent: "secondary",
+                          signing: "secondary",
+                          signed: "default",
+                          declined: "destructive",
+                          expired: "destructive",
+                          cancelled: "outline",
+                        };
+                        return (
+                          <TableRow key={doc.id}>
+                            <TableCell className="text-sm">
+                              {new Date(doc.createdAt).toLocaleString("nl-NL")}
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{doc.templateKey}</Badge>
+                            </TableCell>
+                            <TableCell>v{doc.versionNumber}</TableCell>
+                            <TableCell>
+                              <Badge variant={doc.status === "signed" ? "default" : doc.status === "sent" ? "secondary" : "outline"}>
+                                {doc.status === "draft" ? "Concept" : doc.status === "sent" ? "Verzonden" : doc.status === "signed" ? "Ondertekend" : doc.status}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={signStatusVariant[doc.signStatus || "none"]}>
+                                {signStatusLabel[doc.signStatus || "none"]}
+                              </Badge>
+                              {doc.signedAt && (
+                                <span className="text-xs text-muted-foreground ml-2">
+                                  {new Date(doc.signedAt).toLocaleDateString("nl-NL")}
+                                </span>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex gap-1">
+                                {doc.signrequestUrl && (
+                                  <Button variant="ghost" size="sm" asChild title="Open in SignRequest">
+                                    <a href={doc.signrequestUrl} target="_blank" rel="noopener noreferrer">
+                                      <ExternalLink className="h-4 w-4" />
+                                    </a>
+                                  </Button>
+                                )}
+                                {doc.signedPdfUrl && (
+                                  <Button variant="ghost" size="sm" asChild title="Download getekende PDF">
+                                    <a href={`/api/contract-documents/${doc.id}/signed-pdf`} download>
+                                      <Download className="h-4 w-4" />
+                                    </a>
+                                  </Button>
+                                )}
+                                {doc.status === "draft" && !doc.signStatus?.match(/sent|signing|signed/) && (
+                                  <ContractSendButton docId={doc.id} entityType={doc.entityType} entityId={doc.entityId} />
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 )}

@@ -110,4 +110,27 @@ Core entities include: **Entities** (unified model for ADVERTISER + SCREEN), Sit
 - `contract_documents` table stores rendered HTML with versioning
 - API endpoints: `/api/contract-documents/generate`, `/api/contract-documents/:id/status`
 - Full HTML output with Elevizion styling and signature blocks
-- Status workflow: draft → sent → signed
+- Status workflow: draft → sent → signed → declined/expired/cancelled
+
+### SignRequest E-Signing Integration (Jan 2026)
+- **Digital contract signing** via SignRequest API
+- **Sequential signing flow**: Elevizion signs first, then customer
+- **Terms acceptance check**: Contracts can only be sent if `terms_acceptance` record exists
+- **Database tables**:
+  - `contract_documents`: Extended with `signProvider`, `signrequestDocumentId`, `signrequestUrl`, `signStatus`, `signedPdfUrl`, `signedLogUrl`, `sentAt`
+  - `terms_acceptance`: Tracks entity acceptance of general terms (entityType, entityId, acceptedAt, ip, userAgent, termsVersion, termsHash, source)
+- **Services**:
+  - `signrequestClient.ts`: API client for creating sign requests, checking status, downloading signed PDFs
+  - `contractPdfService.ts`: HTML→PDF generation using Puppeteer (preserves branding/layout)
+- **API endpoints**:
+  - `POST /api/contract-documents/:id/send-for-signing`: Send contract for e-signing
+  - `POST /api/webhooks/signrequest`: Webhook for status updates (signed, declined, expired)
+  - `GET /api/contract-documents/:id/signing-status`: Check current signing status
+  - `GET /api/contract-documents/:id/signed-pdf`: Download signed PDF
+  - `GET /api/terms-acceptance/:entityType/:entityId`: Check terms acceptance
+  - `POST /api/terms-acceptance`: Record terms acceptance
+- **UI** (Settings → Templates → Gegenereerde Docs):
+  - Sign status badges (Verzonden, Bezig, Getekend, Afgewezen, Verlopen)
+  - "Verstuur ter ondertekening" button (disabled if terms not accepted)
+  - "Open SignRequest" link, "Download getekende PDF" button
+- **Secrets**: `SIGNREQUEST_API_TOKEN`, `SIGNREQUEST_SIGNER1_EMAIL`
