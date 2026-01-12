@@ -6,7 +6,8 @@
 import { db } from "../db";
 import { templates, emailLogs } from "@shared/schema";
 import { eq } from "drizzle-orm";
-import { sendEmail, buildEmailHtml } from "../email";
+import { sendEmail } from "../email";
+import { renderEmail } from "./renderEngine";
 
 interface TemplateEmailParams {
   templateKey: string;
@@ -81,7 +82,7 @@ export async function sendTemplateEmail(params: TemplateEmailParams): Promise<Te
       return { success: false, message: `Template is disabled: ${templateKey}`, logId: log?.id };
     }
 
-    // Render subject and body
+    // Render subject and body using local placeholder renderer
     const renderedSubject = renderTemplate(template.subject || '', data);
     const renderedBody = renderTemplate(template.body, data);
 
@@ -100,18 +101,18 @@ export async function sendTemplateEmail(params: TemplateEmailParams): Promise<Te
       entityId: entityId || null,
     }).returning();
 
-    // Build email using shared helper (single source of truth)
-    const emailContent = buildEmailHtml({
+    // Build email using centralized render engine (single source of truth)
+    const emailContent = await renderEmail({
       subject: renderedSubject,
-      bodyText: renderedBody,
+      body: renderedBody,
       contactName,
     });
 
     const result = await sendEmail({
       to,
-      subject: renderedSubject,
-      html: emailContent.html,
-      text: emailContent.text,
+      subject: emailContent.subjectRendered,
+      html: emailContent.finalHtmlRendered,
+      text: emailContent.textRendered,
       templateKey,
       entityType,
       entityId,

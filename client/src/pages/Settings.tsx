@@ -2668,8 +2668,23 @@ export default function Settings() {
                         </div>
                       )}
                       
-                      {/* Contract/HTML preview */}
-                      {previewResult.format === "html" && (
+                      {/* Contract A4 preview with full wrapper */}
+                      {previewResult.format === "contract" && previewResult.fullHtml && (
+                        <div className="space-y-2">
+                          <Label>Contract Preview (A4 formaat):</Label>
+                          <div className="bg-gray-200 rounded-lg p-4 flex justify-center overflow-auto">
+                            <iframe
+                              srcDoc={previewResult.fullHtml}
+                              className="bg-white border rounded shadow-lg w-[794px] h-[600px]"
+                              title="Contract Preview"
+                              sandbox="allow-same-origin"
+                            />
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Legacy HTML preview (without wrapper) */}
+                      {previewResult.format === "html" && !previewResult.fullHtml && (
                         <div>
                           <Label>Inhoud:</Label>
                           <div 

@@ -1,0 +1,115 @@
+REPLIT MASTER FIX — TEMPLATES/EMAILS/CONTRACTS 1:1 PREVIEW = REAL OUTPUT (PERFECT, PRODUCTIE-KLAAR)
+Context: Elevizion Dashboard. Templates module bestaat (Instellingen > Templates, Email Logs, Contract Docs). Previews werken half en zien er niet professioneel uit (textarea-achtig). Ik wil dat dit PERFECT wordt: preview moet EXACT hetzelfde zijn als wat daadwerkelijk wordt verstuurd (email) of gegenereerd/ondertekend (contract). Geen nep-preview. Alles moet consistent, mooi en betrouwbaar.
+
+HARD REQUIREMENTS (NIET ONDERHANDELBAAR)
+1) ONE SOURCE OF TRUTH: er is 1 render-pipeline die gebruikt wordt voor:
+   - Template Preview
+   - daadwerkelijke Email verzending
+   - Email Logs (opslaan van exact verstuurde HTML)
+   - Contract generatie (draft/sent/signed)
+   - Contract Docs (opslaan van exact document)
+2) Geen textarea-preview meer als “main”. Preview is een echte viewer met HTML rendering:
+   - Email: “email client” look (600px), desktop/mobile toggle
+   - Contract: “A4 document” look, print-ready
+3) Templates hebben expliciet:
+   - templateType: email | contract | whatsapp | internal | invoice (invoice alleen als interne tekst, geen Moneybird layout)
+   - format: html | text
+4) Logging is exact:
+   - Email Logs bevat finalHtmlRendered (inclusief wrapper) + subjectRendered + to/from
+   - Contract Docs bevat finalHtmlRendered (print-ready) en/of pdfUrl + status
+5) Elke knop werkt met duidelijke feedback:
+   - Preview genereren, Opslaan, Standaard templates, Testmail versturen
+   - Loading states + succes + error toast (geen silent fails)
+6) Alles moet er professioneel uitzien:
+   - nette typografie, witruimte, headings, bullets, button-styling
+   - geen “one-liner contracten” in preview; templates moeten basis-structuur hebben.
+
+STAP 1 — REFACTOR ZONDER GROTE REBUILD: CENTRAL RENDER ENGINE
+Maak een nieuwe module (of service) met 2 functies:
+A) renderEmail({templateKey, data}) -> {subjectRendered, finalHtmlRendered, textRendered(optional)}
+   - finalHtmlRendered = WRAPPER + bodyHtml
+   - wrapper = table-based email layout, max-width 600px, inline CSS, header “Elevizion”, footer met KvK/website/support email
+B) renderContract({templateKey, data}) -> {title, finalHtmlRendered, pdf(optional)}
+   - finalHtmlRendered = A4 print layout wrapper + bodyHtml
+   - A4 wrapper: width ~794px, padding 40px, line-height 1.5, duidelijke headings, ondertekenblok
+Gebruik deze engine OVERAL. Geen losse renderers in UI.
+
+STAP 2 — TEMPLATE BODY NORMALISATIE (TEXT -> HTML)
+- Als template.format='text':
+  - Convert naar HTML:
+    - lege regels -> nieuwe <p>
+    - regels -> <br/>
+- Als 'html': gebruik direct
+- Sanitize output: geen scripts, geen onveilige tags.
+
+STAP 3 — PREVIEW UI (PERFECT LOOK)
+In Instellingen > Templates modal:
+- Toon header met:
+  - Template key + type + last updated
+- Toon subject (voor email) als echte onderwerpregel
+- Viewer:
+  - iframe srcDoc=finalHtmlRendered (email/contract)
+- Toggles:
+  - Desktop (600px) / Mobile (360px) voor email
+  - “Raw” tab (optioneel) met textarea alleen voor debug, niet default
+- Geen scrollbars-in-textarea; scroll in viewer.
+
+STAP 4 — EMAIL VERZENDING MOET IDENTIEK ZIJN AAN PREVIEW
+- In mail-sender code:
+  - gebruik renderEmail() output finalHtmlRendered
+  - verstuur die exact
+- Log direct na send:
+  - subjectRendered, finalHtmlRendered, to, from, templateKey, entity link
+Email Logs detail view:
+  - render finalHtmlRendered in dezelfde viewer (iframe)
+  - knop “Resend” gebruikt dezelfde gelogde finalHtmlRendered (of rerender met dezelfde data snapshot)
+
+STAP 5 — CONTRACT GENERATIE MOET IDENTIEK ZIJN AAN PREVIEW
+- Contract draft generation:
+  - gebruik renderContract() output finalHtmlRendered
+  - sla op in Contract Docs als draft (met data snapshot)
+- Preview contract in Contract Docs:
+  - render finalHtmlRendered in dezelfde A4 viewer
+- Als signing/PDF bestaat:
+  - pdfUrl opslaan en download knop tonen
+- Versiebeheer: signed docs read-only; nieuwe versie = clone.
+
+STAP 6 — DEFAULT TEMPLATES MOETEN MOOI ZIJN (NIET “ONE LINER”)
+- Update de standaard contract templates naar nette structuur met headings en paragrafen:
+  - Titel
+  - Partijen
+  - Diensten/pakket
+  - Looptijd/opzegging
+  - Betaling
+  - Aansprakelijkheid/voorwaarden (kort)
+  - Ondertekening
+- Update standaard email templates naar nette mail met:
+  - korte intro
+  - duidelijke CTA button (“Gegevens invullen”, “Bekijk rapport”, etc.)
+  - footer
+Gebruik placeholders {{companyName}}, {{onboardingLink}}, {{startDate}}, {{monthlyAmount}}, etc.
+
+STAP 7 — TEMPLATE CENTER DATA EN KNOPPEN FIXEN
+- “Standaard Templates” knop:
+  - seed defaults idempotent
+  - error handling + toast
+  - auto refresh list
+- “Testmail naar mij” knop:
+  - gebruikt renderEmail() en verstuurt exact dezelfde HTML als preview
+
+ACCEPTATIECRITERIA (MOET IK KUNNEN AFVINKEN)
+1) Email template preview ziet eruit als echte mail (mooie layout) en EXACT dezelfde mail komt aan bij ontvanger.
+2) Email Logs toont EXACT wat verstuurd is in dezelfde viewer.
+3) Contract template preview ziet eruit als A4 document (professioneel) en Contract Docs toont exact dezelfde output.
+4) Geen textarea als default preview.
+5) Alle knoppen werken (seed, save, preview, testmail) met duidelijke feedback.
+6) Niets is “half”: als iets faalt zie ik de error direct in UI.
+
+OUTPUT
+- Geef een lijst van gewijzigde bestanden + korte uitleg:
+  - render engine module
+  - preview modal/viewer component
+  - mail sender wrapper
+  - email logs detail renderer
+  - contract generator + contract docs renderer
+Stop pas als alle acceptatiecriteria werken in de app.

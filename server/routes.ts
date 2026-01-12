@@ -51,9 +51,9 @@ import {
   sendSepaEmail,
   sendEmail,
   baseEmailTemplate,
-  buildEmailHtml,
   type BodyBlock,
 } from "./email";
+import { renderEmail, renderContract } from "./services/renderEngine";
 import {
   generateSigningToken,
   hashToken,
@@ -6790,34 +6790,52 @@ Sitemap: ${SITE_URL}/sitemap.xml
         renderedSubject = renderedSubject.replace(new RegExp(placeholder.replace(/[{}]/g, "\\$&"), "g"), value);
       }
       
-      // Determine format and build full email preview for email templates
+      // Determine format and build full preview using renderEngine
       const isEmailTemplate = template.category === "email" || template.category === "whatsapp";
       const isContractTemplate = template.category === "contract";
       
       if (isEmailTemplate) {
-        // Build email using shared helper (same as sendTemplateEmail)
-        const contactName = mergedData.contactName || mergedData.contact_name || "klant";
-        const fullEmail = buildEmailHtml({
+        // Build email using centralized render engine (single source of truth)
+        const emailResult = await renderEmail({
           subject: renderedSubject,
-          bodyText: renderedBody,
-          contactName,
+          body: renderedBody,
+          data: mergedData,
+          contactName: mergedData.contactName || mergedData.contact_name,
         });
         
         res.json({
-          subject: renderedSubject,
-          body: renderedBody,
-          fullHtml: fullEmail.html,
-          plainText: fullEmail.text,
+          subject: emailResult.subjectRendered,
+          body: emailResult.bodyRendered,
+          fullHtml: emailResult.finalHtmlRendered,
+          plainText: emailResult.textRendered,
           format: "email",
           placeholdersUsed: template.placeholders,
           dataProvided: mergedData,
           isDemo: Object.keys(data).length === 0,
         });
+      } else if (isContractTemplate) {
+        // Build contract using centralized render engine
+        const contractResult = await renderContract({
+          title: renderedSubject,
+          body: renderedBody,
+          data: mergedData,
+        });
+        
+        res.json({
+          subject: contractResult.title,
+          body: contractResult.bodyRendered,
+          fullHtml: contractResult.finalHtmlRendered,
+          format: "contract",
+          placeholdersUsed: template.placeholders,
+          dataProvided: mergedData,
+          isDemo: Object.keys(data).length === 0,
+        });
       } else {
+        // Other template types (internal, invoice, etc) - render as plain text
         res.json({
           subject: renderedSubject,
           body: renderedBody,
-          format: isContractTemplate ? "html" : "text",
+          format: "text",
           placeholdersUsed: template.placeholders,
           dataProvided: mergedData,
           isDemo: Object.keys(data).length === 0,
@@ -6858,18 +6876,286 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const existingKeys = existingTemplates.map(t => t.name);
       
       const defaultTemplates = [
-        // Email templates
-        { name: "lead_confirmation", category: "email", subject: "Bedankt voor je interesse - Elevizion", body: "Beste {{contactName}},\n\nBedankt voor je interesse in Elevizion! We hebben je aanvraag ontvangen en nemen zo snel mogelijk contact met je op.\n\nMet vriendelijke groet,\nTeam Elevizion" },
-        { name: "onboarding_link", category: "email", subject: "Voltooi je registratie - Elevizion", body: "Beste {{contactName}},\n\nWelkom bij Elevizion! Klik op de onderstaande link om je registratie te voltooien:\n\n{{onboardingLink}}\n\nDeze link is 7 dagen geldig.\n\nMet vriendelijke groet,\nTeam Elevizion" },
-        { name: "onboarding_reminder", category: "email", subject: "Herinnering: Voltooi je registratie - Elevizion", body: "Beste {{contactName}},\n\nWe zagen dat je registratie nog niet is voltooid. Klik op de link hieronder om verder te gaan:\n\n{{onboardingLink}}\n\nHeb je vragen? Neem gerust contact met ons op.\n\nMet vriendelijke groet,\nTeam Elevizion" },
-        { name: "onboarding_completed", category: "email", subject: "Registratie voltooid - Welkom bij Elevizion!", body: "Beste {{contactName}},\n\nGefeliciteerd! Je registratie is voltooid. Je bent nu officieel onderdeel van het Elevizion netwerk.\n\n{{nextSteps}}\n\nMet vriendelijke groet,\nTeam Elevizion" },
-        { name: "what_next", category: "email", subject: "Volgende stappen - Elevizion", body: "Beste {{contactName}},\n\nHier zijn de volgende stappen om aan de slag te gaan met Elevizion:\n\n1. {{step1}}\n2. {{step2}}\n3. {{step3}}\n\nHeb je vragen? Neem gerust contact met ons op.\n\nMet vriendelijke groet,\nTeam Elevizion" },
-        { name: "monthly_report", category: "email", subject: "Maandrapport {{month}} - Elevizion", body: "Beste {{contactName}},\n\nHierbij je maandrapport voor {{month}}:\n\n{{reportContent}}\n\nMet vriendelijke groet,\nTeam Elevizion" },
-        // Contract templates
-        { name: "location_revshare", category: "contract", subject: "Locatie Overeenkomst - Revenue Share", body: "LOCATIE OVEREENKOMST\n\nTussen:\nElevizion B.V.\nen\n{{companyName}}\n\nBetreft: Plaatsing digitaal scherm op locatie {{locationName}}\n\nVoorwaarden:\n- Revenue share: {{revSharePct}}%\n- Startdatum: {{startDate}}\n- Looptijd: {{termMonths}} maanden\n\nGetekend te {{city}}, op {{signDate}}\n\n_________________________\n{{contactName}}" },
-        { name: "location_fixed", category: "contract", subject: "Locatie Overeenkomst - Vaste Vergoeding", body: "LOCATIE OVEREENKOMST\n\nTussen:\nElevizion B.V.\nen\n{{companyName}}\n\nBetreft: Plaatsing digitaal scherm op locatie {{locationName}}\n\nVoorwaarden:\n- Maandelijkse vergoeding: €{{fixedAmount}}\n- Startdatum: {{startDate}}\n- Looptijd: {{termMonths}} maanden\n\nGetekend te {{city}}, op {{signDate}}\n\n_________________________\n{{contactName}}" },
-        { name: "advertiser_standard", category: "contract", subject: "Advertentie Overeenkomst - Standaard", body: "ADVERTENTIE OVEREENKOMST\n\nTussen:\nElevizion B.V.\nen\n{{companyName}}\n\nBetreft: Advertentieplaatsing op Elevizion netwerk\n\nVoorwaarden:\n- Pakket: Standaard\n- Maandbedrag: €{{monthlyAmount}}\n- Startdatum: {{startDate}}\n- Aantal schermen: {{screensCount}}\n\nGetekend te {{city}}, op {{signDate}}\n\n_________________________\n{{contactName}}" },
-        { name: "advertiser_premium", category: "contract", subject: "Advertentie Overeenkomst - Premium", body: "ADVERTENTIE OVEREENKOMST\n\nTussen:\nElevizion B.V.\nen\n{{companyName}}\n\nBetreft: Advertentieplaatsing op Elevizion netwerk\n\nVoorwaarden:\n- Pakket: Premium\n- Maandbedrag: €{{monthlyAmount}}\n- Startdatum: {{startDate}}\n- Aantal schermen: {{screensCount}}\n- Exclusieve plaatsing: Ja\n\nGetekend te {{city}}, op {{signDate}}\n\n_________________________\n{{contactName}}" },
+        // === EMAIL TEMPLATES (professionele structuur) ===
+        { 
+          name: "lead_confirmation", 
+          category: "email", 
+          subject: "Bedankt voor je interesse - Elevizion", 
+          body: `Bedankt voor je interesse in Elevizion!
+
+We hebben je aanvraag ontvangen en zijn blij dat je overweegt om deel uit te maken van ons digitale netwerk.
+
+Wat gebeurt er nu?
+- Binnen 24 uur neemt een van onze accountmanagers contact met je op
+- We bespreken de mogelijkheden die het beste bij jouw situatie passen
+- Je ontvangt een vrijblijvende offerte op maat
+
+Heb je in de tussentijd vragen? Neem gerust contact met ons op via info@elevizion.nl of bel naar 043-123 4567.` 
+        },
+        { 
+          name: "onboarding_link", 
+          category: "email", 
+          subject: "Voltooi je registratie - Elevizion", 
+          body: `Welkom bij Elevizion!
+
+Fijn dat je bent begonnen met je registratie. Om je account te activeren en toegang te krijgen tot het dashboard, dien je nog enkele gegevens in te vullen.
+
+Klik op onderstaande link om je registratie te voltooien:
+{{onboardingLink}}
+
+Let op: deze link is 7 dagen geldig.
+
+Wat heb je nodig?
+- Bedrijfsgegevens (KvK-nummer, BTW-nummer)
+- Contactgegevens
+- IBAN voor betalingen
+
+Het invullen duurt ongeveer 5 minuten. Na voltooiing heb je direct toegang tot je dashboard.` 
+        },
+        { 
+          name: "onboarding_reminder", 
+          category: "email", 
+          subject: "Herinnering: Voltooi je registratie - Elevizion", 
+          body: `We zagen dat je registratie nog niet is voltooid.
+
+Je bent al begonnen, maar we missen nog enkele gegevens om je account te activeren. Klik op onderstaande link om verder te gaan waar je gebleven was:
+
+{{onboardingLink}}
+
+Geen zorgen - je eerder ingevulde gegevens zijn bewaard.
+
+Heb je hulp nodig of loop je ergens tegenaan? Neem gerust contact met ons op via info@elevizion.nl. We helpen je graag verder!` 
+        },
+        { 
+          name: "onboarding_completed", 
+          category: "email", 
+          subject: "Registratie voltooid - Welkom bij Elevizion!", 
+          body: `Gefeliciteerd! Je registratie is succesvol afgerond.
+
+Je bent nu officieel onderdeel van het Elevizion netwerk. Hieronder vind je de volgende stappen om aan de slag te gaan:
+
+Volgende stappen:
+1. Log in op je dashboard via app.elevizion.nl
+2. Upload je eerste advertentie of content
+3. Selecteer de schermen waarop je wilt adverteren
+4. Plan je campagne en ga live!
+
+Heb je vragen over het dashboard of de mogelijkheden? Ons supportteam staat voor je klaar via info@elevizion.nl.
+
+Nogmaals welkom bij Elevizion!` 
+        },
+        { 
+          name: "monthly_report", 
+          category: "email", 
+          subject: "Maandrapport {{month}} - Elevizion", 
+          body: `Hierbij ontvang je het maandrapport voor {{month}}.
+
+In dit rapport vind je een overzicht van:
+- Je actieve advertenties en vertoningen
+- Bereik per schermlocatie
+- Facturatie en betalingsstatus
+
+Rapport Samenvatting:
+{{reportContent}}
+
+Wil je meer weten over de prestaties van je campagnes of heb je vragen over dit rapport? Neem gerust contact met ons op.
+
+We wensen je een succesvolle maand!` 
+        },
+        // === CONTRACT TEMPLATES (professionele A4 structuur) ===
+        { 
+          name: "location_revshare", 
+          category: "contract", 
+          subject: "Samenwerkingsovereenkomst - Revenue Share Model", 
+          body: `<h2>Artikel 1 - Partijen</h2>
+<p>Deze overeenkomst wordt aangegaan tussen:</p>
+<ol>
+<li><strong>Elevizion B.V.</strong>, gevestigd te Maastricht, ingeschreven bij de Kamer van Koophandel onder nummer 12345678, hierna te noemen "Elevizion";</li>
+<li><strong>{{companyName}}</strong>, vertegenwoordigd door {{contactName}}, hierna te noemen "Locatiepartner".</li>
+</ol>
+
+<h2>Artikel 2 - Onderwerp van de Overeenkomst</h2>
+<p>Elevizion plaatst één of meerdere digitale schermen op de locatie van de Locatiepartner ten behoeve van het tonen van advertenties en content van derden.</p>
+
+<h2>Artikel 3 - Locatiegegevens</h2>
+<ul>
+<li><strong>Locatienaam:</strong> {{locationName}}</li>
+<li><strong>Adres:</strong> {{address}}, {{city}}</li>
+</ul>
+
+<h2>Artikel 4 - Commerciële Voorwaarden</h2>
+<ul>
+<li><strong>Vergoedingsmodel:</strong> Revenue Share</li>
+<li><strong>Percentage:</strong> {{revSharePct}}% van de netto advertentie-inkomsten</li>
+<li><strong>Uitbetaling:</strong> Maandelijks, uiterlijk op de 15e van de volgende maand</li>
+<li><strong>Minimumgarantie:</strong> Geen</li>
+</ul>
+
+<h2>Artikel 5 - Looptijd en Opzegging</h2>
+<ul>
+<li><strong>Ingangsdatum:</strong> {{startDate}}</li>
+<li><strong>Looptijd:</strong> {{termMonths}} maanden</li>
+<li><strong>Opzegtermijn:</strong> 2 maanden voor het einde van de lopende periode</li>
+</ul>
+
+<h2>Artikel 6 - Verplichtingen Locatiepartner</h2>
+<p>De Locatiepartner zorgt voor:</p>
+<ul>
+<li>Geschikte plaatsingslocatie met stroomaansluiting</li>
+<li>Stabiele internetverbinding (WiFi of ethernet)</li>
+<li>Toegang voor onderhoud en service</li>
+</ul>
+
+<h2>Artikel 7 - Aansprakelijkheid</h2>
+<p>Elevizion is niet aansprakelijk voor indirecte schade of gevolgschade. De aansprakelijkheid van Elevizion is beperkt tot het bedrag van de vergoedingen over de laatste 3 maanden.</p>
+
+<h2>Artikel 8 - Toepasselijk Recht</h2>
+<p>Op deze overeenkomst is Nederlands recht van toepassing. Geschillen worden voorgelegd aan de bevoegde rechter te Maastricht.</p>` 
+        },
+        { 
+          name: "location_fixed", 
+          category: "contract", 
+          subject: "Samenwerkingsovereenkomst - Vaste Vergoeding", 
+          body: `<h2>Artikel 1 - Partijen</h2>
+<p>Deze overeenkomst wordt aangegaan tussen:</p>
+<ol>
+<li><strong>Elevizion B.V.</strong>, gevestigd te Maastricht, ingeschreven bij de Kamer van Koophandel onder nummer 12345678, hierna te noemen "Elevizion";</li>
+<li><strong>{{companyName}}</strong>, vertegenwoordigd door {{contactName}}, hierna te noemen "Locatiepartner".</li>
+</ol>
+
+<h2>Artikel 2 - Onderwerp van de Overeenkomst</h2>
+<p>Elevizion plaatst één of meerdere digitale schermen op de locatie van de Locatiepartner ten behoeve van het tonen van advertenties en content van derden.</p>
+
+<h2>Artikel 3 - Locatiegegevens</h2>
+<ul>
+<li><strong>Locatienaam:</strong> {{locationName}}</li>
+<li><strong>Adres:</strong> {{address}}, {{city}}</li>
+</ul>
+
+<h2>Artikel 4 - Commerciële Voorwaarden</h2>
+<ul>
+<li><strong>Vergoedingsmodel:</strong> Vaste maandelijkse vergoeding</li>
+<li><strong>Maandbedrag:</strong> €{{fixedAmount}} (excl. BTW)</li>
+<li><strong>Uitbetaling:</strong> Maandelijks, uiterlijk op de 15e van de volgende maand</li>
+</ul>
+
+<h2>Artikel 5 - Looptijd en Opzegging</h2>
+<ul>
+<li><strong>Ingangsdatum:</strong> {{startDate}}</li>
+<li><strong>Looptijd:</strong> {{termMonths}} maanden</li>
+<li><strong>Opzegtermijn:</strong> 2 maanden voor het einde van de lopende periode</li>
+</ul>
+
+<h2>Artikel 6 - Verplichtingen Locatiepartner</h2>
+<p>De Locatiepartner zorgt voor:</p>
+<ul>
+<li>Geschikte plaatsingslocatie met stroomaansluiting</li>
+<li>Stabiele internetverbinding (WiFi of ethernet)</li>
+<li>Toegang voor onderhoud en service</li>
+</ul>
+
+<h2>Artikel 7 - Aansprakelijkheid</h2>
+<p>Elevizion is niet aansprakelijk voor indirecte schade of gevolgschade. De aansprakelijkheid van Elevizion is beperkt tot het bedrag van de vergoedingen over de laatste 3 maanden.</p>
+
+<h2>Artikel 8 - Toepasselijk Recht</h2>
+<p>Op deze overeenkomst is Nederlands recht van toepassing. Geschillen worden voorgelegd aan de bevoegde rechter te Maastricht.</p>` 
+        },
+        { 
+          name: "advertiser_standard", 
+          category: "contract", 
+          subject: "Advertentieovereenkomst - Standaard Pakket", 
+          body: `<h2>Artikel 1 - Partijen</h2>
+<p>Deze overeenkomst wordt aangegaan tussen:</p>
+<ol>
+<li><strong>Elevizion B.V.</strong>, gevestigd te Maastricht, ingeschreven bij de Kamer van Koophandel onder nummer 12345678, hierna te noemen "Elevizion";</li>
+<li><strong>{{companyName}}</strong>, vertegenwoordigd door {{contactName}}, hierna te noemen "Adverteerder".</li>
+</ol>
+
+<h2>Artikel 2 - Onderwerp van de Overeenkomst</h2>
+<p>Elevizion biedt de Adverteerder de mogelijkheid om advertenties te tonen op het Elevizion digitale schermen netwerk conform de voorwaarden in deze overeenkomst.</p>
+
+<h2>Artikel 3 - Pakketgegevens</h2>
+<ul>
+<li><strong>Pakket:</strong> Standaard</li>
+<li><strong>Aantal schermen:</strong> {{screensCount}}</li>
+<li><strong>Vertoningen per dag:</strong> 480 (gemiddeld per scherm)</li>
+<li><strong>Advertentieduur:</strong> 15 seconden</li>
+</ul>
+
+<h2>Artikel 4 - Commerciële Voorwaarden</h2>
+<ul>
+<li><strong>Maandbedrag:</strong> €{{monthlyAmount}} (excl. BTW)</li>
+<li><strong>Facturatie:</strong> Maandelijks vooraf</li>
+<li><strong>Betaaltermijn:</strong> 14 dagen</li>
+</ul>
+
+<h2>Artikel 5 - Looptijd en Opzegging</h2>
+<ul>
+<li><strong>Ingangsdatum:</strong> {{startDate}}</li>
+<li><strong>Minimale looptijd:</strong> 3 maanden</li>
+<li><strong>Opzegtermijn:</strong> 1 maand</li>
+</ul>
+
+<h2>Artikel 6 - Content Richtlijnen</h2>
+<p>De Adverteerder levert content aan die voldoet aan de Elevizion content richtlijnen. Elevizion behoudt zich het recht voor om content te weigeren die niet voldoet aan deze richtlijnen.</p>
+
+<h2>Artikel 7 - Aansprakelijkheid</h2>
+<p>Elevizion is niet aansprakelijk voor technische storingen of onderbrekingen in de vertoning. Bij langdurige storingen (>24 uur) wordt een pro-rata creditering toegepast.</p>
+
+<h2>Artikel 8 - Toepasselijk Recht</h2>
+<p>Op deze overeenkomst is Nederlands recht van toepassing. Geschillen worden voorgelegd aan de bevoegde rechter te Maastricht.</p>` 
+        },
+        { 
+          name: "advertiser_premium", 
+          category: "contract", 
+          subject: "Advertentieovereenkomst - Premium Pakket", 
+          body: `<h2>Artikel 1 - Partijen</h2>
+<p>Deze overeenkomst wordt aangegaan tussen:</p>
+<ol>
+<li><strong>Elevizion B.V.</strong>, gevestigd te Maastricht, ingeschreven bij de Kamer van Koophandel onder nummer 12345678, hierna te noemen "Elevizion";</li>
+<li><strong>{{companyName}}</strong>, vertegenwoordigd door {{contactName}}, hierna te noemen "Adverteerder".</li>
+</ol>
+
+<h2>Artikel 2 - Onderwerp van de Overeenkomst</h2>
+<p>Elevizion biedt de Adverteerder de mogelijkheid om advertenties te tonen op het Elevizion digitale schermen netwerk conform de voorwaarden in deze overeenkomst.</p>
+
+<h2>Artikel 3 - Premium Pakketgegevens</h2>
+<ul>
+<li><strong>Pakket:</strong> Premium (Exclusief)</li>
+<li><strong>Aantal schermen:</strong> {{screensCount}}</li>
+<li><strong>Vertoningen per dag:</strong> 720 (gemiddeld per scherm)</li>
+<li><strong>Advertentieduur:</strong> 15-30 seconden</li>
+<li><strong>Exclusiviteit:</strong> Geen concurrerende advertenties in dezelfde branche</li>
+</ul>
+
+<h2>Artikel 4 - Premium Voordelen</h2>
+<ul>
+<li>Prioriteit bij schermtoewijzing</li>
+<li>Dedicated accountmanager</li>
+<li>Maandelijkse performance rapportages</li>
+<li>Mogelijkheid tot real-time content updates</li>
+</ul>
+
+<h2>Artikel 5 - Commerciële Voorwaarden</h2>
+<ul>
+<li><strong>Maandbedrag:</strong> €{{monthlyAmount}} (excl. BTW)</li>
+<li><strong>Facturatie:</strong> Maandelijks vooraf</li>
+<li><strong>Betaaltermijn:</strong> 14 dagen</li>
+</ul>
+
+<h2>Artikel 6 - Looptijd en Opzegging</h2>
+<ul>
+<li><strong>Ingangsdatum:</strong> {{startDate}}</li>
+<li><strong>Minimale looptijd:</strong> 6 maanden</li>
+<li><strong>Opzegtermijn:</strong> 2 maanden</li>
+</ul>
+
+<h2>Artikel 7 - Aansprakelijkheid</h2>
+<p>Elevizion is niet aansprakelijk voor technische storingen of onderbrekingen in de vertoning. Bij storingen wordt prioriteit gegeven aan Premium klanten en geldt een pro-rata creditering bij storingen >12 uur.</p>
+
+<h2>Artikel 8 - Toepasselijk Recht</h2>
+<p>Op deze overeenkomst is Nederlands recht van toepassing. Geschillen worden voorgelegd aan de bevoegde rechter te Maastricht.</p>` 
+        },
       ];
       
       let created = 0;
@@ -6925,16 +7211,15 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const [log] = await db.select().from(emailLogs).where(eq(emailLogs.id, req.params.id));
       if (!log) return res.status(404).json({ message: "Email log niet gevonden" });
       
-      // Rebuild full HTML from stored body using shared helper (same as send path)
+      // Rebuild full HTML from stored body using centralized render engine (same as send path)
       let fullHtml = "";
       if (log.bodyRendered) {
-        // Use stored contactName or fallback to "klant" for older logs
-        const emailContent = buildEmailHtml({
+        const emailResult = await renderEmail({
           subject: log.subjectRendered || "",
-          bodyText: log.bodyRendered,
+          body: log.bodyRendered,
           contactName: log.contactName || "klant",
         });
-        fullHtml = emailContent.html;
+        fullHtml = emailResult.finalHtmlRendered;
       }
       
       res.json({
