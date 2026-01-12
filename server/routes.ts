@@ -6860,6 +6860,57 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  // Generate contract document from template
+  app.post("/api/contract-documents/generate", async (req, res) => {
+    try {
+      const { templateKey, entityType, entityId, data } = req.body;
+      
+      if (!templateKey || !entityType || !entityId) {
+        return res.status(400).json({ message: "templateKey, entityType, en entityId zijn verplicht" });
+      }
+      
+      const { generateContractDocument } = await import("./services/contractTemplateService");
+      const result = await generateContractDocument({ templateKey, entityType, entityId, data: data || {} });
+      
+      res.status(201).json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Update contract document status
+  app.patch("/api/contract-documents/:id/status", async (req, res) => {
+    try {
+      const { status, signedAt } = req.body;
+      
+      if (!["draft", "sent", "signed"].includes(status)) {
+        return res.status(400).json({ message: "Status moet 'draft', 'sent', of 'signed' zijn" });
+      }
+      
+      const { updateContractDocumentStatus } = await import("./services/contractTemplateService");
+      await updateContractDocumentStatus(
+        req.params.id, 
+        status, 
+        signedAt ? new Date(signedAt) : undefined
+      );
+      
+      res.json({ message: "Status bijgewerkt" });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get contract documents by entity
+  app.get("/api/contract-documents/entity/:entityType/:entityId", async (req, res) => {
+    try {
+      const { getContractDocuments } = await import("./services/contractTemplateService");
+      const docs = await getContractDocuments(req.params.entityType, req.params.entityId);
+      res.json(docs);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ============================================================================
   // SUPPLY ITEMS (CATALOG)
   // ============================================================================
