@@ -66,7 +66,7 @@ export default function Landing() {
               </Button>
             </div>
             <p className="text-sm text-white/50 mb-12">
-              Snel reactie • Ontwerp inbegrepen • Duidelijke afspraken
+              Snelle reactie • Lokaal bereik • Duidelijke afspraken
             </p>
             <div className="flex flex-wrap justify-center gap-x-8 gap-y-3 text-sm text-white/60">
               <div className="flex items-center gap-2">
@@ -221,8 +221,8 @@ export default function Landing() {
                 <Monitor className="h-7 w-7" />
               </div>
               <div className="text-xs text-emerald-600 font-bold mb-2 uppercase tracking-wider">Stap 2</div>
-              <h3 className="font-bold text-slate-800 mb-2 text-lg">Plaatsing & planning</h3>
-              <p className="text-sm text-slate-600 leading-relaxed">Wij maken de content en plannen de campagne.</p>
+              <h3 className="font-bold text-slate-800 mb-2 text-lg">Video aanleveren</h3>
+              <p className="text-sm text-slate-600 leading-relaxed">Je levert je video aan, wij plaatsen hem op de schermen.</p>
             </div>
             <div className="text-center">
               <div className="w-16 h-16 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto mb-5 shadow-lg shadow-emerald-200">
@@ -269,13 +269,13 @@ export default function Landing() {
                     <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
                       <Check className="h-3 w-3 text-emerald-600" />
                     </div>
-                    <span>Maandelijkse looptijd</span>
+                    <span>Klant levert video aan</span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
                       <Check className="h-3 w-3 text-emerald-600" />
                     </div>
-                    <span>Basis rapportage</span>
+                    <span>Min. looptijd: 6 maanden</span>
                   </li>
                 </ul>
                 <Button 
@@ -317,13 +317,13 @@ export default function Landing() {
                     <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center flex-shrink-0">
                       <Check className="h-3 w-3 text-white" />
                     </div>
-                    <span className="font-medium">Flexibele looptijd</span>
+                    <span className="font-medium">Klant levert video aan</span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center flex-shrink-0">
                       <Check className="h-3 w-3 text-white" />
                     </div>
-                    <span className="font-medium">Ontwerp inbegrepen</span>
+                    <span className="font-medium">Min. looptijd: 6 maanden</span>
                   </li>
                 </ul>
                 <Button 
@@ -361,13 +361,13 @@ export default function Landing() {
                     <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
                       <Check className="h-3 w-3 text-emerald-600" />
                     </div>
-                    <span>Volledige ontwerp service</span>
+                    <span>Klant levert video aan</span>
                   </li>
                   <li className="flex items-center gap-2.5">
                     <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
                       <Check className="h-3 w-3 text-emerald-600" />
                     </div>
-                    <span>Uitgebreide rapportage</span>
+                    <span>Min. looptijd: 6 maanden</span>
                   </li>
                 </ul>
                 <Button 
@@ -381,7 +381,7 @@ export default function Landing() {
             </Card>
           </div>
           <p className="text-center text-sm text-slate-400 mt-10 max-w-md mx-auto">
-            Prijs afhankelijk van locatie en looptijd.
+            Je levert je eigen video aan. Prijs afhankelijk van locatie.
           </p>
           <div className="text-center mt-3">
             <Button 
@@ -457,8 +457,8 @@ export default function Landing() {
                   Wat kost adverteren op digitale reclame schermen?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  De kosten voor schermreclame variëren van €75 tot €150 per maand per scherm, afhankelijk van locatie en looptijd. 
-                  Bij langere campagnes krijg je korting. Ontwerp is vaak inbegrepen. Neem contact op voor een vrijblijvende offerte.
+                  Onze pakketten beginnen bij €49,99 per maand. Prijzen zijn afhankelijk van het aantal schermen. 
+                  Je levert je eigen video aan. Neem contact op voor een vrijblijvende offerte.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-3" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
@@ -475,7 +475,7 @@ export default function Landing() {
                   Hoe lang loopt een campagne?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  Minimaal één maand. Langere campagnes zijn mogelijk met korting. 
+                  Minimale looptijd is 6 maanden. Daarna kun je maandelijks opzeggen. 
                   Je advertentie draait de hele dag, met herhaling voor maximale herkenning.
                 </AccordionContent>
               </AccordionItem>
@@ -484,8 +484,8 @@ export default function Landing() {
                   Maken jullie de advertentie ook op?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  Ja, wij ontwerpen je advertentie op basis van je logo, video en teksten. 
-                  Bij de meeste pakketten is ontwerp inbegrepen. Je hoeft dus geen designer in te huren.
+                  Nee, je levert je advertentievideo zelf aan. Wij sturen je na akkoord duidelijke aanleverspecificaties 
+                  (MP4, 1080p, 10-15 sec). Wij plaatsen de video vervolgens op de schermen.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-6" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">
@@ -526,7 +526,7 @@ export default function Landing() {
           <div className="max-w-xl mx-auto text-center">
             <h2 className="text-2xl md:text-4xl font-bold mb-5 text-white">Klaar om lokaal zichtbaar te worden?</h2>
             <p className="text-white/90 mb-8 leading-relaxed text-lg">
-              Wij regelen de schermen, planning en content. Jij wordt gezien.
+              Wij regelen de schermen en planning. Jij levert de video, en wordt gezien.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
               <Button 

@@ -13,15 +13,27 @@ import MarketingFooter from "@/components/marketing/MarketingFooter";
 const faqItems = [
   {
     question: "Wat kost adverteren bij Elevizion?",
-    answer: "Onze pakketten beginnen bij €49,99 per maand (excl. BTW) voor 1 scherm. Het populairste pakket met 3 schermen kost €129,99 per maand. Voor 10 schermen betaal je €299,99 per maand. Bij alle pakketten is het ontwerp van je advertentie inbegrepen."
+    answer: "Onze pakketten beginnen bij €49,99 per maand (excl. BTW) voor 1 scherm. Het populairste pakket met 3 schermen kost €129,99 per maand. Voor 10 schermen betaal je €299,99 per maand. De minimale looptijd is 6 maanden."
+  },
+  {
+    question: "Maken jullie mijn advertentie?",
+    answer: "Nee, je levert je advertentievideo zelf aan. Wij sturen je na akkoord duidelijke aanleverspecificaties (MP4, 1080p, 10-15 sec, 16:9) en je unieke linkKey. Wij plaatsen de video vervolgens op de schermen."
+  },
+  {
+    question: "Welke video moet ik aanleveren?",
+    answer: "Formaat: MP4 (H.264), resolutie 1920x1080 (Full HD, liggend 16:9), duur 10-15 seconden, zonder audio. Bestandsnaam: [linkKey]_Bedrijfsnaam.mp4. Je linkKey (bijv. ADV-001) ontvang je na akkoord."
   },
   {
     question: "Hoe lang duurt het voordat mijn advertentie live staat?",
-    answer: "Na aanmelding en akkoord maken wij binnen 1-2 werkdagen een ontwerp voor je. Zodra je het ontwerp goedkeurt, staat je advertentie binnen 24 uur op de schermen."
+    answer: "Zodra je video is aangeleverd en goedgekeurd, staat je advertentie binnen 24-48 uur op de schermen."
   },
   {
-    question: "Kan ik mijn advertentie tussentijds aanpassen?",
-    answer: "Ja, je kunt je content altijd laten aanpassen. Kleine wijzigingen (tekst, prijs) zijn gratis. Voor een volledig nieuw ontwerp rekenen we een kleine vergoeding."
+    question: "Wanneer kan ik opzeggen?",
+    answer: "Na de minimale looptijd van 6 maanden kun je maandelijks opzeggen. Je betaalt tot het einde van de lopende maand."
+  },
+  {
+    question: "Kan ik mijn video tussentijds vervangen?",
+    answer: "Ja, je kunt je video altijd vervangen. Lever een nieuwe video aan via e-mail en wij plaatsen hem binnen 24-48 uur."
   },
   {
     question: "Waar hangen de schermen?",
@@ -29,19 +41,7 @@ const faqItems = [
   },
   {
     question: "Hoe weet ik dat mijn advertentie wordt getoond?",
-    answer: "Je krijgt toegang tot een dashboard waar je kunt zien op welke schermen je advertentie draait. We monitoren alle schermen 24/7 en krijgen een melding als er iets niet werkt."
-  },
-  {
-    question: "Moet ik zelf een video maken?",
-    answer: "Nee, dat hoeft niet. Wij maken gratis een professionele video op basis van je logo, boodschap en eventuele foto's. Heb je zelf al een video? Dan plaatsen we die uiteraard."
-  },
-  {
-    question: "Wat zijn de technische vereisten voor een video?",
-    answer: "Een video moet 10-15 seconden duren, in MP4-formaat (H.264) en Full HD resolutie (1920x1080) zijn. De schermen staan op mute, dus audio wordt niet afgespeeld."
-  },
-  {
-    question: "Kan ik opzeggen wanneer ik wil?",
-    answer: "Ja, na de eerste maand is je pakket maandelijks opzegbaar. Er is geen lange contractduur of opzegtermijn. Je betaalt tot het einde van de lopende maand."
+    answer: "We monitoren alle schermen 24/7 en krijgen een melding als er iets niet werkt. Je kunt altijd bij ons navragen op welke schermen je advertentie draait."
   },
   {
     question: "Wat kost een scherm op mijn locatie?",
@@ -65,7 +65,7 @@ const faqItems = [
   },
   {
     question: "Hoe neem ik contact op?",
-    answer: "Je kunt het contactformulier op onze website invullen, of direct een e-mail sturen. We reageren binnen 24 uur op werkdagen."
+    answer: "Je kunt het contactformulier op onze website invullen, of direct een e-mail sturen naar info@elevizion.nl. We reageren binnen 24 uur op werkdagen."
   },
   {
     question: "Krijg ik een factuur?",
