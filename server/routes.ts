@@ -7873,6 +7873,201 @@ We wensen je een succesvolle maand!`
 <h2>Artikel 8 - Toepasselijk Recht</h2>
 <p>Op deze overeenkomst is Nederlands recht van toepassing. Geschillen worden voorgelegd aan de bevoegde rechter te Maastricht.</p>` 
         },
+        // === VERPLICHTE TEMPLATES VOOR SYSTEM HEALTH CHECK ===
+        { 
+          name: "algemene_voorwaarden", 
+          category: "contract", 
+          subject: "Algemene Voorwaarden Elevizion", 
+          body: `<h1>Algemene Voorwaarden</h1>
+<p><strong>Douven Services h/o Elevizion</strong><br>
+KvK: 90982541 | BTW: NL004857473B37</p>
+
+<h2>Artikel 1 - Definities</h2>
+<p>In deze algemene voorwaarden wordt verstaan onder:</p>
+<ol>
+<li><strong>Elevizion:</strong> de handelsnaam waaronder Douven Services, ingeschreven bij KvK onder nummer 90982541, haar diensten aanbiedt.</li>
+<li><strong>Klant:</strong> de natuurlijke of rechtspersoon die met Elevizion een overeenkomst aangaat.</li>
+<li><strong>Diensten:</strong> alle door Elevizion aangeboden digitale signage en advertentiediensten.</li>
+<li><strong>Overeenkomst:</strong> de overeenkomst tussen Elevizion en Klant.</li>
+</ol>
+
+<h2>Artikel 2 - Toepasselijkheid</h2>
+<p>Deze algemene voorwaarden zijn van toepassing op alle aanbiedingen, offertes en overeenkomsten tussen Elevizion en Klant.</p>
+
+<h2>Artikel 3 - Aanbieding en Totstandkoming</h2>
+<p>Alle aanbiedingen van Elevizion zijn vrijblijvend tenzij uitdrukkelijk anders aangegeven. Een overeenkomst komt tot stand na digitale ondertekening door beide partijen.</p>
+
+<h2>Artikel 4 - Prijzen en Betaling</h2>
+<ul>
+<li>Alle prijzen zijn exclusief BTW tenzij anders vermeld.</li>
+<li>Betaling dient te geschieden binnen 14 dagen na factuurdatum.</li>
+<li>Bij automatische incasso (SEPA) wordt het bedrag rond de 1e van de maand afgeschreven.</li>
+</ul>
+
+<h2>Artikel 5 - Looptijd en Opzegging</h2>
+<p>Overeenkomsten worden aangegaan voor de in het contract vermelde periode. Opzegging dient schriftelijk te geschieden met inachtneming van de overeengekomen opzegtermijn.</p>
+
+<h2>Artikel 6 - Aansprakelijkheid</h2>
+<p>Elevizion is niet aansprakelijk voor indirecte schade of gevolgschade. De totale aansprakelijkheid is beperkt tot het bedrag van de vergoedingen over de laatste 3 maanden.</p>
+
+<h2>Artikel 7 - Privacy</h2>
+<p>Elevizion verwerkt persoonsgegevens conform de AVG. Zie ons privacybeleid voor meer informatie.</p>
+
+<h2>Artikel 8 - Toepasselijk Recht</h2>
+<p>Op alle overeenkomsten is Nederlands recht van toepassing. Geschillen worden voorgelegd aan de bevoegde rechter te Maastricht.</p>
+
+<p><em>Versie 1.0 - Laatste update: {{currentDate}}</em></p>` 
+        },
+        { 
+          name: "adverteerder_overeenkomst", 
+          category: "contract", 
+          subject: "Adverteerderovereenkomst", 
+          body: `<h1>Adverteerderovereenkomst</h1>
+<p><strong>Douven Services h/o Elevizion</strong><br>
+KvK: 90982541 | BTW: NL004857473B37</p>
+
+<h2>Artikel 1 - Partijen</h2>
+<p>Deze overeenkomst wordt aangegaan tussen:</p>
+<ol>
+<li><strong>Douven Services h/o Elevizion</strong>, ingeschreven bij de Kamer van Koophandel onder nummer 90982541, hierna te noemen "Elevizion";</li>
+<li><strong>{{companyName}}</strong>, vertegenwoordigd door {{contactName}}, hierna te noemen "Adverteerder".</li>
+</ol>
+
+<h2>Artikel 2 - Onderwerp</h2>
+<p>Elevizion biedt de Adverteerder de mogelijkheid om advertenties te tonen op het Elevizion digitale schermen netwerk.</p>
+
+<h2>Artikel 3 - Pakketgegevens</h2>
+<ul>
+<li><strong>Pakket:</strong> {{packageName}}</li>
+<li><strong>Aantal schermen:</strong> {{screenCount}}</li>
+<li><strong>Prijs per scherm:</strong> €{{pricePerScreen}} per maand (excl. BTW)</li>
+<li><strong>Minimale looptijd:</strong> {{minimumTermMonths}} maanden</li>
+</ul>
+
+<h2>Artikel 4 - Content Aanlevering</h2>
+<p>De Adverteerder levert zelf video content aan die voldoet aan de volgende specificaties:</p>
+<ul>
+<li>Formaat: MP4 (H.264 codec)</li>
+<li>Resolutie: 1920x1080 pixels</li>
+<li>Duur: 10-15 seconden</li>
+<li>Aspectratio: 16:9</li>
+<li>Geen audio</li>
+</ul>
+<p><strong>Let op:</strong> Elevizion maakt geen advertenties voor klanten. De Adverteerder is verantwoordelijk voor het aanleveren van content.</p>
+
+<h2>Artikel 5 - Betalingswijze</h2>
+<ul>
+<li><strong>Facturatie:</strong> Maandelijks vooraf</li>
+<li><strong>Betaaltermijn:</strong> 14 dagen of via SEPA automatische incasso</li>
+</ul>
+
+<h2>Artikel 6 - Looptijd en Opzegging</h2>
+<ul>
+<li><strong>Ingangsdatum:</strong> {{startDate}}</li>
+<li><strong>Minimale looptijd:</strong> {{minimumTermMonths}} maanden</li>
+<li><strong>Opzegtermijn:</strong> 1 maand voor het einde van de lopende periode</li>
+</ul>
+
+<h2>Artikel 7 - Algemene Voorwaarden</h2>
+<p>Op deze overeenkomst zijn de Algemene Voorwaarden van Elevizion van toepassing, welke separaat zijn opgenomen in dit document.</p>
+
+<p><em>Versie 1.0</em></p>` 
+        },
+        { 
+          name: "locatie_overeenkomst", 
+          category: "contract", 
+          subject: "Schermlocatieovereenkomst", 
+          body: `<h1>Schermlocatieovereenkomst</h1>
+<p><strong>Douven Services h/o Elevizion</strong><br>
+KvK: 90982541 | BTW: NL004857473B37</p>
+
+<h2>Artikel 1 - Partijen</h2>
+<p>Deze overeenkomst wordt aangegaan tussen:</p>
+<ol>
+<li><strong>Douven Services h/o Elevizion</strong>, ingeschreven bij de Kamer van Koophandel onder nummer 90982541, hierna te noemen "Elevizion";</li>
+<li><strong>{{companyName}}</strong>, vertegenwoordigd door {{contactName}}, hierna te noemen "Locatiepartner".</li>
+</ol>
+
+<h2>Artikel 2 - Onderwerp</h2>
+<p>Elevizion plaatst één of meerdere digitale schermen op de locatie van de Locatiepartner ten behoeve van het tonen van advertenties van derden.</p>
+
+<h2>Artikel 3 - Locatiegegevens</h2>
+<ul>
+<li><strong>Locatienaam:</strong> {{locationName}}</li>
+<li><strong>Adres:</strong> {{address}}, {{zipcode}} {{city}}</li>
+</ul>
+
+<h2>Artikel 4 - Vergoeding</h2>
+<ul>
+<li><strong>Vergoedingsmodel:</strong> Revenue Share</li>
+<li><strong>Percentage:</strong> {{revenueSharePercent}}% van de netto advertentie-inkomsten</li>
+<li><strong>Uitbetaling:</strong> Maandelijks, uiterlijk op de 15e van de volgende maand</li>
+<li><strong>Minimum uitbetaling:</strong> €{{minimumPayout}}</li>
+</ul>
+
+<h2>Artikel 5 - Verplichtingen Locatiepartner</h2>
+<p>De Locatiepartner zorgt voor:</p>
+<ul>
+<li>Geschikte plaatsingslocatie met stroomaansluiting</li>
+<li>Stabiele internetverbinding (WiFi of ethernet)</li>
+<li>Toegang voor onderhoud en service</li>
+</ul>
+
+<h2>Artikel 6 - Looptijd en Opzegging</h2>
+<ul>
+<li><strong>Ingangsdatum:</strong> Na ondertekening en installatie</li>
+<li><strong>Opzegtermijn:</strong> 2 maanden</li>
+</ul>
+
+<h2>Artikel 7 - Algemene Voorwaarden</h2>
+<p>Op deze overeenkomst zijn de Algemene Voorwaarden van Elevizion van toepassing, welke separaat zijn opgenomen in dit document.</p>
+
+<p><em>Versie 1.0</em></p>` 
+        },
+        { 
+          name: "sepa_machtiging", 
+          category: "contract", 
+          subject: "SEPA Machtiging", 
+          body: `<h1>SEPA Incassomachtiging</h1>
+<p><strong>Douven Services h/o Elevizion</strong><br>
+KvK: 90982541 | BTW: NL004857473B37</p>
+
+<h2>Crediteurgegevens</h2>
+<table>
+<tr><td><strong>Naam:</strong></td><td>Douven Services h/o Elevizion</td></tr>
+<tr><td><strong>Incassant ID:</strong></td><td>{{incassantId}}</td></tr>
+<tr><td><strong>IBAN:</strong></td><td>{{creditorIban}}</td></tr>
+</table>
+
+<h2>Machtiging</h2>
+<p>Door ondertekening van deze machtiging geeft u toestemming aan Douven Services h/o Elevizion om doorlopende incasso-opdrachten te sturen naar uw bank om een bedrag van uw rekening af te schrijven wegens de overeengekomen diensten.</p>
+
+<h2>Debiteurgegevens (betaler)</h2>
+<table>
+<tr><td><strong>Bedrijfsnaam:</strong></td><td>{{companyName}}</td></tr>
+<tr><td><strong>Naam rekeninghouder:</strong></td><td>{{accountHolderName}}</td></tr>
+<tr><td><strong>IBAN:</strong></td><td>{{debiteurIban}}</td></tr>
+<tr><td><strong>Adres:</strong></td><td>{{address}}, {{zipcode}} {{city}}</td></tr>
+</table>
+
+<h2>Machtigingsreferentie</h2>
+<p><strong>{{mandateReference}}</strong></p>
+
+<h2>Type machtiging</h2>
+<p>☑ Doorlopende machtiging (voor terugkerende betalingen)</p>
+
+<h2>Voorwaarden</h2>
+<ul>
+<li>U heeft het recht om binnen 8 weken na afschrijving het bedrag terug te vorderen bij uw bank (storneren).</li>
+<li>Als u het niet eens bent met een afschrijving kunt u dit melden aan uw bank.</li>
+<li>Bij onterechte afschrijving kunt u tot 13 maanden na afschrijving reclameren.</li>
+</ul>
+
+<p><strong>Datum ondertekening:</strong> {{signatureDate}}</p>
+<p><strong>Plaats:</strong> {{signatureCity}}</p>
+
+<p><em>Versie 1.0</em></p>` 
+        },
       ];
       
       let created = 0;

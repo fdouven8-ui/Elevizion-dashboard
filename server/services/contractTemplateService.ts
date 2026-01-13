@@ -216,3 +216,75 @@ export async function getContractDocument(documentId: string): Promise<schema.Co
   
   return doc || null;
 }
+
+// ============================================================================
+// TEMPLATE MAPPING FOR WORKFLOW CONTEXTS
+// ============================================================================
+
+export type WorkflowContext = "advertiser_onboarding" | "location_onboarding";
+
+interface RequiredTemplate {
+  key: string;
+  name: string;
+  required: boolean;
+}
+
+/**
+ * Get required templates for a specific workflow context
+ * 
+ * HARD RULES:
+ * - advertiser_onboarding: AV + Adverteerderovereenkomst + SEPA Machtiging
+ * - location_onboarding: AV + Schermlocatieovereenkomst
+ */
+export function getRequiredTemplatesForContext(context: WorkflowContext): RequiredTemplate[] {
+  switch (context) {
+    case "advertiser_onboarding":
+      return [
+        { key: "algemene_voorwaarden", name: "Algemene Voorwaarden", required: true },
+        { key: "adverteerder_overeenkomst", name: "Adverteerderovereenkomst", required: true },
+        { key: "sepa_machtiging", name: "SEPA Machtiging", required: true },
+      ];
+    
+    case "location_onboarding":
+      return [
+        { key: "algemene_voorwaarden", name: "Algemene Voorwaarden", required: true },
+        { key: "locatie_overeenkomst", name: "Schermlocatieovereenkomst", required: true },
+      ];
+    
+    default:
+      return [];
+  }
+}
+
+/**
+ * Fetch all required templates for a workflow context from database
+ */
+export async function fetchRequiredTemplates(context: WorkflowContext): Promise<{
+  templates: schema.Template[];
+  missing: string[];
+}> {
+  const required = getRequiredTemplatesForContext(context);
+  
+  const allTemplates = await db.select()
+    .from(schema.templates)
+    .where(eq(schema.templates.category, "contract"));
+  
+  const templates: schema.Template[] = [];
+  const missing: string[] = [];
+  
+  for (const req of required) {
+    const found = allTemplates.find(t => 
+      t.name.toLowerCase().includes(req.key.replace(/_/g, " ")) ||
+      t.name.toLowerCase().includes(req.key.replace(/_/g, "")) ||
+      t.name.toLowerCase() === req.key
+    );
+    
+    if (found && found.isEnabled) {
+      templates.push(found);
+    } else {
+      missing.push(req.name);
+    }
+  }
+  
+  return { templates, missing };
+}

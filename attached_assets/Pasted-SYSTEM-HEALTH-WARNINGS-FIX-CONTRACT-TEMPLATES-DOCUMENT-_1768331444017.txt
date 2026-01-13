@@ -1,0 +1,67 @@
+SYSTEM-HEALTH WARNINGS FIX: CONTRACT TEMPLATES + DOCUMENT FLOW (GEEN REFACTOR)
+
+CONTEXT
+/system-health werkt en toont 32 PASS, 6 WARNING.
+Warnings zijn:
+1) Ontbrekende contract templates (nog aan te maken)
+2) IBAN ontbreekt (mag WARNING blijven tot later)
+
+DOEL
+1) Maak alle ontbrekende contract templates aan (met versiebeheer) zodat contract module PASS wordt.
+2) Implementeer correcte document-selectie per workflow:
+   - Adverteerder: AV + Adverteerderovereenkomst + SEPA machtiging
+   - Schermlocatie: AV + Schermlocatieovereenkomst
+3) Zorg dat bij OTP acceptatie de juiste PDFs worden gegenereerd en downloadbaar zijn (los of gebundeld), en dat de systeemcheck hierna PASS geeft.
+
+BELANGRIJK
+- Geen redesign en geen grote refactor.
+- Templates mogen initieel “basis inhoud” hebben (placeholder juridisch), maar moeten bestaan en correct gekoppeld zijn.
+- Adres mag niet publiek op website; in PDF’s mag legal header “Douven Services h/o Elevizion, KvK, BTW” altijd.
+- IBAN blijft WARNING totdat ingevuld, maar SEPA template moet wel bestaan.
+
+A) CONTRACT TEMPLATES AANMAKEN (VERPLICHT)
+Voeg (als ze ontbreken) deze templates toe in ContractTemplate store met isActive=true en version=1:
+1) ALGEMENE_VOORWAARDEN (name: “Algemene voorwaarden”)
+2) ADVERTEERDER_OVEREENKOMST (name: “Adverteerderovereenkomst”)
+3) SCHERMLOCATIE_OVEREENKOMST (name: “Schermlocatieovereenkomst”)
+4) SEPA_MACHTIGING (name: “SEPA machtiging”)
+
+Template content mag basis zijn, maar moet:
+- placeholders ondersteunen (company/tradeName, kvk, vat, advertiser companyName, pakket, prijs per scherm, min looptijd)
+- duidelijke versieregels hebben (termsVersion etc.)
+- SEPA template: bevat velden voor betaler IBAN + naam + datum + mandaatreferentie
+  (Crediteur IBAN van ons bedrijf kan later ingevuld worden; zet “(wordt aangevuld)” of laat leeg maar crash niet)
+
+B) DOCUMENT SELECTIE PER FLOW (HARD RULES)
+Implementeer één centrale mapping function:
+- getRequiredTemplatesForContext(context)
+Context = advertiser_onboarding | location_onboarding
+
+Return:
+- advertiser_onboarding -> [AV, ADVERTEERDER_OVEREENKOMST, SEPA_MACHTIGING]
+- location_onboarding -> [AV, SCHERMLOCATIE_OVEREENKOMST]
+
+Zorg dat UI checkboxes exact deze templates reflecteert en dat OTP acceptatie dezelfde set ondertekent.
+
+C) PDF GENERATIE (CONSISTENT)
+Na OTP ACCEPTED:
+- Genereer PDFs voor alle geaccepteerde templates:
+  Optie voorkeur: 1 bundel PDF met:
+   - cover (titel, contractId)
+   - sectie per template (AV, overeenkomst, sepa indien van toepassing)
+   - audit trail pagina
+- Sla pdfRef op bij acceptance/instance en maak downloadknop zichtbaar in dashboard.
+- Systeemcheck moet kunnen verifiëren dat pdfRef aanwezig is.
+
+D) SYSTEM-HEALTH UPDATE
+Pas de checks aan zodat:
+- “Templates ontbreken” -> PASS zodra alle 4 bestaan en isActive=true
+- “IBAN ontbreekt” -> blijft WARNING, maar SEPA template check wordt PASS (template bestaat) en alleen “company iban missing” blijft WARNING.
+
+E) OUTPUT
+- Welke templates zijn aangemaakt (ids + names + versions)
+- Waar de mapping rules staan
+- Hoe PDF bundling werkt + waar te downloaden
+- Bevestig dat /system-health nu minder warnings toont (verwacht alleen IBAN warning)
+
+IMPLEMENT NOW.
