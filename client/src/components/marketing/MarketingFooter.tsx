@@ -22,18 +22,18 @@ export default function MarketingFooter() {
             <h4 className="font-semibold text-white mb-4">Voor adverteerders</h4>
             <ul className="space-y-2 text-sm">
               <li>
-                <Link href="/adverteren">
-                  <a className="hover:text-emerald-400 transition-colors">Adverteren</a>
+                <Link href="/adverteren" className="hover:text-emerald-400 transition-colors">
+                  Adverteren
                 </Link>
               </li>
               <li>
-                <Link href="/prijzen">
-                  <a className="hover:text-emerald-400 transition-colors">Prijzen</a>
+                <Link href="/prijzen" className="hover:text-emerald-400 transition-colors">
+                  Prijzen
                 </Link>
               </li>
               <li>
-                <Link href="/werkwijze">
-                  <a className="hover:text-emerald-400 transition-colors">Werkwijze</a>
+                <Link href="/werkwijze" className="hover:text-emerald-400 transition-colors">
+                  Werkwijze
                 </Link>
               </li>
             </ul>
@@ -43,18 +43,18 @@ export default function MarketingFooter() {
             <h4 className="font-semibold text-white mb-4">Voor locaties</h4>
             <ul className="space-y-2 text-sm">
               <li>
-                <Link href="/scherm-locatie">
-                  <a className="hover:text-emerald-400 transition-colors">Scherm op locatie</a>
+                <Link href="/scherm-locatie" className="hover:text-emerald-400 transition-colors">
+                  Scherm op locatie
                 </Link>
               </li>
               <li>
-                <Link href="/werkwijze">
-                  <a className="hover:text-emerald-400 transition-colors">Hoe werkt het</a>
+                <Link href="/werkwijze" className="hover:text-emerald-400 transition-colors">
+                  Hoe werkt het
                 </Link>
               </li>
               <li>
-                <Link href="/veelgestelde-vragen">
-                  <a className="hover:text-emerald-400 transition-colors">Veelgestelde vragen</a>
+                <Link href="/veelgestelde-vragen" className="hover:text-emerald-400 transition-colors">
+                  Veelgestelde vragen
                 </Link>
               </li>
             </ul>
@@ -72,8 +72,8 @@ export default function MarketingFooter() {
                 </a>
               </li>
               <li>
-                <Link href="/contact">
-                  <a className="hover:text-emerald-400 transition-colors">Contactformulier</a>
+                <Link href="/contact" className="hover:text-emerald-400 transition-colors">
+                  Contactformulier
                 </Link>
               </li>
             </ul>
