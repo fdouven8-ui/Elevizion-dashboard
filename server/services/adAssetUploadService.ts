@@ -59,6 +59,11 @@ export async function validatePortalToken(token: string): Promise<PortalContext 
       return null;
     }
     
+    if (!advertiser.linkKey) {
+      console.log('[AdAssetUpload] Advertiser has no linkKey:', advertiser.id);
+      return null;
+    }
+    
     return {
       advertiserId: advertiser.id,
       linkKey: advertiser.linkKey,

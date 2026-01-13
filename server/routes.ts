@@ -1489,6 +1489,156 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // ============================================================================
+  // AD ASSET UPLOAD ENDPOINTS
+  // ============================================================================
+
+  // Get video specs for advertiser (dashboard)
+  app.get("/api/advertisers/:id/video-specs", isAuthenticated, async (req, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      const { getVideoSpecsForDuration, formatVideoSpecsForDisplay, DEFAULT_VIDEO_SPECS } = await import("./services/videoMetadataService");
+      const duration = advertiser.videoDurationSeconds || 15;
+      const specs = getVideoSpecsForDuration(duration);
+      res.json({
+        specs,
+        duration,
+        displayText: formatVideoSpecsForDisplay(specs, duration),
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get ad assets for advertiser (dashboard)
+  app.get("/api/advertisers/:id/ad-assets", isAuthenticated, async (req, res) => {
+    try {
+      const { getAdAssetsByAdvertiser } = await import("./services/adAssetUploadService");
+      const assets = await getAdAssetsByAdvertiser(req.params.id);
+      res.json(assets);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Mark ad asset as ready for Yodeck (admin action)
+  app.post("/api/ad-assets/:id/mark-ready", isAuthenticated, async (req, res) => {
+    try {
+      const { markAssetAsReady } = await import("./services/adAssetUploadService");
+      const user = req.user as any;
+      const success = await markAssetAsReady(req.params.id, user?.id, req.body.notes);
+      if (!success) {
+        return res.status(400).json({ message: "Kon asset niet klaarzetten" });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Delete ad asset (admin action)
+  app.delete("/api/ad-assets/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { deleteAdAsset } = await import("./services/adAssetUploadService");
+      const success = await deleteAdAsset(req.params.id);
+      if (!success) {
+        return res.status(404).json({ message: "Asset niet gevonden" });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Public upload portal - get advertiser info
+  app.get("/api/upload-portal/:token", async (req, res) => {
+    try {
+      const { validatePortalToken } = await import("./services/adAssetUploadService");
+      const { getVideoSpecsForDuration, formatVideoSpecsForDisplay } = await import("./services/videoMetadataService");
+      
+      const context = await validatePortalToken(req.params.token);
+      if (!context) {
+        return res.status(401).json({ message: "Ongeldige of verlopen toegangslink" });
+      }
+      
+      const specs = getVideoSpecsForDuration(context.contractDuration);
+      res.json({
+        companyName: context.companyName,
+        linkKey: context.linkKey,
+        duration: context.contractDuration,
+        specs,
+        displaySpecs: formatVideoSpecsForDisplay(specs, context.contractDuration),
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Public upload portal - upload video file
+  app.post("/api/upload-portal/:token/upload", async (req, res) => {
+    try {
+      const multer = (await import("multer")).default;
+      const upload = multer({
+        dest: "/tmp/uploads",
+        limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
+      });
+      
+      upload.single("video")(req, res, async (err) => {
+        if (err) {
+          console.error("[UploadPortal] Multer error:", err);
+          return res.status(400).json({ message: "Upload mislukt: " + err.message });
+        }
+        
+        const file = req.file;
+        if (!file) {
+          return res.status(400).json({ message: "Geen bestand geüpload" });
+        }
+        
+        try {
+          const { validatePortalToken, processAdAssetUpload } = await import("./services/adAssetUploadService");
+          
+          const context = await validatePortalToken(req.params.token);
+          if (!context) {
+            return res.status(401).json({ message: "Ongeldige of verlopen toegangslink" });
+          }
+          
+          const result = await processAdAssetUpload(
+            file.path,
+            file.originalname,
+            file.mimetype,
+            context
+          );
+          
+          // Clean up temp file
+          const fs = await import("fs");
+          fs.unlink(file.path, () => {});
+          
+          if (!result.success) {
+            return res.status(400).json({
+              message: result.message,
+              validation: result.validation,
+            });
+          }
+          
+          res.json({
+            success: true,
+            message: result.message,
+            assetId: result.assetId,
+            validation: result.validation,
+          });
+        } catch (error: any) {
+          console.error("[UploadPortal] Processing error:", error);
+          res.status(500).json({ message: "Fout bij verwerken: " + error.message });
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
   // LOCATIONS
   // ============================================================================
 
