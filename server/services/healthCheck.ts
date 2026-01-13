@@ -236,6 +236,26 @@ export async function checkContractModule(): Promise<HealthCheckResult[]> {
         fixSuggestion: "Controleer contractBundleService.ts configuratie",
       });
     }
+
+    // Check ffprobe availability for video validation
+    try {
+      const { isFFprobeAvailable } = await import("./videoMetadataService");
+      const ffprobeOk = await isFFprobeAvailable();
+      results.push({
+        name: "FFprobe (Video Analyse)",
+        status: ffprobeOk ? "PASS" : "WARNING",
+        message: ffprobeOk ? "Beschikbaar" : "Niet beschikbaar",
+        fixSuggestion: !ffprobeOk ? "Installeer ffmpeg/ffprobe voor video validatie" : undefined,
+        details: { purpose: "Analyse van geüploade advertentievideo's" },
+      });
+    } catch (ffprobeError: any) {
+      results.push({
+        name: "FFprobe (Video Analyse)",
+        status: "WARNING",
+        message: ffprobeError.message || "Kan service niet laden",
+        fixSuggestion: "Controleer videoMetadataService.ts",
+      });
+    }
     
   } catch (error: any) {
     results.push({
