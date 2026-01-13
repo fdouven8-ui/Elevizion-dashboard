@@ -43,6 +43,7 @@ import ContractSigning from "@/pages/ContractSigning";
 import AdvertiserOnboarding from "@/pages/AdvertiserOnboarding";
 import LocationIntake from "@/pages/LocationIntake";
 import LocationContract from "@/pages/LocationContract";
+import UploadPortal from "@/pages/UploadPortal";
 import NotFound from "@/pages/not-found";
 import Adverteren from "@/pages/marketing/Adverteren";
 import SchermLocatie from "@/pages/marketing/SchermLocatie";
@@ -110,6 +111,7 @@ function Router() {
       <Route path="/advertiser-onboarding/:token" component={AdvertiserOnboarding} />
       <Route path="/onboarding/location/intake/:token" component={LocationIntake} />
       <Route path="/onboarding/location/contract/:token" component={LocationContract} />
+      <Route path="/upload/:token" component={UploadPortal} />
       <Route component={DashboardRouter} />
     </Switch>
   );
