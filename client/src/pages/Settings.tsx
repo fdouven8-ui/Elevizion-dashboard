@@ -46,6 +46,7 @@ import {
   FileCheck,
   Download,
   Smartphone,
+  Building2,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -286,6 +287,325 @@ interface EmailConfigData {
     dmarc: { record: string; status: string; description: string };
     returnPath: { record: string; status: string; description: string };
   };
+}
+
+interface CompanyProfile {
+  id: string;
+  legalName: string;
+  tradeName: string;
+  kvkNumber: string;
+  vatNumber: string;
+  addressLine1: string | null;
+  postalCode: string | null;
+  city: string | null;
+  country: string | null;
+  publicAddressEnabled: boolean | null;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  iban: string | null;
+  ibanAccountHolder: string | null;
+  bicCode: string | null;
+  showFullAddressInPdf: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+
+function CompanyProfileTab() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [formData, setFormData] = useState<Partial<CompanyProfile>>({});
+  const [hasChanges, setHasChanges] = useState(false);
+
+  const { data: profile, isLoading } = useQuery<CompanyProfile>({
+    queryKey: ["/api/company-profile"],
+    queryFn: async () => {
+      const res = await fetch("/api/company-profile", { credentials: "include" });
+      if (!res.ok) throw new Error("Fout bij ophalen bedrijfsprofiel");
+      return res.json();
+    },
+  });
+
+  useEffect(() => {
+    if (profile) {
+      setFormData(profile);
+    }
+  }, [profile]);
+
+  const updateMutation = useMutation({
+    mutationFn: async (data: Partial<CompanyProfile>) => {
+      const res = await fetch("/api/company-profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Opslaan mislukt");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company-profile"] });
+      toast({ title: "Bedrijfsgegevens opgeslagen" });
+      setHasChanges(false);
+    },
+    onError: (error: any) => {
+      toast({ title: "Opslaan mislukt", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleChange = (field: keyof CompanyProfile, value: any) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    setHasChanges(true);
+  };
+
+  const handleSave = () => {
+    updateMutation.mutate(formData);
+  };
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-48" />
+          <Skeleton className="h-4 w-64" />
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <Skeleton className="h-20 w-full" />
+            <Skeleton className="h-20 w-full" />
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Building2 className="h-5 w-5" />
+                Bedrijfsgegevens
+              </CardTitle>
+              <CardDescription>
+                Centrale bedrijfsinformatie voor website, e-mails en contracten
+              </CardDescription>
+            </div>
+            <Button 
+              onClick={handleSave} 
+              disabled={!hasChanges || updateMutation.isPending}
+              data-testid="button-save-company"
+            >
+              <Save className="h-4 w-4 mr-2" />
+              {updateMutation.isPending ? "Opslaan..." : "Opslaan"}
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="legalName">Juridische naam</Label>
+              <Input
+                id="legalName"
+                value={formData.legalName || ""}
+                onChange={(e) => handleChange("legalName", e.target.value)}
+                placeholder="Bijv. Douven Services"
+                data-testid="input-legal-name"
+              />
+              <p className="text-xs text-muted-foreground">Naam zoals geregistreerd bij KvK</p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="tradeName">Handelsnaam</Label>
+              <Input
+                id="tradeName"
+                value={formData.tradeName || ""}
+                onChange={(e) => handleChange("tradeName", e.target.value)}
+                placeholder="Bijv. Elevizion"
+                data-testid="input-trade-name"
+              />
+              <p className="text-xs text-muted-foreground">Publieke merknaam</p>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="kvkNumber">KvK-nummer</Label>
+              <Input
+                id="kvkNumber"
+                value={formData.kvkNumber || ""}
+                onChange={(e) => handleChange("kvkNumber", e.target.value)}
+                placeholder="12345678"
+                data-testid="input-kvk"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="vatNumber">BTW-nummer</Label>
+              <Input
+                id="vatNumber"
+                value={formData.vatNumber || ""}
+                onChange={(e) => handleChange("vatNumber", e.target.value)}
+                placeholder="NL123456789B01"
+                data-testid="input-vat"
+              />
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
+            <h3 className="font-medium mb-4">Adresgegevens</h3>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="addressLine1">Adres</Label>
+                <Input
+                  id="addressLine1"
+                  value={formData.addressLine1 || ""}
+                  onChange={(e) => handleChange("addressLine1", e.target.value)}
+                  placeholder="Straatnaam 123"
+                  data-testid="input-address"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="postalCode">Postcode</Label>
+                <Input
+                  id="postalCode"
+                  value={formData.postalCode || ""}
+                  onChange={(e) => handleChange("postalCode", e.target.value)}
+                  placeholder="1234 AB"
+                  data-testid="input-postal-code"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="city">Plaats</Label>
+                <Input
+                  id="city"
+                  value={formData.city || ""}
+                  onChange={(e) => handleChange("city", e.target.value)}
+                  placeholder="Amsterdam"
+                  data-testid="input-city"
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2 mt-4">
+              <Switch
+                id="publicAddressEnabled"
+                checked={formData.publicAddressEnabled || false}
+                onCheckedChange={(checked) => handleChange("publicAddressEnabled", checked)}
+                data-testid="switch-public-address"
+              />
+              <Label htmlFor="publicAddressEnabled" className="cursor-pointer">
+                Toon adres op publieke website
+              </Label>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
+            <h3 className="font-medium mb-4">Contactgegevens</h3>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="email">E-mailadres</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={formData.email || ""}
+                  onChange={(e) => handleChange("email", e.target.value)}
+                  placeholder="info@elevizion.nl"
+                  data-testid="input-email"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="phone">Telefoonnummer</Label>
+                <Input
+                  id="phone"
+                  value={formData.phone || ""}
+                  onChange={(e) => handleChange("phone", e.target.value)}
+                  placeholder="+31 6 12345678"
+                  data-testid="input-phone"
+                />
+              </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label htmlFor="website">Website</Label>
+                <Input
+                  id="website"
+                  value={formData.website || ""}
+                  onChange={(e) => handleChange("website", e.target.value)}
+                  placeholder="https://elevizion.nl"
+                  data-testid="input-website"
+                />
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
+            <h3 className="font-medium mb-4">Bankgegevens</h3>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="iban">IBAN</Label>
+                <Input
+                  id="iban"
+                  value={formData.iban || ""}
+                  onChange={(e) => handleChange("iban", e.target.value)}
+                  placeholder="NL12 ABCD 0123 4567 89"
+                  data-testid="input-iban"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ibanAccountHolder">Tenaamstelling</Label>
+                <Input
+                  id="ibanAccountHolder"
+                  value={formData.ibanAccountHolder || ""}
+                  onChange={(e) => handleChange("ibanAccountHolder", e.target.value)}
+                  placeholder="Naam op bankrekening"
+                  data-testid="input-iban-holder"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="bicCode">BIC Code</Label>
+                <Input
+                  id="bicCode"
+                  value={formData.bicCode || ""}
+                  onChange={(e) => handleChange("bicCode", e.target.value)}
+                  placeholder="ABCDNL2A"
+                  data-testid="input-bic"
+                />
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
+          <div>
+            <h3 className="font-medium mb-4">Document instellingen</h3>
+            <div className="flex items-center gap-2">
+              <Switch
+                id="showFullAddressInPdf"
+                checked={formData.showFullAddressInPdf || false}
+                onCheckedChange={(checked) => handleChange("showFullAddressInPdf", checked)}
+                data-testid="switch-pdf-address"
+              />
+              <Label htmlFor="showFullAddressInPdf" className="cursor-pointer">
+                Toon volledig adres in PDF-documenten en contracten
+              </Label>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {profile?.updatedAt && (
+        <p className="text-xs text-muted-foreground text-center">
+          Laatst bijgewerkt: {new Date(profile.updatedAt).toLocaleString("nl-NL")}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function EmailDeliverabilityTab() {
@@ -1836,7 +2156,7 @@ export default function Settings() {
       </div>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className="grid w-full grid-cols-7">
           <TabsTrigger value="automations" className="gap-2">
             <Zap className="h-4 w-4" />
             <span className="hidden sm:inline">Automatiseringen</span>
@@ -1860,6 +2180,10 @@ export default function Settings() {
           <TabsTrigger value="finance" className="gap-2">
             <Wallet className="h-4 w-4" />
             <span className="hidden sm:inline">Financieel</span>
+          </TabsTrigger>
+          <TabsTrigger value="company" className="gap-2" data-testid="tab-company">
+            <Building2 className="h-4 w-4" />
+            <span className="hidden sm:inline">Bedrijf</span>
           </TabsTrigger>
         </TabsList>
 
@@ -2924,6 +3248,10 @@ export default function Settings() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="company" className="mt-6">
+          <CompanyProfileTab />
         </TabsContent>
       </Tabs>
     </div>
