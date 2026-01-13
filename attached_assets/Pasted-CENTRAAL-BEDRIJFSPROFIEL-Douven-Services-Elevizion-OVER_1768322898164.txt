@@ -1,0 +1,112 @@
+CENTRAAL BEDRIJFSPROFIEL (Douven Services / Elevizion) — OVERAL IMPLEMENTEREN
+
+BEDRIJFSGEGEVENS (DEZE ZIJN LEIDEND)
+- Juridische naam: Douven Services
+- Handelsnaam/brand: Elevizion
+- KvK: 90982541
+- BTW: NL004857473B37
+- Adres (intern opslaan, NIET tonen op site): Engelenkampstraat 11, 6131 JD Sittard, NL
+- IBAN: volgt later (veld alvast klaarzetten)
+
+DOEL
+Maak één centrale “Company Profile” (singleton) in het dashboard en zorg dat ALLE plekken die bedrijfsgegevens nodig hebben dit daaruit halen.
+Dus: nooit meer hardcoded of verspreid in templates.
+
+BELANGRIJK
+- Adres mag NIET zichtbaar zijn op de publieke website (geen straat/postcode).
+- In PDF’s/contracten mag adres WEL gebruikt worden indien juridisch nodig, maar bij voorkeur als “Sittard, Nederland” of volledig adres alleen in juridische koptekst (configurable).
+- Geen redesign, alleen integratie en consistentie.
+
+A) DATABASE / MODEL
+Maak een tabel/collection `CompanyProfile` met 1 record (singleton):
+- legalName = "Douven Services"
+- tradeName = "Elevizion"
+- kvkNumber = "90982541"
+- vatNumber = "NL004857473B37"
+- addressLine1 = "Engelenkampstraat 11"
+- postalCode = "6131 JD"
+- city = "Sittard"
+- country = "NL"
+- publicAddressEnabled = false   // heel belangrijk
+- email = "info@elevizion.nl"
+- iban = null (later invullen)
+- updatedAt
+
+Maak helper/service:
+- getCompanyProfile() (server-side)
+- getPublicCompanyProfile() (filtert adres weg wanneer publicAddressEnabled=false)
+
+B) DASHBOARD UI (ADMIN)
+Voeg in Admin/Instellingen een pagina “Bedrijfsgegevens”:
+- velden tonen + bewerken
+- IBAN veld aanwezig maar leeg (later invulbaar)
+- checkbox: “Adres op website tonen” default UIT
+- Save -> updates singleton record
+Toon in UI steeds:
+- Juridische naam + handelsnaam
+- KvK/BTW
+- Adres alleen zichtbaar voor admin (intern)
+
+C) WEBSITE (PUBLIC)
+1) Footer/Contact:
+- Toon: “Elevizion (Douven Services)”
+- Toon KvK + BTW
+- Toon email
+- Toon GEEN straat/postcode/adres zolang publicAddressEnabled=false
+2) Structured data JSON-LD:
+- Organization/WebSite schema moet brand en legal info bevatten:
+  - name: "Elevizion"
+  - legalName: "Douven Services"
+  - vatID: "NL004857473B37"
+  - (KvK kan als identifier/additionalProperty)
+  - email: info@elevizion.nl
+  - address alleen opnemen als publicAddressEnabled=true
+3) Alle plekken waar nu (mogelijk) placeholder bedrijfsinfo staat vervangen door data uit getPublicCompanyProfile()
+
+D) CONTRACTEN / PDF GENERATIE (DASHBOARD)
+Update ALLE PDF/contract templates zodat partijgegevens automatisch gevuld worden vanuit CompanyProfile:
+- “Leverancier: Douven Services h/o Elevizion”
+- KvK: 90982541
+- BTW: NL004857473B37
+- Adresregel:
+  - Als juridisch nodig: gebruik volledig adres (intern toegestaan)
+  - Anders: “Sittard, Nederland”
+Maak dit instelbaar via template switch:
+- showFullAddressInPdf = true/false (default true voor contracten, false voor marketing pdf’s)
+
+E) E-MAIL TEMPLATES (NO-REPLY / INFO)
+Update alle mail templates (invite, OTP, bevestiging, wat-nu, interne meldingen):
+- Standaard footerblok met:
+  - Elevizion (Douven Services)
+  - KvK 90982541
+  - BTW NL004857473B37
+  - info@elevizion.nl
+- Geen adres in mails tenzij expliciet nodig
+
+F) INTEGRATIES (Moneybird e.d.)
+1) Moneybird:
+- Zorg dat “Afzender/bedrijf” gegevens in documenten/omschrijving waar relevant kloppen:
+  - Douven Services / Elevizion
+  - KvK/BTW correct
+- Niets hardcoden: haal uit CompanyProfile
+2) Overal waar contract/SEPA teksten verwijzen naar “bedrijf” of “crediteur”:
+- Gebruik legalName + tradeName + KvK/BTW
+- IBAN nog niet invullen, maar veld klaar (later update zonder codewijzigingen)
+
+G) CONSISTENTIECHECK (MOET)
+Doorzoek codebase op mogelijke hardcoded waarden en vervang:
+- “Elevizion BV” / “Elevizion” losse strings in juridische context
+- oude KvK/BTW placeholders
+- address in public components
+Zorg dat:
+- Website geen adres toont
+- Dashboard/PDF wel correct alle juridische gegevens heeft
+
+OUTPUT
+Na implementatie wil ik:
+1) Waar CompanyProfile opgeslagen wordt (model + seed/default)
+2) Waar ik het kan bewerken in dashboard (menu pad)
+3) Welke website onderdelen het tonen (footer + JSON-LD)
+4) Welke PDF/contract templates zijn aangepast
+5) Welke mail templates zijn aangepast
+6) Bevestiging: adres wordt NIET publiek getoond, maar is intern beschikbaar

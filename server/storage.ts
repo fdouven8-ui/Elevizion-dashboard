@@ -70,6 +70,7 @@ import type {
   IntegrationOutbox, InsertIntegrationOutbox,
   LocationToken, InsertLocationToken,
   LocationOnboardingEvent, InsertLocationOnboardingEvent,
+  CompanyProfile, InsertCompanyProfile,
 } from "@shared/schema";
 
 // Lead query params for server-side filtering/pagination
@@ -457,6 +458,10 @@ export interface IStorage {
   getOutboxJobsByEntity(entityType: string, entityId: string): Promise<IntegrationOutbox[]>;
   updateOutboxJob(id: string, data: Partial<IntegrationOutbox>): Promise<IntegrationOutbox | undefined>;
   getOutboxStats(): Promise<{ queued: number; processing: number; succeeded: number; failed: number; total: number }>;
+
+  // Company Profile (singleton)
+  getCompanyProfile(): Promise<CompanyProfile | undefined>;
+  updateCompanyProfile(data: Partial<InsertCompanyProfile>): Promise<CompanyProfile | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -2971,6 +2976,31 @@ export class DatabaseStorage implements IStorage {
       if (row.status === "failed") stats.failed = count;
     }
     return stats;
+  }
+
+  // ============================================================================
+  // COMPANY PROFILE (SINGLETON)
+  // ============================================================================
+
+  async getCompanyProfile(): Promise<CompanyProfile | undefined> {
+    const [profile] = await db.select().from(schema.companyProfile).limit(1);
+    return profile;
+  }
+
+  async updateCompanyProfile(data: Partial<InsertCompanyProfile>): Promise<CompanyProfile | undefined> {
+    // Get existing profile first
+    const existing = await this.getCompanyProfile();
+    if (!existing) {
+      // Create if doesn't exist (singleton)
+      const [profile] = await db.insert(schema.companyProfile).values(data as InsertCompanyProfile).returning();
+      return profile;
+    }
+    // Update existing
+    const [profile] = await db.update(schema.companyProfile)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.companyProfile.id, existing.id))
+      .returning();
+    return profile;
   }
 }
 

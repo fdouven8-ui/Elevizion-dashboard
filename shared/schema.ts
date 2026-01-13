@@ -2131,6 +2131,52 @@ export type InsertLocationPayout = z.infer<typeof insertLocationPayoutSchema>;
 export type MonthlyReport = typeof monthlyReports.$inferSelect;
 export type InsertMonthlyReport = z.infer<typeof insertMonthlyReportSchema>;
 
+// ============================================================================
+// COMPANY PROFILE (SINGLETON)
+// ============================================================================
+
+/**
+ * CompanyProfile - Central company/brand information (singleton record)
+ * Used for: footer, contracts, PDFs, emails, integrations
+ */
+export const companyProfile = pgTable("company_profile", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // Legal & Brand
+  legalName: text("legal_name").notNull(), // Juridische naam (Douven Services)
+  tradeName: text("trade_name").notNull(), // Handelsnaam (Elevizion)
+  kvkNumber: text("kvk_number").notNull(), // KvK nummer
+  vatNumber: text("vat_number").notNull(), // BTW nummer
+  // Address
+  addressLine1: text("address_line1"), // Straat + huisnummer
+  postalCode: text("postal_code"),
+  city: text("city"),
+  country: text("country").default("NL"),
+  // Public visibility
+  publicAddressEnabled: boolean("public_address_enabled").default(false), // Show address on website?
+  // Contact
+  email: text("email"),
+  phone: text("phone"),
+  website: text("website"),
+  // Banking (for SEPA/contracts)
+  iban: text("iban"),
+  ibanAccountHolder: text("iban_account_holder"),
+  bicCode: text("bic_code"),
+  // PDF/Contract settings
+  showFullAddressInPdf: boolean("show_full_address_in_pdf").default(true),
+  // Meta
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const insertCompanyProfileSchema = createInsertSchema(companyProfile).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type CompanyProfile = typeof companyProfile.$inferSelect;
+export type InsertCompanyProfile = z.infer<typeof insertCompanyProfileSchema>;
+
 // Lead Category Constants
 export const LEAD_CATEGORIES = [
   "horeca",
