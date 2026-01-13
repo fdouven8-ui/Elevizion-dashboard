@@ -13,7 +13,7 @@ import MarketingFooter from "@/components/marketing/MarketingFooter";
 const faqItems = [
   {
     question: "Wat kost adverteren bij Elevizion?",
-    answer: "Onze pakketten beginnen bij €49,99 per maand (excl. BTW) voor 1 scherm. Het populairste pakket met 3 schermen kost €129,99 per maand. Voor 10 schermen betaal je €299,99 per maand. De minimale looptijd is 6 maanden."
+    answer: "Vanaf €30 per scherm / maand (bij 10 schermen). Meer schermen = lagere prijs per scherm. De startprijs voor 1 scherm is €49,99 per scherm / maand (excl. BTW). Minimale looptijd is 6 maanden, daarna maandelijks opzegbaar."
   },
   {
     question: "Maken jullie mijn advertentie?",

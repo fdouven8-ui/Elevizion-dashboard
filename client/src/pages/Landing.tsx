@@ -240,13 +240,13 @@ export default function Landing() {
         <div className="container mx-auto px-4">
           <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-3">Pakketten</h2>
           <p className="text-center text-slate-600 mb-14 max-w-lg mx-auto">
-            Kies een pakket. Je levert je advertentievideo zelf aan — wij plaatsen 'm op de schermen.
+            Meer schermen = lagere prijs per scherm. Je levert je video zelf aan — wij plaatsen 'm.
           </p>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 max-w-6xl mx-auto">
             <Card className="border-2 border-slate-200 bg-white hover:border-emerald-300 hover:shadow-md transition-all">
               <CardHeader className="text-center pb-2 pt-6">
                 <CardTitle className="text-lg font-bold text-slate-800">1 scherm</CardTitle>
-                <p className="text-2xl font-bold text-emerald-600 mt-2">€49,99 <span className="text-sm font-normal text-slate-500">p/m</span></p>
+                <p className="text-2xl font-bold text-emerald-600 mt-2">€49,99 <span className="text-sm font-normal text-slate-500">per scherm / mnd</span></p>
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2.5 text-sm text-slate-700 mb-6">
@@ -284,7 +284,7 @@ export default function Landing() {
               </div>
               <CardHeader className="text-center pb-2 pt-7">
                 <CardTitle className="text-lg font-bold text-slate-800">3 schermen</CardTitle>
-                <p className="text-2xl font-bold text-emerald-600 mt-2">€129,99 <span className="text-sm font-normal text-slate-500">p/m</span></p>
+                <p className="text-2xl font-bold text-emerald-600 mt-2">€43,33 <span className="text-sm font-normal text-slate-500">per scherm / mnd</span></p>
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2.5 text-sm text-slate-700 mb-6">
@@ -318,7 +318,7 @@ export default function Landing() {
             <Card className="border-2 border-slate-200 bg-white hover:border-emerald-300 hover:shadow-md transition-all">
               <CardHeader className="text-center pb-2 pt-6">
                 <CardTitle className="text-lg font-bold text-slate-800">10 schermen</CardTitle>
-                <p className="text-2xl font-bold text-emerald-600 mt-2">€299,99 <span className="text-sm font-normal text-slate-500">p/m</span></p>
+                <p className="text-2xl font-bold text-emerald-600 mt-2">€30,00 <span className="text-sm font-normal text-slate-500">per scherm / mnd</span></p>
               </CardHeader>
               <CardContent>
                 <ul className="space-y-2.5 text-sm text-slate-700 mb-6">
@@ -463,8 +463,8 @@ export default function Landing() {
                   Wat kost adverteren op digitale reclame schermen?
                 </AccordionTrigger>
                 <AccordionContent className="text-slate-600 text-sm pb-5">
-                  Onze pakketten beginnen bij €49,99 per maand. Prijzen zijn afhankelijk van het aantal schermen. 
-                  Je levert je eigen video aan. Neem contact op voor een vrijblijvende offerte.
+                  Vanaf €30 per scherm / maand (bij 10 schermen). Meer schermen = lagere prijs per scherm. 
+                  Je levert je eigen video aan. Minimale looptijd is 6 maanden.
                 </AccordionContent>
               </AccordionItem>
               <AccordionItem value="item-3" className="bg-white rounded-xl border-2 border-slate-100 px-5 hover:border-emerald-200 transition-colors shadow-sm">

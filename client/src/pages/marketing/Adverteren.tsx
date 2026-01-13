@@ -184,12 +184,12 @@ export default function Adverteren() {
             Bekijk onze pakketten
           </h2>
           <p className="text-center text-slate-600 mb-8 max-w-lg mx-auto">
-            Duidelijke prijzen, vaste maandkosten
+            Vanaf €30 per scherm / maand. Meer schermen = lagere prijs per scherm.
           </p>
           <div className="text-center">
             <Button asChild size="lg" className="gap-2 bg-emerald-600 hover:bg-emerald-700">
               <Link href="/prijzen">
-                Bekijk prijzen
+                Bekijk prijzen per scherm
                 <ArrowRight className="h-5 w-5" />
               </Link>
             </Button>
