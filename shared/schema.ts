@@ -82,9 +82,25 @@ export const advertisers = pgTable("advertisers", {
   moneybirdLastSyncAt: timestamp("moneybird_last_sync_at"),
   // Status & meta
   status: text("status").notNull().default("active"), // active, paused, churned
-  onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | completed
+  onboardingStatus: text("onboarding_status").default("invited"), // INVITED | DETAILS_SUBMITTED | PACKAGE_SELECTED | CONTRACT_PENDING_OTP | CONTRACT_ACCEPTED | READY_FOR_ASSET | ASSET_RECEIVED | LIVE
   source: text("source"), // Face-to-face, Telefoon, Website, etc
   notes: text("notes"), // Interne notities (max 500 chars)
+  // LinkKey voor Yodeck matching (ADV-BEDRIJFSNAAM-ABC123)
+  linkKey: text("link_key").unique(), // Unieke key voor asset matching
+  linkKeyGeneratedAt: timestamp("link_key_generated_at"),
+  // Pakket selectie
+  packageType: text("package_type"), // SINGLE | TRIPLE | TEN | CUSTOM
+  screensIncluded: integer("screens_included"), // Aantal schermen in pakket
+  packagePrice: decimal("package_price", { precision: 10, scale: 2 }), // Maandelijkse prijs
+  packageNotes: text("package_notes"), // Toelichting bij CUSTOM pakket
+  // Asset/video status
+  assetStatus: text("asset_status").default("none"), // none | received | live
+  // Onboarding akkoord (OTP-based)
+  acceptedTermsAt: timestamp("accepted_terms_at"), // Wanneer akkoord gegeven
+  acceptedTermsIp: text("accepted_terms_ip"), // IP adres bij akkoord
+  acceptedTermsUserAgent: text("accepted_terms_user_agent"), // Browser info bij akkoord
+  acceptedTermsVersion: text("accepted_terms_version"), // Versie AV/Privacy
+  acceptedTermsPdfUrl: text("accepted_terms_pdf_url"), // Opgeslagen PDF akkoordverklaring
   // Email tracking timestamps (idempotency)
   inviteEmailSentAt: timestamp("invite_email_sent_at"), // When portal invite was sent
   confirmationEmailSentAt: timestamp("confirmation_email_sent_at"), // When submission confirmation was sent

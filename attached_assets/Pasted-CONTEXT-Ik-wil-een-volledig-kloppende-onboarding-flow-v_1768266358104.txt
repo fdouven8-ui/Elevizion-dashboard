@@ -1,0 +1,195 @@
+CONTEXT
+Ik wil een volledig kloppende onboarding flow voor “Nieuwe Adverteerder”.
+Op dit moment is onduidelijk waar vinkjes/akkoorden zitten. Dit moet centraal, logisch en afdwingbaar worden ingericht.
+
+DOEL
+Een lineaire onboarding met harde stappen:
+INVITE → GEGEVENS → PAKKET → AKKOORD (checkboxes + OTP) → “WAT NU?” MAIL → YODECK KOPPELING → LIVE
+
+BELANGRIJK
+- Zoek eerst actief in de code waar huidige checkboxes, akkoord, contract of SEPA-logica zit.
+- Maak deze zichtbaar, verplaats of vervang ze door één centrale contract/acceptance module.
+- Geen halve oplossingen: OTP + audit trail + PDF is verplicht.
+- Oude externe signing (SignRequest / Dropbox / Box / etc.) volledig verwijderen.
+
+────────────────────────
+ONBOARDING STATES (ENUM)
+────────────────────────
+Advertiser.onboardingStatus:
+
+1. INVITED
+2. DETAILS_SUBMITTED
+3. PACKAGE_SELECTED
+4. CONTRACT_PENDING_OTP
+5. CONTRACT_ACCEPTED
+6. READY_FOR_ASSET
+7. ASSET_RECEIVED
+8. LIVE
+
+────────────────────────
+STAP 0 – INVITE (ADMIN)
+────────────────────────
+Admin vult alleen in:
+- bedrijfsnaam
+- e-mailadres
+
+Systeem:
+- maakt advertiser record
+- genereert onboardingToken
+- genereert linkKey (zie verder)
+- verstuurt mail met invul-link
+- status = INVITED
+
+────────────────────────
+STAP 1 – GEGEVENS INVULLEN (PUBLIC LINK)
+────────────────────────
+Adverteerder vult ALLE benodigde gegevens in:
+- bedrijfsgegevens
+- contactpersoon
+- facturatiegegevens (Moneybird-vereisten)
+
+Na submit:
+- maak/update Moneybird contact
+- sla moneybirdContactId op
+- status → DETAILS_SUBMITTED
+
+────────────────────────
+STAP 2 – PAKKET KIEZEN
+────────────────────────
+Toon exact 4 opties:
+
+1) 1 scherm
+   - packageType = SINGLE
+   - screensIncluded = 1
+   - price = 49.99
+
+2) 3 schermen
+   - packageType = TRIPLE
+   - screensIncluded = 3
+   - price = 129.99
+
+3) 10 schermen
+   - packageType = TEN
+   - screensIncluded = 10
+   - price = 299.99
+
+4) Custom
+   - packageType = CUSTOM
+   - toon veld “Wens / toelichting”
+   - prijs/screens pas later door admin vast te zetten
+
+Na keuze:
+- sla pakketgegevens op
+- status → PACKAGE_SELECTED
+
+────────────────────────
+STAP 3 – AKKOORD + OTP (CENTRAAL)
+────────────────────────
+Toon nu pas de akkoordstap.
+
+Checkboxes (ALLE verplicht):
+☑ Algemene Voorwaarden
+☑ Privacyverklaring
+☑ SEPA automatische incasso
+
+Daarna:
+- knop “Verstuur bevestigingscode”
+- genereer 6-cijferige OTP
+- geldig 15 minuten
+- max 5 pogingen
+- mail via no-reply@elevizion.nl
+
+Na correcte OTP:
+- status → CONTRACT_ACCEPTED
+- maak audit trail (email, tijd, ip, user-agent)
+- genereer PDF akkoordverklaring
+- sla PDF op bij advertiser
+- zet status → READY_FOR_ASSET
+
+────────────────────────
+LINK-KEY (ZEER BELANGRIJK)
+────────────────────────
+Genereer bij INVITED automatisch:
+
+linkKey =
+"ADV-" + BEDRIJFSNAAM_ZONDER_SPATIES_EN_CAPS + "-" + RANDOM_6_CHARS
+
+Voorbeeld:
+ADV-BAKERIJSITTARD-A9F3K2
+
+Sla op bij advertiser:
+- linkKey (string)
+- linkKeyGeneratedAt
+
+Deze key wordt:
+- getoond in dashboard
+- gebruikt in mail
+- gebruikt voor Yodeck koppeling
+
+────────────────────────
+AUTOMATISCHE “WAT NU?” MAIL
+────────────────────────
+Verstuur DIRECT na CONTRACT_ACCEPTED.
+
+Onderwerp:
+"Volgende stap – lever je advertentievideo aan"
+
+Inhoud (belangrijk):
+- bevestiging dat alles akkoord is
+- duidelijke instructie:
+
+“Gebruik ONDERSTAANDE CODE in de bestandsnaam:
+{{linkKey}}
+
+Bestandsnaam voorbeeld:
+{{linkKey}}_bedrijfsnaam.mp4”
+
+- specs:
+  - mp4
+  - max 10–15 sec
+  - zonder audio
+  - 1080p
+- mailen naar: info@elevizion.nl
+
+Mail moet de linkKey letterlijk bevatten zodat deze gekopieerd kan worden.
+
+────────────────────────
+YODECK AUTO-KOPPELING
+────────────────────────
+Dashboard sync met Yodeck:
+
+Als een nieuw media item verschijnt waarbij:
+- titel, tag of bestandsnaam bevat {{linkKey}}
+
+Dan:
+- koppel media aan advertiser
+- zet assetStatus = ASSET_RECEIVED
+- zodra media in playlist staat → status = LIVE
+
+NOOIT matchen op alleen bedrijfsnaam.
+
+────────────────────────
+DASHBOARD (ADMIN)
+────────────────────────
+In adverteerder detail:
+- onboardingStatus (badge)
+- pakket + prijs
+- contractstatus + PDF download
+- linkKey (copy button)
+- assetStatus (NONE / RECEIVED / LIVE)
+
+Custom package:
+- admin kan screensIncluded + prijs aanpassen
+- pas daarna facturatie mogelijk
+
+────────────────────────
+FACTURATIE / SEPA
+────────────────────────
+- Geen facturatie of incasso starten vóór CONTRACT_ACCEPTED
+- Daarna pas abonnement activeren in Moneybird
+
+────────────────────────
+OPRUIMEN
+────────────────────────
+- Verwijder ALLE oude signing code
+- G

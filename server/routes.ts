@@ -64,6 +64,7 @@ import {
 import { setupAuth, registerAuthRoutes, isAuthenticated, requirePermission } from "./replit_integrations/auth";
 import { getScreenStats, getAdvertiserStats, clearStatsCache, checkYodeckScreenHasContent } from "./yodeckStats";
 import { classifyMediaItems } from "./services/mediaClassifier";
+import * as advertiserOnboarding from "./services/advertiserOnboarding";
 
 // ============================================================================
 // IN-MEMORY CACHE (10 second TTL for control-room endpoints)
@@ -1102,6 +1103,251 @@ Sitemap: ${SITE_URL}/sitemap.xml
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // ADVERTISER ONBOARDING (New Multi-Step Flow)
+  // ============================================================================
+
+  app.post("/api/advertiser-onboarding/invite", isAuthenticated, async (req, res) => {
+    try {
+      const schema = z.object({
+        companyName: z.string().min(1),
+        email: z.string().email(),
+      });
+      const { companyName, email } = schema.parse(req.body);
+      
+      const baseUrl = process.env.PUBLIC_PORTAL_URL 
+        || (req.headers.origin ? req.headers.origin : null)
+        || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : null)
+        || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      
+      const result = await advertiserOnboarding.inviteAdvertiser(companyName, email, baseUrl);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+      res.json(result);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/advertiser-onboarding/:token", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const portalToken = await storage.getPortalTokenByHash(tokenHash);
+      
+      if (!portalToken) {
+        return res.status(404).json({ message: "Link niet gevonden" });
+      }
+      
+      if (portalToken.usedAt) {
+        return res.status(410).json({ message: "Deze link is al gebruikt" });
+      }
+      
+      if (new Date() > new Date(portalToken.expiresAt)) {
+        return res.status(410).json({ message: "Deze link is verlopen" });
+      }
+      
+      const advertiser = await storage.getAdvertiser(portalToken.advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      res.json({
+        advertiserId: advertiser.id,
+        companyName: advertiser.companyName,
+        contactName: advertiser.contactName,
+        email: advertiser.email,
+        phone: advertiser.phone,
+        street: advertiser.street,
+        zipcode: advertiser.zipcode,
+        city: advertiser.city,
+        country: advertiser.country,
+        kvkNumber: advertiser.kvkNumber,
+        vatNumber: advertiser.vatNumber,
+        iban: advertiser.iban,
+        ibanAccountHolder: advertiser.ibanAccountHolder,
+        onboardingStatus: advertiser.onboardingStatus,
+        packageType: advertiser.packageType,
+        screensIncluded: advertiser.screensIncluded,
+        packagePrice: advertiser.packagePrice,
+        linkKey: advertiser.linkKey,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/advertiser-onboarding/:token/details", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const portalToken = await storage.getPortalTokenByHash(tokenHash);
+      
+      if (!portalToken || portalToken.usedAt || new Date() > new Date(portalToken.expiresAt)) {
+        return res.status(410).json({ message: "Ongeldige of verlopen link" });
+      }
+
+      const schema = z.object({
+        companyName: z.string().min(1),
+        contactName: z.string().min(1),
+        email: z.string().email(),
+        phone: z.string().optional(),
+        street: z.string().optional(),
+        zipcode: z.string().optional(),
+        city: z.string().optional(),
+        country: z.string().optional(),
+        vatNumber: z.string().optional(),
+        kvkNumber: z.string().optional(),
+        iban: z.string().optional(),
+        ibanAccountHolder: z.string().optional(),
+      });
+
+      const details = schema.parse(req.body);
+      const result = await advertiserOnboarding.submitAdvertiserDetails(portalToken.advertiserId, details);
+      
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/advertiser-onboarding/:token/package", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const portalToken = await storage.getPortalTokenByHash(tokenHash);
+      
+      if (!portalToken || portalToken.usedAt || new Date() > new Date(portalToken.expiresAt)) {
+        return res.status(410).json({ message: "Ongeldige of verlopen link" });
+      }
+
+      const schema = z.object({
+        packageType: z.enum(["SINGLE", "TRIPLE", "TEN", "CUSTOM"]),
+        customNotes: z.string().optional(),
+      });
+
+      const { packageType, customNotes } = schema.parse(req.body);
+      const result = await advertiserOnboarding.selectPackage(
+        portalToken.advertiserId,
+        packageType as advertiserOnboarding.PackageType,
+        customNotes
+      );
+      
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/advertiser-onboarding/:token/send-otp", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const portalToken = await storage.getPortalTokenByHash(tokenHash);
+      
+      if (!portalToken || portalToken.usedAt || new Date() > new Date(portalToken.expiresAt)) {
+        return res.status(410).json({ message: "Ongeldige of verlopen link" });
+      }
+
+      const result = await advertiserOnboarding.sendAcceptanceOtp(portalToken.advertiserId);
+      
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+      res.json({ success: true, message: "Bevestigingscode verzonden per e-mail" });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/advertiser-onboarding/:token/verify-otp", async (req, res) => {
+    try {
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      const portalToken = await storage.getPortalTokenByHash(tokenHash);
+      
+      if (!portalToken || new Date() > new Date(portalToken.expiresAt)) {
+        return res.status(410).json({ message: "Ongeldige of verlopen link" });
+      }
+
+      const schema = z.object({
+        otpCode: z.string().length(6),
+        acceptedTerms: z.boolean(),
+        acceptedPrivacy: z.boolean(),
+        acceptedSepa: z.boolean(),
+      });
+
+      const { otpCode, acceptedTerms, acceptedPrivacy, acceptedSepa } = schema.parse(req.body);
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+      const userAgent = req.headers["user-agent"] || "unknown";
+
+      const result = await advertiserOnboarding.verifyAcceptanceOtp(
+        portalToken.advertiserId,
+        otpCode,
+        ip,
+        userAgent,
+        acceptedTerms,
+        acceptedPrivacy,
+        acceptedSepa
+      );
+      
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+
+      await storage.markPortalTokenUsed(portalToken.id);
+
+      const baseUrl = process.env.PUBLIC_PORTAL_URL 
+        || (req.headers.origin ? req.headers.origin : null)
+        || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : null)
+        || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      
+      await advertiserOnboarding.transitionToReadyForAsset(portalToken.advertiserId, baseUrl);
+
+      res.json({ success: true, message: "Akkoord bevestigd!" });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.get("/api/advertisers/:id/onboarding-progress", isAuthenticated, async (req, res) => {
+    try {
+      const progress = await advertiserOnboarding.getOnboardingProgress(req.params.id);
+      if (!progress) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      res.json(progress);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/advertisers/:id/mark-asset-received", isAuthenticated, async (req, res) => {
+    try {
+      const result = await advertiserOnboarding.markAssetReceived(req.params.id);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.post("/api/advertisers/:id/mark-live", isAuthenticated, async (req, res) => {
+    try {
+      const result = await advertiserOnboarding.markLive(req.params.id);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
     }
   });
 

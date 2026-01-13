@@ -329,6 +329,36 @@ export default function AdvertiserDetail() {
     }
   };
 
+  const getOnboardingBadge = (status: string | null | undefined) => {
+    const statusMap: Record<string, { label: string; className: string }> = {
+      "INVITED": { label: "Uitgenodigd", className: "bg-blue-100 text-blue-800" },
+      "DETAILS_SUBMITTED": { label: "Gegevens ingevuld", className: "bg-indigo-100 text-indigo-800" },
+      "PACKAGE_SELECTED": { label: "Pakket gekozen", className: "bg-purple-100 text-purple-800" },
+      "CONTRACT_PENDING_OTP": { label: "Wacht op OTP", className: "bg-amber-100 text-amber-800" },
+      "CONTRACT_ACCEPTED": { label: "Akkoord gegeven", className: "bg-green-100 text-green-800" },
+      "READY_FOR_ASSET": { label: "Klaar voor video", className: "bg-teal-100 text-teal-800" },
+      "ASSET_RECEIVED": { label: "Video ontvangen", className: "bg-cyan-100 text-cyan-800" },
+      "LIVE": { label: "Live", className: "bg-green-500 text-white" },
+      "draft": { label: "Concept", className: "bg-gray-100 text-gray-700" },
+      "invited": { label: "Uitgenodigd", className: "bg-blue-100 text-blue-800" },
+      "completed": { label: "Voltooid", className: "bg-green-100 text-green-800" },
+    };
+    const config = statusMap[status || "draft"] || { label: status || "Onbekend", className: "bg-gray-100 text-gray-700" };
+    return <Badge className={config.className}>{config.label}</Badge>;
+  };
+
+  const getAssetBadge = (status: string | null | undefined) => {
+    switch (status) {
+      case "received":
+        return <Badge className="bg-cyan-100 text-cyan-800"><Camera className="h-3 w-3 mr-1" />Ontvangen</Badge>;
+      case "live":
+        return <Badge className="bg-green-100 text-green-800"><Play className="h-3 w-3 mr-1" />Live</Badge>;
+      default:
+        return <Badge variant="outline" className="text-muted-foreground">Nog niet ontvangen</Badge>;
+    }
+  };
+
+
   return (
     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="flex items-center gap-4">
@@ -345,7 +375,7 @@ export default function AdvertiserDetail() {
             {getStatusBadge(advertiser.status)}
           </div>
           <p className="text-muted-foreground">{advertiser.contactName}</p>
-          <div className="mt-2">
+          <div className="mt-2 flex items-center gap-3 flex-wrap">
             <SyncStatusBadge
               status={advertiser.moneybirdSyncStatus}
               provider="moneybird"
@@ -354,6 +384,23 @@ export default function AdvertiserDetail() {
               error={advertiser.moneybirdSyncError}
               lastSyncAt={advertiser.moneybirdLastSyncAt}
             />
+            {getOnboardingBadge(advertiser.onboardingStatus)}
+            {advertiser.assetStatus && getAssetBadge(advertiser.assetStatus)}
+            {advertiser.linkKey && (
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 rounded-md text-sm font-mono">
+                <Share2 className="h-3.5 w-3.5 text-slate-500" />
+                <span className="text-slate-700">{advertiser.linkKey}</span>
+                <Button 
+                  variant="ghost" 
+                  size="icon"
+                  className="h-5 w-5"
+                  onClick={() => copyToClipboard(advertiser.linkKey!, "LinkKey")}
+                  data-testid="button-copy-linkkey"
+                >
+                  {copiedField === "LinkKey" ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
+                </Button>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex gap-2">

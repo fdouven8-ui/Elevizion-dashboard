@@ -39,6 +39,7 @@ import Leads from "@/pages/Leads";
 import Payouts from "@/pages/Payouts";
 import Contracts from "@/pages/Contracts";
 import ContractSigning from "@/pages/ContractSigning";
+import AdvertiserOnboarding from "@/pages/AdvertiserOnboarding";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -90,6 +91,7 @@ function Router() {
       <Route path="/regio/roermond">{() => <LocalLanding city="roermond" />}</Route>
       <Route path="/regio/venlo">{() => <LocalLanding city="venlo" />}</Route>
       <Route path="/contract-ondertekenen/:id" component={ContractSigning} />
+      <Route path="/advertiser-onboarding/:token" component={AdvertiserOnboarding} />
       <Route component={DashboardRouter} />
     </Switch>
   );
