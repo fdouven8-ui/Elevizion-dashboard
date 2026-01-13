@@ -240,158 +240,164 @@ export default function Landing() {
         <div className="container mx-auto px-4">
           <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-3">Pakketten</h2>
           <p className="text-center text-slate-600 mb-14 max-w-lg mx-auto">
-            Indicatiepakketten. We stemmen altijd af op locatie, doelgroep en budget.
+            Kies een pakket. Je levert je advertentievideo zelf aan — wij plaatsen 'm op de schermen.
           </p>
-          <div className="grid md:grid-cols-3 gap-6 max-w-5xl mx-auto">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-5 max-w-6xl mx-auto">
             <Card className="border-2 border-slate-200 bg-white hover:border-emerald-300 hover:shadow-md transition-all">
               <CardHeader className="text-center pb-2 pt-6">
-                <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3">
-                  <Monitor className="h-5 w-5" />
-                </div>
-                <CardTitle className="text-lg font-bold text-slate-800">Starter</CardTitle>
-                <p className="text-sm text-slate-500">Om te beginnen</p>
+                <CardTitle className="text-lg font-bold text-slate-800">1 scherm</CardTitle>
+                <p className="text-2xl font-bold text-emerald-600 mt-2">€49,99 <span className="text-sm font-normal text-slate-500">p/m</span></p>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-3 text-sm text-slate-700 mb-6">
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-emerald-600" />
-                    </div>
+                <ul className="space-y-2.5 text-sm text-slate-700 mb-6">
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                     <span>1 schermlocatie</span>
                   </li>
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-emerald-600" />
-                    </div>
-                    <span>Meerdere keren per uur zichtbaar</span>
-                  </li>
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-emerald-600" />
-                    </div>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                     <span>Klant levert video aan</span>
                   </li>
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-emerald-600" />
-                    </div>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                     <span>Min. looptijd: 6 maanden</span>
                   </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Lokaal bereik</span>
+                  </li>
                 </ul>
-                <Button 
-                  variant="outline" 
-                  className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors font-semibold"
-                  onClick={() => setAdvertiserModalOpen(true)}
-                >
-                  Meer info
-                </Button>
+                <Link href="/prijzen">
+                  <Button 
+                    variant="outline" 
+                    className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors font-semibold"
+                  >
+                    Bekijk details
+                  </Button>
+                </Link>
               </CardContent>
             </Card>
 
-            <Card className="border-2 border-emerald-600 relative bg-gradient-to-b from-emerald-50 to-white shadow-xl shadow-emerald-100 scale-105">
-              <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-sm font-bold px-5 py-1.5 rounded-full shadow-lg">
+            <Card className="border-2 border-emerald-600 relative bg-gradient-to-b from-emerald-50 to-white shadow-xl shadow-emerald-100">
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-xs font-bold px-4 py-1 rounded-full shadow-lg">
                 Populair
               </div>
-              <CardHeader className="text-center pb-2 pt-8">
-                <div className="w-12 h-12 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto mb-3 shadow-lg">
-                  <Monitor className="h-6 w-6" />
-                </div>
-                <CardTitle className="text-xl font-bold text-slate-800">Local Plus</CardTitle>
-                <p className="text-sm text-emerald-600 font-medium">Meest gekozen</p>
+              <CardHeader className="text-center pb-2 pt-7">
+                <CardTitle className="text-lg font-bold text-slate-800">3 schermen</CardTitle>
+                <p className="text-2xl font-bold text-emerald-600 mt-2">€129,99 <span className="text-sm font-normal text-slate-500">p/m</span></p>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-3 text-sm text-slate-700 mb-6">
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-white" />
-                    </div>
+                <ul className="space-y-2.5 text-sm text-slate-700 mb-6">
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                     <span className="font-medium">3 schermlocaties</span>
                   </li>
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-white" />
-                    </div>
-                    <span className="font-medium">Meer zendtijd, langere spots</span>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Klant levert video aan</span>
                   </li>
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-white" />
-                    </div>
-                    <span className="font-medium">Klant levert video aan</span>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Min. looptijd: 6 maanden</span>
                   </li>
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-600 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-white" />
-                    </div>
-                    <span className="font-medium">Min. looptijd: 6 maanden</span>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Lokaal bereik</span>
                   </li>
                 </ul>
-                <Button 
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 transition-colors font-semibold text-base py-5 shadow-lg"
-                  onClick={() => setAdvertiserModalOpen(true)}
-                >
-                  Meer info
-                </Button>
+                <Link href="/prijzen">
+                  <Button 
+                    className="w-full bg-emerald-600 hover:bg-emerald-700 transition-colors font-semibold shadow-lg"
+                  >
+                    Bekijk details
+                  </Button>
+                </Link>
               </CardContent>
             </Card>
 
             <Card className="border-2 border-slate-200 bg-white hover:border-emerald-300 hover:shadow-md transition-all">
               <CardHeader className="text-center pb-2 pt-6">
-                <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3">
-                  <Monitor className="h-5 w-5" />
-                </div>
-                <CardTitle className="text-lg font-bold text-slate-800">Premium</CardTitle>
-                <p className="text-sm text-slate-500">Maximaal bereik</p>
+                <CardTitle className="text-lg font-bold text-slate-800">10 schermen</CardTitle>
+                <p className="text-2xl font-bold text-emerald-600 mt-2">€299,99 <span className="text-sm font-normal text-slate-500">p/m</span></p>
               </CardHeader>
               <CardContent>
-                <ul className="space-y-3 text-sm text-slate-700 mb-6">
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-emerald-600" />
-                    </div>
-                    <span>Meerdere schermen naar wens</span>
+                <ul className="space-y-2.5 text-sm text-slate-700 mb-6">
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span className="font-medium">10 schermlocaties</span>
                   </li>
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-emerald-600" />
-                    </div>
-                    <span>Voorrang op toplocaties</span>
-                  </li>
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-emerald-600" />
-                    </div>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                     <span>Klant levert video aan</span>
                   </li>
-                  <li className="flex items-center gap-2.5">
-                    <div className="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
-                      <Check className="h-3 w-3 text-emerald-600" />
-                    </div>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                     <span>Min. looptijd: 6 maanden</span>
                   </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Breed lokaal bereik</span>
+                  </li>
                 </ul>
-                <Button 
-                  variant="outline" 
-                  className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors font-semibold"
-                  onClick={() => setAdvertiserModalOpen(true)}
-                >
-                  Meer info
-                </Button>
+                <Link href="/prijzen">
+                  <Button 
+                    variant="outline" 
+                    className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors font-semibold"
+                  >
+                    Bekijk details
+                  </Button>
+                </Link>
+              </CardContent>
+            </Card>
+
+            <Card className="border-2 border-slate-200 bg-white hover:border-emerald-300 hover:shadow-md transition-all">
+              <CardHeader className="text-center pb-2 pt-6">
+                <CardTitle className="text-lg font-bold text-slate-800">Custom</CardTitle>
+                <p className="text-2xl font-bold text-emerald-600 mt-2">Op aanvraag</p>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-2.5 text-sm text-slate-700 mb-6">
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Meer schermen / maatwerk</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Klant levert video aan</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Min. looptijd: 6 maanden</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Vraag een voorstel aan</span>
+                  </li>
+                </ul>
+                <Link href="/contact">
+                  <Button 
+                    variant="outline" 
+                    className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white transition-colors font-semibold"
+                  >
+                    Custom aanvragen
+                  </Button>
+                </Link>
               </CardContent>
             </Card>
           </div>
-          <p className="text-center text-sm text-slate-400 mt-10 max-w-md mx-auto">
-            Je levert je eigen video aan. Prijs afhankelijk van locatie.
+          <p className="text-center text-sm text-slate-500 mt-10 max-w-md mx-auto">
+            Alle prijzen excl. BTW. Je levert je eigen video aan.
           </p>
           <div className="text-center mt-3">
-            <Button 
-              variant="link" 
-              className="text-emerald-600 gap-1 transition-colors"
-              onClick={() => setAdvertiserModalOpen(true)}
-            >
-              Start met adverteren
-              <ArrowRight className="h-4 w-4" />
-            </Button>
+            <Link href="/prijzen">
+              <Button 
+                variant="link" 
+                className="text-emerald-600 gap-1 transition-colors"
+              >
+                Alle details bekijken
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
           </div>
         </div>
       </section>

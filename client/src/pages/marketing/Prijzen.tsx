@@ -154,7 +154,7 @@ export default function Prijzen() {
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Voorrang op toplocaties</span>
+                    <span>Breed lokaal bereik</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />

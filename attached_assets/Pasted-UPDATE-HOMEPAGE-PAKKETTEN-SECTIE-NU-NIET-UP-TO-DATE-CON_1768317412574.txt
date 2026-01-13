@@ -1,0 +1,85 @@
+UPDATE HOMEPAGE “PAKKETTEN” SECTIE (NU NIET UP-TO-DATE)
+
+CONTEXT
+Op de homepage staat een “Pakketten” sectie met kaarten (Starter / Local Plus / Premium) en tekst zoals:
+- “Indicatiepakketten. We stemmen altijd af op locatie, doelgroep en budget.”
+- Features zoals “meer zendtijd, langere spots” en “voorrang op toplocaties”
+Dit klopt niet meer met het nieuwe aanbod en we bespreken niet altijd alles.
+
+DOEL
+Vervang deze hele homepage-sectie door een up-to-date pricing preview die exact aansluit op de echte pakketten en werkwijze:
+- 1 scherm €49,99 p/m
+- 3 schermen €129,99 p/m
+- 10 schermen €299,99 p/m
+- Custom op aanvraag
+Met duidelijke, eerlijke bullets: klant levert video aan + minimale looptijd (6 maanden) + lokale zichtbaarheid.
+Geen claims over “voorrang” of “altijd afstemmen” of “meer zendtijd”.
+
+BELANGRIJK
+- Pas alleen deze homepage-sectie aan (component + copy). Geen redesign van de hele site.
+- Houd dezelfde visuele stijl (cards), maar update inhoud en CTA’s.
+- Zorg dat de CTA’s werken en naar echte pagina’s gaan.
+
+A) COPY UPDATES (HELEMAAL CONSISTENT)
+1) Sectie titel: “Pakketten”
+2) Subtekst vervangen door iets dat altijd klopt, bijv:
+   “Kies een pakket. Je levert je advertentievideo zelf aan — wij plaatsen ’m op de schermen.”
+   (NIET: “we stemmen altijd af…”)
+
+B) KAARTEN (VERVANG STARTER/LOCAL PLUS/PREMIUM)
+Maak 4 kaarten met deze labels:
+
+Kaart 1: “1 scherm”
+- Prijs: “€49,99 p/m”
+- Bullets (allemaal waar):
+  - “1 schermlocatie”
+  - “Klant levert video aan”
+  - “Min. looptijd: 6 maanden”
+  - “Lokaal bereik”
+
+Kaart 2: “3 schermen” (mag “Populair” badge houden)
+- Prijs: “€129,99 p/m”
+- Bullets:
+  - “3 schermlocaties”
+  - “Klant levert video aan”
+  - “Min. looptijd: 6 maanden”
+  - “Lokaal bereik”
+
+Kaart 3: “10 schermen”
+- Prijs: “€299,99 p/m”
+- Bullets:
+  - “10 schermlocaties”
+  - “Klant levert video aan”
+  - “Min. looptijd: 6 maanden”
+  - “Breed lokaal bereik”
+
+Kaart 4: “Custom”
+- Prijs: “Op aanvraag”
+- Bullets:
+  - “Meer schermen / maatwerk”
+  - “Klant levert video aan”
+  - “Min. looptijd: 6 maanden” (alleen als dit ook voor custom geldt)
+  - “Vraag een voorstel aan”
+
+C) CTA’S (MOET WERKEN)
+- Knop op kaart 1–3: “Bekijk details” -> navigeer naar /prijzen (of /adverteren)
+- Knop op Custom: “Custom aanvragen” -> /contact
+- Onder de kaarten een link: “Alle details bekijken →” naar /prijzen
+
+D) “MEER INFO” MAG NIET LOOS ZIJN
+- Verwijder de huidige “Meer info” knoppen als ze niets doen.
+- Of maak ze “Bekijk details” met echte navigatie naar /prijzen.
+- Optioneel: open een modal met korte uitleg, maar navigeren naar /prijzen is eenvoudiger en SEO-vriendelijk.
+
+E) CONSISTENTIECHECK
+- Doorzoek de site op deze claims en verwijder ze als ze nog bestaan in pricing context:
+  “we stemmen altijd af…”
+  “voorrang op toplocaties”
+  “meer zendtijd”
+  “langere spots”
+  “meerdere schermen naar wens” (tenzij alleen bij custom, dan duidelijk maken: “op aanvraag”)
+
+OUTPUT
+- Toon welk bestand de homepage-sectie bevat en wat je hebt aangepast.
+- Bevestig dat de homepage nu exact de 4 pakketten toont met de juiste prijzen.
+- Bevestig dat alle CTA’s werken en naar /prijzen of /contact gaan.
