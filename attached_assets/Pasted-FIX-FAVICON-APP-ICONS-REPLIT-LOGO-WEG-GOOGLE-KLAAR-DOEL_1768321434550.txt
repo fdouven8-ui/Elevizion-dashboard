@@ -1,0 +1,99 @@
+FIX FAVICON + APP ICONS (REPLIT LOGO WEG, GOOGLE KLAAR)
+
+DOEL
+Vervang overal het standaard Replit-icoon door het officiële Elevizion app-icoon.
+Dit moet werken voor:
+- browser tabs
+- bookmarks
+- Google zoekresultaten
+- mobiele home screen icons
+
+BELANGRIJK
+- Dit is GEEN styling-issue maar een head/asset probleem.
+- Replit icons moeten volledig overschreven worden.
+
+────────────────────────
+A) ICON BESTANDEN (VERPLICHT)
+────────────────────────
+Gebruik het bestaande Elevizion logo/app-icoon en zorg dat deze bestanden bestaan in /public (of equivalent):
+
+- /favicon.ico            (min. 48x48, liefst 64x64)
+- /favicon-16x16.png
+- /favicon-32x32.png
+- /favicon-48x48.png      (BELANGRIJK voor Google)
+- /apple-touch-icon.png   (180x180)
+- /android-chrome-192x192.png
+- /android-chrome-512x512.png
+- /site.webmanifest
+
+Als het logo slechts 1 bestand is:
+- genereer automatisch alle varianten
+- gebruik transparante achtergrond
+
+────────────────────────
+B) <HEAD> FIX (OVERSCHRIJF REPLIT)
+────────────────────────
+In de globale layout / document head (bijv. _document.tsx, layout.tsx, index.html):
+
+1) Verwijder of overschrijf ALLE bestaande icon refs
+2) Voeg expliciet toe:
+
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png">
+
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+
+<link rel="manifest" href="/site.webmanifest">
+<meta name="theme-color" content="#0A9F6C">
+
+Zorg dat deze tags daadwerkelijk gerenderd worden op alle pagina’s.
+
+────────────────────────
+C) SITE.WEBMANIFEST
+────────────────────────
+Maak /site.webmanifest met:
+
+{
+  "name": "Elevizion",
+  "short_name": "Elevizion",
+  "icons": [
+    {
+      "src": "/android-chrome-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/android-chrome-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ],
+  "theme_color": "#0A9F6C",
+  "background_color": "#ffffff",
+  "display": "standalone"
+}
+
+────────────────────────
+D) GOOGLE FAVICON REQUIREMENTS (CHECK)
+────────────────────────
+Controleer dat:
+- https://elevizion.nl/favicon.ico direct bereikbaar is
+- https://elevizion.nl/favicon-48x48.png direct bereikbaar is
+- GEEN robots.txt blokkade bestaat voor deze bestanden
+
+────────────────────────
+E) CACHE / REPLIT FIX
+────────────────────────
+- Forceer rebuild / redeploy
+- Cache busting: wijzig favicon bestandsnaam of voeg ?v=1 toe indien nodig
+- Test in incognito + andere browser
+
+────────────────────────
+OUTPUT (VERPLICHT)
+────────────────────────
+1) Bevestig dat het Replit-icoon nergens meer verschijnt
+2) Geef de exacte URL van favicon.ico en favicon-48x48.png
+3) Bevestig dat <head> deze tags bevat op alle pagina’s
+4) Screenshot of beschrijving: browser tab toont Elevizion icoon
