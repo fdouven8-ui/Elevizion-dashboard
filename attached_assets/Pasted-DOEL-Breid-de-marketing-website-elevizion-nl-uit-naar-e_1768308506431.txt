@@ -1,0 +1,108 @@
+DOEL
+Breid de marketing-website (elevizion.nl) uit naar een volledige, duidelijke website met:
+- meerdere pagina’s
+- werkend menu + routing
+- pakketten/prijzen zichtbaar (49,99 / 129,99 / 299,99 / custom)
+- CTA’s die naar de juiste pagina’s gaan
+- “Meer info” geeft echt meer info (niet alleen een knop zonder inhoud)
+
+BELANGRIJK
+- Houd de bestaande styling als basis, maar maak het professioneler/overzichtelijker.
+- Geen extreem redesign, wel duidelijk betere structuur en content.
+- Alles moet SEO-vriendelijk: echte pagina’s met headings, meta title/description per pagina.
+- Knoppen moeten naar routes navigeren (niet alleen anchors).
+
+INFORMATIE (PAKKETTEN)
+Maak een Pricing sectie + aparte pricing pagina met exact deze pakketten:
+1) 1 Scherm — €49,99 p/m
+2) 3 Schermen — €129,99 p/m
+3) 10 Schermen — €299,99 p/m
+4) Custom — “Op aanvraag”
+Vermeld: prijzen per maand, (optioneel) “excl. btw” of “incl. btw” maar kies 1 en gebruik het overal consistent.
+
+WEBSITE STRUCTUUR (PAGINA’S)
+Maak minimaal deze pagina’s (routes):
+- / (Home)
+- /adverteren (Voor adverteerders)
+- /scherm-locatie (Voor ondernemers die een scherm willen)
+- /prijzen (Pricing)
+- /werkwijze (Hoe het werkt)
+- /veelgestelde-vragen (FAQ)
+- /contact (Contact)
+
+MENU / NAVIGATIE (VERPLICHT WERKEND)
+Header menu-items:
+- Adverteren -> /adverteren
+- Scherm op locatie -> /scherm-locatie
+- Prijzen -> /prijzen
+- Werkwijze -> /werkwijze
+- FAQ -> /veelgestelde-vragen
+- Contact -> /contact
+
+Elke menu-click moet navigeren naar een nieuwe pagina (route), met actieve highlight.
+Op mobiel: hamburger menu dat ook correct werkt.
+
+CTA’S (KNOPPEN DIE ECHT WERKEN)
+Op Home:
+- Primair: “Ik wil adverteren” -> /adverteren
+- Secundair: “Ik wil een scherm op mijn locatie” -> /scherm-locatie
+Op Prijzen:
+- “Start met 1 scherm” -> /adverteren (naar stap/sectie “Start”)
+- “Start met 3 schermen” -> /adverteren
+- “Start met 10 schermen” -> /adverteren
+- “Custom aanvragen” -> /contact (of /adverteren met custom optie)
+
+MEER INFO (MOET ÉCHT MEER INFO GEVEN)
+Overal waar “Meer info” staat:
+- Of: maak een accordion / uitklap-blok met extra tekst (wat zit erbij, levertijd, content specs, etc.)
+- Of: link naar de juiste uitlegpagina (Werkwijze/FAQ)
+Maar NOOIT een knop zonder inhoud.
+
+CONTENT (KORTE, DUIDELIJKE TEKSTEN)
+Vul iedere pagina met echte content (NL) en duidelijke uitleg:
+
+/adverteren:
+- Wat is Elevizion, waar hangen de schermen
+- Waarom adverteren (lokaal bereik)
+- Hoe start je (in 3 stappen)
+- Pricing teaser + CTA naar /prijzen
+- Lever je video aan: specs (10-15 sec, mp4, zonder audio, 1080p)
+/scherm-locatie:
+- Wat krijg je als locatie (scherm, content)
+- Wat verwachten we (stroom, plek, bezoekers)
+- Revenue share / voordelen (zonder te technisch)
+/werkwijze:
+- Flow voor adverteerder (gegevens -> pakket -> akkoord -> aanleveren -> live)
+- Flow voor schermlocatie (intake -> review -> akkoord -> installatie -> live)
+/veelgestelde-vragen:
+- 10-15 concrete FAQ’s (duur, opzeggen, video maken, wanneer live, waar te zien, etc.)
+/contact:
+- contactgegevens + formulier (naam, bedrijf, email, telefoon, bericht)
+- formulier moet in backend een lead aanmaken (geen mailto)
+
+LEADS (BELANGRIJK)
+- Verwijder alle mailto links als primaire conversie.
+- Elk formulier (contact + adverteren interesse + schermlocatie interesse) moet:
+  1) een lead record aanmaken in dashboard database
+  2) mij een melding sturen (email of dashboard notification)
+  3) een nette “bedankt” bevestiging tonen
+
+SEO BASIS (MINIMAAL)
+- Per pagina: meta title + meta description
+- H1 per pagina, logisch gebruik H2/H3
+- OpenGraph tags (title/description)
+- Snelle laadtijd, geen zware assets
+
+TECHNISCH
+- Als dit een Next.js/React site is: gebruik echte routes (Next router / React Router).
+- Zorg dat het menu niet “breekt” bij refresh op subpagina’s.
+- Zorg dat alle links in footer ook werken.
+- Voeg een footer toe met: links + KvK/plaats (als bekend) + email.
+
+OUTPUT
+Na implementatie wil ik:
+1) Een lijst met nieuwe pagina’s/routes
+2) Welke bestanden zijn aangepast
+3) Waar de forms/leads binnenkomen in het dashboard
+4) Welke teksten je hebt toegevoegd bij “Meer info”
+5) Kort testplan: klik menu, klik pricing knoppen, verstuur formulier, lead verschijnt, bevestiging werkt
