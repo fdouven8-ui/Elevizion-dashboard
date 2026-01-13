@@ -271,16 +271,6 @@ const INTEGRATION_INFO = {
     ],
     hasSync: true,
   },
-  signrequest: {
-    name: "SignRequest",
-    description: "Digitale handtekeningen voor contracten en mandaten",
-    icon: FileText,
-    color: "text-purple-600",
-    credentials: [],
-    hasSync: false,
-    externalUrl: "https://app.signrequest.com",
-    envVars: ["SIGNREQUEST_API_TOKEN", "SIGNREQUEST_SIGNER1_EMAIL"],
-  },
 };
 
 interface EmailConfigData {
@@ -905,9 +895,7 @@ function IntegrationsTab() {
                     href={
                       service === "yodeck"
                         ? "https://app.yodeck.com"
-                        : service === "moneybird"
-                        ? "https://moneybird.com"
-                        : "https://app.signrequest.com"
+                        : "https://moneybird.com"
                     }
                     target="_blank"
                     rel="noopener noreferrer"
@@ -2483,6 +2471,7 @@ export default function Settings() {
                         const signStatusLabel: Record<string, string> = {
                           none: "-",
                           sent: "Verzonden",
+                          verified: "OTP geverifieerd",
                           signing: "Bezig...",
                           signed: "Getekend",
                           declined: "Afgewezen",
@@ -2492,6 +2481,7 @@ export default function Settings() {
                         const signStatusVariant: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
                           none: "outline",
                           sent: "secondary",
+                          verified: "secondary",
                           signing: "secondary",
                           signed: "default",
                           declined: "destructive",
@@ -2524,13 +2514,6 @@ export default function Settings() {
                             </TableCell>
                             <TableCell>
                               <div className="flex gap-1">
-                                {doc.signrequestUrl && (
-                                  <Button variant="ghost" size="sm" asChild title="Open in SignRequest">
-                                    <a href={doc.signrequestUrl} target="_blank" rel="noopener noreferrer">
-                                      <ExternalLink className="h-4 w-4" />
-                                    </a>
-                                  </Button>
-                                )}
                                 {doc.signedPdfUrl && (
                                   <Button variant="ghost" size="sm" asChild title="Download getekende PDF">
                                     <a href={`/api/contract-documents/${doc.id}/signed-pdf`} download>
@@ -2538,8 +2521,11 @@ export default function Settings() {
                                     </a>
                                   </Button>
                                 )}
-                                {doc.status === "draft" && !doc.signStatus?.match(/sent|signing|signed/) && (
+                                {doc.status === "draft" && !doc.signStatus?.match(/sent|verified|signed/) && (
                                   <ContractSendButton docId={doc.id} entityType={doc.entityType} entityId={doc.entityId} />
+                                )}
+                                {doc.signrequestUrl && (
+                                  <Badge variant="outline" className="text-xs">Legacy</Badge>
                                 )}
                               </div>
                             </TableCell>

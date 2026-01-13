@@ -1,0 +1,54 @@
+BELANGRIJK: LEES EERST
+- Verwijder volledig alle oude e-sign integraties (SignRequest / Dropbox Sign / Box Sign / e.d.) uit code, UI, routes, env vars, database velden waar relevant.
+- Vervang dit overal door 1 uniforme interne “Akkoord + OTP” contract-engine.
+- Dit moet PERFECT werken met alle bestaande contract templates in de app.
+- Geen grote refactor: behoud bestaande UI/structuur waar mogelijk, maar maak het contractgedeelte robuust en centraal.
+
+DOEL
+1 centrale contractmodule bouwen die:
+1) Templates beheert (versies, variabelen, preview)
+2) Per klant/locatie een contract kan genereren vanuit een template
+3) Akkoord laat geven via: verplichte vinkjes + e-mail OTP (6 cijfers)
+4) Automatisch bewijs (audit trail) + PDF produceert
+5) Overal in de app dezelfde status/werking gebruikt
+
+SCOPE: WAAR MOET DIT WERKEN
+- Onboarding: Nieuwe Adverteerder
+- Onboarding: Nieuwe Schermlocatie
+- Overal waar nu “Contracten”, “Overeenkomsten”, “SignRequest”, “Ondertekenen”, “E-sign” of vergelijkbaar staat
+- Per klantdetail: contracten overzicht + download PDF(s)
+- Mailflows rondom contracten (uitnodiging, OTP, bevestiging, interne melding)
+
+OPRUIMEN (VERWIJDER OUD)
+1) Zoek en verwijder:
+   - alle SignRequest/DropboxSign/BoxSign imports, clients, services, helpers
+   - alle UI knoppen/flows die externe signing openen
+   - alle API routes die naar externe signing gaan
+   - alle env vars/keys die daarvoor gebruikt werden + referenties in code
+2) Als er “legacy signed” records bestaan:
+   - Laat ze zichtbaar blijven als READ-ONLY “Legacy” met download/view
+   - Zorg dat niets crasht en dat nieuwe contracten uitsluitend via de nieuwe engine lopen
+
+NIEUWE CONTRACT ENGINE (CENTRAAL)
+Maak een module (bijv. /server/contracts of /lib/contracts) met deze onderdelen:
+
+A) Template systeem
+- Table/collection: ContractTemplate
+  velden:
+  - id (uuid)
+  - name (bijv. “Adverteerder Overeenkomst”, “Schermlocatie Overeenkomst”, “Algemene Voorwaarden”, “Privacy”, “SEPA Machtiging”)
+  - category (advertiser|screenlocation|legal|sepa|other)
+  - version (semver of integer)
+  - isActive (bool)
+  - contentHtml (of markdown) = template body
+  - variablesSchema (json) = welke placeholders bestaan
+  - createdAt, updatedAt
+
+- UI: Template beheer (bestaand scherm gebruiken als dat er is)
+  - lijst + versiebeheer
+  - preview render met testdata
+  - “Active version” per template (alleen 1 active per name/category)
+  - wijziging maakt nieuwe versie (oude blijft bewaard)
+
+B) Contract instance per klant/locatie
+- Table/collection: ContractInstance

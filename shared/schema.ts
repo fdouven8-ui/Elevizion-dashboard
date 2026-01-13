@@ -686,7 +686,7 @@ export const integrationLogs = pgTable("integration_logs", {
  */
 export const integrationConfigs = pgTable("integration_configs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  service: text("service").notNull().unique(), // yodeck, moneybird, signrequest
+  service: text("service").notNull().unique(), // yodeck, moneybird
   isEnabled: boolean("is_enabled").notNull().default(false),
   status: text("status").notNull().default("not_configured"), // not_configured, connected, error
   lastTestedAt: timestamp("last_tested_at"),
@@ -1792,6 +1792,7 @@ export const emailLogs = pgTable("email_logs", {
 
 /**
  * ContractDocuments - Track all generated contracts for auditing
+ * Uses internal "Akkoord + OTP" signing instead of external e-sign services
  */
 export const contractDocuments = pgTable("contract_documents", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -1805,14 +1806,22 @@ export const contractDocuments = pgTable("contract_documents", {
   signedAt: timestamp("signed_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-  // SignRequest integration fields
-  signProvider: text("sign_provider"), // signrequest
-  signrequestDocumentId: text("signrequest_document_id"),
-  signrequestUrl: text("signrequest_url"), // View/sign URL
-  signStatus: text("sign_status").default("none"), // none, sent, signing, signed, declined, expired, cancelled
-  signedPdfUrl: text("signed_pdf_url"), // Storage URL for signed PDF
-  signedLogUrl: text("signed_log_url"), // Storage URL for signing log
+  // Internal OTP signing fields (replaces external e-sign services)
+  signProvider: text("sign_provider").default("internal_otp"), // internal_otp (legacy: signrequest)
+  signStatus: text("sign_status").default("none"), // none, sent, verified, signed, expired
+  signedPdfUrl: text("signed_pdf_url"), // Storage URL for signed PDF with audit trail
   sentAt: timestamp("sent_at"),
+  // OTP verification audit trail
+  otpSentAt: timestamp("otp_sent_at"),
+  otpVerifiedAt: timestamp("otp_verified_at"),
+  signerEmail: text("signer_email"),
+  signerName: text("signer_name"),
+  signerIp: text("signer_ip"),
+  signerUserAgent: text("signer_user_agent"),
+  // Legacy SignRequest fields (read-only for old contracts)
+  signrequestDocumentId: text("signrequest_document_id"),
+  signrequestUrl: text("signrequest_url"),
+  signedLogUrl: text("signed_log_url"),
 });
 
 /**

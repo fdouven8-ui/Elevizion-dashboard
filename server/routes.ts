@@ -44,7 +44,6 @@ import {
   syncYodeckScreens,
   getYodeckConfigStatus,
 } from "./integrations";
-import { testConnection as testSignRequestConnection } from "./services/signrequestClient";
 import {
   isEmailConfigured,
   sendContractEmail,
@@ -7442,35 +7441,20 @@ We wensen je een succesvolle maand!`
     }
   });
 
-  // Send contract for signing via SignRequest
+  // Send contract for signing via internal OTP engine
   app.post("/api/contract-documents/:id/send-for-signing", async (req, res) => {
     try {
       const { id } = req.params;
       
-      // Get contract document
       const [doc] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, id));
       if (!doc) {
         return res.status(404).json({ message: "Contract document niet gevonden" });
       }
       
-      if (doc.status !== "draft" && doc.signStatus !== "none") {
+      if (doc.status !== "draft") {
         return res.status(400).json({ message: "Contract is al verzonden of ondertekend" });
       }
 
-      // Check terms acceptance
-      const [termsAcceptanceRecord] = await db.select().from(termsAcceptance)
-        .where(sql`entity_type = ${doc.entityType} AND entity_id = ${doc.entityId}`)
-        .orderBy(desc(termsAcceptance.acceptedAt))
-        .limit(1);
-      
-      if (!termsAcceptanceRecord) {
-        return res.status(400).json({ 
-          message: "Algemene voorwaarden moeten eerst geaccepteerd worden",
-          code: "TERMS_NOT_ACCEPTED"
-        });
-      }
-
-      // Get entity details for signer info
       let customerEmail = "";
       let customerName = "";
       
@@ -7494,176 +7478,93 @@ We wensen je een succesvolle maand!`
         return res.status(400).json({ message: "Klant heeft geen e-mailadres" });
       }
 
-      // Generate PDF from HTML content
-      const { generateContractPdf } = await import("./services/contractPdfService");
-      const pdfBuffer = await generateContractPdf(doc.renderedContent || "");
+      const { sendContractForSigning } = await import("./services/contractEngine");
+      const result = await sendContractForSigning(id, customerEmail, customerName);
 
-      // Create sign request
-      const { createSignRequest, getElevizionSignerEmail } = await import("./services/signrequestClient");
-      const elevizionEmail = getElevizionSignerEmail();
-
-      const signResult = await createSignRequest({
-        pdfBuffer,
-        filename: `contract-${doc.id}.pdf`,
-        signers: [
-          { email: elevizionEmail, firstName: "Elevizion", order: 0 },
-          { email: customerEmail, firstName: customerName, order: 1 },
-        ],
-        subject: `Contract ter ondertekening: ${doc.templateKey}`,
-        message: "Graag uw handtekening zetten op bijgaand contract.",
-        externalId: doc.id,
-      });
-
-      if (!signResult.success) {
-        return res.status(500).json({ message: signResult.error || "SignRequest aanmaken mislukt" });
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
       }
 
-      // Update contract document with SignRequest info
-      await db.update(contractDocuments)
-        .set({
-          status: "sent",
-          signProvider: "signrequest",
-          signrequestDocumentId: signResult.signrequestId,
-          signrequestUrl: signResult.signrequestUrl,
-          signStatus: "sent",
-          sentAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(contractDocuments.id, id));
-
-      res.json({ 
-        message: "Contract verzonden ter ondertekening",
-        signrequestId: signResult.signrequestId,
-        signrequestUrl: signResult.signrequestUrl,
-      });
+      res.json({ message: result.message });
     } catch (error: any) {
       console.error("[send-for-signing] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });
 
-  // SignRequest webhook endpoint
-  app.post("/api/webhooks/signrequest", async (req, res) => {
+  // Verify OTP code for contract signing
+  app.post("/api/contract-documents/:id/verify-otp", async (req, res) => {
     try {
-      const payload = req.body;
-      console.log("[SignRequest Webhook] Received:", JSON.stringify(payload).substring(0, 500));
+      const { id } = req.params;
+      const { code } = req.body;
 
-      const { document, status, uuid } = payload;
-      const externalId = payload.external_id || document?.external_id;
-
-      if (!externalId) {
-        console.warn("[SignRequest Webhook] No external_id found in payload");
-        return res.status(200).json({ received: true, warning: "no external_id" });
+      if (!code || code.length !== 6) {
+        return res.status(400).json({ message: "Voer een 6-cijferige code in" });
       }
 
-      // Find contract document
-      const [doc] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, externalId));
-      if (!doc) {
-        console.warn("[SignRequest Webhook] Contract document not found:", externalId);
-        return res.status(200).json({ received: true, warning: "document not found" });
+      const ip = String(req.ip || req.headers["x-forwarded-for"] || "unknown");
+      const userAgent = String(req.headers["user-agent"] || "unknown");
+
+      const { verifyContractOtp } = await import("./services/contractEngine");
+      const result = await verifyContractOtp(id, code, ip, userAgent);
+
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
       }
 
-      // Map SignRequest status codes
-      let signStatus = doc.signStatus || "sent";
-      let docStatus = doc.status;
-      let signedAt: Date | null = null;
-
-      // SignRequest status codes: si = signed, de = declined, ca = cancelled, ex = expired
-      if (status === "si" || payload.status === "signed") {
-        signStatus = "signed";
-        docStatus = "signed";
-        signedAt = new Date();
-        console.log("[SignRequest Webhook] Document signed:", externalId);
-      } else if (status === "de" || payload.status === "declined") {
-        signStatus = "declined";
-        docStatus = "declined";
-        console.log("[SignRequest Webhook] Document declined:", externalId);
-      } else if (status === "ca" || payload.status === "cancelled") {
-        signStatus = "cancelled";
-        docStatus = "cancelled";
-        console.log("[SignRequest Webhook] Document cancelled:", externalId);
-      } else if (status === "ex" || payload.status === "expired") {
-        signStatus = "expired";
-        docStatus = "expired";
-        console.log("[SignRequest Webhook] Document expired:", externalId);
-      } else if (status === "vi" || payload.status === "viewing") {
-        signStatus = "signing";
-        console.log("[SignRequest Webhook] Document being viewed:", externalId);
-      }
-
-      // Download signed PDF if signed
-      let signedPdfUrl: string | null = null;
-      if (signStatus === "signed" && payload.pdf) {
-        try {
-          const { downloadSignedPdf } = await import("./services/signrequestClient");
-          const pdfResult = await downloadSignedPdf(doc.signrequestDocumentId || uuid);
-          if (pdfResult.success && pdfResult.pdfBuffer) {
-            // Store PDF in object storage
-            const objectStorage = new ObjectStorageService();
-            const storagePath = `.private/contracts/signed-${doc.id}.pdf`;
-            await objectStorage.write(storagePath, pdfResult.pdfBuffer, {
-              contentType: "application/pdf",
-            });
-            signedPdfUrl = storagePath;
-            console.log("[SignRequest Webhook] Signed PDF stored:", storagePath);
-          }
-        } catch (pdfError) {
-          console.error("[SignRequest Webhook] Failed to download signed PDF:", pdfError);
-        }
-      }
-
-      // Update contract document
-      const updateData: any = {
-        signStatus,
-        status: docStatus,
-        updatedAt: new Date(),
-      };
-      if (signedAt) updateData.signedAt = signedAt;
-      if (signedPdfUrl) updateData.signedPdfUrl = signedPdfUrl;
-
-      await db.update(contractDocuments)
-        .set(updateData)
-        .where(eq(contractDocuments.id, externalId));
-
-      res.status(200).json({ received: true, status: signStatus });
+      res.json({ message: result.message, verified: true });
     } catch (error: any) {
-      console.error("[SignRequest Webhook] Error:", error);
-      res.status(200).json({ received: true, error: error.message });
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Finalize contract signature after OTP verification
+  app.post("/api/contract-documents/:id/finalize-signature", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const { finalizeContractSignature } = await import("./services/contractEngine");
+      const result = await finalizeContractSignature(id);
+
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+
+      res.json({ message: "Contract succesvol ondertekend", pdfUrl: result.pdfUrl });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Resend OTP code for contract
+  app.post("/api/contract-documents/:id/resend-otp", async (req, res) => {
+    try {
+      const { id } = req.params;
+
+      const { resendContractOtp } = await import("./services/contractEngine");
+      const result = await resendContractOtp(id);
+
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+
+      res.json({ message: result.message });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
     }
   });
 
   // Get signing status for a contract
   app.get("/api/contract-documents/:id/signing-status", async (req, res) => {
     try {
-      const [doc] = await db.select().from(contractDocuments).where(eq(contractDocuments.id, req.params.id));
-      if (!doc) {
+      const { getContractSigningStatus } = await import("./services/contractEngine");
+      const status = await getContractSigningStatus(req.params.id);
+
+      if (!status) {
         return res.status(404).json({ message: "Contract document niet gevonden" });
       }
 
-      // If we have a SignRequest ID, fetch fresh status
-      if (doc.signrequestDocumentId && doc.signStatus !== "signed") {
-        const { getSignRequestStatus } = await import("./services/signrequestClient");
-        const statusResult = await getSignRequestStatus(doc.signrequestDocumentId);
-        
-        if (statusResult.success) {
-          return res.json({
-            signStatus: doc.signStatus,
-            signrequestUrl: doc.signrequestUrl,
-            sentAt: doc.sentAt,
-            signedAt: doc.signedAt,
-            signedPdfUrl: doc.signedPdfUrl,
-            liveStatus: statusResult,
-          });
-        }
-      }
-
-      res.json({
-        signStatus: doc.signStatus || "none",
-        signrequestUrl: doc.signrequestUrl,
-        sentAt: doc.sentAt,
-        signedAt: doc.signedAt,
-        signedPdfUrl: doc.signedPdfUrl,
-      });
+      res.json(status);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
@@ -9239,7 +9140,7 @@ We wensen je een succesvolle maand!`
   // INTEGRATION CONFIGURATION
   // ============================================================================
 
-  const VALID_SERVICES = ["yodeck", "moneybird", "signrequest"];
+  const VALID_SERVICES = ["yodeck", "moneybird"];
 
   app.get("/api/integrations", requirePermission("manage_integrations"), async (req, res) => {
     try {
@@ -9358,8 +9259,6 @@ We wensen je een succesvolle maand!`
 
         if (service === "moneybird") {
           testResult = await testMoneybirdConnection(credentials);
-        } else if (service === "signrequest") {
-          testResult = await testSignRequestConnection();
         }
       }
 
@@ -9438,7 +9337,6 @@ We wensen je een succesvolle maand!`
       const result: Record<string, Record<string, boolean>> = {
         yodeck: { api_key: false },
         moneybird: { access_token: false, admin_id: false },
-        signrequest: { api_token: false, signer_email: false },
       };
       
       for (const config of configs) {
