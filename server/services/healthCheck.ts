@@ -187,15 +187,21 @@ export async function checkContractModule(): Promise<HealthCheckResult[]> {
     ];
     
     for (const req of requiredTemplates) {
-      const found = templates.find(t => 
-        t.name.toLowerCase().includes(req.key.replace(/_/g, " ")) ||
-        t.name.toLowerCase().includes(req.key.replace(/_/g, ""))
-      );
+      const templateNameLower = req.key.toLowerCase();
+      const found = templates.find(t => {
+        const tName = t.name.toLowerCase();
+        return (
+          tName === templateNameLower ||                              // Exact match with underscore
+          tName.includes(req.key.replace(/_/g, " ")) ||               // "algemene voorwaarden"
+          tName.includes(req.key.replace(/_/g, "")) ||                // "algemenevoorwaarden"
+          tName.includes(templateNameLower.replace(/_/g, " "))        // Normalized with spaces
+        );
+      });
       
       results.push({
         name: `Template: ${req.name}`,
-        status: found ? "PASS" : "WARNING",
-        message: found ? `Aanwezig (ID: ${found.id})` : "Niet gevonden",
+        status: found && found.isEnabled ? "PASS" : "WARNING",
+        message: found && found.isEnabled ? `Aanwezig (v${found.version})` : "Niet gevonden",
         fixSuggestion: !found ? `Maak template "${req.name}" aan in Instellingen → Templates` : undefined,
       });
     }
