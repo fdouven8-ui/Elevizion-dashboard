@@ -1454,6 +1454,40 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  // Bundled PDF download endpoint for advertisers
+  app.get("/api/advertisers/:id/bundle.pdf", isAuthenticated, async (req, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      if (!advertiser.bundledPdfUrl) {
+        return res.status(404).json({ message: "Bundel-PDF niet beschikbaar" });
+      }
+      res.redirect(advertiser.bundledPdfUrl);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Generate bundled PDF for advertiser (manual trigger)
+  app.post("/api/advertisers/:id/generate-bundle", isAuthenticated, async (req, res) => {
+    try {
+      const { generateContractBundle, getAdvertiserBundleContext } = await import("./services/contractBundleService");
+      const context = await getAdvertiserBundleContext(req.params.id);
+      if (!context) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      const result = await generateContractBundle(context);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+      res.json({ success: true, bundledPdfUrl: result.bundledPdfUrl });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ============================================================================
   // LOCATIONS
   // ============================================================================
@@ -1678,6 +1712,40 @@ Sitemap: ${SITE_URL}/sitemap.xml
     try {
       const events = await storage.getLocationOnboardingEvents(req.params.id);
       res.json(events);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Bundled PDF download endpoint for locations
+  app.get("/api/locations/:id/bundle.pdf", isAuthenticated, async (req, res) => {
+    try {
+      const location = await storage.getLocation(req.params.id);
+      if (!location) {
+        return res.status(404).json({ message: "Locatie niet gevonden" });
+      }
+      if (!location.bundledPdfUrl) {
+        return res.status(404).json({ message: "Bundel-PDF niet beschikbaar" });
+      }
+      res.redirect(location.bundledPdfUrl);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Generate bundled PDF for location (manual trigger)
+  app.post("/api/locations/:id/generate-bundle", isAuthenticated, async (req, res) => {
+    try {
+      const { generateContractBundle, getLocationBundleContext } = await import("./services/contractBundleService");
+      const context = await getLocationBundleContext(req.params.id);
+      if (!context) {
+        return res.status(404).json({ message: "Locatie niet gevonden" });
+      }
+      const result = await generateContractBundle(context);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error });
+      }
+      res.json({ success: true, bundledPdfUrl: result.bundledPdfUrl });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }

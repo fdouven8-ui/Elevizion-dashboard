@@ -575,17 +575,7 @@ export async function verifyLocationOtp(
       .set({ usedAt: new Date() })
       .where(eq(verificationCodes.id, codeRecord.id));
 
-    const pdfContent = await generateLocationContractPdf(location, ip, userAgent);
-    let pdfUrl = "";
-    
-    try {
-      const objectStorage = new ObjectStorageService();
-      const fileName = `location-contracts/${location.id}-${Date.now()}.pdf`;
-      pdfUrl = await objectStorage.uploadFile(pdfContent, fileName, "application/pdf");
-    } catch (err) {
-      console.error("[LocationOnboarding] Error uploading PDF:", err);
-    }
-
+    // Update status first
     await db.update(locations)
       .set({
         onboardingStatus: "CONTRACT_ACCEPTED",
@@ -596,16 +586,56 @@ export async function verifyLocationOtp(
         acceptedTermsIp: ip,
         acceptedTermsUserAgent: userAgent,
         acceptedTermsVersion: "1.0",
-        acceptedTermsPdfUrl: pdfUrl || null,
         updatedAt: new Date(),
       })
       .where(eq(locations.id, location.id));
 
+    // Generate bundled contract PDF
+    let bundledPdfUrl = "";
+    try {
+      const { generateContractBundle, getLocationBundleContext } = await import("./contractBundleService");
+      const context = await getLocationBundleContext(location.id);
+      if (context) {
+        // Override audit data with current values
+        context.auditData = {
+          acceptedAt: new Date(),
+          ip,
+          userAgent,
+          acceptedTerms: true,
+          acceptedPrivacy: true,
+        };
+        const result = await generateContractBundle(context);
+        if (result.success && result.bundledPdfUrl) {
+          bundledPdfUrl = result.bundledPdfUrl;
+        }
+      }
+    } catch (bundleErr) {
+      console.error("[LocationOnboarding] Error generating bundle PDF:", bundleErr);
+    }
+
+    // Re-fetch to get updated bundledPdfUrl
+    const [updatedLocation] = await db.select().from(locations).where(eq(locations.id, location.id));
+    const pdfUrl = bundledPdfUrl || updatedLocation?.bundledPdfUrl;
+
+    // Update with PDF URL
+    if (pdfUrl) {
+      await db.update(locations)
+        .set({ acceptedTermsPdfUrl: pdfUrl })
+        .where(eq(locations.id, location.id));
+    }
+
     await db.insert(locationOnboardingEvents).values({
       locationId: location.id,
       eventType: "contract_accepted",
-      eventData: { ip, userAgent, pdfUrl },
+      eventData: { ip, userAgent, bundledPdfUrl: pdfUrl },
     });
+
+    const pdfLink = pdfUrl 
+      ? `<div style="background: #eff6ff; border: 1px solid #2563eb; padding: 16px; border-radius: 8px; margin: 20px 0;">
+          <p style="margin: 0; font-weight: 600; color: #1e40af;">📄 Jouw contractbundel</p>
+          <p style="margin: 8px 0 0 0;"><a href="${pdfUrl}" style="color: #2563eb;">Download je contractdocumenten (PDF)</a></p>
+        </div>`
+      : "";
 
     await sendEmail({
       to: location.email!,
@@ -615,11 +645,11 @@ export async function verifyLocationOtp(
           <h2 style="color: #1a1a1a;">🎉 Je aanmelding is compleet!</h2>
           <p>Beste ${location.contactName || location.name},</p>
           <p>Bedankt voor je akkoord! De aanmelding van <strong>${location.name}</strong> is nu volledig afgerond.</p>
+          ${pdfLink}
           <div style="background: #f0fdf4; padding: 16px; border-radius: 8px; margin: 20px 0; border: 1px solid #86efac;">
             <p style="margin: 0; font-weight: bold; color: #166534;">Wat gebeurt er nu?</p>
             <p style="margin: 8px 0 0 0; color: #166534;">We nemen binnenkort contact met je op om de installatie van het scherm te plannen.</p>
           </div>
-          ${pdfUrl ? `<p><a href="${pdfUrl}" style="color: #2563eb;">Download je akkoordverklaring (PDF)</a></p>` : ""}
           <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
         </div>
       `,
@@ -640,7 +670,7 @@ export async function verifyLocationOtp(
           <p><strong>Adres:</strong> ${location.address || `${location.street} ${location.houseNumber}, ${location.zipcode} ${location.city}`}</p>
           <p><strong>IBAN:</strong> ****${location.bankAccountIban?.slice(-4) || "****"}</p>
           <p><strong>Bezoekers/week:</strong> ${location.visitorsPerWeek}</p>
-          ${pdfUrl ? `<p><a href="${pdfUrl}">Download PDF</a></p>` : ""}
+          ${pdfUrl ? `<p><a href="${pdfUrl}">Download contractbundel (PDF)</a></p>` : ""}
           <p style="text-align: center; margin: 20px 0;">
             <a href="${getBaseUrl()}/locations/${location.id}" style="background: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Bekijk in dashboard</a>
           </p>
