@@ -1,6 +1,37 @@
 import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
+
+interface PublicCompanyProfile {
+  legalName: string;
+  tradeName: string;
+  kvkNumber: string;
+  vatNumber: string;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  addressLine1?: string;
+  postalCode?: string;
+  city?: string;
+  country?: string;
+}
 
 export default function MarketingFooter() {
+  const { data: company } = useQuery<PublicCompanyProfile>({
+    queryKey: ["/api/public/company-profile"],
+    queryFn: async () => {
+      const res = await fetch("/api/public/company-profile");
+      if (!res.ok) return null;
+      return res.json();
+    },
+    staleTime: 60000,
+  });
+
+  const currentYear = new Date().getFullYear();
+  const tradeName = company?.tradeName || "Elevizion";
+  const email = company?.email || "info@elevizion.nl";
+  const kvkNumber = company?.kvkNumber;
+  const vatNumber = company?.vatNumber;
+
   return (
     <footer className="bg-slate-900 text-slate-400 py-12">
       <div className="container mx-auto px-4">
@@ -8,7 +39,7 @@ export default function MarketingFooter() {
           <div>
             <img 
               src="/elevizion-logo.png" 
-              alt="Elevizion" 
+              alt={tradeName}
               className="h-8 w-auto mb-4 brightness-0 invert opacity-80"
               loading="lazy"
             />
@@ -65,10 +96,10 @@ export default function MarketingFooter() {
             <ul className="space-y-2 text-sm">
               <li>
                 <a 
-                  href="mailto:info@elevizion.nl" 
+                  href={`mailto:${email}`}
                   className="hover:text-emerald-400 transition-colors"
                 >
-                  info@elevizion.nl
+                  {email}
                 </a>
               </li>
               <li>
@@ -80,13 +111,22 @@ export default function MarketingFooter() {
           </div>
         </div>
 
-        <div className="border-t border-slate-800 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-          <p className="text-sm">
-            &copy; {new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.
-          </p>
-          <div className="flex items-center gap-4 text-sm">
-            <span>Limburg, Nederland</span>
+        <div className="border-t border-slate-800 pt-8">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+            <p className="text-sm">
+              &copy; {currentYear} {tradeName}. Alle rechten voorbehouden.
+            </p>
+            <div className="flex items-center gap-4 text-sm">
+              <span>Limburg, Nederland</span>
+            </div>
           </div>
+          {(kvkNumber || vatNumber) && (
+            <div className="text-center md:text-left text-xs text-slate-500">
+              {kvkNumber && <span>KvK: {kvkNumber}</span>}
+              {kvkNumber && vatNumber && <span className="mx-2">|</span>}
+              {vatNumber && <span>BTW: {vatNumber}</span>}
+            </div>
+          )}
         </div>
       </div>
     </footer>
