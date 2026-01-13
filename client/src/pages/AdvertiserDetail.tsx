@@ -48,7 +48,8 @@ import {
   TrendingUp,
   Camera,
   Share2,
-  AlertTriangle
+  AlertTriangle,
+  XCircle
 } from "lucide-react";
 import { useState, useRef } from "react";
 import { format, subDays } from "date-fns";
@@ -89,7 +90,7 @@ export default function AdvertiserDetail() {
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
   const [renderedMessage, setRenderedMessage] = useState<{ subject: string; body: string } | null>(null);
 
-  const { data: advertiser, isLoading: advLoading } = useQuery<Advertiser>({
+  const { data: advertiser, isLoading: advLoading, refetch: refetchAdvertiser } = useQuery<Advertiser>({
     queryKey: ["/api/advertisers", id],
     queryFn: async () => {
       const res = await fetch(`/api/advertisers/${id}`);
@@ -581,6 +582,108 @@ export default function AdvertiserDetail() {
                 <RefreshCw className="h-4 w-4 mr-1" />
                 Status verversen
               </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-orange-200 bg-orange-50/50">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Camera className="h-5 w-5" />
+            Video Advertentie
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-background rounded-lg p-4 border">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-medium">Video Status</span>
+                {advertiser.assetStatus === "live" ? (
+                  <Badge className="bg-green-100 text-green-800">
+                    <Play className="h-3 w-3 mr-1" />
+                    Live op schermen
+                  </Badge>
+                ) : advertiser.assetStatus === "ready_for_yodeck" ? (
+                  <Badge className="bg-blue-100 text-blue-800">
+                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                    Klaar voor upload
+                  </Badge>
+                ) : advertiser.assetStatus === "uploaded_valid" ? (
+                  <Badge className="bg-cyan-100 text-cyan-800">
+                    <Camera className="h-3 w-3 mr-1" />
+                    Ontvangen
+                  </Badge>
+                ) : advertiser.assetStatus === "uploaded_invalid" ? (
+                  <Badge className="bg-red-100 text-red-800">
+                    <XCircle className="h-3 w-3 mr-1" />
+                    Ongeldige video
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="bg-amber-50 text-amber-700">
+                    <Clock className="h-3 w-3 mr-1" />
+                    Wacht op video
+                  </Badge>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground mb-3">
+                Duur: {advertiser.videoDurationSeconds || 15} seconden | Formaat: MP4 (H.264) | 1920x1080
+              </p>
+              <div className="flex gap-2 flex-wrap">
+                {advertiser.linkKey && (
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    data-testid="button-copy-upload-link"
+                    onClick={() => {
+                      const uploadLink = `${window.location.origin}/upload/${advertiser.linkKey}`;
+                      navigator.clipboard.writeText(uploadLink);
+                      toast({ title: "Upload link gekopieerd" });
+                    }}
+                  >
+                    <Copy className="h-4 w-4 mr-1" />
+                    Upload Link
+                  </Button>
+                )}
+                {(advertiser.assetStatus === "uploaded_valid" || advertiser.assetStatus === "ready_for_yodeck") && (
+                  <Button 
+                    size="sm" 
+                    variant="default"
+                    data-testid="button-mark-ready-yodeck"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`/api/advertisers/${advertiser.id}/ad-assets`);
+                        const assets = await res.json();
+                        const latestValid = assets.find((a: any) => a.validationStatus === "valid");
+                        if (latestValid) {
+                          await fetch(`/api/ad-assets/${latestValid.id}/mark-ready`, { method: "POST" });
+                          refetchAdvertiser();
+                          toast({ title: "Video klaargezet voor Yodeck" });
+                        }
+                      } catch (e) {
+                        toast({ title: "Fout bij klaarzetten", variant: "destructive" });
+                      }
+                    }}
+                  >
+                    <Play className="h-4 w-4 mr-1" />
+                    Klaarzetten
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-background rounded-lg p-4 border">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-medium">Video Specificaties</span>
+                <Badge variant="secondary">LinkKey: {advertiser.linkKey || "Niet beschikbaar"}</Badge>
+              </div>
+              <ul className="text-sm text-muted-foreground space-y-1">
+                <li>• Bestandsformaat: MP4 (H.264 codec)</li>
+                <li>• Resolutie: 1920x1080 (Full HD)</li>
+                <li>• Duur: exact {advertiser.videoDurationSeconds || 15} seconden</li>
+                <li>• Beeldverhouding: 16:9</li>
+                <li>• Audio: niet toegestaan</li>
+              </ul>
             </div>
           </div>
         </CardContent>
