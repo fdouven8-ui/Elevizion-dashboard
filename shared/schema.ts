@@ -94,7 +94,9 @@ export const advertisers = pgTable("advertisers", {
   packagePrice: decimal("package_price", { precision: 10, scale: 2 }), // Maandelijkse prijs
   packageNotes: text("package_notes"), // Toelichting bij CUSTOM pakket
   // Asset/video status
-  assetStatus: text("asset_status").default("none"), // none | received | live
+  assetStatus: text("asset_status").default("none"), // none | uploaded_invalid | uploaded_valid | ready_for_yodeck | live
+  // Video specification (contract-driven)
+  videoDurationSeconds: integer("video_duration_seconds").default(15), // Required video length (default 15s, can be custom per contract)
   // Onboarding akkoord (OTP-based)
   acceptedTermsAt: timestamp("accepted_terms_at"), // Wanneer akkoord gegeven
   acceptedTermsIp: text("accepted_terms_ip"), // IP adres bij akkoord
@@ -122,6 +124,40 @@ export const portalTokens = pgTable("portal_tokens", {
   tokenHash: text("token_hash").notNull(), // SHA256 hash of the token
   expiresAt: timestamp("expires_at").notNull(),
   usedAt: timestamp("used_at"), // When the token was used (null = unused)
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * Ad Assets - Uploaded video files from advertisers
+ * Stores metadata and validation results for uploaded advertisement videos
+ */
+export const adAssets = pgTable("ad_assets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),
+  linkKey: text("link_key").notNull(), // Copy of advertiser's linkKey at upload time
+  // File information
+  originalFileName: text("original_file_name").notNull(),
+  mimeType: text("mime_type").notNull(), // video/mp4, video/quicktime, etc.
+  sizeBytes: integer("size_bytes").notNull(),
+  storageUrl: text("storage_url"), // URL in object storage
+  storagePath: text("storage_path"), // Path in storage bucket
+  // Video metadata (from ffprobe)
+  durationSeconds: decimal("duration_seconds", { precision: 10, scale: 2 }), // Detected duration
+  width: integer("width"), // Video width in pixels
+  height: integer("height"), // Video height in pixels
+  aspectRatio: text("aspect_ratio"), // Detected aspect ratio (e.g., "16:9")
+  codec: text("codec"), // Video codec (e.g., "h264")
+  // Validation
+  validationStatus: text("validation_status").notNull().default("pending"), // pending | valid | invalid
+  validationErrors: jsonb("validation_errors").$type<string[]>().default([]), // List of hard errors
+  validationWarnings: jsonb("validation_warnings").$type<string[]>().default([]), // List of soft warnings
+  requiredDurationSeconds: integer("required_duration_seconds").notNull().default(15), // Expected duration from contract
+  // Admin review
+  reviewedByAdminAt: timestamp("reviewed_by_admin_at"),
+  reviewedByAdminId: varchar("reviewed_by_admin_id"),
+  adminNotes: text("admin_notes"),
+  // Timestamps
+  uploadedAt: timestamp("uploaded_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
@@ -1289,6 +1325,7 @@ export const insertYodeckCreativeSchema = createInsertSchema(yodeckCreatives).om
 
 export const insertAdvertiserSchema = createInsertSchema(advertisers).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertPortalTokenSchema = createInsertSchema(portalTokens).omit({ id: true, createdAt: true });
+export const insertAdAssetSchema = createInsertSchema(adAssets).omit({ id: true, createdAt: true, uploadedAt: true });
 export const insertLocationSchema = createInsertSchema(locations).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertLocationTokenSchema = createInsertSchema(locationTokens).omit({ id: true, createdAt: true });
 export const insertLocationOnboardingEventSchema = createInsertSchema(locationOnboardingEvents).omit({ id: true, createdAt: true });
@@ -1344,6 +1381,9 @@ export type InsertAdvertiser = z.infer<typeof insertAdvertiserSchema>;
 
 export type PortalToken = typeof portalTokens.$inferSelect;
 export type InsertPortalToken = z.infer<typeof insertPortalTokenSchema>;
+
+export type AdAsset = typeof adAssets.$inferSelect;
+export type InsertAdAsset = z.infer<typeof insertAdAssetSchema>;
 
 export type Location = typeof locations.$inferSelect;
 export type InsertLocation = z.infer<typeof insertLocationSchema>;

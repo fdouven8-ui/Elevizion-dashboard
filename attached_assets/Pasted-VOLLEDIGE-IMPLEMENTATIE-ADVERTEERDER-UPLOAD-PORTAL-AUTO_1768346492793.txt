@@ -1,0 +1,212 @@
+VOLLEDIGE IMPLEMENTATIE: ADVERTEERDER UPLOAD PORTAL + AUTOMATISCHE VIDEO-LENGTE PER CONTRACT + MAILS UPDATEN
+
+CONTEXT
+Voor adverteerders wil ik na het akkoord (checkboxes + OTP) direct een upload-portal i.p.v. “mail je bestand”.
+De video-lengte is standaard 15 seconden, TENZIJ in het contract anders is opgenomen. Dit moet automatisch mee gaan:
+- validatie op upload
+- tekst in mails
+- tekst in portal
+- contract/PDF (waar relevant)
+Ook moet de bestandsnaam verplicht zijn: code (linkKey) + bedrijfsnaam.
+
+DOEL
+1) Voeg een upload-stap toe aan de adverteerder onboarding die alleen beschikbaar is NA CONTRACT_ACCEPTED.
+2) Upload accepteert alleen bestanden die voldoen aan:
+   - juiste bestandsnaam (linkKey + bedrijfsnaam)
+   - juiste type (video)
+   - juiste duur (standaard exact 15s; of contract-specifiek)
+   - (optioneel) resolutie/ratio checks
+3) Als upload VALID is:
+   - dashboard koppelt het bestand aan de adverteerder
+   - admin krijgt melding + downloadlink
+   - onboarding status gaat door (READY_FOR_YODECK / ASSET_RECEIVED)
+4) Update alle relevante e-mails (wat-nu, bevestigingen) zodat ze naar upload verwijzen en de juiste lengte noemen.
+5) Geen e-mail bijlagen voor video. Alles via upload storage + link.
+
+BELANGRIJK
+- Geen grote redesign/refactor.
+- Veiligheid: upload alleen via token + juiste status.
+- Dashboard houdt data klein, maar moet alle koppelingen correct bewaren (advertiserId/linkKey/contract).
+
+────────────────────────
+A) CONTRACT-GEDREVEN VIDEO SPEC (AUTOMATISCH)
+────────────────────────
+1) Voeg contract-veld toe aan Adverteerderovereenkomst data (of Advertiser record) dat de video-lengte bepaalt:
+- videoDurationSeconds (int)
+- default = 15
+- Alleen afwijkend als contract dit expliciet heeft (bijv. custom / handmatig ingesteld door admin)
+2) Zorg dat dit veld:
+- wordt opgeslagen bij PACKAGE_SELECTED/CONTRACT generation
+- in contract/PDF kan worden gebruikt als placeholder {{videoDurationSeconds}}
+- in upload-validatie wordt gebruikt
+- in “wat nu” mail wordt gebruikt
+
+3) Logica:
+- Als advertiser.videoDurationSeconds niet gezet: set 15
+- Als admin een custom contract maakt: admin kan videoDurationSeconds aanpassen (optioneel UI veld “Video lengte (sec)”)
+
+────────────────────────
+B) ONBOARDING FLOW (ADVERTEERDER)
+────────────────────────
+States:
+- READY_FOR_ASSET blijft bestaan, maar wijzig betekenis:
+  READY_FOR_ASSET = “upload portal is open”
+- Voeg toe:
+  ASSET_UPLOADED_INVALID
+  ASSET_UPLOADED_VALID
+  READY_FOR_YODECK
+  LIVE (bestaat al)
+
+Flow:
+1) OTP ACCEPTED -> CONTRACT_ACCEPTED
+2) Direct daarna -> READY_FOR_ASSET
+3) Klant ziet upload stap
+4) Upload VALID -> ASSET_UPLOADED_VALID -> READY_FOR_YODECK
+5) Ik plaats handmatig in Yodeck (later) -> dashboard koppelt -> LIVE
+
+────────────────────────
+C) UPLOAD PORTAL UI (PUBLIC, VIA ONBOARDING TOKEN)
+────────────────────────
+1) Toon bovenaan:
+- Bedrijfsnaam
+- LinkKey met “Kopieer” knop
+- Vereiste bestandsnaam voorbeeld:
+  {{linkKey}}_{{companyName}}.mp4
+  (bedrijfsgedeelte mag vrij, maar linkKey + "_" is verplicht)
+2) Toon duidelijke eisen:
+- “Lengte: EXACT {{videoDurationSeconds}} seconden (tenzij anders overeengekomen in contract).”
+- “Type: MP4 (H.264) aanbevolen”
+- “Zonder audio (optioneel)”
+- “16:9, 1080p aanbevolen”
+3) Upload dropzone + progress
+4) Na upload:
+- Toon VALID/INVALID + errors
+- Bij INVALID: duidelijke fouten + knop “Opnieuw uploaden”
+
+────────────────────────
+D) VALIDATIEREGELS (HARD)
+────────────────────────
+1) Bestandsnaam (hard):
+- originele naam moet beginnen met:
+  {{linkKey}}_
+- als niet: INVALID (error: “Bestandsnaam moet beginnen met {{linkKey}}_”)
+
+2) Bestandstype (hard):
+- Accept only:
+  - video/mp4
+  - video/quicktime (mov)
+  (maar MP4 aanbevelen)
+- Alles anders: INVALID
+
+3) Duur (hard):
+- EXact match: durationSeconds == videoDurationSeconds
+- Tolerantie: max ±0.2s (om encoding afronding op te vangen)
+- Buiten tolerantie: INVALID met melding:
+  “Video moet {{videoDurationSeconds}} sec zijn. Jouw video is {{detected}} sec.”
+
+4) Bestandsgrootte (hard):
+- max 200MB (config)
+
+5) Resolutie/ratio (soft of hard):
+- Voeg detectie toe (ffprobe):
+  - width/height
+  - ratio
+- Als niet 16:9 of < 1080p:
+  - WARNING tonen (maar nog steeds VALID) óf HARD reject
+Kies default: WARNING (zodat je conversie niet crasht), maar toon het duidelijk.
+
+────────────────────────
+E) TECHNISCH: UPLOAD + METADATA
+────────────────────────
+1) Storage
+- Sla video op in storage (zelfde aanpak als project: S3/Cloudinary/local)
+- Path:
+  /uploads/ads/{advertiserId}/{originalFileName}
+
+2) AdAsset model/table:
+- id (uuid)
+- advertiserId
+- linkKey
+- originalFileName
+- mimeType
+- sizeBytes
+- durationSeconds
+- width
+- height
+- validationStatus: VALID | INVALID
+- validationErrors: string[]
+- validationWarnings: string[]
+- storageRef/url
+- uploadedAt
+- reviewedByAdminAt (optional)
+
+3) Endpoints:
+- POST /api/ad-assets/upload (multipart) OF presigned flow:
+  - Na upload: server runs ffprobe, validates, stores metadata
+  - Returns VALID/INVALID + reasons + saved asset id
+- GET /api/ad-assets/:id/download (admin only)
+- GET /api/onboarding/advertiser/:token/upload (public page; token-gated)
+
+4) Security
+- Upload page alleen toegankelijk met onboarding token + status >= READY_FOR_ASSET
+- Rate limit: max 10 uploads per advertiser per uur
+- No logging of file contents; only metadata
+
+────────────────────────
+F) MAILS (AANPASSEN, VERPLICHT)
+────────────────────────
+1) “Wat nu” mail na contract ACCEPTED:
+- In plaats van “mail je video”
+- Zet:
+  - “Upload je advertentievideo via deze link: <uploadLink>”
+  - Toon linkKey in de mail met copy-friendly blok:
+    “Jouw code: {{linkKey}}”
+  - Bestandsnaam instructie:
+    “Noem je bestand: {{linkKey}}_{{companyName}}.mp4”
+  - Lengte instructie:
+    “Lengte: EXACT {{videoDurationSeconds}} seconden (tenzij anders in contract opgenomen).”
+  - Type:
+    “MP4 aanbevolen”
+
+2) Admin notificatie mail:
+- Alleen bij VALID upload:
+  - “Nieuwe advertentie upload (VALID): {{companyName}} ({{linkKey}})”
+  - Downloadlink in dashboard
+
+3) (optioneel) Klant bevestiging mail:
+- “Upload ontvangen en gecontroleerd” (alleen bij VALID)
+
+────────────────────────
+G) DASHBOARD UI (ADMIN)
+────────────────────────
+In adverteerder detail:
+- Toon linkKey + copy button
+- Toon videoDurationSeconds
+- Toon laatste upload:
+  - status VALID/INVALID
+  - duration/resolution
+  - download knop
+- Badge “Nieuwe upload” in overzicht wanneer VALID upload binnenkomt
+- Zet advertiser.assetStatus:
+  - NONE -> INVALID/VALID -> READY_FOR_YODECK
+
+────────────────────────
+H) SYSTEM HEALTH UPDATE
+────────────────────────
+Voeg check toe:
+- “Upload portal enabled” PASS als routes + storage config aanwezig
+- “ffprobe available” PASS als metadata extractie werkt
+- (optioneel) test upload in healthcheck (klein dummy bestand) zonder echte video
+
+────────────────────────
+OUTPUT
+────────────────────────
+1) Bestanden/routes toegevoegd/gewijzigd
+2) Waar videoDurationSeconds wordt opgeslagen en hoe default=15 werkt
+3) Exacte mail templates die zijn aangepast
+4) Testplan:
+   - Contract accept -> upload correct 15s mp4 met juiste naam -> VALID + admin mail
+   - Upload 12s -> INVALID
+   - Upload verkeerde naam -> INVALID
+   - Upload mov 15s -> VALID (maar MP4 aanbevolen)
+IMPLEMENT NOW, NO QUESTIONS.
