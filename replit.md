@@ -112,25 +112,28 @@ Core entities include: **Entities** (unified model for ADVERTISER + SCREEN), Sit
 - Full HTML output with Elevizion styling and signature blocks
 - Status workflow: draft → sent → signed → declined/expired/cancelled
 
-### SignRequest E-Signing Integration (Jan 2026)
-- **Digital contract signing** via SignRequest API
-- **Sequential signing flow**: Elevizion signs first, then customer
+### Internal OTP Contract Signing (Jan 2026)
+- **Digital contract signing** via internal OTP-based verification (replaces external SignRequest)
+- **OTP verification flow**: 6-digit code via email → verify code → finalize with audit trail
 - **Terms acceptance check**: Contracts can only be sent if `terms_acceptance` record exists
 - **Database tables**:
-  - `contract_documents`: Extended with `signProvider`, `signrequestDocumentId`, `signrequestUrl`, `signStatus`, `signedPdfUrl`, `signedLogUrl`, `sentAt`
+  - `contract_documents`: Extended with `signProvider` ("internal_otp"), `otpCode`, `otpExpiresAt`, `otpSentAt`, `otpVerifiedAt`, `signStatus`, `signedPdfUrl`, `signerEmail`, `signerName`, `signerIp`, `signerUserAgent`
   - `terms_acceptance`: Tracks entity acceptance of general terms (entityType, entityId, acceptedAt, ip, userAgent, termsVersion, termsHash, source)
 - **Services**:
-  - `signrequestClient.ts`: API client for creating sign requests, checking status, downloading signed PDFs
-  - `contractPdfService.ts`: HTML→PDF generation using Puppeteer (preserves branding/layout)
+  - `contractEngine.ts`: Central engine for OTP generation, verification, expiration (24-hour), and audit trail
+  - `contractPdfService.ts`: HTML→PDF generation using Puppeteer (preserves branding/layout) with embedded audit trail
 - **API endpoints**:
-  - `POST /api/contract-documents/:id/send-for-signing`: Send contract for e-signing
-  - `POST /api/webhooks/signrequest`: Webhook for status updates (signed, declined, expired)
+  - `POST /api/contract-documents/:id/send-for-signing`: Send OTP via email
+  - `POST /api/contract-documents/:id/verify-otp`: Verify 6-digit OTP code
+  - `POST /api/contract-documents/:id/finalize-signature`: Complete signing with audit trail PDF
+  - `POST /api/contract-documents/:id/resend-otp`: Resend OTP email
   - `GET /api/contract-documents/:id/signing-status`: Check current signing status
   - `GET /api/contract-documents/:id/signed-pdf`: Download signed PDF
   - `GET /api/terms-acceptance/:entityType/:entityId`: Check terms acceptance
   - `POST /api/terms-acceptance`: Record terms acceptance
 - **UI** (Settings → Templates → Gegenereerde Docs):
-  - Sign status badges (Verzonden, Bezig, Getekend, Afgewezen, Verlopen)
+  - Sign status badges (Verzonden, OTP geverifieerd, Getekend, Afgewezen, Verlopen)
   - "Verstuur ter ondertekening" button (disabled if terms not accepted)
-  - "Open SignRequest" link, "Download getekende PDF" button
-- **Secrets**: `SIGNREQUEST_API_TOKEN`, `SIGNREQUEST_SIGNER1_EMAIL`
+  - "Download getekende PDF" button
+  - Legacy badge for old SignRequest contracts (read-only)
+- **Sign status progression**: none → sent → verified → signed (or expired)

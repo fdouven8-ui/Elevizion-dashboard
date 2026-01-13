@@ -1847,6 +1847,7 @@ export const verificationCodes = pgTable("verification_codes", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   email: text("email").notNull(),
   codeHash: text("code_hash").notNull(), // SHA256 hash of 6-digit code
+  contractDocumentId: varchar("contract_document_id"), // Scopes OTP to specific contract
   expiresAt: timestamp("expires_at").notNull(),
   attempts: integer("attempts").notNull().default(0),
   usedAt: timestamp("used_at"),

@@ -45,6 +45,7 @@ export async function sendContractForSigning(
     await db.insert(verificationCodes).values({
       email: customerEmail,
       codeHash,
+      contractDocumentId: contractId,
       expiresAt,
     });
 
@@ -114,13 +115,13 @@ export async function verifyContractOtp(
 
     const codeHash = hashCode(otpCode);
     const [codeRecord] = await db.select().from(verificationCodes)
-      .where(sql`email = ${doc.signerEmail} AND code_hash = ${codeHash} AND used_at IS NULL AND expires_at > NOW()`)
+      .where(sql`email = ${doc.signerEmail} AND code_hash = ${codeHash} AND contract_document_id = ${contractId} AND used_at IS NULL AND expires_at > NOW()`)
       .orderBy(desc(verificationCodes.createdAt))
       .limit(1);
 
     if (!codeRecord) {
       const [existingCode] = await db.select().from(verificationCodes)
-        .where(sql`email = ${doc.signerEmail} AND used_at IS NULL AND expires_at > NOW()`)
+        .where(sql`email = ${doc.signerEmail} AND contract_document_id = ${contractId} AND used_at IS NULL AND expires_at > NOW()`)
         .orderBy(desc(verificationCodes.createdAt))
         .limit(1);
 
@@ -279,6 +280,10 @@ export async function resendContractOtp(
       return { success: false, error: "Geen ontvanger e-mail bekend" };
     }
 
+    await db.update(verificationCodes)
+      .set({ usedAt: new Date() })
+      .where(sql`contract_document_id = ${contractId} AND used_at IS NULL`);
+
     const otpCode = generateOtpCode();
     const codeHash = hashCode(otpCode);
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -286,6 +291,7 @@ export async function resendContractOtp(
     await db.insert(verificationCodes).values({
       email: doc.signerEmail,
       codeHash,
+      contractDocumentId: contractId,
       expiresAt,
     });
 
