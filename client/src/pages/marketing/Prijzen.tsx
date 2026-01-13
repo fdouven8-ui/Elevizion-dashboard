@@ -2,12 +2,94 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { 
-  Monitor, Check, ArrowRight, Megaphone, MessageSquare
+  Monitor, Check, ArrowRight, Megaphone, MessageSquare, Info
 } from "lucide-react";
 import { Link } from "wouter";
 import { AdvertiserLeadModal } from "@/components/LeadModals";
 import MarketingHeader from "@/components/marketing/MarketingHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
+import { PRICING_PACKAGES, PRICING_CONSTANTS, type PricingPackage } from "@/lib/pricing";
+
+function PricingCard({ pkg, onCtaClick }: { pkg: PricingPackage; onCtaClick: () => void }) {
+  const isPopular = pkg.isPopular;
+  const isCustom = pkg.isCustom;
+
+  return (
+    <Card className={`border-2 transition-all ${
+      isPopular 
+        ? "border-emerald-600 bg-gradient-to-b from-emerald-50 to-white shadow-xl relative" 
+        : "border-slate-200 bg-white hover:border-emerald-300 hover:shadow-lg"
+    }`}>
+      {isPopular && (
+        <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-sm font-bold px-5 py-1.5 rounded-full shadow-lg">
+          {pkg.badge}
+        </div>
+      )}
+      <CardHeader className={`text-center pb-2 ${isPopular ? "pt-8" : "pt-6"}`}>
+        <div className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${
+          isPopular 
+            ? "bg-emerald-600 text-white" 
+            : isCustom 
+              ? "bg-slate-200 text-slate-600"
+              : "bg-emerald-100 text-emerald-600"
+        }`}>
+          {isCustom ? <MessageSquare className="h-6 w-6" /> : <Monitor className="h-6 w-6" />}
+        </div>
+        <CardTitle className="text-xl font-bold text-slate-800">{pkg.name}</CardTitle>
+        <p className={`text-sm mt-1 ${isPopular ? "text-emerald-600 font-medium" : "text-slate-500"}`}>
+          {isCustom ? "Op maat" : `${pkg.screens} scherm${pkg.screens > 1 ? "en" : ""}`}
+        </p>
+      </CardHeader>
+      <CardContent className="text-center">
+        <div className="mb-4">
+          {isCustom ? (
+            <span className="text-2xl font-bold text-slate-800">Op aanvraag</span>
+          ) : (
+            <>
+              <div className="mb-1">
+                <span className="text-3xl font-bold text-slate-800">€{pkg.perScreenPrice.toFixed(2).replace('.', ',')}</span>
+                <span className="text-slate-500 text-sm"> per scherm / maand</span>
+              </div>
+              {pkg.screens > 1 && (
+                <p className="text-xs text-slate-400">
+                  Totaal €{pkg.totalPrice.toFixed(2).replace('.', ',')} p/m · {pkg.screens} schermlocaties
+                </p>
+              )}
+            </>
+          )}
+        </div>
+        <ul className="space-y-2.5 text-sm text-slate-700 mb-6 text-left">
+          {pkg.features.map((feature, index) => (
+            <li key={index} className="flex items-center gap-2">
+              <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+              <span className={index === 0 && isPopular ? "font-medium" : ""}>{feature}</span>
+            </li>
+          ))}
+        </ul>
+        {isCustom ? (
+          <Button 
+            variant="outline"
+            className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white font-semibold"
+            asChild
+            data-testid="button-pricing-custom"
+          >
+            <Link href="/contact">
+              {pkg.ctaText}
+            </Link>
+          </Button>
+        ) : (
+          <Button 
+            className={`w-full bg-emerald-600 hover:bg-emerald-700 font-semibold ${isPopular ? "text-base py-5" : ""}`}
+            onClick={onCtaClick}
+            data-testid={`button-pricing-${pkg.screens}`}
+          >
+            {pkg.ctaText}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function Prijzen() {
   const [modalOpen, setModalOpen] = useState(false);
@@ -20,203 +102,26 @@ export default function Prijzen() {
         <div className="container mx-auto px-4">
           <div className="max-w-3xl mx-auto text-center mb-12">
             <h1 className="text-3xl md:text-5xl font-bold mb-6 text-slate-800">
-              Duidelijke prijzen, geen verrassingen
+              Duidelijke prijzen per scherm
             </h1>
-            <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-              Vaste maandprijzen inclusief plaatsing en onderhoud. 
+            <p className="text-lg text-slate-600 max-w-2xl mx-auto mb-4">
+              Meer schermen = lagere prijs per scherm. 
               Alle prijzen zijn exclusief BTW.
             </p>
+            <div className="flex items-center justify-center gap-2 text-sm text-slate-500">
+              <Info className="h-4 w-4" />
+              <span>{PRICING_CONSTANTS.minTermText}, {PRICING_CONSTANTS.afterTermText}</span>
+            </div>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
-            <Card className="border-2 border-slate-200 bg-white hover:border-emerald-300 hover:shadow-lg transition-all">
-              <CardHeader className="text-center pb-2 pt-6">
-                <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3">
-                  <Monitor className="h-6 w-6" />
-                </div>
-                <CardTitle className="text-xl font-bold text-slate-800">Starter</CardTitle>
-                <p className="text-sm text-slate-500 mt-1">1 scherm</p>
-              </CardHeader>
-              <CardContent className="text-center">
-                <div className="mb-6">
-                  <span className="text-4xl font-bold text-slate-800">€49,99</span>
-                  <span className="text-slate-500 text-sm">/maand</span>
-                </div>
-                <ul className="space-y-3 text-sm text-slate-700 mb-6 text-left">
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>1 schermlocatie</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>4x per uur zichtbaar</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>10-15 seconden spot</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Klant levert video aan</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Minimale looptijd: 6 maanden</span>
-                  </li>
-                </ul>
-                <Button 
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 font-semibold"
-                  onClick={() => setModalOpen(true)}
-                  data-testid="button-pricing-1"
-                >
-                  Start met 1 scherm
-                </Button>
-              </CardContent>
-            </Card>
-
-            <Card className="border-2 border-emerald-600 bg-gradient-to-b from-emerald-50 to-white shadow-xl relative">
-              <div className="absolute -top-4 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-sm font-bold px-5 py-1.5 rounded-full shadow-lg">
-                Populair
-              </div>
-              <CardHeader className="text-center pb-2 pt-8">
-                <div className="w-12 h-12 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto mb-3">
-                  <Monitor className="h-6 w-6" />
-                </div>
-                <CardTitle className="text-xl font-bold text-slate-800">Local Plus</CardTitle>
-                <p className="text-sm text-emerald-600 font-medium mt-1">3 schermen</p>
-              </CardHeader>
-              <CardContent className="text-center">
-                <div className="mb-6">
-                  <span className="text-4xl font-bold text-slate-800">€129,99</span>
-                  <span className="text-slate-500 text-sm">/maand</span>
-                </div>
-                <ul className="space-y-3 text-sm text-slate-700 mb-6 text-left">
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span className="font-medium">3 schermlocaties</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>6x per uur zichtbaar</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>10-20 seconden spot</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Klant levert video aan</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Minimale looptijd: 6 maanden</span>
-                  </li>
-                </ul>
-                <Button 
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 font-semibold text-base py-5"
-                  onClick={() => setModalOpen(true)}
-                  data-testid="button-pricing-3"
-                >
-                  Start met 3 schermen
-                </Button>
-              </CardContent>
-            </Card>
-
-            <Card className="border-2 border-slate-200 bg-white hover:border-emerald-300 hover:shadow-lg transition-all">
-              <CardHeader className="text-center pb-2 pt-6">
-                <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-3">
-                  <Monitor className="h-6 w-6" />
-                </div>
-                <CardTitle className="text-xl font-bold text-slate-800">Premium</CardTitle>
-                <p className="text-sm text-slate-500 mt-1">10 schermen</p>
-              </CardHeader>
-              <CardContent className="text-center">
-                <div className="mb-6">
-                  <span className="text-4xl font-bold text-slate-800">€299,99</span>
-                  <span className="text-slate-500 text-sm">/maand</span>
-                </div>
-                <ul className="space-y-3 text-sm text-slate-700 mb-6 text-left">
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>10 schermlocaties</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>8x per uur zichtbaar</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Tot 30 seconden spot</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Klant levert video aan</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Breed lokaal bereik</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Minimale looptijd: 6 maanden</span>
-                  </li>
-                </ul>
-                <Button 
-                  className="w-full bg-emerald-600 hover:bg-emerald-700 font-semibold"
-                  onClick={() => setModalOpen(true)}
-                  data-testid="button-pricing-10"
-                >
-                  Start met 10 schermen
-                </Button>
-              </CardContent>
-            </Card>
-
-            <Card className="border-2 border-slate-300 bg-gradient-to-b from-slate-50 to-white hover:border-emerald-300 hover:shadow-lg transition-all">
-              <CardHeader className="text-center pb-2 pt-6">
-                <div className="w-12 h-12 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center mx-auto mb-3">
-                  <MessageSquare className="h-6 w-6" />
-                </div>
-                <CardTitle className="text-xl font-bold text-slate-800">Custom</CardTitle>
-                <p className="text-sm text-slate-500 mt-1">Op maat</p>
-              </CardHeader>
-              <CardContent className="text-center">
-                <div className="mb-6">
-                  <span className="text-2xl font-bold text-slate-800">Op aanvraag</span>
-                </div>
-                <ul className="space-y-3 text-sm text-slate-700 mb-6 text-left">
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Meer dan 10 schermen</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Exclusieve locaties</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Volledige campagne</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Meerdere video's/ontwerpen</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Persoonlijke begeleiding</span>
-                  </li>
-                </ul>
-                <Button 
-                  variant="outline"
-                  className="w-full border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-600 hover:text-white font-semibold"
-                  asChild
-                  data-testid="button-pricing-custom"
-                >
-                  <Link href="/contact">
-                    Neem contact op
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
+            {PRICING_PACKAGES.map((pkg) => (
+              <PricingCard 
+                key={pkg.id} 
+                pkg={pkg} 
+                onCtaClick={() => setModalOpen(true)} 
+              />
+            ))}
           </div>
 
           <p className="text-center text-sm text-slate-500 mt-10">
@@ -254,7 +159,7 @@ export default function Prijzen() {
                 <Check className="h-6 w-6" />
               </div>
               <h3 className="font-bold text-slate-800 mb-2">Duidelijke voorwaarden</h3>
-              <p className="text-sm text-slate-600">Minimaal 6 maanden, daarna maandelijks opzegbaar</p>
+              <p className="text-sm text-slate-600">{PRICING_CONSTANTS.minTermText}, {PRICING_CONSTANTS.afterTermText}</p>
             </div>
           </div>
         </div>
@@ -276,7 +181,7 @@ export default function Prijzen() {
                 onClick={() => setModalOpen(true)}
               >
                 <Megaphone className="h-5 w-5" />
-                Start nu
+                Start vanaf €30 per scherm
               </Button>
               <Button 
                 size="lg" 

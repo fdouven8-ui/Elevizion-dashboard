@@ -1,0 +1,95 @@
+HELE WEBSITE PRICING OMZETTEN NAAR “PRIJS PER SCHERM” (CONSISTENT)
+
+DOEL
+Pas de volledige marketing-website aan zodat prijzen primair worden weergegeven als “prijs per scherm / maand”.
+Bundel-totaalprijzen (€129,99 / €299,99) mogen NIET meer groot/primair in beeld staan op de website.
+Alle copy, cards, FAQ, werkwijze en CTA’s moeten hiermee consistent zijn.
+
+BELANGRIJK
+- Geen redesign/refactor. Alleen content + pricing weergave + consistentie.
+- Prijzen moeten eerlijk blijven: toon totale bundelprijs alleen klein/optioneel op /prijzen detail of in tooltip/accordion.
+- Overal dezelfde looptijdregel tonen (min. 6 maanden) en “klant levert video aan”.
+
+BRONWAARDEN (BUNDELS)
+Gebruik deze bundels als basis (deze bedragen blijven de waarheid):
+- 1 scherm: €49,99 p/m totaal (dus €49,99 per scherm)
+- 3 schermen: €129,99 p/m totaal
+- 10 schermen: €299,99 p/m totaal
+- Custom: op aanvraag
+
+BEREKEN PER-SCHERM PRIJZEN (AFGEROND OP 2 DECIMALEN)
+- 1 scherm: €49,99 per scherm / maand
+- 3 schermen: €129,99 / 3 = €43,33 per scherm / maand
+- 10 schermen: €299,99 / 10 = €30,00 per scherm / maand (afronden op 2 decimalen; toon als €29,99 of €30,00, maar kies 1 consistent)
+Maak hiervoor één centrale helper/constant zodat overal dezelfde berekening/formatting wordt gebruikt.
+
+SITEWIDE REGELS (OVERAL CONSISTENT TONEN)
+- “Je levert je advertentievideo zelf aan — wij plaatsen ’m op de schermen.”
+- “Minimale looptijd: 6 maanden (daarna maandelijks opzegbaar)” (alleen als dit klopt)
+
+A) UPDATE ALLE PRICING UI (SITEWIDE)
+1) Homepage “Pakketten/Prijzen” sectie:
+- Toon 4 kaarten: 1 scherm / 3 schermen / 10 schermen / Custom
+- Primary price line = per-scherm prijs, groot:
+  “€43,33 per scherm / maand”
+- Secondary line klein (optioneel) alleen op homepage:
+  “Totaal €129,99 p/m” (klein, gede-emphasized) OF weg laten op homepage.
+- Bullets: “Klant levert video aan”, “Min. looptijd: 6 maanden”, “Lokaal bereik”
+- CTA: “Bekijk details” -> /prijzen
+
+2) /prijzen pagina:
+- Primary = per scherm prijs groot
+- Secondary (klein) = totaal per maand + aantal schermen
+Voorbeeld kaart 3 schermen:
+  Groot: “€43,33 per scherm / maand”
+  Klein: “Totaal €129,99 p/m · 3 schermlocaties”
+- Voeg een toggle of accordion toe:
+  “Toon totaalprijzen” (collapsed by default)
+  zodat bezoekers niet meteen op de grote bedragen ankeren.
+
+3) /adverteren pagina:
+- Vervang alle prijsvermeldingen naar “vanaf €49,99 per scherm / maand”
+- Verwijs naar /prijzen voor details.
+- Geen grote bundelprijzen hier.
+
+4) Overige pagina’s (werkwijze/FAQ/contact/CTA blokken):
+- Elke prijsvermelding omzetten naar per-scherm.
+- Als je bundels noemt, dan in termen van:
+  “3 schermen (voordeliger per scherm)” etc.
+- Verwijder teksten die de totaalprijs prominent tonen.
+
+B) CTA TEKSTEN AANPASSEN
+Vervang CTA’s zoals:
+- “Start met 10 schermen €299,99”
+naar:
+- “Start vanaf €30 per scherm” / “Bekijk prijs per scherm”
+
+C) CONSISTENTIECHECK (MOET)
+Doorzoek hele codebase op:
+- “129,99”, “299,99”, “€129”, “€299”
+- “per maand €299”, “totaal”
+En zorg dat:
+- deze bedragen niet meer als primaire/large heading getoond worden
+- alleen klein/secondary op /prijzen (optioneel) of in accordion
+
+D) PRICING COPY (EERLIJK + DUIDELIJK)
+Voeg op /prijzen een korte uitleg toe:
+- “Meer schermen = lagere prijs per scherm.”
+- “Totaalbedrag hangt af van gekozen bundel; details staan hieronder.”
+- “Minimale looptijd: 6 maanden.”
+
+E) TECHNISCH (CENTRAAL)
+Maak één centrale config/constant file, bijv. /lib/pricing.ts:
+- bundles: { screens: 1|3|10, totalPrice: 49.99|129.99|299.99, badge? }
+- helper: formatPriceEUR()
+- helper: perScreenPrice(totalPrice, screens)
+Gebruik deze helpers overal zodat bedragen nooit uiteen lopen.
+
+F) OUTPUT
+- Lijst van pagina’s/components die je hebt aangepast
+- Welke centrale pricing helper/config is gemaakt
+- Bevestig dat:
+  1) Per scherm prijzen overal primair zijn
+  2) Bundel-totaalprijzen niet meer groot op de site staan
+  3) /prijzen heeft (optioneel) kleine totaalprijs info of toggle/accordion
+- Screenshot checklist (of beschrijving) per pagina waar pricing staat
