@@ -7904,6 +7904,64 @@ We wensen je een succesvolle maand!`
   });
 
   // ============================================================================
+  // COMPANY PROFILE (SINGLETON)
+  // ============================================================================
+
+  app.get("/api/company-profile", async (req, res) => {
+    try {
+      const profile = await storage.getCompanyProfile();
+      if (!profile) {
+        return res.status(404).json({ message: "Bedrijfsprofiel niet gevonden" });
+      }
+      res.json(profile);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/company-profile", async (req, res) => {
+    try {
+      const profile = await storage.updateCompanyProfile(req.body);
+      if (!profile) {
+        return res.status(404).json({ message: "Bedrijfsprofiel niet gevonden" });
+      }
+      res.json(profile);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Public endpoint - only returns non-sensitive fields
+  app.get("/api/public/company-profile", async (req, res) => {
+    try {
+      const profile = await storage.getCompanyProfile();
+      if (!profile) {
+        return res.status(404).json({ message: "Bedrijfsprofiel niet gevonden" });
+      }
+      // Return only public fields (no banking, no full address if disabled)
+      const publicProfile: Record<string, any> = {
+        legalName: profile.legalName,
+        tradeName: profile.tradeName,
+        kvkNumber: profile.kvkNumber,
+        vatNumber: profile.vatNumber,
+        email: profile.email,
+        phone: profile.phone,
+        website: profile.website,
+      };
+      // Only include address if public address is enabled
+      if (profile.publicAddressEnabled) {
+        publicProfile.addressLine1 = profile.addressLine1;
+        publicProfile.postalCode = profile.postalCode;
+        publicProfile.city = profile.city;
+        publicProfile.country = profile.country;
+      }
+      res.json(publicProfile);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
   // EMAIL LOGS
   // ============================================================================
 
