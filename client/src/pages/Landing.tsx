@@ -31,7 +31,7 @@ export default function Landing() {
           muted 
           loop 
           playsInline
-          className="absolute inset-0 w-full h-full object-cover"
+          className="absolute inset-0 w-full h-full object-cover scale-[1.08] sm:scale-[1.06] origin-center"
         >
           <source src="/hero-video.mp4" type="video/mp4" />
         </video>
@@ -79,7 +79,7 @@ export default function Landing() {
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle className="h-4 w-4 text-white/40" />
-                <span>Volledig verzorgd</span>
+                <span>Jij levert aan, wij plaatsen</span>
               </div>
             </div>
           </div>

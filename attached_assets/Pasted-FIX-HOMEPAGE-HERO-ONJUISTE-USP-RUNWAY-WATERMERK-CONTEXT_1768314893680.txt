@@ -1,0 +1,54 @@
+FIX HOMEPAGE HERO: ONJUISTE USP + RUNWAY WATERMERK
+
+CONTEXT
+Op de homepage (hero sectie met achtergrondvideo) staat onder de CTA’s een rij USP’s.
+Daar staat nu “Volledig verzorgd”, maar dat klopt niet: Elevizion maakt de advertentie niet, klant levert zelf aan.
+Daarnaast staat rechtsonder in de hero-video een “runway” watermark. Als de video iets ingezoomd/gecropt wordt valt dit weg.
+
+DOEL
+1) Vervang de onjuiste USP-tekst “Volledig verzorgd” door iets dat wel klopt.
+2) Verwijder het zichtbare Runway-watermerk door de hero background video zo te renderen dat het watermerk buiten beeld valt (croppen/zoomen), en zorg dat dit responsive goed blijft op alle schermformaten.
+
+A) TEKST FIX (USP’S)
+- Zoek waar deze USP’s in de homepage component staan (waarschijnlijk onder de knoppen).
+- Vervang “Volledig verzorgd” door 1 van deze opties (kies de beste die past bij de rest):
+  Optie 1: “Jij levert aan, wij plaatsen”
+  Optie 2: “Duidelijke plaatsing & planning”
+  Optie 3: “Heldere afspraken”
+- Zorg dat nergens op de homepage of andere pagina’s nog gesuggereerd wordt dat Elevizion de advertentie maakt.
+
+B) WATERMERK FIX (VIDEO CROPPEN/ZOOMEN)
+BELANGRIJK: We willen het watermerk niet “wegpoetsen”; we willen het simpelweg buiten het zichtbare kader krijgen door crop/zoom.
+
+- Pas de hero video styling aan:
+  - Gebruik object-fit: cover
+  - Voeg een lichte scale/zoom toe zodat de onder-right corner niet zichtbaar is.
+  - Bijv. transform: scale(1.08) (fine-tune indien nodig)
+  - Zorg dat de video gecentreerd blijft (object-position: center) en dat crop niet raar wordt op mobile.
+
+- Maak het responsive met breakpoints:
+  - Desktop: scale ~ 1.06–1.10
+  - Tablet: scale ~ 1.10–1.15
+  - Mobile: scale ~ 1.15–1.25 (om watermark zeker weg te krijgen)
+  - Als je merkt dat er te veel in beeld verloren gaat, pas object-position aan (bijv. center top) zodat gezichten/onderwerp niet raar afsnijdt.
+
+- Zorg dat er geen zwarte randen verschijnen en dat de video altijd fullscreen/hero-cover blijft.
+
+C) FALLBACK
+- Als de video om wat voor reden ook niet goed cropt:
+  - Voeg een fallback poster image toe
+  - Of switch naar een video asset zonder watermark (alleen als beschikbaar).
+  - Maar eerst: crop/zoom oplossing proberen.
+
+D) CHECKLIST / OUTPUT
+- Laat zien welk bestand je hebt aangepast (homepage/hero component + CSS/Tailwind).
+- Bevestig dat:
+  1) “Volledig verzorgd” weg is en vervangen
+  2) Runway watermark nergens zichtbaar is op:
+     - 1920x1080
+     - 1440x900
+     - 1366x768
+     - iPhone/Android mobile breedtes
+
+LET OP
+- Maak geen andere copy-wijzigingen of redesign. Alleen deze 2 fixes + noodzakelijke styling.
