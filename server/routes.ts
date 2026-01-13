@@ -503,6 +503,108 @@ Sitemap: ${SITE_URL}/sitemap.xml
       res.status(500).json({ message: "Er ging iets mis. Probeer het later opnieuw." });
     }
   });
+
+  // Contact form lead schema
+  const contactLeadSchema = z.object({
+    name: z.string().min(2, "Naam is verplicht"),
+    company: z.string().optional(),
+    email: z.string().email("Voer een geldig e-mailadres in"),
+    phone: z.string().optional(),
+    message: z.string().min(10, "Bericht moet minimaal 10 tekens bevatten"),
+    honeypot: z.string().optional(),
+  });
+
+  // POST /api/public/contact-lead - Public contact form submission
+  app.post("/api/public/contact-lead", async (req, res) => {
+    try {
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      
+      if (!checkLeadRateLimit(ip)) {
+        return res.status(429).json({ message: "Te veel aanvragen. Probeer het later opnieuw." });
+      }
+      
+      const result = contactLeadSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error.errors[0].message });
+      }
+      
+      const data = result.data;
+      
+      if (data.honeypot) {
+        return res.status(200).json({ success: true });
+      }
+      
+      const { db } = await import("./db");
+      const leadResult = await db.execute(sql`
+        INSERT INTO advertiser_leads (goal, region, company_name, contact_name, phone, email, remarks, inferred_category)
+        VALUES ('Contact formulier', 'Onbekend', ${data.company || data.name}, ${data.name}, ${data.phone || null}, ${data.email}, ${data.message}, 'contact')
+        RETURNING id
+      `);
+      
+      const leadId = (leadResult.rows[0] as any)?.id;
+      
+      const contactInternalBlocks: BodyBlock[] = [
+        { type: "paragraph", content: "Er is een nieuw contactformulier binnengekomen via de website." },
+        { 
+          type: "infoCard", 
+          rows: [
+            { label: "Naam", value: `<strong>${data.name}</strong>` },
+            { label: "Bedrijf", value: data.company || "<span style='color:#999;'>Niet opgegeven</span>" },
+            { label: "E-mail", value: data.email },
+            { label: "Telefoon", value: data.phone || "<span style='color:#999;'>Niet opgegeven</span>" },
+            { label: "Bericht", value: data.message },
+            { label: "Interne referentie", value: `Lead #${leadId}` },
+          ]
+        },
+      ];
+      
+      const { html: contactHtml, text: contactText } = baseEmailTemplate({
+        subject: `Nieuw contactformulier – ${data.name}`,
+        preheader: `Nieuw bericht van ${data.name}`,
+        title: "Nieuw Bericht",
+        bodyBlocks: contactInternalBlocks,
+        cta: { label: "Open in Dashboard", url: `https://elevizion.nl/leads` },
+      });
+      
+      await sendEmail({
+        to: "info@elevizion.nl",
+        subject: `Nieuw contactformulier – ${data.name}`,
+        html: contactHtml,
+        text: contactText,
+        templateKey: "contact_form_internal",
+      });
+      
+      if (data.email) {
+        const contactCustomerBlocks: BodyBlock[] = [
+          { type: "paragraph", content: `Hallo ${data.name},` },
+          { type: "paragraph", content: "Bedankt voor je bericht! We hebben je vraag ontvangen en nemen zo snel mogelijk contact met je op." },
+          { type: "paragraph", content: "Meestal reageren we binnen 24 uur op werkdagen." },
+          { type: "paragraph", content: "Heb je dringende vragen? Beantwoord gerust deze e-mail." },
+        ];
+        
+        const { html: confirmHtml, text: confirmText } = baseEmailTemplate({
+          subject: "We hebben je bericht ontvangen – Elevizion",
+          preheader: "We nemen snel contact met je op.",
+          title: "Bericht Ontvangen",
+          bodyBlocks: contactCustomerBlocks,
+          footerNote: "Je ontvangt deze e-mail omdat je het contactformulier hebt ingevuld op elevizion.nl",
+        });
+        
+        await sendEmail({
+          to: data.email,
+          subject: "We hebben je bericht ontvangen – Elevizion",
+          html: confirmHtml,
+          text: confirmText,
+          templateKey: "contact_form_confirmation",
+        });
+      }
+      
+      res.json({ success: true, message: "Bedankt voor je bericht! We nemen snel contact op." });
+    } catch (error: any) {
+      console.error("Error creating contact lead:", error);
+      res.status(500).json({ message: "Er ging iets mis. Probeer het later opnieuw." });
+    }
+  });
   
   // ============================================================================
   // ADVERTISERS

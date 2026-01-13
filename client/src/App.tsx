@@ -43,6 +43,12 @@ import AdvertiserOnboarding from "@/pages/AdvertiserOnboarding";
 import LocationIntake from "@/pages/LocationIntake";
 import LocationContract from "@/pages/LocationContract";
 import NotFound from "@/pages/not-found";
+import Adverteren from "@/pages/marketing/Adverteren";
+import SchermLocatie from "@/pages/marketing/SchermLocatie";
+import Prijzen from "@/pages/marketing/Prijzen";
+import Werkwijze from "@/pages/marketing/Werkwijze";
+import VeelgesteldeVragen from "@/pages/marketing/VeelgesteldeVragen";
+import Contact from "@/pages/marketing/Contact";
 
 function DashboardRouter() {
   return (
@@ -84,6 +90,12 @@ function Router() {
     <Switch>
       <Route path="/" component={Landing} />
       <Route path="/login" component={Login} />
+      <Route path="/adverteren" component={Adverteren} />
+      <Route path="/scherm-locatie" component={SchermLocatie} />
+      <Route path="/prijzen" component={Prijzen} />
+      <Route path="/werkwijze" component={Werkwijze} />
+      <Route path="/veelgestelde-vragen" component={VeelgesteldeVragen} />
+      <Route path="/contact" component={Contact} />
       <Route path="/portal/:token" component={AdvertiserPortal} />
       <Route path="/locatie-portal/:token" component={LocationPortal} />
       <Route path="/regio/limburg">{() => <LocalLanding city="limburg" />}</Route>

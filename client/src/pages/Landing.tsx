@@ -14,62 +14,16 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { AdvertiserLeadModal, ScreenLeadModal } from "@/components/LeadModals";
+import MarketingHeader from "@/components/marketing/MarketingHeader";
+import MarketingFooter from "@/components/marketing/MarketingFooter";
 
 export default function Landing() {
   const [advertiserModalOpen, setAdvertiserModalOpen] = useState(false);
   const [screenModalOpen, setScreenModalOpen] = useState(false);
 
-  const scrollToSection = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
-  };
-
   return (
     <div className="min-h-screen bg-white">
-      <header className="border-b border-slate-100 bg-white/95 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <img 
-              src="/elevizion-logo.png" 
-              alt="Elevizion - Digital Signage en Narrowcasting in Limburg" 
-              className="h-9 w-auto"
-              data-testid="logo"
-              loading="lazy"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none';
-                const textEl = e.currentTarget.nextElementSibling as HTMLElement;
-                if (textEl) textEl.style.display = 'block';
-              }}
-            />
-            <span className="text-xl font-bold text-slate-900 hidden" data-testid="logo-text">Elevizion</span>
-          </div>
-          <nav className="flex items-center gap-1 sm:gap-2">
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="text-slate-500 hover:text-slate-900 hidden sm:inline-flex transition-colors"
-              onClick={() => scrollToSection('adverteren')}
-            >
-              Adverteren
-            </Button>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="text-slate-500 hover:text-slate-900 hidden sm:inline-flex transition-colors"
-              onClick={() => scrollToSection('scherm-aanbieden')}
-            >
-              Scherm aanbieden
-            </Button>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="text-slate-500 hover:text-slate-900 hidden sm:inline-flex transition-colors"
-              onClick={() => scrollToSection('contact')}
-            >
-              Contact
-            </Button>
-          </nav>
-        </div>
-      </header>
+      <MarketingHeader />
 
       <section className="py-24 md:py-36 relative overflow-hidden min-h-[75vh] flex items-center">
         <video 
@@ -619,56 +573,7 @@ export default function Landing() {
         </div>
       </section>
 
-      <footer className="py-12 bg-slate-950 text-slate-500">
-        <div className="container mx-auto px-4">
-          <div className="max-w-5xl mx-auto">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
-              <div>
-                <h3 className="font-semibold text-white mb-3">Elevizion</h3>
-                <p className="text-sm leading-relaxed">
-                  Digital signage en narrowcasting specialist in Limburg. Schermreclame bij kappers, sportscholen en horeca.
-                </p>
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-3">Snel naar</h3>
-                <ul className="space-y-2 text-sm">
-                  <li><a href="#adverteren" className="hover:text-white transition-colors">Adverteren</a></li>
-                  <li><a href="#scherm-aanbieden" className="hover:text-white transition-colors">Scherm aanbieden</a></li>
-                  <li><a href="#contact" className="hover:text-white transition-colors">Contact</a></li>
-                </ul>
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-3">Regio's</h3>
-                <ul className="space-y-2 text-sm">
-                  <li><Link href="/regio/limburg" className="hover:text-white transition-colors">Limburg</Link></li>
-                  <li><Link href="/regio/maastricht" className="hover:text-white transition-colors">Maastricht</Link></li>
-                  <li><Link href="/regio/sittard" className="hover:text-white transition-colors">Sittard-Geleen</Link></li>
-                  <li><Link href="/regio/heerlen" className="hover:text-white transition-colors">Heerlen</Link></li>
-                  <li><Link href="/regio/roermond" className="hover:text-white transition-colors">Roermond</Link></li>
-                  <li><Link href="/regio/venlo" className="hover:text-white transition-colors">Venlo</Link></li>
-                </ul>
-              </div>
-              <div>
-                <h3 className="font-semibold text-white mb-3">Contact</h3>
-                <ul className="space-y-2 text-sm">
-                  <li>
-                    <button 
-                      onClick={() => setAdvertiserModalOpen(true)}
-                      className="hover:text-white transition-colors text-left"
-                    >
-                      Contact opnemen
-                    </button>
-                  </li>
-                  <li className="text-slate-600">Limburg, Nederland</li>
-                </ul>
-              </div>
-            </div>
-            <div className="border-t border-slate-800 pt-6 text-center text-sm">
-              <p>&copy; {new Date().getFullYear()} Elevizion. Digital signage & narrowcasting in Limburg.</p>
-            </div>
-          </div>
-        </div>
-      </footer>
+      <MarketingFooter />
 
       <AdvertiserLeadModal open={advertiserModalOpen} onOpenChange={setAdvertiserModalOpen} />
       <ScreenLeadModal open={screenModalOpen} onOpenChange={setScreenModalOpen} />
