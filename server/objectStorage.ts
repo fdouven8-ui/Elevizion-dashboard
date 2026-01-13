@@ -192,6 +192,36 @@ export class ObjectStorageService {
       requestedPermission: requestedPermission ?? ObjectPermission.READ,
     });
   }
+
+  /**
+   * Upload a file to object storage
+   * Returns the public URL of the uploaded file
+   */
+  async uploadFile(content: Buffer, fileName: string, contentType: string): Promise<string> {
+    try {
+      const privateObjectDir = this.getPrivateObjectDir();
+      const fullPath = `${privateObjectDir}/${fileName}`;
+      const { bucketName, objectName } = parseObjectPath(fullPath);
+      
+      const bucket = objectStorageClient.bucket(bucketName);
+      const file = bucket.file(objectName);
+      
+      await file.save(content, {
+        metadata: {
+          contentType,
+        },
+      });
+
+      // Make the file publicly accessible
+      await file.makePublic();
+      
+      // Return the public URL
+      return `https://storage.googleapis.com/${bucketName}/${objectName}`;
+    } catch (error) {
+      console.error("[ObjectStorage] Error uploading file:", error);
+      throw error;
+    }
+  }
 }
 
 function parseObjectPath(path: string): {
