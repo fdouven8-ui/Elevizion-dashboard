@@ -242,12 +242,12 @@ export function formatVideoSpecsForDisplay(specs: VideoSpecs, contractDuration: 
   return `
 Videospecificaties voor uw advertentie:
 
-• Bestandsformaat: MP4 (H.264 codec)
-• Resolutie: ${specs.requiredWidth}x${specs.requiredHeight} pixels (Full HD)
-• Beeldverhouding: ${specs.requiredAspectRatio}
-• Duur: exact ${contractDuration} seconden
+• Bestandsformaat: MP4 (H.264 codec) - VERPLICHT
+• Duur: exact ${contractDuration} seconden - VERPLICHT
+• Resolutie: ${specs.requiredWidth}x${specs.requiredHeight} pixels (Full HD) - Aanbevolen
+• Beeldverhouding: ${specs.requiredAspectRatio} liggend - Aanbevolen
 • Maximale bestandsgrootte: ${specs.maxFileSizeBytes / (1024 * 1024)}MB
-• Audio: niet toegestaan (wordt niet afgespeeld)
+• Audio: wordt niet afgespeeld
 
 Tip: Gebruik Adobe Premiere, DaVinci Resolve of een online converter om uw video om te zetten naar de juiste specificaties.
   `.trim();

@@ -205,11 +205,11 @@ export default function UploadPortal() {
             </div>
             <Alert className="mt-4" variant="default">
               <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Bestandsnaam</AlertTitle>
+              <AlertTitle>Bestandsnaam (verplicht)</AlertTitle>
               <AlertDescription>
-                Uw bestandsnaam moet uw linkcode bevatten: <strong>{portalInfo?.linkKey}</strong>
+                Uw bestandsnaam <strong>moet beginnen met</strong>: <code className="bg-blue-100 px-1">{portalInfo?.linkKey}_</code>
                 <br />
-                Bijvoorbeeld: <code>{portalInfo?.linkKey}_advertentie.mp4</code>
+                Voorbeeld: <code className="bg-gray-100 px-1">{portalInfo?.linkKey}_Bedrijfsnaam.mp4</code>
               </AlertDescription>
             </Alert>
           </CardContent>
