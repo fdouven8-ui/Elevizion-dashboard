@@ -7965,6 +7965,74 @@ We wensen je een succesvolle maand!`
   });
 
   // ============================================================================
+  // SYSTEM HEALTH CHECK
+  // ============================================================================
+  
+  app.get("/api/system-health", async (req, res) => {
+    try {
+      const { runFullHealthCheck, getOverallStatus, countChecksByStatus } = await import("./services/healthCheck");
+      const groups = await runFullHealthCheck();
+      const overall = getOverallStatus(groups);
+      const counts = countChecksByStatus(groups);
+      
+      res.json({
+        overall,
+        counts,
+        groups,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error("[HealthCheck] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  app.post("/api/system-health/test/email", async (req, res) => {
+    try {
+      const { email } = req.body;
+      if (!email) {
+        return res.status(400).json({ message: "E-mailadres is verplicht" });
+      }
+      
+      const { testSendEmail } = await import("./services/healthCheck");
+      const result = await testSendEmail(email);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  app.post("/api/system-health/test/moneybird", async (req, res) => {
+    try {
+      const { testMoneybirdCreateContact } = await import("./services/healthCheck");
+      const result = await testMoneybirdCreateContact();
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  app.post("/api/system-health/test/yodeck", async (req, res) => {
+    try {
+      const { testYodeckSync } = await import("./services/healthCheck");
+      const result = await testYodeckSync();
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  app.post("/api/system-health/test/lead", async (req, res) => {
+    try {
+      const { testCreateLead } = await import("./services/healthCheck");
+      const result = await testCreateLead();
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
   // EMAIL LOGS
   // ============================================================================
 

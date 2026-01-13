@@ -1,0 +1,118 @@
+VOLLEDIGE WORKFLOW + INTEGRATIES CHECK (MONEYBIRD AL KLAAR, IBAN VOLGT)
+
+CONTEXT
+Moneybird is volledig ingericht. Alleen mijn eigen IBAN ontbreekt nog (komt later). Ik wil dat het dashboard automatisch nacheckt:
+- of alle configuraties kloppen
+- of de bedachte workflow end-to-end klopt en werkt
+- of er geen gaps/bugs zitten (data sync, contracten, mails, leads, yodeck koppeling)
+
+DOEL
+Bouw een “Systeemcheck / Health Check” pagina in het dashboard (Admin) die alle essentiële onderdelen controleert, duidelijke fouten/warnings toont en per item een “Test” knop heeft (waar veilig).
+Daarnaast: loop de code door en fix alles wat niet matcht met de workflow.
+
+BELANGRIJK
+- Geen grote refactor.
+- IBAN van ons bedrijf is nog niet bekend: dat mag GEEN blokker zijn voor onboarding, behalve voor SEPA-machtiging tekst waar noodzakelijk. Toon dat als WARNING, niet als ERROR.
+- Gebruik Moneybird en Yodeck als sources of truth; dashboard houdt data klein, maar moet alles correct koppelen.
+
+A) HEALTH CHECK PAGE (ADMIN)
+Maak Admin -> “Systeemcheck” met checks gegroepeerd:
+
+1) Bedrijfsprofiel (CompanyProfile)
+- legalName/tradeName/kvk/vat aanwezig
+- publicAddressEnabled=false (adres niet publiek)
+- IBAN ontbreekt -> WARNING “IBAN nog niet ingevuld (SEPA crediteur tekst mogelijk incompleet)”
+
+2) Mail (Postmark)
+- API key aanwezig
+- From addresses:
+  - no-reply@elevizion.nl voor systeemmails
+  - info@elevizion.nl voor contact
+- Test button: “Stuur testmail naar admin” (naar mijn email) -> success/fail tonen
+
+3) Contract/OTP module
+- Templates bestaan:
+  - AV
+  - Adverteerderovereenkomst
+  - Schermlocatieovereenkomst
+  - SEPA machtiging
+- OTP settings:
+  - 6 digits
+  - expiry 15 min
+  - rate limit
+- Test button: “Simuleer OTP flow” (maakt dummy acceptance in testmode, zonder echte klant)
+
+4) Moneybird integratie
+- API token aanwezig
+- Connection ok (call /me of /administrations)
+- Check: kan contact aanmaken/updaten
+- Check: SEPA mandate flow voorbereid (maar IBAN bedrijf ontbreekt -> WARNING)
+- Test button: “Maak testcontact” (met label TEST_HEALTHCHECK) en daarna opruimen of markeren
+
+5) Yodeck integratie
+- API token aanwezig
+- Kan screens ophalen
+- Kan playlists/media ophalen
+- Sync status endpoint werkt
+- Test button: “Run sync now” (alleen lezen, geen destructive acties)
+
+6) Leads/forms
+- Website forms maken lead record (geen mailto)
+- Dashboard lead listing werkt
+- Acties: “Behandeld” & “Verwijderen” werken
+- Test button: “Maak testlead” zichtbaar in lijst
+
+7) Workflow checks (END-TO-END)
+Maak per workflow een checklist met status per stap + “Run Test”:
+
+Workflow A: Adverteerder
+- Invite link (token) genereren + mail verstuurd
+- Details submit -> Moneybird contact aangemaakt/updated + id opgeslagen
+- Package selected -> pricing opgeslagen (per scherm)
+- Contract step -> checkboxes + OTP -> ACCEPTED
+- PDF(s) gegenereerd + downloadbaar
+- “Wat nu” mail verstuurd met linkKey + bestandsnaam instructie
+- Yodeck koppeling:
+  - dashboard kan ad asset matchen op linkKey (titel/tag/bestandsnaam)
+  - status verandert naar ASSET_RECEIVED / LIVE
+
+Workflow B: Schermlocatie
+- intakeToken link + mail
+- intake submit -> status PENDING_REVIEW + bevestiging mail
+- admin approve -> contractToken mail
+- contract step -> IBAN locatie + checkboxes + OTP -> ACCEPTED
+- PDF(s) + bevestiging naar beide
+- status READY_FOR_INSTALL
+
+B) AUTOMATISCHE VALIDATIES (BIJ LADEN)
+Health check moet bij openen:
+- alle checks draaien
+- elke check toont:
+  - PASS / WARNING / FAIL
+  - korte reden
+  - “Fix suggestion” (bijv. “Postmark token ontbreekt” / “Template SEPA ontbreekt”)
+
+C) CODEBASE AUDIT (FIX WAT NIET KLOPT)
+Doorzoek en fix mismatch met workflow:
+- verkeerde mail afzender (alles systeem via no-reply)
+- checkboxes/OTP die verspreid zitten -> centraliseren
+- verkeerde claims in mails/web
+- ontbrekende linkKey in “Wat nu” mail
+- yodeck matching op bedrijfsnaam -> vervangen door linkKey match
+- moneybird contact niet opgeslagen -> fix mapping
+
+D) LOGGING
+Voeg veilige logging toe (geen OTP codes loggen):
+- sync runs
+- mail send success/fail
+- moneybird api errors
+- yodeck api errors
+
+E) OUTPUT
+Na implementatie:
+1) Toon waar “Systeemcheck” zit (menu pad)
+2) Toon welke checks PASS/WARNING/FAIL kunnen geven
+3) Geef test-instructies voor beide workflows (klik voor klik)
+4) Lijst met bestanden die zijn aangepast
+
+START NU MET IMPLEMENTEREN.
