@@ -9,6 +9,7 @@ import {
   validateVideoMetadata,
   getVideoSpecsForDuration,
   VideoValidationResult,
+  DEFAULT_VIDEO_DURATION_SECONDS,
 } from './videoMetadataService';
 import { ObjectStorageService } from '../objectStorage';
 
@@ -75,7 +76,7 @@ export async function validatePortalToken(token: string, recordAccess = false): 
     return {
       advertiserId: advertiser.id,
       linkKey: advertiser.linkKey,
-      contractDuration: advertiser.videoDurationSeconds || 15,
+      contractDuration: advertiser.videoDurationSeconds || DEFAULT_VIDEO_DURATION_SECONDS,
       companyName: advertiser.companyName,
       strictResolution: advertiser.strictResolution || false,
     };

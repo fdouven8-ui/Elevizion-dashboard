@@ -40,8 +40,8 @@ export interface VideoSpecs {
 
 export const DEFAULT_VIDEO_SPECS: VideoSpecs = {
   allowedMimeTypes: ['video/mp4'],
-  minDurationSeconds: 9.5,
-  maxDurationSeconds: 15.5,
+  minDurationSeconds: DEFAULT_VIDEO_DURATION_SECONDS - DURATION_TOLERANCE_SECONDS,
+  maxDurationSeconds: DEFAULT_VIDEO_DURATION_SECONDS + DURATION_TOLERANCE_SECONDS,
   requiredWidth: 1920,
   requiredHeight: 1080,
   requiredAspectRatio: '16:9',
