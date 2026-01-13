@@ -38,6 +38,7 @@ import LocalLanding from "@/pages/LocalLanding";
 import Leads from "@/pages/Leads";
 import Payouts from "@/pages/Payouts";
 import Contracts from "@/pages/Contracts";
+import ContractSigning from "@/pages/ContractSigning";
 import NotFound from "@/pages/not-found";
 
 function DashboardRouter() {
@@ -88,6 +89,7 @@ function Router() {
       <Route path="/regio/heerlen">{() => <LocalLanding city="heerlen" />}</Route>
       <Route path="/regio/roermond">{() => <LocalLanding city="roermond" />}</Route>
       <Route path="/regio/venlo">{() => <LocalLanding city="venlo" />}</Route>
+      <Route path="/contract-ondertekenen/:id" component={ContractSigning} />
       <Route component={DashboardRouter} />
     </Switch>
   );

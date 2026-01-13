@@ -124,6 +124,96 @@ export default function AdvertiserDetail() {
     },
   });
 
+  const { data: contractDocs = [], refetch: refetchContracts } = useQuery<any[]>({
+    queryKey: ["/api/contract-documents/entity/advertiser", id],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/contract-documents/entity/advertiser/${id}`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!id,
+  });
+
+  const { data: termsAcceptance } = useQuery<any>({
+    queryKey: ["/api/terms-acceptance/advertiser", id],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/terms-acceptance/advertiser/${id}`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!id,
+  });
+
+  const generateContractMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/contract-documents/generate", {
+        templateKey: "contract_advertiser",
+        entityType: "advertiser",
+        entityId: id,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.id) {
+        sendContractMutation.mutate(data.id);
+      } else {
+        toast({ title: "Fout", description: data.error || "Kon contract niet genereren", variant: "destructive" });
+      }
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const sendContractMutation = useMutation({
+    mutationFn: async (docId: string) => {
+      const res = await apiRequest("POST", `/api/contract-documents/${docId}/send-for-signing`, {
+        customerEmail: advertiser?.email,
+        customerName: advertiser?.contactName || advertiser?.companyName,
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.success) {
+        toast({ title: "Contract verzonden", description: "OTP code is verzonden naar de adverteerder" });
+        refetchContracts();
+      } else {
+        toast({ title: "Fout", description: data.error, variant: "destructive" });
+      }
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const handleSendContract = async () => {
+    if (!advertiser?.email) {
+      toast({ title: "Fout", description: "Adverteerder heeft geen e-mailadres", variant: "destructive" });
+      return;
+    }
+
+    if (!termsAcceptance?.accepted) {
+      toast({ 
+        title: "Algemene voorwaarden vereist", 
+        description: "Laat de adverteerder eerst de algemene voorwaarden accepteren via de portal", 
+        variant: "destructive" 
+      });
+      return;
+    }
+
+    const latestDoc = contractDocs.find((d: any) => d.templateKey === "contract_advertiser" && d.status !== "signed");
+    
+    if (latestDoc) {
+      sendContractMutation.mutate(latestDoc.id);
+    } else {
+      generateContractMutation.mutate();
+    }
+  };
+
+  const latestAdvertiserContract = contractDocs.find((d: any) => d.templateKey === "contract_advertiser");
+  const contractSignStatus = latestAdvertiserContract?.signStatus || "none";
+  const isContractSigned = latestAdvertiserContract?.status === "signed";
+
   const previewMutation = useMutation({
     mutationFn: async (templateId: string) => {
       const res = await apiRequest("POST", `/api/templates/${templateId}/preview`, { advertiserId: id });
@@ -304,23 +394,75 @@ export default function AdvertiserDetail() {
             <div className="bg-background rounded-lg p-4 border">
               <div className="flex items-center justify-between mb-2">
                 <span className="font-medium">Reclame Contract</span>
-                <Badge variant="outline" className="bg-amber-50 text-amber-700">
-                  <Clock className="h-3 w-3 mr-1" />
-                  Niet verstuurd
-                </Badge>
+                {isContractSigned ? (
+                  <Badge className="bg-green-100 text-green-800">
+                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                    Getekend
+                  </Badge>
+                ) : contractSignStatus === "verified" ? (
+                  <Badge className="bg-blue-100 text-blue-800">
+                    <Check className="h-3 w-3 mr-1" />
+                    OTP geverifieerd
+                  </Badge>
+                ) : contractSignStatus === "sent" ? (
+                  <Badge className="bg-blue-100 text-blue-800">
+                    <Clock className="h-3 w-3 mr-1" />
+                    Verzonden
+                  </Badge>
+                ) : latestAdvertiserContract ? (
+                  <Badge variant="outline" className="bg-gray-50 text-gray-700">
+                    Concept
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="bg-amber-50 text-amber-700">
+                    <Clock className="h-3 w-3 mr-1" />
+                    Niet verstuurd
+                  </Badge>
+                )}
               </div>
               <p className="text-sm text-muted-foreground mb-3">
                 Advertentie-overeenkomst voor plaatsing op schermen
               </p>
               <div className="flex gap-2">
-                <Button size="sm" variant="default" data-testid="button-send-contract">
-                  <Send className="h-4 w-4 mr-1" />
-                  Verstuur
-                </Button>
-                <Button size="sm" variant="outline" data-testid="button-copy-contract-link">
-                  <Copy className="h-4 w-4 mr-1" />
-                  Link kopiëren
-                </Button>
+                {isContractSigned ? (
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    data-testid="button-download-contract"
+                    onClick={() => window.open(`/api/contract-documents/${latestAdvertiserContract?.id}/signed-pdf`, '_blank')}
+                  >
+                    <Download className="h-4 w-4 mr-1" />
+                    PDF downloaden
+                  </Button>
+                ) : (
+                  <>
+                    <Button 
+                      size="sm" 
+                      variant="default" 
+                      data-testid="button-send-contract"
+                      onClick={handleSendContract}
+                      disabled={generateContractMutation.isPending || sendContractMutation.isPending || !advertiser.email}
+                    >
+                      <Send className="h-4 w-4 mr-1" />
+                      {contractSignStatus === "sent" ? "Opnieuw versturen" : "Verstuur"}
+                    </Button>
+                    {latestAdvertiserContract && (
+                      <Button 
+                        size="sm" 
+                        variant="outline" 
+                        data-testid="button-copy-contract-link"
+                        onClick={() => {
+                          const link = `${window.location.origin}/contract-ondertekenen/${latestAdvertiserContract.id}`;
+                          navigator.clipboard.writeText(link);
+                          toast({ title: "Link gekopieerd" });
+                        }}
+                      >
+                        <Copy className="h-4 w-4 mr-1" />
+                        Link kopiëren
+                      </Button>
+                    )}
+                  </>
+                )}
               </div>
             </div>
 
@@ -369,9 +511,14 @@ export default function AdvertiserDetail() {
           </div>
           <div className="mt-4 flex items-center justify-between text-sm">
             <span className="text-muted-foreground">
-              Contracten: {advertiser.sepaMandate ? "1" : "0"}/2 getekend
+              Contracten: {(isContractSigned ? 1 : 0) + (advertiser.sepaMandate ? 1 : 0)}/2 getekend
             </span>
-            <Button variant="ghost" size="sm" data-testid="button-refresh-contracts">
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              data-testid="button-refresh-contracts"
+              onClick={() => refetchContracts()}
+            >
               <RefreshCw className="h-4 w-4 mr-1" />
               Status verversen
             </Button>
