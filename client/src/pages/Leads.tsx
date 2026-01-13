@@ -31,8 +31,28 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from "@/hooks/use-toast";
 import { 
   UserPlus, Megaphone, MapPin, Phone, Mail, Building2, User, 
-  Calendar, Loader2, Search, X, ChevronLeft, ChevronRight, Plus 
+  Calendar, Loader2, Search, X, ChevronLeft, ChevronRight, Plus,
+  CheckCircle2, Archive, RotateCcw, Trash2, MoreHorizontal
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { apiRequest } from "@/lib/queryClient";
 import { format } from "date-fns";
 import { nl } from "date-fns/locale";
 
@@ -47,6 +67,12 @@ interface Lead {
   source: string | null;
   category: string | null;
   createdAt: string;
+  isHandled: boolean;
+  handledAt: string | null;
+  handledBy: string | null;
+  isDeleted: boolean;
+  deletedAt: string | null;
+  deletedBy: string | null;
 }
 
 interface LeadQueryResult {
@@ -138,6 +164,14 @@ export default function Leads() {
   // Drawer state
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  
+  // Tab state for workflow status (open/handled/deleted)
+  const [workflowTab, setWorkflowTab] = useState<"open" | "handled" | "deleted">(
+    params.get("tab") as "open" | "handled" | "deleted" || "open"
+  );
+  
+  // Delete confirmation dialog
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   // Debounce search input
   const debouncedSearch = useDebounce(searchInput, 400);
@@ -151,12 +185,28 @@ export default function Leads() {
     if (categoryFilter !== "all") p.set("category", categoryFilter);
     if (onlyNew) p.set("onlyNew", "true");
     if (dateRange !== "all") p.set("dateRange", dateRange);
-    p.set("sortBy", sortBy);
+    
+    // Workflow tab filters
+    let effectiveSortBy = sortBy;
+    if (workflowTab === "open") {
+      p.set("isHandled", "false");
+      p.set("isDeleted", "false");
+    } else if (workflowTab === "handled") {
+      p.set("isHandled", "true");
+      p.set("isDeleted", "false");
+      if (sortBy === "createdAt") effectiveSortBy = "handledAt";
+    } else if (workflowTab === "deleted") {
+      p.set("isDeleted", "true");
+      if (sortBy === "createdAt") effectiveSortBy = "deletedAt";
+    }
+    
+    p.set("tab", workflowTab);
+    p.set("sortBy", effectiveSortBy);
     p.set("sortDir", sortDir);
     p.set("page", page.toString());
     p.set("pageSize", pageSize.toString());
     return p.toString();
-  }, [debouncedSearch, typeFilter, statusFilter, categoryFilter, onlyNew, dateRange, sortBy, sortDir, page, pageSize]);
+  }, [debouncedSearch, typeFilter, statusFilter, categoryFilter, onlyNew, dateRange, sortBy, sortDir, page, pageSize, workflowTab]);
 
   // Sync filters to URL
   useEffect(() => {
@@ -193,6 +243,60 @@ export default function Leads() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
       toast({ title: "Status bijgewerkt", duration: 2000 });
+    },
+  });
+
+  // Handle mutation (mark as handled/open)
+  const handleMutation = useMutation({
+    mutationFn: async ({ id, isHandled }: { id: string; isHandled: boolean }) => {
+      const res = await apiRequest("PATCH", `/api/leads/${id}/handle`, { isHandled });
+      return res.json();
+    },
+    onSuccess: (_, { isHandled }) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
+      toast({ 
+        title: isHandled ? "Lead behandeld" : "Lead heropend", 
+        description: isHandled ? "Lead is gemarkeerd als behandeld" : "Lead is teruggezet naar open",
+        duration: 2000 
+      });
+      setIsDrawerOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Fout", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Soft delete mutation
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("PATCH", `/api/leads/${id}/delete`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
+      toast({ title: "Lead verwijderd", description: "Lead is verplaatst naar verwijderd", duration: 2000 });
+      setIsDrawerOpen(false);
+      setDeleteConfirmId(null);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Fout", description: err.message, variant: "destructive" });
+      setDeleteConfirmId(null);
+    },
+  });
+
+  // Restore mutation
+  const restoreMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiRequest("PATCH", `/api/leads/${id}/restore`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
+      toast({ title: "Lead hersteld", description: "Lead is teruggeplaatst", duration: 2000 });
+      setIsDrawerOpen(false);
+    },
+    onError: (err: Error) => {
+      toast({ title: "Fout", description: err.message, variant: "destructive" });
     },
   });
 
@@ -281,6 +385,24 @@ export default function Leads() {
           )}
         </div>
       </div>
+
+      {/* Workflow Tabs */}
+      <Tabs value={workflowTab} onValueChange={(v) => { setWorkflowTab(v as "open" | "handled" | "deleted"); setPage(1); }}>
+        <TabsList className="grid w-full max-w-md grid-cols-3">
+          <TabsTrigger value="open" data-testid="tab-open" className="gap-1.5">
+            <UserPlus className="h-3.5 w-3.5" />
+            Open
+          </TabsTrigger>
+          <TabsTrigger value="handled" data-testid="tab-handled" className="gap-1.5">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Behandeld
+          </TabsTrigger>
+          <TabsTrigger value="deleted" data-testid="tab-deleted" className="gap-1.5">
+            <Archive className="h-3.5 w-3.5" />
+            Verwijderd
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
 
       {/* Toolbar */}
       <Card className="border-muted">
@@ -436,15 +558,59 @@ export default function Leads() {
                     <TableCell className="py-3 text-muted-foreground">{lead.contactName}</TableCell>
                     <TableCell className="py-3">{getStatusBadge(lead.status)}</TableCell>
                     <TableCell className="text-right py-3">
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        className="h-7 text-xs"
-                        onClick={(e) => { e.stopPropagation(); openDrawer(lead); }}
-                        data-testid={`button-view-${lead.id}`}
-                      >
-                        Bekijk
-                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" data-testid={`button-actions-${lead.id}`}>
+                            <MoreHorizontal className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); openDrawer(lead); }}>
+                            Bekijk details
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {workflowTab === "open" && (
+                            <DropdownMenuItem 
+                              onClick={(e) => { e.stopPropagation(); handleMutation.mutate({ id: lead.id, isHandled: true }); }}
+                              data-testid={`button-handle-${lead.id}`}
+                            >
+                              <CheckCircle2 className="h-4 w-4 mr-2 text-emerald-600" />
+                              Markeer als behandeld
+                            </DropdownMenuItem>
+                          )}
+                          {workflowTab === "handled" && (
+                            <DropdownMenuItem 
+                              onClick={(e) => { e.stopPropagation(); handleMutation.mutate({ id: lead.id, isHandled: false }); }}
+                              data-testid={`button-reopen-${lead.id}`}
+                            >
+                              <RotateCcw className="h-4 w-4 mr-2 text-blue-600" />
+                              Zet terug naar open
+                            </DropdownMenuItem>
+                          )}
+                          {workflowTab === "deleted" && (
+                            <DropdownMenuItem 
+                              onClick={(e) => { e.stopPropagation(); restoreMutation.mutate(lead.id); }}
+                              data-testid={`button-restore-${lead.id}`}
+                            >
+                              <RotateCcw className="h-4 w-4 mr-2 text-blue-600" />
+                              Herstellen
+                            </DropdownMenuItem>
+                          )}
+                          {workflowTab !== "deleted" && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem 
+                                onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(lead.id); }}
+                                className="text-red-600"
+                                data-testid={`button-delete-${lead.id}`}
+                              >
+                                <Trash2 className="h-4 w-4 mr-2" />
+                                Verwijderen
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -587,10 +753,106 @@ export default function Leads() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {/* Workflow timestamps */}
+              {selectedLead.handledAt && (
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 mt-0.5" />
+                  <div>
+                    <p className="text-xs text-muted-foreground">Behandeld op</p>
+                    <p className="font-medium">
+                      {format(new Date(selectedLead.handledAt), "d MMMM yyyy 'om' HH:mm", { locale: nl })}
+                      {selectedLead.handledBy && <span className="text-muted-foreground"> door {selectedLead.handledBy}</span>}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Workflow actions */}
+              <div className="pt-4 border-t space-y-2">
+                <Label className="text-sm font-medium">Acties</Label>
+                <div className="flex flex-wrap gap-2">
+                  {!selectedLead.isHandled && !selectedLead.isDeleted && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleMutation.mutate({ id: selectedLead.id, isHandled: true })}
+                      disabled={handleMutation.isPending}
+                      data-testid="button-drawer-handle"
+                    >
+                      <CheckCircle2 className="h-4 w-4 mr-1.5 text-emerald-600" />
+                      Markeer als behandeld
+                    </Button>
+                  )}
+                  {selectedLead.isHandled && !selectedLead.isDeleted && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleMutation.mutate({ id: selectedLead.id, isHandled: false })}
+                      disabled={handleMutation.isPending}
+                      data-testid="button-drawer-reopen"
+                    >
+                      <RotateCcw className="h-4 w-4 mr-1.5 text-blue-600" />
+                      Zet terug naar open
+                    </Button>
+                  )}
+                  {selectedLead.isDeleted && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => restoreMutation.mutate(selectedLead.id)}
+                      disabled={restoreMutation.isPending}
+                      data-testid="button-drawer-restore"
+                    >
+                      <RotateCcw className="h-4 w-4 mr-1.5 text-blue-600" />
+                      Herstellen
+                    </Button>
+                  )}
+                  {!selectedLead.isDeleted && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      onClick={() => setDeleteConfirmId(selectedLead.id)}
+                      data-testid="button-drawer-delete"
+                    >
+                      <Trash2 className="h-4 w-4 mr-1.5" />
+                      Verwijderen
+                    </Button>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </SheetContent>
       </Sheet>
+
+      {/* Delete confirmation dialog */}
+      <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => !open && setDeleteConfirmId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Lead verwijderen?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Weet je zeker dat je deze lead wilt verwijderen? De lead wordt verplaatst naar het archief en kan later worden hersteld.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Annuleren</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => deleteConfirmId && deleteMutation.mutate(deleteConfirmId)}
+              className="bg-red-600 hover:bg-red-700"
+              data-testid="button-confirm-delete"
+            >
+              {deleteMutation.isPending ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4 mr-2" />
+              )}
+              Verwijderen
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

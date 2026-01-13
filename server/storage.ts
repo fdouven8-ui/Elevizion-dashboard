@@ -80,10 +80,12 @@ export interface LeadQueryParams {
   category?: string;
   onlyNew?: boolean;
   dateRange?: "7" | "30" | "all";
-  sortBy?: "createdAt" | "companyName" | "status";
+  sortBy?: "createdAt" | "companyName" | "status" | "handledAt" | "deletedAt";
   sortDir?: "asc" | "desc";
   page?: number;
   pageSize?: number;
+  isHandled?: boolean;
+  isDeleted?: boolean;
 }
 
 export interface LeadQueryResult {
@@ -1395,10 +1397,20 @@ export class DatabaseStorage implements IStorage {
       sortDir = "desc",
       page = 1,
       pageSize = 25,
+      isHandled,
+      isDeleted = false,
     } = params;
 
     // Build conditions array
     const conditions = [];
+
+    // isDeleted filter (default: exclude deleted)
+    conditions.push(eq(schema.leads.isDeleted, isDeleted));
+
+    // isHandled filter
+    if (typeof isHandled === "boolean") {
+      conditions.push(eq(schema.leads.isHandled, isHandled));
+    }
 
     // Text search (case-insensitive partial match)
     if (q && q.trim()) {
@@ -1451,18 +1463,25 @@ export class DatabaseStorage implements IStorage {
       .from(schema.leads)
       .where(whereClause);
 
-    // Count new leads (global, not filtered)
+    // Count new leads (global, not filtered, excluding deleted)
     const [{ count: newCount }] = await db
       .select({ count: sql<number>`count(*)` })
       .from(schema.leads)
-      .where(eq(schema.leads.status, "nieuw"));
+      .where(and(eq(schema.leads.status, "nieuw"), eq(schema.leads.isDeleted, false)));
 
     // Build ORDER BY
-    const orderColumn = sortBy === "companyName" 
-      ? schema.leads.companyName 
-      : sortBy === "status" 
-        ? schema.leads.status 
-        : schema.leads.createdAt;
+    let orderColumn;
+    if (sortBy === "companyName") {
+      orderColumn = schema.leads.companyName;
+    } else if (sortBy === "status") {
+      orderColumn = schema.leads.status;
+    } else if (sortBy === "handledAt") {
+      orderColumn = schema.leads.handledAt;
+    } else if (sortBy === "deletedAt") {
+      orderColumn = schema.leads.deletedAt;
+    } else {
+      orderColumn = schema.leads.createdAt;
+    }
     const orderFn = sortDir === "asc" ? sql`${orderColumn} ASC` : sql`${orderColumn} DESC`;
 
     // Fetch paginated items

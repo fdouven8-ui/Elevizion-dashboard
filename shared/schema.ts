@@ -1032,6 +1032,14 @@ export const leads = pgTable("leads", {
   inferredConfidence: decimal("inferred_confidence", { precision: 3, scale: 2 }), // 0.00 - 1.00
   finalCategory: text("final_category"), // User-confirmed category (overrides inferred)
   categoryUpdatedAt: timestamp("category_updated_at"),
+  // Workflow status (OPEN/BEHANDELD)
+  isHandled: boolean("is_handled").notNull().default(false),
+  handledAt: timestamp("handled_at"),
+  handledBy: varchar("handled_by"),
+  // Soft delete
+  isDeleted: boolean("is_deleted").notNull().default(false),
+  deletedAt: timestamp("deleted_at"),
+  deletedBy: varchar("deleted_by"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

@@ -1,0 +1,66 @@
+DOEL
+Leads beheren: ik moet per lead kunnen klikken en kiezen:
+1) “Behandeld” -> verdwijnt uit de standaardlijst, maar blijft altijd terug te zien in een archief/geschiedenis.
+2) “Verwijderen” -> verwijderd (liefst soft-delete), met confirm. Ook verwijderde leads moeten (optioneel) terug te zien zijn in een aparte tab/sectie.
+
+BELANGRIJK
+- Geen grote refactor of redesign. Hou de huidige UI en structuur zoveel mogelijk.
+- Maak dit consistent en betrouwbaar.
+
+DATA MODEL
+Voeg aan Lead (of bestaande lead tabel/collection) deze velden toe:
+- status: "OPEN" | "BEHANDELD" (default "OPEN")
+- handledAt: datetime (nullable)
+- handledBy: userId/name (nullable) (als er user-systeem is)
+- isDeleted: boolean (default false)
+- deletedAt: datetime (nullable)
+- deletedBy: userId/name (nullable)
+- notes: string (optional) (voor korte notities)
+- updatedAt: datetime
+
+Als er al iets bestaat wat hierop lijkt: hergebruik en migreer, maar zorg dat dit overal klopt.
+
+BACKEND / API
+1) PATCH /api/leads/:id/status
+   body: { status: "OPEN" | "BEHANDELD" }
+   - bij "BEHANDELD": set handledAt=now
+   - bij terug naar "OPEN": handledAt=null
+2) PATCH /api/leads/:id/delete
+   body: { isDeleted: true }
+   - soft delete: set isDeleted=true, deletedAt=now
+3) PATCH /api/leads/:id/restore (optioneel maar handig)
+   - zet isDeleted=false, deletedAt=null
+4) GET /api/leads?status=OPEN|BEHANDELD&deleted=false|true
+   - default in UI: status=OPEN en deleted=false
+
+UI/UX
+- Leads pagina krijgt 2 tabs (of filterknoppen):
+  - “Open” (default) -> toont status=OPEN en isDeleted=false
+  - “Behandeld” -> toont status=BEHANDELD en isDeleted=false
+  - (optioneel) “Verwijderd” -> toont isDeleted=true
+- Per lead in de lijst:
+  - Klik op lead opent detailpaneel/modal OF een actie-menu (⋯) met:
+    - “Markeer als behandeld”
+    - “Zet terug naar open” (alleen in behandeld tab)
+    - “Verwijderen” (altijd zichtbaar) + confirm dialog: “Weet je zeker?”
+  - Na “Behandeld”: lead verdwijnt direct uit Open lijst (optimistic UI oké)
+  - Lead blijft terug te zien onder tab “Behandeld” inclusief handledAt.
+- In detailweergave:
+  - toon status badge (OPEN/BEHANDELD) en timestamps
+  - knopjes voor acties
+
+SORTERING & ZOEKEN
+- Open leads: nieuwste eerst (createdAt desc)
+- Behandeld: nieuwste handledAt eerst
+- Verwijderd: nieuwste deletedAt eerst
+- Bestaande search/filter blijven werken op alle tabs (indien al aanwezig)
+
+VEILIGHEID / BETROUWBAARHEID
+- Server-side validatie op id, status enums
+- Zorg dat deleted leads niet meer in OPEN/BEHANDELD default queries zitten
+- Geen hard delete tenzij ik later expliciet vraag
+
+OUTPUT
+- Laat zien welke bestanden je aanpast
+- Welke DB migratie je maakt
+- Waar i

@@ -6232,27 +6232,29 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   app.get("/api/leads", async (req, res) => {
-    const { q, type, status, onlyNew, dateRange, sortBy, sortDir, page, pageSize } = req.query;
+    const { q, type, status, onlyNew, dateRange, sortBy, sortDir, page, pageSize, isHandled, isDeleted } = req.query;
     
     // If any pagination/filter params provided, use paginated endpoint
-    if (q || type || status || onlyNew || dateRange || sortBy || sortDir || page || pageSize) {
+    if (q || type || status || onlyNew || dateRange || sortBy || sortDir || page || pageSize || isHandled !== undefined || isDeleted !== undefined) {
       const result = await storage.getLeadsPaginated({
         q: q as string,
         type: type as string,
         status: status as string,
         onlyNew: onlyNew === "true",
         dateRange: dateRange as "7" | "30" | "all",
-        sortBy: sortBy as "createdAt" | "companyName" | "status",
+        sortBy: sortBy as "createdAt" | "companyName" | "status" | "handledAt" | "deletedAt",
         sortDir: sortDir as "asc" | "desc",
         page: page ? parseInt(page as string) : 1,
         pageSize: pageSize ? parseInt(pageSize as string) : 25,
+        isHandled: isHandled === "true" ? true : isHandled === "false" ? false : undefined,
+        isDeleted: isDeleted === "true",
       });
       return res.json(result);
     }
     
-    // Legacy: return all leads as array for backwards compatibility
-    const leads = await storage.getLeads();
-    res.json(leads);
+    // Legacy: return all leads as array for backwards compatibility (excludes deleted)
+    const result = await storage.getLeadsPaginated({ isDeleted: false });
+    res.json(result.items);
   });
 
   app.get("/api/leads/:id", async (req, res) => {
@@ -6346,6 +6348,67 @@ Sitemap: ${SITE_URL}/sitemap.xml
   app.patch("/api/leads/:id", async (req, res) => {
     try {
       const lead = await storage.updateLead(req.params.id, req.body);
+      if (!lead) return res.status(404).json({ message: "Lead niet gevonden" });
+      res.json(lead);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/leads/:id/handle", async (req, res) => {
+    try {
+      const { isHandled } = req.body;
+      if (typeof isHandled !== "boolean") {
+        return res.status(400).json({ message: "isHandled (boolean) is verplicht" });
+      }
+      const { db } = await import("./db");
+      const [lead] = await db.update(leads)
+        .set({
+          isHandled,
+          handledAt: isHandled ? new Date() : null,
+          handledBy: isHandled ? (req.user?.username || null) : null,
+          updatedAt: new Date(),
+        })
+        .where(eq(leads.id, req.params.id))
+        .returning();
+      if (!lead) return res.status(404).json({ message: "Lead niet gevonden" });
+      res.json(lead);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/leads/:id/delete", async (req, res) => {
+    try {
+      const { db } = await import("./db");
+      const [lead] = await db.update(leads)
+        .set({
+          isDeleted: true,
+          deletedAt: new Date(),
+          deletedBy: req.user?.username || null,
+          updatedAt: new Date(),
+        })
+        .where(eq(leads.id, req.params.id))
+        .returning();
+      if (!lead) return res.status(404).json({ message: "Lead niet gevonden" });
+      res.json(lead);
+    } catch (error: any) {
+      res.status(400).json({ message: error.message });
+    }
+  });
+
+  app.patch("/api/leads/:id/restore", async (req, res) => {
+    try {
+      const { db } = await import("./db");
+      const [lead] = await db.update(leads)
+        .set({
+          isDeleted: false,
+          deletedAt: null,
+          deletedBy: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(leads.id, req.params.id))
+        .returning();
       if (!lead) return res.status(404).json({ message: "Lead niet gevonden" });
       res.json(lead);
     } catch (error: any) {
