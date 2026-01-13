@@ -81,10 +81,10 @@ export default function Werkwijze() {
                       3
                     </div>
                     <div>
-                      <h3 className="font-bold text-lg text-slate-800 mb-2">Akkoord geven</h3>
+                      <h3 className="font-bold text-lg text-slate-800 mb-2">Akkoord & ontvang linkKey</h3>
                       <p className="text-slate-600">
-                        Je ontvangt een duidelijke offerte. Na akkoord starten we direct met 
-                        het maken van je advertentievideo. Je krijgt een preview ter goedkeuring.
+                        Je ontvangt een duidelijke offerte. Na akkoord via OTP-ondertekening 
+                        krijg je een "Wat nu" mail met je unieke linkKey (bijv. ADV-001).
                       </p>
                     </div>
                   </div>
@@ -98,10 +98,13 @@ export default function Werkwijze() {
                       4
                     </div>
                     <div>
-                      <h3 className="font-bold text-lg text-slate-800 mb-2">Content aanleveren</h3>
+                      <h3 className="font-bold text-lg text-slate-800 mb-2">Video aanleveren</h3>
                       <p className="text-slate-600">
-                        Stuur je logo, boodschap en eventuele beelden. Heb je zelf al een video? 
-                        Prima! Anders maken wij een professioneel ontwerp voor je.
+                        Lever je video aan via e-mail met je linkKey in de bestandsnaam 
+                        (bijv. ADV-001_Bedrijfsnaam.mp4). Specs: MP4 (H.264), 1080p, 10-15 sec, 16:9.
+                      </p>
+                      <p className="text-sm text-amber-600 mt-2 font-medium">
+                        Let op: geen ontwerp/maakservice inbegrepen.
                       </p>
                     </div>
                   </div>
@@ -117,8 +120,8 @@ export default function Werkwijze() {
                     <div>
                       <h3 className="font-bold text-lg text-slate-800 mb-2">Live!</h3>
                       <p className="text-slate-600">
-                        Je advertentie draait op de gekozen schermen. Je krijgt toegang tot 
-                        rapportages en kunt altijd je content laten aanpassen.
+                        Wij plaatsen je video in Yodeck en je advertentie draait automatisch 
+                        op de gekozen schermen. Minimale looptijd: 6 maanden.
                       </p>
                     </div>
                   </div>

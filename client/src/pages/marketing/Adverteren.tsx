@@ -115,9 +115,9 @@ export default function Adverteren() {
               <div className="w-16 h-16 rounded-full bg-emerald-600 text-white flex items-center justify-center mx-auto mb-5 shadow-lg">
                 <span className="text-2xl font-bold">3</span>
               </div>
-              <h3 className="font-bold text-slate-800 mb-2 text-lg">Live!</h3>
+              <h3 className="font-bold text-slate-800 mb-2 text-lg">Video aanleveren & Live!</h3>
               <p className="text-sm text-slate-600 leading-relaxed">
-                Wij maken de content, jij geeft akkoord, en je advertentie draait binnen 48 uur.
+                Je levert je video aan volgens onze specs. Wij plaatsen hem en je advertentie draait binnen 48 uur.
               </p>
             </div>
           </div>
@@ -127,10 +127,10 @@ export default function Adverteren() {
       <section className="py-16 md:py-24 bg-white">
         <div className="container mx-auto px-4">
           <h2 className="text-2xl md:text-3xl font-bold text-center text-slate-800 mb-4">
-            Video-specificaties
+            Aanleverspecificaties
           </h2>
           <p className="text-center text-slate-600 mb-12 max-w-lg mx-auto">
-            Lever je eigen video aan of laat ons een ontwerp maken
+            Je levert je advertentievideo zelf aan. Wij plaatsen hem op de schermen.
           </p>
           
           <div className="max-w-2xl mx-auto">
@@ -141,27 +141,34 @@ export default function Adverteren() {
                     <FileVideo className="h-6 w-6" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-slate-800 mb-3">Aanleveren video</h3>
+                    <h3 className="font-bold text-slate-800 mb-3">Video aanleveren</h3>
                     <ul className="space-y-2 text-sm text-slate-600">
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                        <span>Duur: 10-15 seconden</span>
-                      </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                         <span>Formaat: MP4 (H.264)</span>
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                        <span>Resolutie: 1920x1080 (Full HD)</span>
+                        <span>Resolutie: 1920x1080 (Full HD, liggend 16:9)</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                        <span>Duur: 10-15 seconden</span>
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                         <span>Zonder audio (schermen staan op mute)</span>
                       </li>
+                      <li className="flex items-center gap-2">
+                        <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                        <span>Bestandsnaam: [linkKey]_Bedrijfsnaam.mp4</span>
+                      </li>
                     </ul>
                     <p className="text-sm text-slate-500 mt-4">
-                      Geen video? Geen probleem. Wij maken gratis een ontwerp op basis van je logo en boodschap.
+                      Na akkoord ontvang je een unieke linkKey (bijv. ADV-001). Gebruik deze in je bestandsnaam. Aanleveren via e-mail naar info@elevizion.nl.
+                    </p>
+                    <p className="text-sm text-amber-600 mt-3 font-medium">
+                      Let op: geen ontwerp/maakservice inbegrepen. Je levert de video zelf aan.
                     </p>
                   </div>
                 </div>

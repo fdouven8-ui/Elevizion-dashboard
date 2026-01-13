@@ -23,7 +23,7 @@ export default function Prijzen() {
               Duidelijke prijzen, geen verrassingen
             </h1>
             <p className="text-lg text-slate-600 max-w-2xl mx-auto">
-              Vaste maandprijzen inclusief ontwerp, plaatsing en onderhoud. 
+              Vaste maandprijzen inclusief plaatsing en onderhoud. 
               Alle prijzen zijn exclusief BTW.
             </p>
           </div>
@@ -57,11 +57,11 @@ export default function Prijzen() {
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Ontwerp inbegrepen</span>
+                    <span>Klant levert video aan</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Maandelijks opzegbaar</span>
+                    <span>Minimale looptijd: 6 maanden</span>
                   </li>
                 </ul>
                 <Button 
@@ -105,11 +105,11 @@ export default function Prijzen() {
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Ontwerp inbegrepen</span>
+                    <span>Klant levert video aan</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Maandelijks opzegbaar</span>
+                    <span>Minimale looptijd: 6 maanden</span>
                   </li>
                 </ul>
                 <Button 
@@ -150,11 +150,15 @@ export default function Prijzen() {
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
-                    <span>Ontwerp + revisies</span>
+                    <span>Klant levert video aan</span>
                   </li>
                   <li className="flex items-center gap-2">
                     <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
                     <span>Voorrang op toplocaties</span>
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <Check className="h-4 w-4 text-emerald-600 flex-shrink-0" />
+                    <span>Minimale looptijd: 6 maanden</span>
                   </li>
                 </ul>
                 <Button 
@@ -235,22 +239,22 @@ export default function Prijzen() {
               <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-4">
                 <Check className="h-6 w-6" />
               </div>
-              <h3 className="font-bold text-slate-800 mb-2">Gratis ontwerp</h3>
-              <p className="text-sm text-slate-600">Wij maken een professionele video op basis van je logo en boodschap</p>
+              <h3 className="font-bold text-slate-800 mb-2">Plaatsing & beheer</h3>
+              <p className="text-sm text-slate-600">Wij zorgen voor plaatsing op de schermen en monitoren alles 24/7</p>
             </div>
             <div className="text-center">
               <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-4">
                 <Check className="h-6 w-6" />
               </div>
               <h3 className="font-bold text-slate-800 mb-2">Flexibel wijzigen</h3>
-              <p className="text-sm text-slate-600">Content aanpassen of locaties wisselen kan altijd</p>
+              <p className="text-sm text-slate-600">Video vervangen of locaties wisselen kan altijd</p>
             </div>
             <div className="text-center">
               <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto mb-4">
                 <Check className="h-6 w-6" />
               </div>
-              <h3 className="font-bold text-slate-800 mb-2">Geen lange contracten</h3>
-              <p className="text-sm text-slate-600">Maandelijks opzegbaar na de eerste maand</p>
+              <h3 className="font-bold text-slate-800 mb-2">Duidelijke voorwaarden</h3>
+              <p className="text-sm text-slate-600">Minimaal 6 maanden, daarna maandelijks opzegbaar</p>
             </div>
           </div>
         </div>

@@ -1,0 +1,90 @@
+DOEL
+Corrigeer alle website-teksten zodat ze overal kloppen met het echte aanbod:
+1) Elevizion maakt NIET de advertentie. De klant levert zelf een video/advertentie aan volgens specs.
+2) Abonnementen zijn NIET vanaf maand 1 opzegbaar. Verwijder/verbeter alle teksten die “maandelijks opzegbaar vanaf maand 1” suggereren. Maak het consistent met de echte looptijd/opzegregels.
+
+BELANGRIJK
+- Pas alleen content/teksten en relevante UI labels aan. Geen grote redesign of refactor.
+- Zoek in alle pagina’s + componenten waar dit genoemd wordt en fix overal consistent.
+- Update ook FAQ, Werkwijze en Pricing kaarten.
+
+────────────────────────
+A) ADVERTENTIE AANLEVEREN (OVERAL CONSISTENT)
+────────────────────────
+Vervang alle teksten die suggereren dat Elevizion advertenties maakt (zoals “wij maken je advertentie”, “wij ontwerpen”, “wij produceren”) door:
+
+Standaardboodschap (gebruik consequent):
+- “Je levert je advertentievideo zelf aan. Wij plaatsen hem op de schermen.”
+- “Geen ontwerp/maakservice inbegrepen.”
+- “We sturen je na akkoord duidelijke aanleverspecificaties.”
+
+Voeg een korte “Aanleverspecificaties” sectie toe op /adverteren en /werkwijze:
+- Video: mp4 (H.264), 1080p, 10–15 sec, zonder audio (of als audio niet wordt gebruikt), liggend 16:9
+- Bestandsnaam verplicht met linkKey (ADV-...): {{linkKey}}_Bedrijfsnaam.mp4
+- Aanleveren via e-mail naar info@elevizion.nl (of via upload indien aanwezig)
+Let op: “linkKey” is uniek en krijg je automatisch na akkoord.
+
+────────────────────────
+B) ABONNEMENTSVOORWAARDEN (NIET MAAND 1 OPZEGBAAR)
+────────────────────────
+1) Zoek en verwijder/aanpassen van alle teksten zoals:
+- “maandelijks opzegbaar”
+- “opzegbaar vanaf maand 1”
+- “cancel anytime”
+2) Vervang door een duidelijke, korte formulering die klopt met hoe jij het echt wil aanbieden.
+
+Gebruik één consistente tekst (kies de minst juridische, meest duidelijke variant):
+- “Looptijd: minimaal X maanden, daarna maandelijks opzegbaar.”
+OF (als je met 6 maanden werkt)
+- “Looptijd: minimaal 6 maanden, daarna maandelijks opzegbaar.”
+OF (als je 12 maanden werkt)
+- “Looptijd: minimaal 12 maanden, daarna maandelijks opzegbaar.”
+
+Maak dit overal gelijk op:
+- /prijzen (pricing cards + detailtekst)
+- /adverteren
+- /werkwijze
+- /veelgestelde-vragen (FAQ)
+- checkout/onboarding teaser teksten (als aanwezig)
+
+Als de exacte X maanden al in het dashboard/voorwaarden staat, lees die waarde als config/constant (bijv. SUBSCRIPTION_MIN_TERM_MONTHS) zodat website en dashboard altijd matchen.
+
+────────────────────────
+C) PRICING KAARTEN (KLEINE AANPASSINGEN)
+────────────────────────
+Op /prijzen:
+- Laat prijzen staan (49,99 / 129,99 / 299,99 / custom)
+- Voeg onder elke kaart 2 bullets toe:
+  1) “Klant levert video aan”
+  2) “Minimale looptijd: X maanden”
+- “Meer info” moet verwijzen naar /werkwijze of een accordion openen met:
+  - aanleveren
+  - looptijd/opzegging
+  - wat wij wel doen (plaatsen, planning, support)
+
+────────────────────────
+D) FAQ UPDATES (BELANGRIJK)
+────────────────────────
+Zorg dat FAQ vragen/antwoorden deze twee punten duidelijk maken.
+Voeg of pas minimaal deze FAQ’s aan:
+
+1) “Maken jullie mijn advertentie?”
+Antwoord: “Nee, je levert je advertentievideo zelf aan. Wij sturen specs en plaatsen hem op de schermen.”
+
+2) “Wanneer kan ik opzeggen?”
+Antwoord: “Na de minimale looptijd van X maanden kun je maandelijks opzeggen.”
+
+3) “Welke video moet ik aanleveren?”
+Antwoord met specs + linkKey bestandsnaam.
+
+────────────────────────
+E) WERKWIJZE PAGINA
+────────────────────────
+Update adverteerder flow:
+- Gegevens invullen → pakket kiezen → akkoord + OTP → ontvang ‘Wat nu’ mail met linkKey → video aanleveren met linkKey in bestandsnaam → wij plaatsen in Yodeck → automatisch live.
+
+Zorg dat overal expliciet staat:
+- “Klant levert aan”
+- “Minimale looptijd X maanden”
+
+───────
