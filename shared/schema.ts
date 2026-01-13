@@ -101,6 +101,9 @@ export const advertisers = pgTable("advertisers", {
   acceptedTermsUserAgent: text("accepted_terms_user_agent"), // Browser info bij akkoord
   acceptedTermsVersion: text("accepted_terms_version"), // Versie AV/Privacy
   acceptedTermsPdfUrl: text("accepted_terms_pdf_url"), // Opgeslagen PDF akkoordverklaring
+  // Bundled contract PDF (AV + Overeenkomst + SEPA)
+  bundledPdfUrl: text("bundled_pdf_url"), // URL to bundled contract PDF
+  bundledPdfGeneratedAt: timestamp("bundled_pdf_generated_at"), // When bundle was generated
   // Email tracking timestamps (idempotency)
   inviteEmailSentAt: timestamp("invite_email_sent_at"), // When portal invite was sent
   confirmationEmailSentAt: timestamp("confirmation_email_sent_at"), // When submission confirmation was sent
@@ -185,6 +188,9 @@ export const locations = pgTable("locations", {
   acceptedTermsUserAgent: text("accepted_terms_user_agent"),
   acceptedTermsVersion: text("accepted_terms_version"),
   acceptedTermsPdfUrl: text("accepted_terms_pdf_url"),
+  // Bundled contract PDF (AV + Overeenkomst)
+  bundledPdfUrl: text("bundled_pdf_url"), // URL to bundled contract PDF
+  bundledPdfGeneratedAt: timestamp("bundled_pdf_generated_at"), // When bundle was generated
   contractInstanceId: text("contract_instance_id"), // Reference to contract document
   // Email tracking
   inviteEmailSentAt: timestamp("invite_email_sent_at"),
