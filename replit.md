@@ -51,6 +51,13 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **Template Management System**: Database-driven templates for emails, contracts, and other communications with dynamic content `{{placeholder}}` syntax.
 - **Email Logging**: Tracks all sent emails with status and integrates with Postmark.
 - **System Health Check**: Comprehensive admin page (`/system-health`) for validating all configurations, integrations, and workflows. Includes 8 check groups: Company Profile, Email/Postmark, Contract/OTP, Moneybird, Yodeck, Leads/Forms, Advertiser Workflow, and Location Workflow. Features test buttons for sending test emails, creating test Moneybird contacts, running Yodeck syncs, and creating test leads.
+- **Video Upload Portal**: Self-service portal (`/upload/:token`) for advertisers to upload their own video content. Features:
+  - Token-based authentication via `portal_tokens` with SHA256 hashing and usage tracking
+  - Video validation using ffprobe: MP4 format, 1920x1080 resolution, contract-specific duration (±0.5s tolerance)
+  - Filename validation requiring advertiser's linkKey
+  - Asset workflow states: none → uploaded_invalid → uploaded_valid → ready_for_yodeck → live
+  - Object Storage integration for file persistence (100MB limit)
+  - Drag-and-drop UI with real-time upload progress and detailed validation feedback
 
 ## External Dependencies
 
