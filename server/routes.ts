@@ -1745,6 +1745,234 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // ============================================================================
+  // LOCATION ONBOARDING 2.0 (Two-phase: Intake + Contract)
+  // ============================================================================
+
+  // Admin: Create new location invite
+  app.post("/api/location-onboarding/invite", async (req, res) => {
+    try {
+      const { companyName, email } = req.body;
+      if (!companyName || !email) {
+        return res.status(400).json({ error: "Bedrijfsnaam en email zijn verplicht" });
+      }
+
+      const { createLocationInvite } = await import("./services/locationOnboarding");
+      const result = await createLocationInvite(companyName, email, req.user?.username || "system");
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ 
+        success: true, 
+        locationId: result.locationId,
+        intakeUrl: result.intakeUrl,
+        message: "Uitnodiging verzonden"
+      });
+    } catch (error: any) {
+      console.error("[LocationOnboarding] Invite error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Approve location
+  app.post("/api/location-onboarding/:id/approve", async (req, res) => {
+    try {
+      const { approveLocation } = await import("./services/locationOnboarding");
+      const result = await approveLocation(req.params.id, req.user?.username || "admin");
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ 
+        success: true, 
+        contractUrl: result.contractUrl,
+        message: "Locatie goedgekeurd"
+      });
+    } catch (error: any) {
+      console.error("[LocationOnboarding] Approve error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Reject location
+  app.post("/api/location-onboarding/:id/reject", async (req, res) => {
+    try {
+      const { rejectLocation } = await import("./services/locationOnboarding");
+      const result = await rejectLocation(req.params.id, req.user?.username || "admin", req.body.reason);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ success: true, message: "Locatie afgewezen" });
+    } catch (error: any) {
+      console.error("[LocationOnboarding] Reject error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Resend intake link
+  app.post("/api/location-onboarding/:id/resend-intake", async (req, res) => {
+    try {
+      const { resendIntakeLink } = await import("./services/locationOnboarding");
+      const result = await resendIntakeLink(req.params.id);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ success: true, message: "Intake link opnieuw verzonden" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Admin: Resend contract link
+  app.post("/api/location-onboarding/:id/resend-contract", async (req, res) => {
+    try {
+      const { resendContractLink } = await import("./services/locationOnboarding");
+      const result = await resendContractLink(req.params.id);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ success: true, message: "Contract link opnieuw verzonden" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // PUBLIC: Validate intake token
+  app.get("/api/public/location-intake/:token", async (req, res) => {
+    try {
+      const { validateIntakeToken } = await import("./services/locationOnboarding");
+      const result = await validateIntakeToken(req.params.token);
+      
+      if (!result.valid) {
+        return res.status(403).json({ error: result.error });
+      }
+      
+      res.json({
+        name: result.location.name,
+        email: result.location.email,
+        contactName: result.location.contactName,
+        phone: result.location.phone,
+        street: result.location.street,
+        houseNumber: result.location.houseNumber,
+        zipcode: result.location.zipcode,
+        city: result.location.city,
+        locationType: result.location.locationType,
+        visitorsPerWeek: result.location.visitorsPerWeek,
+        openingHours: result.location.openingHours,
+        notes: result.location.notes,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // PUBLIC: Submit intake form
+  app.post("/api/public/location-intake/:token", async (req, res) => {
+    try {
+      const { submitIntake } = await import("./services/locationOnboarding");
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+      const userAgent = req.headers["user-agent"] || "unknown";
+      
+      const result = await submitIntake(req.params.token, req.body, ip, userAgent);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ success: true, message: "Gegevens opgeslagen" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // PUBLIC: Validate contract token
+  app.get("/api/public/location-contract/:token", async (req, res) => {
+    try {
+      const { validateContractToken } = await import("./services/locationOnboarding");
+      const result = await validateContractToken(req.params.token);
+      
+      if (!result.valid) {
+        return res.status(403).json({ error: result.error });
+      }
+      
+      res.json({
+        name: result.location.name,
+        email: result.location.email,
+        contactName: result.location.contactName,
+        address: result.location.address,
+        city: result.location.city,
+        visitorsPerWeek: result.location.visitorsPerWeek,
+        hasIban: !!result.location.bankAccountIban,
+        onboardingStatus: result.location.onboardingStatus,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // PUBLIC: Submit contract details (IBAN + checkboxes)
+  app.post("/api/public/location-contract/:token/details", async (req, res) => {
+    try {
+      const { submitContractDetails } = await import("./services/locationOnboarding");
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+      const userAgent = req.headers["user-agent"] || "unknown";
+      
+      const result = await submitContractDetails(req.params.token, req.body, ip, userAgent);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // PUBLIC: Send OTP
+  app.post("/api/public/location-contract/:token/send-otp", async (req, res) => {
+    try {
+      const { sendLocationOtp } = await import("./services/locationOnboarding");
+      const result = await sendLocationOtp(req.params.token);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ success: true, message: "Bevestigingscode verzonden" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // PUBLIC: Verify OTP and finalize
+  app.post("/api/public/location-contract/:token/verify-otp", async (req, res) => {
+    try {
+      const { verifyLocationOtp } = await import("./services/locationOnboarding");
+      const ip = (req.headers["x-forwarded-for"] as string)?.split(",")[0] || req.socket.remoteAddress || "unknown";
+      const userAgent = req.headers["user-agent"] || "unknown";
+      
+      const result = await verifyLocationOtp(req.params.token, req.body.otpCode, ip, userAgent);
+      
+      if (!result.success) {
+        return res.status(400).json({ error: result.error });
+      }
+      
+      res.json({ success: true, message: "Akkoord succesvol bevestigd" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
   // SITES (Unified entity: 1 site = 1 screen location)
   // ============================================================================
 

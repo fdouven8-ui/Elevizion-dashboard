@@ -165,3 +165,40 @@ Core entities include: **Entities** (unified model for ADVERTISER + SCREEN), Sit
   - Handled timestamp display in drawer
   - Tab-specific default sorting (createdAt/handledAt/deletedAt)
   - URL sync for tab state persistence
+
+### Location Onboarding System (Jan 2026)
+- **2-phase onboarding workflow** for new locations:
+  - Phase A: Admin invites → Location submits intake form
+  - Phase B: Admin reviews → Approve sends contract link → Location accepts with OTP
+- **9-state workflow**: INVITED_INTAKE → INTAKE_SUBMITTED → PENDING_REVIEW → APPROVED_AWAITING_CONTRACT → CONTRACT_PENDING_OTP → CONTRACT_ACCEPTED → READY_FOR_INSTALL → ACTIVE → REJECTED
+- **LocationKey system**: Unique identifiers (LOC-COMPANYNAME-RANDOM6) for Yodeck matching
+- **Dual token system**: intakeToken (30-day expiry) for Phase A, contractToken (30-day expiry) for Phase B
+- **Database fields** added to locations table:
+  - Tokens: `intakeToken`, `intakeTokenExpiresAt`, `contractToken`, `contractTokenExpiresAt`
+  - Key: `locationKey` (unique per location)
+  - Workflow: `onboardingStatus`, `reviewedBy`, `reviewedAt`, `reviewReason`
+  - Payout: `payoutIban`, `payoutBeneficiaryName`
+  - Audit: `acceptedTermsAt`, `acceptedTermsPdfUrl`
+- **Public pages**:
+  - `/onboarding/location/intake/:token`: Location intake form (contact, address, type, visitors)
+  - `/onboarding/location/contract/:token`: Contract acceptance with IBAN, checkboxes, OTP
+- **API endpoints** (admin):
+  - `POST /api/location-onboarding/:id/invite`: Send intake link
+  - `POST /api/location-onboarding/:id/approve`: Approve location, send contract link
+  - `POST /api/location-onboarding/:id/reject`: Reject location with optional reason
+  - `POST /api/location-onboarding/:id/resend-intake`: Resend intake invitation
+  - `POST /api/location-onboarding/:id/resend-contract`: Resend contract link
+- **API endpoints** (public):
+  - `GET /api/public/location-intake/:token`: Validate intake token
+  - `POST /api/public/location-intake/:token`: Submit intake form
+  - `GET /api/public/location-contract/:token`: Validate contract token
+  - `POST /api/public/location-contract/:token/accept`: Accept terms (triggers OTP)
+  - `POST /api/public/location-contract/:token/verify-otp`: Verify OTP, finalize with PDF
+  - `POST /api/public/location-contract/:token/resend-otp`: Resend OTP
+- **LocationDetail UI** (`/locations/:id`):
+  - Onboarding status badges with Dutch labels
+  - LocationKey display with copy button
+  - Review card for PENDING_REVIEW with Goedkeuren/Afwijzen buttons
+  - Status-specific alerts (waiting for intake, contract, etc.)
+  - Reject confirmation dialog with optional reason
+  - PDF download for accepted contracts

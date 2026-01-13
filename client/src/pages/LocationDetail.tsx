@@ -25,13 +25,22 @@ import {
   RefreshCw,
   Link2,
   ExternalLink,
-  Clock
+  Clock,
+  FileCheck,
+  XCircle,
+  Send,
+  Copy,
+  Check,
+  Download
 } from "lucide-react";
 import { Link, useRoute } from "wouter";
 import { formatDistanceToNow } from "date-fns";
 import { nl } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 
 interface MoneybirdContact {
   id: string;
@@ -54,6 +63,9 @@ export default function LocationDetail() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [selectedContactId, setSelectedContactId] = useState<string>("");
+  const [showRejectDialog, setShowRejectDialog] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const locationId = params?.id;
   const location = locations.find(l => l.id === locationId);
@@ -110,6 +122,116 @@ export default function LocationDetail() {
     },
   });
 
+  const approveMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`/api/location-onboarding/${locationId}/approve`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || "Goedkeuren mislukt");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: "Locatie goedgekeurd", description: "Contract-link is verzonden" });
+      queryClient.invalidateQueries({ queryKey: ["locations"] });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`/api/location-onboarding/${locationId}/reject`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ reason: rejectReason }),
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || "Afwijzen mislukt");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Locatie afgewezen" });
+      setShowRejectDialog(false);
+      setRejectReason("");
+      queryClient.invalidateQueries({ queryKey: ["locations"] });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const resendIntakeMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`/api/location-onboarding/${locationId}/resend-intake`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Versturen mislukt");
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Intake link opnieuw verzonden" });
+    },
+    onError: () => {
+      toast({ title: "Versturen mislukt", variant: "destructive" });
+    },
+  });
+
+  const resendContractMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`/api/location-onboarding/${locationId}/resend-contract`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Versturen mislukt");
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Contract link opnieuw verzonden" });
+    },
+    onError: () => {
+      toast({ title: "Versturen mislukt", variant: "destructive" });
+    },
+  });
+
+  const copyToClipboard = async (text: string, fieldName: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedField(fieldName);
+      setTimeout(() => setCopiedField(null), 2000);
+      toast({ title: "Gekopieerd" });
+    } catch {
+      toast({ title: "Kopiëren mislukt", variant: "destructive" });
+    }
+  };
+
+  const getOnboardingBadge = (status: string | null | undefined) => {
+    const statusMap: Record<string, { label: string; className: string }> = {
+      "INVITED_INTAKE": { label: "Uitgenodigd", className: "bg-blue-100 text-blue-800" },
+      "INTAKE_SUBMITTED": { label: "Intake ontvangen", className: "bg-indigo-100 text-indigo-800" },
+      "PENDING_REVIEW": { label: "Te beoordelen", className: "bg-amber-100 text-amber-800" },
+      "APPROVED_AWAITING_CONTRACT": { label: "Wacht op akkoord", className: "bg-purple-100 text-purple-800" },
+      "CONTRACT_PENDING_OTP": { label: "Wacht op OTP", className: "bg-cyan-100 text-cyan-800" },
+      "CONTRACT_ACCEPTED": { label: "Akkoord gegeven", className: "bg-green-100 text-green-800" },
+      "READY_FOR_INSTALL": { label: "Klaar voor install", className: "bg-teal-100 text-teal-800" },
+      "ACTIVE": { label: "Actief", className: "bg-green-500 text-white" },
+      "REJECTED": { label: "Afgewezen", className: "bg-red-100 text-red-800" },
+      "draft": { label: "Concept", className: "bg-gray-100 text-gray-700" },
+    };
+    const config = statusMap[status || "draft"] || { label: status || "Onbekend", className: "bg-gray-100 text-gray-700" };
+    return <Badge className={config.className}>{config.label}</Badge>;
+  };
+
   if (!location) {
     return (
       <div className="space-y-6">
@@ -159,7 +281,22 @@ export default function LocationDetail() {
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 items-center">
+          {getOnboardingBadge(location.onboardingStatus)}
+          {(location as any).locationKey && (
+            <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 rounded-md text-sm font-mono">
+              <span className="text-slate-700">{(location as any).locationKey}</span>
+              <Button 
+                variant="ghost" 
+                size="icon"
+                className="h-5 w-5"
+                onClick={() => copyToClipboard((location as any).locationKey!, "LocationKey")}
+                data-testid="button-copy-locationkey"
+              >
+                {copiedField === "LocationKey" ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
+              </Button>
+            </div>
+          )}
           <Button 
             variant="secondary" 
             onClick={() => syncMutation.mutate()}
@@ -171,6 +308,122 @@ export default function LocationDetail() {
           </Button>
         </div>
       </div>
+
+      {location.onboardingStatus === "PENDING_REVIEW" && (
+        <Card className="border-amber-200 bg-amber-50">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <FileCheck className="h-5 w-5 text-amber-600" />
+              Beoordeling nodig
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <p className="text-muted-foreground">Bezoekers/week</p>
+                  <p className="font-medium">{location.visitorsPerWeek || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Type</p>
+                  <p className="font-medium">{(location as any).locationType || location.branche || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Stad</p>
+                  <p className="font-medium">{location.city || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Contact</p>
+                  <p className="font-medium">{location.contactName || "-"}</p>
+                </div>
+              </div>
+              <div className="flex gap-2 pt-2">
+                <Button 
+                  onClick={() => approveMutation.mutate()}
+                  disabled={approveMutation.isPending || rejectMutation.isPending}
+                  className="bg-green-600 hover:bg-green-700"
+                  data-testid="button-approve-location"
+                >
+                  <CheckCircle className="h-4 w-4 mr-2" />
+                  Goedkeuren
+                </Button>
+                <Button 
+                  variant="destructive"
+                  onClick={() => setShowRejectDialog(true)}
+                  disabled={approveMutation.isPending || rejectMutation.isPending}
+                  data-testid="button-reject-location"
+                >
+                  <XCircle className="h-4 w-4 mr-2" />
+                  Afwijzen
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {["INVITED_INTAKE", "INTAKE_SUBMITTED"].includes(location.onboardingStatus || "") && (
+        <Alert>
+          <Send className="h-4 w-4" />
+          <AlertDescription className="flex items-center justify-between">
+            <span>Wacht op intake van locatie</span>
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => resendIntakeMutation.mutate()}
+              disabled={resendIntakeMutation.isPending}
+              data-testid="button-resend-intake"
+            >
+              Herinnering sturen
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {["APPROVED_AWAITING_CONTRACT", "CONTRACT_PENDING_OTP"].includes(location.onboardingStatus || "") && (
+        <Alert className="border-purple-200 bg-purple-50">
+          <FileCheck className="h-4 w-4 text-purple-600" />
+          <AlertDescription className="flex items-center justify-between">
+            <span>Wacht op akkoord van locatie</span>
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={() => resendContractMutation.mutate()}
+              disabled={resendContractMutation.isPending}
+              data-testid="button-resend-contract"
+            >
+              Contract-link opnieuw sturen
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {location.onboardingStatus === "CONTRACT_ACCEPTED" && (
+        <Alert className="border-green-200 bg-green-50">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <AlertDescription className="flex items-center justify-between">
+            <span>Locatie heeft akkoord gegeven - klaar voor installatie</span>
+            {(location as any).acceptedTermsPdfUrl && (
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => window.open((location as any).acceptedTermsPdfUrl, '_blank')}
+                data-testid="button-download-pdf"
+              >
+                <Download className="h-4 w-4 mr-2" />
+                PDF downloaden
+              </Button>
+            )}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {location.onboardingStatus === "REJECTED" && (
+        <Alert variant="destructive">
+          <XCircle className="h-4 w-4" />
+          <AlertDescription>Deze locatie is afgewezen</AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
@@ -394,6 +647,46 @@ export default function LocationDetail() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={showRejectDialog} onOpenChange={setShowRejectDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Locatie afwijzen</DialogTitle>
+            <DialogDescription>
+              Weet je zeker dat je deze locatie wilt afwijzen? Voeg optioneel een reden toe.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Textarea
+              placeholder="Reden voor afwijzing (optioneel)..."
+              value={rejectReason}
+              onChange={(e) => setRejectReason(e.target.value)}
+              rows={3}
+            />
+          </div>
+          <DialogFooter>
+            <Button 
+              variant="outline" 
+              onClick={() => {
+                setShowRejectDialog(false);
+                setRejectReason("");
+              }}
+              data-testid="button-cancel-reject"
+            >
+              Annuleren
+            </Button>
+            <Button 
+              variant="destructive"
+              onClick={() => rejectMutation.mutate()}
+              disabled={rejectMutation.isPending}
+              data-testid="button-confirm-reject"
+            >
+              <XCircle className="h-4 w-4 mr-2" />
+              Afwijzen
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

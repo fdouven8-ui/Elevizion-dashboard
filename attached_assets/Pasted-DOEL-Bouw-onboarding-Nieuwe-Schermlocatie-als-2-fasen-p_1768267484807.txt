@@ -1,0 +1,226 @@
+DOEL
+Bouw onboarding “Nieuwe Schermlocatie” als 2-fasen proces met twee aparte links/tokens:
+FASE A: Intake (gegevens invullen via intake-link) -> bevestiging “locatie wordt beoordeeld”
+FASE B: Na mijn goedkeuring -> contract-link voor akkoord (checkboxes + OTP + IBAN) -> PDF + bevestiging naar beide.
+
+BELANGRIJK
+- Geen grote refactor. Houd huidige UI/structuur zoveel mogelijk hetzelfde.
+- Hergebruik dezelfde centrale “ContractAcceptance/OTP/PDF” module als bij adverteerders (of bouw die als die nog niet bestaat).
+- Oude externe signing integraties (SignRequest / Dropbox / Box / etc.) moeten weg of volledig uitgeschakeld.
+- Alles moet in het dashboard zichtbaar zijn met duidelijke status + acties.
+
+────────────────────────
+1) STATES (ENUM)
+────────────────────────
+Location.onboardingStatus:
+
+1) INVITED_INTAKE
+2) INTAKE_SUBMITTED
+3) PENDING_REVIEW
+4) APPROVED_AWAITING_CONTRACT
+5) CONTRACT_PENDING_OTP
+6) CONTRACT_ACCEPTED
+7) READY_FOR_INSTALL (of READY_FOR_PI)
+8) ACTIVE
+9) REJECTED (optioneel, maar handig)
+
+────────────────────────
+2) EXPLICIET: TWEE APARTE TOKENS (VERPLICHT)
+────────────────────────
+Er MOETEN twee verschillende tokens bestaan en gebruikt worden, niet combineren:
+
+A) intakeToken
+- Alleen toegang tot intake-form (gegevens invullen)
+- MAG NIET toegang geven tot: checkboxes, IBAN, OTP, contract/PDF
+- Route:
+  /onboarding/location/intake/:intakeToken
+
+B) contractToken
+- Wordt pas aangemaakt NA admin-goedkeuring
+- Alleen toegang tot: checkboxes, IBAN, OTP, contract/PDF
+- MAG NIET toegang geven tot: intake-gegevens aanpassen
+- Route:
+  /onboarding/location/contract/:contractToken
+
+BEVEILIGING & VALIDATIE (server-side verplicht)
+- Tokens uniek, random, onvoorspelbaar (crypto secure)
+- Tokens time-bound (bijv. 30 dagen geldig)
+- intakeToken alleen geldig bij status:
+  INVITED_INTAKE | INTAKE_SUBMITTED | PENDING_REVIEW
+- contractToken alleen geldig bij status:
+  APPROVED_AWAITING_CONTRACT | CONTRACT_PENDING_OTP
+- Verkeerde token of status -> 403 Forbidden
+- Token usage loggen (timestamp + ip + user-agent)
+- Token invalid maken:
+  - intakeToken: na succesvolle intake submit (of na review decision)
+  - contractToken: na CONTRACT_ACCEPTED
+
+────────────────────────
+3) DATA MODEL
+────────────────────────
+Location (of bestaande entity) uitbreiden met:
+- onboardingStatus (enum)
+- intakeToken, intakeTokenExpiresAt, intakeTokenUsedAt
+- contractToken, contractTokenExpiresAt, contractTokenUsedAt
+- visitorsPerWeek (int)
+- contactName, contactEmail, contactPhone
+- addressLine, postalCode, city, country
+- locationType (string)
+- notes (string)
+- payoutIban (string, veilig opslaan / encrypted indien mogelijk)
+- payoutAccountName (string)
+- contractInstanceId / acceptanceId (refs)
+- pdfUrl(s) (refs)
+- createdAt, updatedAt
+- reviewedAt, reviewedBy, reviewDecision (APPROVED/REJECTED)
+
+Optioneel (handig):
+- locationKey = "LOC-" + BEDRIJFSNAAM_CAPS_NO_SPACES + "-" + RANDOM6
+  Toon in dashboard met copy button.
+
+────────────────────────
+4) FASE A – INTAKE FLOW
+────────────────────────
+ADMIN (dashboard):
+- Ik maak “Nieuwe schermlocatie” aan met alleen:
+  - bedrijfsnaam
+  - email
+- Systeem:
+  - maakt location record
+  - genereert intakeToken (+ expiry)
+  - stuurt intake mail met intake-link
+  - onboardingStatus = INVITED_INTAKE
+
+PUBLIC INTAKE FORM (via intakeToken):
+Verplichte velden:
+- Bedrijfsnaam (prefill)
+- Contactpersoon naam
+- Email (prefill, maar editable indien nodig)
+- Telefoon
+- Adres + postcode + plaats
+- Type locatie
+- Gemiddeld bezoekers per week (verplicht)
+
+Optioneel:
+- openingstijden
+- opmerkingen
+
+Bij submit:
+- sla alles op in DB
+- onboardingStatus -> INTAKE_SUBMITTED -> direct daarna -> PENDING_REVIEW
+- stuur bevestigingsmail naar locatie:
+  “Bedankt, we beoordelen je locatie”
+- stuur interne melding naar info@elevizion.nl:
+  “Nieuwe locatie intake ontvangen + link naar dashboard item”
+
+MAIL 1 (naar locatie): Intake bevestiging
+Onderwerp: “Bedankt – we beoordelen je schermlocatie”
+Inhoud:
+- bevestig ontvangst
+- leg uit dat we dit beoordelen
+- noem indicatie: “je hoort snel van ons”
+- geen akkoord/contract in deze mail
+
+────────────────────────
+5) ADMIN REVIEW FLOW (DASHBOARD)
+────────────────────────
+In dashboard moet een duidelijke “Te beoordelen” lijst/indicator zijn.
+
+Op location detail:
+- toon intake info netjes
+- knoppen:
+  1) “Goedkeuren”
+  2) “Afwijzen”
+  3) (optioneel) “Meer info vragen”
+
+Bij “Goedkeuren”:
+- onboardingStatus -> APPROVED_AWAITING_CONTRACT
+- maak contractToken (+ expiry) (en zorg dat intakeToken niet meer gebruikt kan worden)
+- stuur mail 2 met contract-link
+- log: reviewedAt, reviewedBy, decision=APPROVED
+
+Bij “Afwijzen”:
+- onboardingStatus -> REJECTED
+- stuur nette afwijzingsmail
+- lead blijft terug te zien (archief), niet hard-delete
+
+MAIL 2 (naar locatie): Contract-link na goedkeuring
+Onderwerp: “Goedgekeurd – rond je schermlocatie aanmelding af”
+Inhoud:
+- “Je locatie is goedgekeurd”
+- link naar contract/akkoord pagina (contractToken link)
+- leg uit: “Hier geef je akkoord + vul je uitbetalingsgegevens in”
+
+────────────────────────
+6) FASE B – CONTRACT/AKKOORD FLOW (PUBLIC via contractToken)
+────────────────────────
+Op /onboarding/location/contract/:contractToken:
+
+Stap B1: Uitbetalingsgegevens
+- IBAN (verplicht) + client-side check + server-side validatie
+- Tenaamstelling rekening (verplicht)
+
+Stap B2: Verplichte checkboxes
+☑ Algemene Voorwaarden Schermlocatie
+☑ Privacyverklaring
+☑ Akkoord met uitbetalingsvoorwaarden (revenue share/min payout regels indien van toepassing)
+
+Stap B3: OTP (6-cijferige bevestiging)
+- knop “Verstuur bevestigingscode”
+- OTP 15 min geldig
+- max 5 pogingen, daarna LOCKED
+- rate limit: max 3 OTP mails per uur per email
+- OTP nooit plaintext opslaan, alleen hash
+
+Bij correcte OTP:
+- onboardingStatus -> CONTRACT_ACCEPTED
+- genereer PDF akkoordverklaring(en) met:
+  - locatiegegevens
+  - IBAN gemaskeerd (laatste 2-4 cijfers)
+  - audit trail (tijd, email, ip, user-agent)
+  - versies van voorwaarden/privacy
+  - uniek contract ID
+- sla PDF op en koppel aan location
+- stuur bevestiging naar locatie + naar info@elevizion.nl
+- zet onboardingStatus -> READY_FOR_INSTALL (of READY_FOR_PI)
+
+MAIL 3 (naar locatie): Bevestiging afgerond
+Onderwerp: “Bevestiging – je schermlocatie is afgerond”
+Inhoud:
+- bevestig akkoord
+- “we nemen contact op voor installatie / volgende stap”
+- PDF downloadlink of bijlage (wat jullie al doen)
+
+MAIL 4 (naar mij): Interne bevestiging
+Onderwerp: “Schermlocatie akkoord afgerond: <bedrijfsnaam>”
+Inhoud:
+- samenvatting + dashboard link + pdf link
+
+────────────────────────
+7) DASHBOARD UI (MINIMAAL, MAAR COMPLEET)
+────────────────────────
+In “Schermlocaties” overzicht:
+- tabs/filters:
+  - Te beoordelen (PENDING_REVIEW)
+  - Wacht op akkoord (APPROVED_AWAITING_CONTRACT / CONTRACT_PENDING_OTP)
+  - Klaar voor install (READY_FOR_INSTALL)
+  - Actief (ACTIVE)
+  - Afgewezen (REJECTED)
+- in de lijst toon minimaal: bedrijfsnaam, plaats, bezoekers/week, status badge
+
+Op detailpagina:
+- status + timestamps
+- knoppen voor review
+- resend intake-link (alleen in fase A)
+- resend contract-link (alleen na APPROVED)
+- download PDF(s) zodra CONTRACT_ACCEPTED
+
+────────────────────────
+8) OUTPUT (VERPLICHT)
+────────────────────────
+Aan het einde wil ik:
+1) Welke bestanden gewijzigd/nieuw
+2) Welke oude signing code verwijderd/uitgezet
+3) Welke DB migratie je hebt gedaan
+4) Waar ik in het dashboard de review doe
+5) Stappen om te testen: invite → intake → review → contract → otp → pdf → bevestiging

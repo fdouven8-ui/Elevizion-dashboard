@@ -131,12 +131,15 @@ export const portalTokens = pgTable("portal_tokens", {
 export const locations = pgTable("locations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   locationCode: text("location_code").unique(), // EVZ-LOC-001 format - central identifier
+  locationKey: text("location_key").unique(), // LOC-COMPANYNAME-RANDOM6 for Yodeck matching
   name: text("name").notNull(),
   address: text("address"), // Made nullable for placeholder locations
   street: text("street"),
   houseNumber: text("house_number"),
   zipcode: text("zipcode"),
   city: text("city"), // Plaats - used for filtering screens
+  country: text("country").default("Nederland"),
+  locationType: text("location_type"), // Type locatie (sportschool, cafe, etc.)
   contactName: text("contact_name"), // Made nullable for placeholder locations
   email: text("email"), // Made nullable for placeholder locations
   phone: text("phone"),
@@ -149,6 +152,7 @@ export const locations = pgTable("locations", {
   fixedPayoutAmount: decimal("fixed_payout_amount", { precision: 10, scale: 2 }), // Alleen bij payoutType=fixed
   minimumPayoutAmount: decimal("minimum_payout_amount", { precision: 10, scale: 2 }).notNull().default("25.00"),
   bankAccountIban: text("bank_account_iban"),
+  bankAccountName: text("bank_account_name"), // Tenaamstelling rekening
   moneybirdContactId: text("moneybird_contact_id"), // Link to Moneybird contact (NOT unique - same contact can link to multiple locations)
   // Moneybird sync status (SSOT pattern)
   moneybirdSyncStatus: text("moneybird_sync_status").default("not_linked"), // not_linked | pending | synced | failed
@@ -161,9 +165,32 @@ export const locations = pgTable("locations", {
   isPlaceholder: boolean("is_placeholder").default(false), // Auto-created from Yodeck, needs Moneybird linking
   source: text("source").default("manual"), // manual, yodeck, onboarding
   status: text("status").notNull().default("pending_details"), // pending_details | pending_pi | ready_for_pi | active | paused | terminated
-  onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | details_completed | completed
+  // Onboarding status - 2-phase flow
+  onboardingStatus: text("onboarding_status").default("draft"), // INVITED_INTAKE | INTAKE_SUBMITTED | PENDING_REVIEW | APPROVED_AWAITING_CONTRACT | CONTRACT_PENDING_OTP | CONTRACT_ACCEPTED | READY_FOR_INSTALL | ACTIVE | REJECTED
+  // Intake token (Phase A)
+  intakeToken: text("intake_token").unique(), // Crypto-secure token for intake form
+  intakeTokenExpiresAt: timestamp("intake_token_expires_at"),
+  intakeTokenUsedAt: timestamp("intake_token_used_at"),
+  // Contract token (Phase B)
+  contractToken: text("contract_token").unique(), // Crypto-secure token for contract form (only after approval)
+  contractTokenExpiresAt: timestamp("contract_token_expires_at"),
+  contractTokenUsedAt: timestamp("contract_token_used_at"),
+  // Review audit fields
+  reviewedAt: timestamp("reviewed_at"),
+  reviewedBy: text("reviewed_by"), // Admin user who reviewed
+  reviewDecision: text("review_decision"), // APPROVED | REJECTED
+  // Contract acceptance audit trail
+  acceptedTermsAt: timestamp("accepted_terms_at"),
+  acceptedTermsIp: text("accepted_terms_ip"),
+  acceptedTermsUserAgent: text("accepted_terms_user_agent"),
+  acceptedTermsVersion: text("accepted_terms_version"),
+  acceptedTermsPdfUrl: text("accepted_terms_pdf_url"),
+  contractInstanceId: text("contract_instance_id"), // Reference to contract document
   // Email tracking
   inviteEmailSentAt: timestamp("invite_email_sent_at"),
+  intakeConfirmationSentAt: timestamp("intake_confirmation_sent_at"),
+  contractEmailSentAt: timestamp("contract_email_sent_at"),
+  completionEmailSentAt: timestamp("completion_email_sent_at"),
   reminderEmailSentAt: timestamp("reminder_email_sent_at"),
   lastReminderSentAt: timestamp("last_reminder_sent_at"), // Voor herinnering tracking
   notes: text("notes"),
