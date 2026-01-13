@@ -50,6 +50,7 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **Revenue Allocation Engine**: Calculates weighted screen-days allocation for location payouts with a minimum threshold and carry-over system.
 - **Template Management System**: Database-driven templates for emails, contracts, and other communications with dynamic content `{{placeholder}}` syntax.
 - **Email Logging**: Tracks all sent emails with status and integrates with Postmark.
+- **System Health Check**: Comprehensive admin page (`/system-health`) for validating all configurations, integrations, and workflows. Includes 8 check groups: Company Profile, Email/Postmark, Contract/OTP, Moneybird, Yodeck, Leads/Forms, Advertiser Workflow, and Location Workflow. Features test buttons for sending test emails, creating test Moneybird contacts, running Yodeck syncs, and creating test leads.
 
 ## External Dependencies
 
