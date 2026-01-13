@@ -145,3 +145,23 @@ Core entities include: **Entities** (unified model for ADVERTISER + SCREEN), Sit
   - One-click generate+send: generates contract and immediately sends OTP
   - Terms validation: blocks sending if `termsAcceptance?.accepted !== true`
   - Contract status badges with download signed PDF button
+
+### Lead Workflow Management (Jan 2026)
+- **Workflow status tracking** with three states: OPEN, BEHANDELD (handled), VERWIJDERD (deleted)
+- **Soft delete pattern**: Leads marked as deleted can be restored, not permanently removed
+- **Database fields** added to leads table:
+  - `isHandled`, `handledAt`, `handledBy` for workflow status
+  - `isDeleted`, `deletedAt`, `deletedBy` for soft delete
+- **API endpoints**:
+  - `PATCH /api/leads/:id/handle`: Toggle isHandled status (mark/unmark as handled)
+  - `PATCH /api/leads/:id/delete`: Soft delete lead
+  - `PATCH /api/leads/:id/restore`: Restore deleted lead
+  - `GET /api/leads`: Updated with `isHandled`/`isDeleted` query filters
+- **UI improvements** (`/leads`):
+  - Three workflow tabs: Open (default), Behandeld, Verwijderd
+  - Dropdown action menu per lead row with context-aware actions
+  - Action buttons in detail drawer with status-specific options
+  - Delete confirmation dialog (AlertDialog)
+  - Handled timestamp display in drawer
+  - Tab-specific default sorting (createdAt/handledAt/deletedAt)
+  - URL sync for tab state persistence
