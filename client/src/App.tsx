@@ -38,6 +38,7 @@ import LocalLanding from "@/pages/LocalLanding";
 import Leads from "@/pages/Leads";
 import Payouts from "@/pages/Payouts";
 import Contracts from "@/pages/Contracts";
+import SystemHealth from "@/pages/SystemHealth";
 import ContractSigning from "@/pages/ContractSigning";
 import AdvertiserOnboarding from "@/pages/AdvertiserOnboarding";
 import LocationIntake from "@/pages/LocationIntake";
@@ -79,6 +80,7 @@ function DashboardRouter() {
           <EmailCenterRedirect />
         </Route>
         <Route path="/data-health" component={DataHealthPage} />
+        <Route path="/system-health" component={SystemHealth} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>

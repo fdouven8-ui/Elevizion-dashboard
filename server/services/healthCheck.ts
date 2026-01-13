@@ -250,13 +250,23 @@ export async function checkMoneybird(): Promise<HealthCheckResult[]> {
       const client = await getMoneybirdClient();
       if (client) {
         try {
-          const adminInfo = await client.getAdministrationInfo();
-          results.push({
-            name: "Verbinding",
-            status: "PASS",
-            message: `Verbonden met: ${adminInfo.name}`,
-            details: { currency: adminInfo.currency, country: adminInfo.country },
-          });
+          const testResult = await client.testConnection();
+          if (testResult.ok && testResult.administrations && testResult.administrations.length > 0) {
+            const admin = testResult.administrations.find(a => a.id === process.env.MONEYBIRD_ADMINISTRATION_ID) || testResult.administrations[0];
+            results.push({
+              name: "Verbinding",
+              status: "PASS",
+              message: `Verbonden met: ${admin.name}`,
+              details: { currency: admin.currency, country: admin.country },
+            });
+          } else {
+            results.push({
+              name: "Verbinding",
+              status: "FAIL",
+              message: testResult.error || "Geen administraties gevonden",
+              fixSuggestion: "Controleer API token en administratie ID",
+            });
+          }
         } catch (error: any) {
           results.push({
             name: "Verbinding",

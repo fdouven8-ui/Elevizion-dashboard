@@ -22,6 +22,7 @@ const pageNames: Record<string, string> = {
   "placements": "Ads & Plaatsingen",
   "advertisers": "Adverteerders",
   "settings": "Instellingen",
+  "system-health": "Systeemcheck",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

@@ -35,6 +35,7 @@ import {
   Shield,
   FileText,
   Wallet,
+  Activity,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -289,6 +290,18 @@ export function AppSidebar() {
                       <Link href="/settings" data-testid="nav-settings">
                         <Settings className="h-4 w-4" />
                         <span className="text-[13px]">Instellingen</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton 
+                      asChild 
+                      tooltip="Systeemcheck"
+                      className={`h-9 rounded-lg transition-colors ${isActive("/system-health") ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
+                    >
+                      <Link href="/system-health" data-testid="nav-system-health">
+                        <Activity className="h-4 w-4" />
+                        <span className="text-[13px]">Systeemcheck</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
