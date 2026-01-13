@@ -32,7 +32,7 @@ function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-export async function validatePortalToken(token: string): Promise<PortalContext | null> {
+export async function validatePortalToken(token: string, recordAccess = false): Promise<PortalContext | null> {
   try {
     const tokenHash = hashToken(token);
     
@@ -64,6 +64,13 @@ export async function validatePortalToken(token: string): Promise<PortalContext 
       return null;
     }
     
+    if (recordAccess) {
+      await db.update(portalTokens)
+        .set({ usedAt: new Date() })
+        .where(eq(portalTokens.tokenHash, tokenHash));
+      console.log('[AdAssetUpload] Token access recorded:', token.slice(0, 8) + '...');
+    }
+    
     return {
       advertiserId: advertiser.id,
       linkKey: advertiser.linkKey,
@@ -81,10 +88,10 @@ export function validateFilename(filename: string, linkKey: string): { valid: bo
     return { valid: false, error: 'Bestandsnaam ontbreekt.' };
   }
   
-  const sanitizedFilename = filename.toLowerCase().replace(/[^a-z0-9.-]/g, '');
-  const sanitizedLinkKey = linkKey.toLowerCase();
+  const filenameLower = filename.toLowerCase();
+  const linkKeyLower = linkKey.toLowerCase();
   
-  if (!sanitizedFilename.includes(sanitizedLinkKey)) {
+  if (!filenameLower.includes(linkKeyLower)) {
     return {
       valid: false,
       error: `Bestandsnaam moet uw linkcode bevatten: "${linkKey}". Bijvoorbeeld: "${linkKey}_advertentie.mp4"`,
@@ -200,12 +207,12 @@ export async function processAdAssetUpload(
   }
   
   return {
-    success: true,
+    success: validation.isValid,
     assetId: asset.id,
     validation,
     message: validation.isValid
       ? 'Video succesvol geüpload en goedgekeurd!'
-      : 'Video geüpload maar voldoet niet aan de specificaties.',
+      : 'Video geüpload maar voldoet niet aan de specificaties. Corrigeer de fouten en upload opnieuw.',
   };
 }
 

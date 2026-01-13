@@ -116,12 +116,19 @@ export default function UploadPortal() {
         setUploading(false);
         try {
           const response = JSON.parse(xhr.responseText);
-          setUploadResult(response);
-          if (response.success) {
-            setSelectedFile(null);
+          if (xhr.status >= 400) {
+            setError(response.message || `Serverfout (${xhr.status})`);
+            if (response.validation) {
+              setUploadResult(response);
+            }
+          } else {
+            setUploadResult(response);
+            if (response.success) {
+              setSelectedFile(null);
+            }
           }
         } catch {
-          setError("Onverwachte serverfout.");
+          setError(`Onverwachte serverfout (${xhr.status})`);
         }
       };
 

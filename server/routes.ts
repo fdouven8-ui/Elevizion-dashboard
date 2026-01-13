@@ -1599,7 +1599,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         try {
           const { validatePortalToken, processAdAssetUpload } = await import("./services/adAssetUploadService");
           
-          const context = await validatePortalToken(req.params.token);
+          const context = await validatePortalToken(req.params.token, true);
           if (!context) {
             return res.status(401).json({ message: "Ongeldige of verlopen toegangslink" });
           }
