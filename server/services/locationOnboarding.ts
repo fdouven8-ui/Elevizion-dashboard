@@ -6,6 +6,13 @@ import { sendEmail } from "../email";
 import { generateContractPdf } from "./contractPdfService";
 import { ObjectStorageService } from "../objectStorage";
 
+const COMPANY = {
+  legalName: "Douven Services",
+  tradeName: "Elevizion",
+  email: "info@elevizion.nl",
+  website: "elevizion.nl",
+};
+
 const INTAKE_TOKEN_EXPIRY_DAYS = 30;
 const CONTRACT_TOKEN_EXPIRY_DAYS = 30;
 const OTP_EXPIRY_MINUTES = 15;
@@ -69,18 +76,18 @@ export async function createLocationInvite(
 
     await sendEmail({
       to: email,
-      subject: "Uitnodiging schermlocatie aanmelding - Elevizion",
+      subject: `Uitnodiging schermlocatie aanmelding - ${COMPANY.tradeName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1a1a1a;">Welkom bij Elevizion</h2>
+          <h2 style="color: #1a1a1a;">Welkom bij ${COMPANY.tradeName}</h2>
           <p>Beste ${companyName},</p>
-          <p>Je bent uitgenodigd om je aan te melden als schermlocatie bij Elevizion. Via het scherm in jouw zaak bereiken adverteerders hun doelgroep én verdien jij een deel van de advertentie-inkomsten.</p>
+          <p>Je bent uitgenodigd om je aan te melden als schermlocatie bij ${COMPANY.tradeName}. Via het scherm in jouw zaak bereiken adverteerders hun doelgroep én verdien jij een deel van de advertentie-inkomsten.</p>
           <p>Klik op de onderstaande link om je gegevens in te vullen:</p>
           <p style="text-align: center; margin: 30px 0;">
             <a href="${intakeUrl}" style="background: #2563eb; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold;">Gegevens invullen</a>
           </p>
           <p style="color: #666; font-size: 14px;">Deze link is ${INTAKE_TOKEN_EXPIRY_DAYS} dagen geldig.</p>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team Elevizion</p>
+          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
         </div>
       `,
     });
@@ -198,13 +205,13 @@ export async function submitIntake(
           <h2 style="color: #1a1a1a;">Bedankt voor je aanmelding</h2>
           <p>Beste ${data.contactName},</p>
           <p>We hebben je aanmelding voor <strong>${data.name}</strong> goed ontvangen.</p>
-          <p>Ons team beoordeelt nu je locatie. Je hoort snel van ons of je locatie geschikt is voor een Elevizion scherm.</p>
+          <p>Ons team beoordeelt nu je locatie. Je hoort snel van ons of je locatie geschikt is voor een ${COMPANY.tradeName} scherm.</p>
           <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 20px 0;">
             <p style="margin: 0; font-size: 14px;"><strong>Ingediende gegevens:</strong></p>
             <p style="margin: 8px 0 0 0; font-size: 14px;">${data.street} ${data.houseNumber}, ${data.zipcode} ${data.city}</p>
             <p style="margin: 4px 0 0 0; font-size: 14px;">Bezoekers per week: ~${data.visitorsPerWeek}</p>
           </div>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team Elevizion</p>
+          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
         </div>
       `,
     });
@@ -286,13 +293,13 @@ export async function approveLocation(
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #1a1a1a;">🎉 Je locatie is goedgekeurd!</h2>
           <p>Beste ${location.contactName || location.name},</p>
-          <p>Goed nieuws! Na beoordeling hebben we besloten dat <strong>${location.name}</strong> een geschikte locatie is voor een Elevizion scherm.</p>
+          <p>Goed nieuws! Na beoordeling hebben we besloten dat <strong>${location.name}</strong> een geschikte locatie is voor een ${COMPANY.tradeName} scherm.</p>
           <p>Er rest nog één stap: je akkoord geven op de voorwaarden en je uitbetalingsgegevens invullen.</p>
           <p style="text-align: center; margin: 30px 0;">
             <a href="${contractUrl}" style="background: #16a34a; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold;">Aanmelding afronden</a>
           </p>
           <p style="color: #666; font-size: 14px;">Deze link is ${CONTRACT_TOKEN_EXPIRY_DAYS} dagen geldig.</p>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team Elevizion</p>
+          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
         </div>
       `,
     });
@@ -350,10 +357,10 @@ export async function rejectLocation(
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #1a1a1a;">Update over je aanmelding</h2>
           <p>Beste ${location.contactName || location.name},</p>
-          <p>Bedankt voor je interesse in Elevizion. Na zorgvuldige beoordeling hebben we helaas besloten dat <strong>${location.name}</strong> op dit moment niet geschikt is voor ons netwerk.</p>
+          <p>Bedankt voor je interesse in ${COMPANY.tradeName}. Na zorgvuldige beoordeling hebben we helaas besloten dat <strong>${location.name}</strong> op dit moment niet geschikt is voor ons netwerk.</p>
           ${reason ? `<p style="background: #f5f5f5; padding: 12px; border-radius: 6px;">${reason}</p>` : ""}
           <p>Mocht er in de toekomst iets veranderen, neem dan gerust opnieuw contact met ons op.</p>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team Elevizion</p>
+          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
         </div>
       `,
     });
@@ -499,7 +506,7 @@ export async function sendLocationOtp(
 
     await sendEmail({
       to: location.email!,
-      subject: "Je bevestigingscode - Elevizion",
+      subject: `Je bevestigingscode - ${COMPANY.tradeName}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #1a1a1a;">Bevestigingscode</h2>
@@ -509,7 +516,7 @@ export async function sendLocationOtp(
             <span style="font-size: 36px; font-weight: bold; letter-spacing: 8px; color: #2563eb;">${otpCode}</span>
           </div>
           <p style="color: #666; font-size: 14px;">Deze code is ${OTP_EXPIRY_MINUTES} minuten geldig.</p>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team Elevizion</p>
+          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
         </div>
       `,
     });
@@ -617,7 +624,7 @@ export async function verifyLocationOtp(
             <p style="margin: 8px 0 0 0; color: #166534;">We nemen binnenkort contact met je op om de installatie van het scherm te plannen.</p>
           </div>
           ${pdfUrl ? `<p><a href="${pdfUrl}" style="color: #2563eb;">Download je akkoordverklaring (PDF)</a></p>` : ""}
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team Elevizion</p>
+          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
         </div>
       `,
     });
@@ -710,7 +717,7 @@ async function generateLocationContractPdf(
       </div>
 
       <div class="footer">
-        <p>Elevizion B.V. | Dit document is digitaal ondertekend</p>
+        <p>${COMPANY.legalName} h/o ${COMPANY.tradeName} | Dit document is digitaal ondertekend</p>
         <p>Gegenereerd op ${new Date().toLocaleString("nl-NL")}</p>
       </div>
     </body>
@@ -753,7 +760,7 @@ export async function resendIntakeLink(locationId: string): Promise<{ success: b
 
     await sendEmail({
       to: location.email!,
-      subject: "Herinnering: Vul je schermlocatie gegevens in - Elevizion",
+      subject: "Herinnering: Vul je schermlocatie gegevens in - ${COMPANY.tradeName}",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #1a1a1a;">Herinnering: Gegevens invullen</h2>
@@ -762,7 +769,7 @@ export async function resendIntakeLink(locationId: string): Promise<{ success: b
           <p style="text-align: center; margin: 30px 0;">
             <a href="${intakeUrl}" style="background: #2563eb; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold;">Gegevens invullen</a>
           </p>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team Elevizion</p>
+          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
         </div>
       `,
     });
@@ -800,7 +807,7 @@ export async function resendContractLink(locationId: string): Promise<{ success:
 
     await sendEmail({
       to: location.email!,
-      subject: "Herinnering: Rond je schermlocatie aanmelding af - Elevizion",
+      subject: "Herinnering: Rond je schermlocatie aanmelding af - ${COMPANY.tradeName}",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #1a1a1a;">Herinnering: Aanmelding afronden</h2>
@@ -809,7 +816,7 @@ export async function resendContractLink(locationId: string): Promise<{ success:
           <p style="text-align: center; margin: 30px 0;">
             <a href="${contractUrl}" style="background: #16a34a; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold;">Aanmelding afronden</a>
           </p>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team Elevizion</p>
+          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
         </div>
       `,
     });

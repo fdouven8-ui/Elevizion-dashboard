@@ -162,8 +162,8 @@ function generateContractHtml(params: {
 
   <h2>5. Algemene Voorwaarden</h2>
   <ul>
-    <li>Elevizion behoudt het recht om advertentiemateriaal te weigeren dat in strijd is met de wet of goede zeden.</li>
-    <li>De adverteerder vrijwaart Elevizion voor alle aanspraken van derden met betrekking tot het aangeleverde materiaal.</li>
+    <li>De leverancier behoudt het recht om advertentiemateriaal te weigeren dat in strijd is met de wet of goede zeden.</li>
+    <li>De adverteerder vrijwaart de leverancier voor alle aanspraken van derden met betrekking tot het aangeleverde materiaal.</li>
     <li>Opzegging dient minimaal 30 dagen voor het einde van de lopende periode schriftelijk te geschieden.</li>
   </ul>
 
@@ -182,7 +182,7 @@ function generateContractHtml(params: {
   </div>
 
   <p class="small" style="margin-top: 60px; color: #999;">
-    Dit document is automatisch gegenereerd door Elevizion Dashboard op ${format(new Date(), "d MMMM yyyy 'om' HH:mm", { locale: nl })}.
+    Dit document is automatisch gegenereerd op ${format(new Date(), "d MMMM yyyy 'om' HH:mm", { locale: nl })}.
   </p>
 </body>
 </html>`;

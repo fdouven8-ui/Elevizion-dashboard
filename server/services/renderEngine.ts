@@ -28,11 +28,13 @@ const BRAND = {
 };
 
 const COMPANY = {
-  name: "Elevizion B.V.",
+  legalName: "Douven Services",
+  tradeName: "Elevizion",
   email: "info@elevizion.nl",
   website: "elevizion.nl",
-  kvk: "12345678",
-  address: "Maastricht, Nederland",
+  kvk: "90982541",
+  btw: "NL004857473B37",
+  address: "Engelenkampstraat 11, 6131 JD Sittard",
   logoUrl: "https://elevizion.nl/logo-email.png",
 };
 
@@ -238,7 +240,7 @@ function buildEmailWrapper(options: EmailWrapperOptions): string {
               <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
                 <tr>
                   <td style="text-align:center;">
-                    <img src="${COMPANY.logoUrl}" alt="Elevizion" height="40" style="display:inline-block;border:0;outline:none;text-decoration:none;" />
+                    <img src="${COMPANY.logoUrl}" alt="${COMPANY.tradeName}" height="40" style="display:inline-block;border:0;outline:none;text-decoration:none;" />
                   </td>
                 </tr>
               </table>
@@ -260,7 +262,7 @@ function buildEmailWrapper(options: EmailWrapperOptions): string {
               <div style="margin-top:32px;padding-top:24px;border-top:1px solid ${BRAND.border};">
                 <p style="margin:0;font-size:15px;color:${BRAND.text};line-height:1.6;">
                   Met vriendelijke groet,<br>
-                  <strong>Team Elevizion</strong>
+                  <strong>Team ${COMPANY.tradeName}</strong>
                 </p>
               </div>
               
@@ -274,7 +276,7 @@ function buildEmailWrapper(options: EmailWrapperOptions): string {
                 <tr>
                   <td style="text-align:center;">
                     <p style="margin:0 0 8px 0;font-size:13px;color:${BRAND.muted};">
-                      ${COMPANY.name} | KvK: ${COMPANY.kvk}
+                      ${COMPANY.legalName} | KvK: ${COMPANY.kvk} | BTW: ${COMPANY.btw}
                     </p>
                     <p style="margin:0 0 8px 0;font-size:13px;color:${BRAND.muted};">
                       <a href="mailto:${COMPANY.email}" style="color:${BRAND.primary};text-decoration:none;">${COMPANY.email}</a>
@@ -282,7 +284,7 @@ function buildEmailWrapper(options: EmailWrapperOptions): string {
                       <a href="https://${COMPANY.website}" style="color:${BRAND.primary};text-decoration:none;">${COMPANY.website}</a>
                     </p>
                     <p style="margin:16px 0 0 0;font-size:11px;color:${BRAND.muted};">
-                      &copy; ${year} ${COMPANY.name}. Alle rechten voorbehouden.
+                      &copy; ${year} ${COMPANY.legalName}. Alle rechten voorbehouden.
                     </p>
                   </td>
                 </tr>
@@ -468,14 +470,15 @@ function buildContractWrapper(options: ContractWrapperOptions): string {
     <!-- Header -->
     <div class="header">
       <div class="header-left">
-        <img src="${COMPANY.logoUrl}" alt="Elevizion" class="logo-img" />
+        <img src="${COMPANY.logoUrl}" alt="${COMPANY.tradeName}" class="logo-img" />
         <div class="document-title">${title}</div>
         <div class="document-date">Datum: ${today}</div>
       </div>
       <div class="header-right">
-        <strong>${COMPANY.name}</strong><br>
+        <strong>${COMPANY.legalName}</strong><br>
+        h/o ${COMPANY.tradeName}<br>
         ${COMPANY.address}<br>
-        KvK: ${COMPANY.kvk}<br>
+        KvK: ${COMPANY.kvk} | BTW: ${COMPANY.btw}<br>
         ${COMPANY.email}
       </div>
     </div>
@@ -490,8 +493,8 @@ function buildContractWrapper(options: ContractWrapperOptions): string {
       <div class="signature-title">Ondertekening</div>
       <div class="signature-grid">
         <div class="signature-box">
-          <div class="signature-label">Namens ${COMPANY.name}:</div>
-          <div class="signature-value">Elevizion B.V.</div>
+          <div class="signature-label">Namens ${COMPANY.legalName} h/o ${COMPANY.tradeName}:</div>
+          <div class="signature-value">${COMPANY.tradeName}</div>
           <div class="signature-line">
             <div class="signature-line-label">Handtekening & datum</div>
           </div>
@@ -508,7 +511,7 @@ function buildContractWrapper(options: ContractWrapperOptions): string {
     
     <!-- Footer -->
     <div class="footer">
-      ${COMPANY.name} | ${COMPANY.address} | KvK: ${COMPANY.kvk} | ${COMPANY.email}
+      ${COMPANY.legalName} h/o ${COMPANY.tradeName} | ${COMPANY.address} | KvK: ${COMPANY.kvk} | BTW: ${COMPANY.btw} | ${COMPANY.email}
     </div>
     
   </div>
@@ -626,9 +629,10 @@ function generateEmailPlainText(options: { subject: string; body: string; contac
   text += body;
   text += "\n\n" + "-".repeat(40);
   text += "\nMet vriendelijke groet,";
-  text += "\nTeam Elevizion";
-  text += `\n\n${COMPANY.name} | ${COMPANY.email} | ${COMPANY.website}`;
-  text += `\n\n© ${year} ${COMPANY.name}. Alle rechten voorbehouden.`;
+  text += `\nTeam ${COMPANY.tradeName}`;
+  text += `\n\n${COMPANY.legalName} | ${COMPANY.email} | ${COMPANY.website}`;
+  text += `\nKvK: ${COMPANY.kvk} | BTW: ${COMPANY.btw}`;
+  text += `\n\n© ${year} ${COMPANY.legalName}. Alle rechten voorbehouden.`;
   
   return text;
 }

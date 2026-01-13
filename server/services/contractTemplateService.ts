@@ -110,7 +110,7 @@ function wrapInHtml(title: string, content: string, generatedDate: string): stri
   </div>
 
   <div class="footer">
-    Dit document is automatisch gegenereerd door Elevizion Dashboard op ${generatedDate}.
+    Dit document is automatisch gegenereerd op ${generatedDate}.
   </div>
 </body>
 </html>`;

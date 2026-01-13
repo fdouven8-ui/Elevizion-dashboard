@@ -1,10 +1,17 @@
 /**
- * Background Jobs for Elevizion Dashboard
+ * Background Jobs for Dashboard
  * Handles contract reminders, expiration processing, and scheduled tasks
  */
 
 import { storage } from "./storage";
 import { sendEmail } from "./email";
+
+const COMPANY = {
+  legalName: "Douven Services",
+  tradeName: "Elevizion",
+  email: "info@elevizion.nl",
+  tagline: "See Your Business Grow",
+};
 
 interface JobResult {
   success: boolean;
@@ -288,8 +295,8 @@ function generateSigningReminderEmail(data: SigningReminderData): string {
 </head>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
   <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-    <h1 style="color: white; margin: 0; font-size: 24px;">Elevizion</h1>
-    <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
+    <h1 style="color: white; margin: 0; font-size: 24px;">${COMPANY.tradeName}</h1>
+    <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">${COMPANY.tagline}</p>
   </div>
   
   <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
@@ -309,11 +316,11 @@ function generateSigningReminderEmail(data: SigningReminderData): string {
     
     <p>Heeft u vragen of heeft u hulp nodig? Neem gerust contact met ons op.</p>
     
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   </div>
   
   <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-    <p>© ${new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
+    <p>© ${new Date().getFullYear()} ${COMPANY.legalName}. Alle rechten voorbehouden.</p>
   </div>
 </body>
 </html>
@@ -351,8 +358,8 @@ function generateExpirationEmail(data: ExpirationEmailData): string {
 </head>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
   <div style="background: linear-gradient(135deg, #1e3a5f 0%, #2d5a87 100%); padding: 30px; text-align: center; border-radius: 8px 8px 0 0;">
-    <h1 style="color: white; margin: 0; font-size: 24px;">Elevizion</h1>
-    <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">See Your Business Grow</p>
+    <h1 style="color: white; margin: 0; font-size: 24px;">${COMPANY.tradeName}</h1>
+    <p style="color: #f8a12f; margin: 5px 0 0 0; font-size: 14px;">${COMPANY.tagline}</p>
   </div>
   
   <div style="background: #f9f9f9; padding: 30px; border: 1px solid #ddd; border-top: none;">
@@ -368,11 +375,11 @@ function generateExpirationEmail(data: ExpirationEmailData): string {
     
     <p>Heeft u vragen? Neem gerust contact met ons op.</p>
     
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   </div>
   
   <div style="text-align: center; padding: 20px; color: #666; font-size: 12px;">
-    <p>© ${new Date().getFullYear()} Elevizion. Alle rechten voorbehouden.</p>
+    <p>© ${new Date().getFullYear()} ${COMPANY.legalName}. Alle rechten voorbehouden.</p>
   </div>
 </body>
 </html>
