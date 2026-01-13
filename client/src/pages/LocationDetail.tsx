@@ -403,15 +403,15 @@ export default function LocationDetail() {
           <CheckCircle className="h-4 w-4 text-green-600" />
           <AlertDescription className="flex items-center justify-between">
             <span>Locatie heeft akkoord gegeven - klaar voor installatie</span>
-            {(location as any).acceptedTermsPdfUrl && (
+            {((location as any).bundledPdfUrl || (location as any).acceptedTermsPdfUrl) && (
               <Button 
                 variant="outline" 
                 size="sm"
-                onClick={() => window.open((location as any).acceptedTermsPdfUrl, '_blank')}
+                onClick={() => window.open((location as any).bundledPdfUrl || (location as any).acceptedTermsPdfUrl, '_blank')}
                 data-testid="button-download-pdf"
               >
                 <Download className="h-4 w-4 mr-2" />
-                PDF downloaden
+                Contractbundel
               </Button>
             )}
           </AlertDescription>

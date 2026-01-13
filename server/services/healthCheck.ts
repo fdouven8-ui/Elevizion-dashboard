@@ -213,6 +213,29 @@ export async function checkContractModule(): Promise<HealthCheckResult[]> {
       message: "6 cijfers, 15 minuten geldig",
       details: { digits: 6, expiryMinutes: 15 },
     });
+
+    // Check PDF bundle service
+    try {
+      const { getAdvertiserBundleContext, getLocationBundleContext } = await import("./contractBundleService");
+      
+      // Verify bundle service can load context functions
+      results.push({
+        name: "PDF Bundle Service",
+        status: "PASS",
+        message: "Service beschikbaar",
+        details: { 
+          features: ["Cover page", "Template sections", "Audit trail"],
+          storage: "Object Storage"
+        },
+      });
+    } catch (bundleError: any) {
+      results.push({
+        name: "PDF Bundle Service",
+        status: "WARNING",
+        message: bundleError.message || "Service niet beschikbaar",
+        fixSuggestion: "Controleer contractBundleService.ts configuratie",
+      });
+    }
     
   } catch (error: any) {
     results.push({

@@ -560,15 +560,28 @@ export default function AdvertiserDetail() {
             <span className="text-muted-foreground">
               Contracten: {(isContractSigned ? 1 : 0) + (advertiser.sepaMandate ? 1 : 0)}/2 getekend
             </span>
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              data-testid="button-refresh-contracts"
-              onClick={() => refetchContracts()}
-            >
-              <RefreshCw className="h-4 w-4 mr-1" />
-              Status verversen
-            </Button>
+            <div className="flex gap-2">
+              {(advertiser as any).bundledPdfUrl && (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  data-testid="button-download-bundle"
+                  onClick={() => window.open((advertiser as any).bundledPdfUrl, '_blank')}
+                >
+                  <Download className="h-4 w-4 mr-1" />
+                  Contractbundel
+                </Button>
+              )}
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                data-testid="button-refresh-contracts"
+                onClick={() => refetchContracts()}
+              >
+                <RefreshCw className="h-4 w-4 mr-1" />
+                Status verversen
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
