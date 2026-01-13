@@ -137,3 +137,11 @@ Core entities include: **Entities** (unified model for ADVERTISER + SCREEN), Sit
   - "Download getekende PDF" button
   - Legacy badge for old SignRequest contracts (read-only)
 - **Sign status progression**: none → sent → verified → signed (or expired)
+- **Public Signing Page** (`/contract-ondertekenen/:id`): Customer-facing page for OTP verification
+  - Step-by-step wizard: view contract → enter OTP → confirm signature
+  - Mobile-responsive design with Elevizion branding
+  - Real-time status updates and error handling
+- **AdvertiserDetail Integration**: 
+  - One-click generate+send: generates contract and immediately sends OTP
+  - Terms validation: blocks sending if `termsAcceptance?.accepted !== true`
+  - Contract status badges with download signed PDF button
