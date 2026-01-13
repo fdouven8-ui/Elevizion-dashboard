@@ -26,6 +26,7 @@ export interface PortalContext {
   linkKey: string;
   contractDuration: number;
   companyName: string;
+  strictResolution: boolean;
 }
 
 function hashToken(token: string): string {
@@ -76,6 +77,7 @@ export async function validatePortalToken(token: string, recordAccess = false): 
       linkKey: advertiser.linkKey,
       contractDuration: advertiser.videoDurationSeconds || 15,
       companyName: advertiser.companyName,
+      strictResolution: advertiser.strictResolution || false,
     };
   } catch (error) {
     console.error('[AdAssetUpload] Error validating token:', error);
@@ -88,21 +90,31 @@ export function validateFilename(filename: string, linkKey: string): { valid: bo
     return { valid: false, error: 'Bestandsnaam ontbreekt.' };
   }
   
-  const filenameLower = filename.toLowerCase();
-  const linkKeyLower = linkKey.toLowerCase();
-  
-  if (!filenameLower.includes(linkKeyLower)) {
-    return {
-      valid: false,
-      error: `Bestandsnaam moet uw linkcode bevatten: "${linkKey}". Bijvoorbeeld: "${linkKey}_advertentie.mp4"`,
-    };
-  }
-  
   const ext = path.extname(filename).toLowerCase();
   if (ext !== '.mp4') {
     return {
       valid: false,
       error: 'Alleen MP4 bestanden zijn toegestaan.',
+    };
+  }
+  
+  const baseName = path.basename(filename);
+  const expectedPrefix = `${linkKey.toLowerCase()}_`;
+  const baseNameLower = baseName.toLowerCase();
+  
+  if (!baseNameLower.startsWith(expectedPrefix)) {
+    return {
+      valid: false,
+      error: `Bestandsnaam moet beginnen met: ${linkKey}_\nVoorbeeld: ${linkKey}_Bedrijfsnaam.mp4`,
+    };
+  }
+  
+  const afterPrefix = baseName.substring(linkKey.length + 1);
+  const nameWithoutExt = afterPrefix.replace(/\.mp4$/i, '');
+  if (nameWithoutExt.length < 1) {
+    return {
+      valid: false,
+      error: `Bestandsnaam moet beginnen met: ${linkKey}_ gevolgd door uw bedrijfsnaam.\nVoorbeeld: ${linkKey}_Bedrijfsnaam.mp4`,
     };
   }
   
@@ -146,7 +158,9 @@ export async function processAdAssetUpload(
     };
   }
   
-  const validation = validateVideoMetadata(metadata, specs);
+  const validation = validateVideoMetadata(metadata, specs, { 
+    strictResolution: portalContext.strictResolution 
+  });
   
   const fileBuffer = fs.readFileSync(filePath);
   const uniqueId = crypto.randomBytes(8).toString('hex');

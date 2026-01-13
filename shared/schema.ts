@@ -97,6 +97,7 @@ export const advertisers = pgTable("advertisers", {
   assetStatus: text("asset_status").default("none"), // none | uploaded_invalid | uploaded_valid | ready_for_yodeck | live
   // Video specification (contract-driven)
   videoDurationSeconds: integer("video_duration_seconds").default(15), // Required video length (default 15s, can be custom per contract)
+  strictResolution: boolean("strict_resolution").default(false), // If true, resolution/aspect ratio mismatches are errors instead of warnings
   // Onboarding akkoord (OTP-based)
   acceptedTermsAt: timestamp("accepted_terms_at"), // Wanneer akkoord gegeven
   acceptedTermsIp: text("accepted_terms_ip"), // IP adres bij akkoord

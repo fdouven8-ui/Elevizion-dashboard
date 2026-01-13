@@ -5,6 +5,9 @@ import * as fs from 'fs';
 
 const execAsync = promisify(exec);
 
+export const DURATION_TOLERANCE_SECONDS = 0.5;
+export const DEFAULT_VIDEO_DURATION_SECONDS = 15;
+
 export interface VideoMetadata {
   durationSeconds: number;
   width: number;
@@ -47,11 +50,10 @@ export const DEFAULT_VIDEO_SPECS: VideoSpecs = {
 };
 
 export function getVideoSpecsForDuration(contractDuration: number): VideoSpecs {
-  const tolerance = 0.5;
   return {
     ...DEFAULT_VIDEO_SPECS,
-    minDurationSeconds: contractDuration - tolerance,
-    maxDurationSeconds: contractDuration + tolerance,
+    minDurationSeconds: contractDuration - DURATION_TOLERANCE_SECONDS,
+    maxDurationSeconds: contractDuration + DURATION_TOLERANCE_SECONDS,
   };
 }
 
@@ -130,10 +132,12 @@ function calculateAspectRatio(width: number, height: number): string {
 
 export function validateVideoMetadata(
   metadata: VideoMetadata,
-  specs: VideoSpecs
+  specs: VideoSpecs,
+  options: { strictResolution?: boolean } = {}
 ): VideoValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const { strictResolution = false } = options;
   
   if (!specs.allowedMimeTypes.includes(metadata.mimeType)) {
     errors.push(`Ongeldig bestandstype: ${metadata.mimeType}. Vereist: ${specs.allowedMimeTypes.join(', ')}`);
@@ -153,17 +157,34 @@ export function validateVideoMetadata(
     );
   }
   
-  if (metadata.width !== specs.requiredWidth || metadata.height !== specs.requiredHeight) {
-    errors.push(
-      `Verkeerde resolutie: ${metadata.width}x${metadata.height}. ` +
-      `Vereist: ${specs.requiredWidth}x${specs.requiredHeight}.`
-    );
+  const isPortrait = metadata.height > metadata.width;
+  const ratio = metadata.width / metadata.height;
+  const is16by9 = Math.abs(ratio - 16 / 9) < 0.05;
+  const isLowRes = metadata.width < specs.requiredWidth || metadata.height < specs.requiredHeight;
+  
+  if (isPortrait) {
+    const msg = 'Video is staand (portrait). Aanbevolen: liggend 16:9 formaat.';
+    if (strictResolution) {
+      errors.push(msg);
+    } else {
+      warnings.push(msg);
+    }
+  } else if (!is16by9) {
+    const msg = `Aspectverhouding ${metadata.aspectRatio} wijkt af. Aanbevolen: 16:9.`;
+    if (strictResolution) {
+      errors.push(msg);
+    } else {
+      warnings.push(msg);
+    }
   }
   
-  if (metadata.aspectRatio !== specs.requiredAspectRatio) {
-    warnings.push(
-      `Aspectverhouding ${metadata.aspectRatio} wijkt af van ${specs.requiredAspectRatio}.`
-    );
+  if (isLowRes && !isPortrait) {
+    const msg = `Resolutie ${metadata.width}x${metadata.height} is lager dan aanbevolen (1920x1080).`;
+    if (strictResolution) {
+      errors.push(msg);
+    } else {
+      warnings.push(msg);
+    }
   }
   
   if (metadata.fileSize > specs.maxFileSizeBytes) {

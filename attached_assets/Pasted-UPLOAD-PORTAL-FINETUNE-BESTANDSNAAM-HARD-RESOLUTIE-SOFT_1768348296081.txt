@@ -1,0 +1,62 @@
+UPLOAD PORTAL FINETUNE: BESTANDSNAAM HARD, RESOLUTIE SOFT, CONTRACT-LENGTE SINGLE SOURCE
+
+CONTEXT
+Upload portal werkt. Nu finetunen zodat het exact matcht met de gewenste business rules:
+- Bestandsnaam: verplicht “{linkKey}_{bedrijfsnaam}.*” (linkKey als prefix)
+- Video-lengte: exact contractduur (default 15 sec) uit 1 bron
+- Resolutie: niet hard blocken tenzij jij dat wilt; standaard WARNING (16:9/1080p aanbevolen)
+
+DOEL
+1) Maak bestandsnaam validatie strenger en exact volgens spec.
+2) Maak resolutie check standaard NON-BLOCKING (warning), tenzij admin een ‘strict’ flag aanzet.
+3) Zorg dat videoDurationSeconds overal uit dezelfde bron komt (advertiser.videoDurationSeconds default 15), en dat mails/portal/validation dezelfde waarde gebruiken.
+
+A) BESTANDSNAAM VALIDATIE (HARD)
+Vervang huidige check “filename contains linkKey” door:
+- normalizedFileName = originele bestandsnaam zonder path
+- Regel:
+  - moet beginnen met exact `${linkKey}_`
+  - daarna moet er minimaal 1 karakter staan (bedrijfsnaam deel)
+  - geen spaties in het linkKey gedeelte (linkKey heeft die niet)
+- Foutmelding NL:
+  “Bestandsnaam moet beginnen met: {linkKey}_”
+- Voorbeeld tonen in UI:
+  “{linkKey}_Bedrijfsnaam.mp4”
+
+B) RESOLUTIE / RATIO VALIDATIE (DEFAULT WARNING)
+Huidige hard check: 1920x1080.
+Wijzig naar:
+- Detecteer width/height en ratio
+- Rules:
+  - If ratio not ~16:9 (tolerantie) -> WARNING (“Aanbevolen 16:9”)
+  - If width < 1920 OR height < 1080 -> WARNING (“Aanbevolen 1920x1080”)
+  - Als video portrait is (height > width) -> WARNING (“Aanbevolen liggend 16:9”)
+- Upload blijft VALID zolang type + duur + naam OK zijn.
+- Voeg optional config/flag toe:
+  advertiser.strictResolution = false default
+  Als strictResolution=true -> dan worden bovenstaande WARNINGS -> INVALID
+(Deze flag alleen zichtbaar voor admin in dashboard.)
+
+C) CONTRACT-LENGTE: SINGLE SOURCE OF TRUTH
+- Zorg dat validation service, portal UI tekst en “Wat nu” mail allemaal de waarde halen uit:
+  advertiser.videoDurationSeconds (default 15)
+- Default zetten bij advertiser creation of bij package selection:
+  if null -> set 15
+- Zorg dat tolerance consistent is:
+  ±0.5s is OK, maar zet dit centraal als constant (DURATION_TOLERANCE_SECONDS)
+
+D) MAILS & UI COPY CHECK
+- Controleer de “Wat nu” mail template:
+  - noemt exact de durationSeconds dynamisch
+  - noemt bestandsnaamregel (prefix)
+  - bevat linkKey copy-friendly
+- Portal UI moet dezelfde regels tonen (geen afwijkende tekst).
+
+E) OUTPUT
+- Welke bestanden aangepast
+- Bevestig: naam is prefix-rule, resolutie warnings, duur komt uit 1 bron
+- Geef 3 testcases:
+  1) juiste naam + 15s + 1280x720 -> VALID met WARNING
+  2) naam zonder prefix -> INVALID
+  3) 14s bij 15s contract -> INVALID
+IMPLEMENT NOW.
