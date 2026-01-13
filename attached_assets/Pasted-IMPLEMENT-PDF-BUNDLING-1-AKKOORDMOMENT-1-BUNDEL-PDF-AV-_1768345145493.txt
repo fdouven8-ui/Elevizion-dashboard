@@ -1,0 +1,110 @@
+IMPLEMENT PDF BUNDLING: 1 AKKOORDMOMENT = 1 BUNDEL-PDF (AV + OVK + SEPA)
+
+CONTEXT
+We hebben 4 templates in DB:
+- algemene_voorwaarden
+- adverteerder_overeenkomst
+- locatie_overeenkomst
+- sepa_machtiging
+Workflow:
+- Adverteerder accepteert: AV + Adverteerderovereenkomst + SEPA
+- Schermlocatie accepteert: AV + Locatieovereenkomst
+Na OTP ACCEPTED moet er 1 downloadbaar contractdocument komen als bundel-PDF.
+
+DOEL
+Bouw een “PDF bundling” feature die na OTP ACCEPTED automatisch 1 gecombineerde PDF genereert en opslaat, met:
+- Coverpagina (titel + partijen + contractId)
+- Secties in vaste volgorde
+- Audit trail pagina
+En zet deze PDF beschikbaar in dashboard + in bevestigingsmails.
+
+BELANGRIJK
+- Geen redesign/refactor.
+- Gebruik bestaande renderedHtml per template (snapshot) + CompanyProfile data.
+- Werkt voor beide flows (adverteerder & schermlocatie).
+- Behoud ook mogelijkheid om losse PDFs te genereren (optioneel), maar bundel is primair.
+
+A) BUNDEL REGELS (HARD)
+1) Adverteerder bundel volgorde:
+   1) Algemene Voorwaarden
+   2) Adverteerderovereenkomst
+   3) SEPA Machtiging
+2) Schermlocatie bundel volgorde:
+   1) Algemene Voorwaarden
+   2) Schermlocatieovereenkomst
+3) Iedere bundel heeft exact 1 bestand: bundledPdfRef / bundledPdfUrl
+
+B) PDF CONTENT STRUCTUUR
+Pagina 1: COVER
+- Titel: “Contractbundel – <Elevizion>”
+- Subtitel: “Douven Services h/o Elevizion”
+- Contract ID: <contractInstanceId of acceptanceId>
+- Voor: <bedrijf klant> (en type: Adverteerder/Schermlocatie)
+- Datum/tijd akkoord: <otpVerifiedAt>
+- Template versies: AV vX, OVK vY, SEPA vZ (indien van toepassing)
+
+Daarna: SECTIES
+- Voeg tussen secties een sectie-header pagina of duidelijke heading toe:
+  “Algemene Voorwaarden (versie …)”
+  “Adverteerderovereenkomst (versie …)” of “Schermlocatieovereenkomst (versie …)”
+  “SEPA Machtiging (versie …)” indien adverteerder
+
+Laatste pagina: AUDIT TRAIL
+- Email van ondertekenaar
+- Datum/tijd OTP verified
+- IP + user-agent (zoals opgeslagen)
+- Aangevinkte checkboxes + template ids/versies
+- LinkKey (bij adverteerder) indien relevant
+- Let op: nooit OTP code tonen
+
+C) TECHNISCHE IMPLEMENTATIE
+1) Bundel-builder service (server-side):
+   createBundledContractPdf({acceptanceId}) -> pdfRef/url
+   - haalt acceptance + linked contractInstance + required templates
+   - rendert elke template naar HTML (snapshot) met ingevulde placeholders
+   - combineert in 1 HTML document (met page-breaks)
+   - converteert naar PDF
+
+2) PDF engine:
+- Gebruik bestaande PDF aanpak in project.
+- Als nog niet aanwezig: gebruik Playwright/Puppeteer HTML-to-PDF of een betrouwbare html->pdf library.
+- Zorg dat CSS print styles goed zijn:
+  - A4, margins, font consistent, page-breaks tussen secties
+  - Kopteksten niet afgekapt
+
+3) Opslag:
+- Sla pdf op in dezelfde storage als bestaande PDFs (db blob/ref of file storage)
+- Zet in DB:
+  - ContractAcceptance.bundledPdfRef (of ContractInstance.bundledPdfRef)
+  - bundledPdfGeneratedAt
+- Zorg dat download endpoint bestaat:
+  GET /api/contracts/acceptance/:id/bundle.pdf
+
+D) UI & MAILS
+1) Dashboard:
+- In adverteerder detail en schermlocatie detail:
+  - Toon “Download contractbundel (PDF)”
+  - Toon generatedAt
+2) Mails na ACCEPTED:
+- Voeg link of bijlage toe:
+  - klant krijgt bundel
+  - interne mail info@elevizion.nl krijgt bundel
+
+E) SYSTEM HEALTH
+- Voeg check toe:
+  - “Bundled PDF aanwezig” -> PASS zodra bundledPdfRef bestaat na test acceptatie
+- Let op: IBAN warnings blijven warnings tot ingevuld; bundel mag nog steeds genereren.
+
+F) TESTS (MINIMAAL)
+- Test advertiser acceptance -> bundel bevat 3 secties + audit trail
+- Test location acceptance -> bundel bevat 2 secties + audit trail
+- Test download endpoint
+
+OUTPUT
+- Welke files/services zijn toegevoegd
+- Welke DB velden gebruikt/nieuw
+- Welke routes/endpoints toegevoegd
+- Waar downloadknoppen zichtbaar zijn
+- Teststappen klik-voor-klik
+
+IMPLEMENT NOW (NO QUESTIONS).
