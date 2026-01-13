@@ -4,6 +4,9 @@ import { advertisers, portalTokens, verificationCodes } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import { sendEmail } from "../email";
 import { storage } from "../storage";
+import { DEFAULT_COMPANY } from "../companyBranding";
+
+const COMPANY = DEFAULT_COMPANY;
 
 export type AdvertiserOnboardingStatus = 
   | "INVITED"

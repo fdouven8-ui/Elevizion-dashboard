@@ -5,13 +5,9 @@
 
 import { storage } from "./storage";
 import { sendEmail } from "./email";
+import { DEFAULT_COMPANY } from "./companyBranding";
 
-const COMPANY = {
-  legalName: "Douven Services",
-  tradeName: "Elevizion",
-  email: "info@elevizion.nl",
-  tagline: "See Your Business Grow",
-};
+const COMPANY = DEFAULT_COMPANY;
 
 interface JobResult {
   success: boolean;

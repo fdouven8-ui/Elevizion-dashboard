@@ -5,6 +5,9 @@
 
 import { sendEmail, baseEmailTemplate as centralEmailTemplate } from "./email";
 import { storage } from "./storage";
+import { DEFAULT_COMPANY } from "./companyBranding";
+
+const COMPANY = DEFAULT_COMPANY;
 
 export type EmailStep = 
   | "advertiser_created"
@@ -29,12 +32,12 @@ interface StepConfig {
 const stepConfigs: Record<EmailStep, StepConfig> = {
   advertiser_created: {
     templateKey: "advertiser_created",
-    getSubject: (meta) => `Welkom bij Elevizion - ${meta?.companyName || "Nieuwe Adverteerder"}`,
+    getSubject: (meta) => `Welkom bij ${COMPANY.tradeName} - ${meta?.companyName || "Nieuwe Adverteerder"}`,
     getHtml: (meta) => generateAdvertiserCreatedHtml(meta),
   },
   advertiser_invite_sent: {
     templateKey: "advertiser_invite_sent",
-    getSubject: () => "Voltooi uw registratie bij Elevizion",
+    getSubject: () => `Voltooi uw registratie bij ${COMPANY.tradeName}`,
     getHtml: (meta) => generateInviteHtml(meta),
   },
   advertiser_onboarding_completed: {
@@ -79,12 +82,12 @@ const stepConfigs: Record<EmailStep, StepConfig> = {
   },
   verification_code: {
     templateKey: "verification_code",
-    getSubject: () => "Uw verificatiecode - Elevizion",
+    getSubject: () => `Uw verificatiecode - ${COMPANY.tradeName}`,
     getHtml: (meta) => generateVerificationCodeHtml(meta),
   },
   test_email: {
     templateKey: "test_email",
-    getSubject: () => "Test Email - Elevizion",
+    getSubject: () => `Test Email - ${COMPANY.tradeName}`,
     getHtml: () => generateTestEmailHtml(),
   },
 };
@@ -212,11 +215,11 @@ function generateAdvertiserCreatedHtml(meta?: Record<string, any>): string {
   const contactName = meta?.contactName || "Geachte klant";
   
   return baseEmailTemplate(`
-    <h2 style="color: #1e3a5f; margin-top: 0;">Welkom bij Elevizion!</h2>
+    <h2 style="color: #1e3a5f; margin-top: 0;">Welkom bij ${COMPANY.tradeName}!</h2>
     <p>Beste ${contactName},</p>
-    <p>Hartelijk welkom! Uw bedrijf <strong>${companyName}</strong> is succesvol geregistreerd bij Elevizion.</p>
+    <p>Hartelijk welkom! Uw bedrijf <strong>${companyName}</strong> is succesvol geregistreerd bij ${COMPANY.tradeName}.</p>
     <p>Wij nemen spoedig contact met u op om de volgende stappen te bespreken.</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -232,7 +235,7 @@ function generateInviteHtml(meta?: Record<string, any>): string {
       <a href="${portalUrl}" style="background: #f8a12f; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold;">Gegevens invullen</a>
     </div>
     <p style="color: #666; font-size: 12px;">Deze link is 7 dagen geldig.</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -245,7 +248,7 @@ function generateOnboardingCompletedHtml(meta?: Record<string, any>): string {
     <p>Beste ${contactName},</p>
     <p>Bedankt voor het invullen van uw gegevens. De onboarding voor <strong>${companyName}</strong> is nu voltooid.</p>
     <p>Wij gaan aan de slag om uw reclame live te zetten. U hoort spoedig van ons!</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -255,12 +258,12 @@ function generateScreenCreatedHtml(meta?: Record<string, any>): string {
   
   return baseEmailTemplate(`
     <h2 style="color: #1e3a5f; margin-top: 0;">Nieuw Scherm Geregistreerd</h2>
-    <p>Er is een nieuw scherm geregistreerd in het Elevizion netwerk:</p>
+    <p>Er is een nieuw scherm geregistreerd in het ${COMPANY.tradeName} netwerk:</p>
     <div style="background: white; padding: 15px; border-radius: 5px; margin: 15px 0;">
       <p><strong>Scherm:</strong> ${screenName}</p>
       ${locationName ? `<p><strong>Locatie:</strong> ${locationName}</p>` : ""}
     </div>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -276,7 +279,7 @@ function generateScreenInviteHtml(meta?: Record<string, any>): string {
       <a href="${portalUrl}" style="background: #f8a12f; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold;">Gegevens invullen</a>
     </div>
     <p style="color: #666; font-size: 12px;">Deze link is 7 dagen geldig.</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -289,7 +292,7 @@ function generateScreenOnboardingCompletedHtml(meta?: Record<string, any>): stri
     <p>Beste klant,</p>
     <p>De onboarding voor scherm <strong>${screenName}</strong>${locationName ? ` op locatie <strong>${locationName}</strong>` : ""} is nu voltooid.</p>
     <p>Wij gaan aan de slag om het scherm live te zetten. U hoort spoedig van ons!</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -305,7 +308,7 @@ function generateLocationInviteHtml(meta?: Record<string, any>): string {
       <a href="${portalUrl}" style="background: #f8a12f; color: white; padding: 15px 30px; text-decoration: none; border-radius: 5px; font-weight: bold;">Gegevens invullen</a>
     </div>
     <p style="color: #666; font-size: 12px;">Deze link is 7 dagen geldig.</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -318,7 +321,7 @@ function generateLocationOnboardingCompletedHtml(meta?: Record<string, any>): st
     <p>Beste klant,</p>
     <p>De onboarding voor locatie <strong>${locationName}</strong>${companyName ? ` (${companyName})` : ""} is nu voltooid.</p>
     <p>Wij gaan aan de slag met de installatie. U hoort spoedig van ons!</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -331,7 +334,7 @@ function generateContractSentHtml(meta?: Record<string, any>): string {
     <p>Beste ${contactName},</p>
     <p>Het contract <strong>${contractName}</strong> is klaar voor ondertekening.</p>
     <p>U ontvangt separaat een uitnodiging om digitaal te tekenen.</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -344,7 +347,7 @@ function generateContractSignedHtml(meta?: Record<string, any>): string {
     <p>Beste ${contactName},</p>
     <p>Het contract <strong>${contractName}</strong> is succesvol ondertekend.</p>
     <p>U ontvangt een kopie van het getekende document. Wij gaan direct aan de slag!</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
@@ -358,16 +361,16 @@ function generateVerificationCodeHtml(meta?: Record<string, any>): string {
       <span style="font-size: 32px; font-weight: bold; letter-spacing: 8px; background: white; padding: 15px 30px; border-radius: 5px; border: 2px dashed #1e3a5f;">${code}</span>
     </div>
     <p style="color: #666; font-size: 12px;">Deze code is 10 minuten geldig.</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 
 function generateTestEmailHtml(): string {
   return baseEmailTemplate(`
     <h2 style="color: #1e3a5f; margin-top: 0;">Test Email</h2>
-    <p>Dit is een test email vanuit het Elevizion Dashboard.</p>
+    <p>Dit is een test email vanuit het ${COMPANY.tradeName} Dashboard.</p>
     <p>Als u deze email ontvangt, werkt de email configuratie correct!</p>
-    <p>Met vriendelijke groet,<br><strong>Team Elevizion</strong></p>
+    <p>Met vriendelijke groet,<br><strong>Team ${COMPANY.tradeName}</strong></p>
   `);
 }
 

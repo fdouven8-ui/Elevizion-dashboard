@@ -5,6 +5,9 @@ import crypto from "crypto";
 import { sendEmail } from "../email";
 import { generateContractPdf } from "./contractPdfService";
 import { ObjectStorageService } from "../objectStorage";
+import { DEFAULT_COMPANY } from "../companyBranding";
+
+const COMPANY = DEFAULT_COMPANY;
 
 function generateOtpCode(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();

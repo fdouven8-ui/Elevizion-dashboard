@@ -5,13 +5,9 @@ import crypto from "crypto";
 import { sendEmail } from "../email";
 import { generateContractPdf } from "./contractPdfService";
 import { ObjectStorageService } from "../objectStorage";
+import { DEFAULT_COMPANY } from "../companyBranding";
 
-const COMPANY = {
-  legalName: "Douven Services",
-  tradeName: "Elevizion",
-  email: "info@elevizion.nl",
-  website: "elevizion.nl",
-};
+const COMPANY = DEFAULT_COMPANY;
 
 const INTAKE_TOKEN_EXPIRY_DAYS = 30;
 const CONTRACT_TOKEN_EXPIRY_DAYS = 30;

@@ -65,6 +65,7 @@ import { setupAuth, registerAuthRoutes, isAuthenticated, requirePermission } fro
 import { getScreenStats, getAdvertiserStats, clearStatsCache, checkYodeckScreenHasContent } from "./yodeckStats";
 import { classifyMediaItems } from "./services/mediaClassifier";
 import * as advertiserOnboarding from "./services/advertiserOnboarding";
+import { clearBrandingCache } from "./companyBranding";
 
 // ============================================================================
 // IN-MEMORY CACHE (10 second TTL for control-room endpoints)
@@ -7925,6 +7926,8 @@ We wensen je een succesvolle maand!`
       if (!profile) {
         return res.status(404).json({ message: "Bedrijfsprofiel niet gevonden" });
       }
+      // Clear branding cache so services pick up new values
+      clearBrandingCache();
       res.json(profile);
     } catch (error: any) {
       res.status(500).json({ message: error.message });
