@@ -147,6 +147,24 @@ function stripHtml(html: string): string {
 // CENTRAL EMAIL TEMPLATE WRAPPER
 // ============================================================================
 
+interface CompanyInfo {
+  legalName: string;
+  tradeName: string;
+  email: string;
+  website: string;
+  kvkNumber?: string;
+  vatNumber?: string;
+}
+
+const DEFAULT_COMPANY: CompanyInfo = {
+  legalName: "Douven Services",
+  tradeName: "Elevizion",
+  email: "info@elevizion.nl",
+  website: "elevizion.nl",
+  kvkNumber: "90982541",
+  vatNumber: "NL004857473B37",
+};
+
 interface EmailTemplateOptions {
   subject: string;
   preheader?: string;
@@ -158,6 +176,7 @@ interface EmailTemplateOptions {
   secondaryCta?: { label: string; url: string };
   footerNote?: string;
   showUnsubscribe?: boolean;
+  company?: CompanyInfo;
 }
 
 interface EmailTemplateResult {
@@ -166,7 +185,7 @@ interface EmailTemplateResult {
 }
 
 export function baseEmailTemplate(options: EmailTemplateOptions): EmailTemplateResult {
-  const { subject, preheader, title, introText, bodyBlocks, bodyHtml, cta, secondaryCta, footerNote, showUnsubscribe } = options;
+  const { subject, preheader, title, introText, bodyBlocks, bodyHtml, cta, secondaryCta, footerNote, showUnsubscribe, company = DEFAULT_COMPANY } = options;
   const year = new Date().getFullYear();
   
   // Build content from either bodyBlocks (preferred) or legacy bodyHtml
@@ -265,11 +284,12 @@ export function baseEmailTemplate(options: EmailTemplateOptions): EmailTemplateR
             <td style="padding:24px 40px;background-color:${BRAND.background};border-top:1px solid ${BRAND.border};">
               <p style="margin:0 0 8px 0;font-size:13px;color:${BRAND.muted};">
                 Met vriendelijke groet,<br>
-                <strong style="color:${BRAND.primary};">Team Elevizion</strong>
+                <strong style="color:${BRAND.primary};">Team ${company.tradeName}</strong>
               </p>
               <p style="margin:12px 0 0 0;font-size:12px;color:${BRAND.muted};">
-                Elevizion B.V. &bull; info@elevizion.nl &bull; elevizion.nl
+                ${company.legalName} &bull; ${company.email} &bull; ${company.website}
               </p>
+              ${company.kvkNumber ? `<p style="margin:4px 0 0 0;font-size:11px;color:${BRAND.muted};">KvK: ${company.kvkNumber}${company.vatNumber ? ` &bull; BTW: ${company.vatNumber}` : ""}</p>` : ""}
               ${footerNoteHtml}
               ${unsubscribeHtml}
             </td>
@@ -279,7 +299,7 @@ export function baseEmailTemplate(options: EmailTemplateOptions): EmailTemplateR
         
         <!-- Copyright -->
         <p style="margin:24px 0 0 0;font-size:11px;color:${BRAND.muted};text-align:center;">
-          &copy; ${year} Elevizion B.V. Alle rechten voorbehouden.
+          &copy; ${year} ${company.legalName}. Alle rechten voorbehouden.
         </p>
         
       </td>
@@ -296,7 +316,7 @@ export function baseEmailTemplate(options: EmailTemplateOptions): EmailTemplateR
 }
 
 function generatePlainTextFromTemplate(options: EmailTemplateOptions): string {
-  const { title, introText, bodyBlocks, bodyHtml, cta, secondaryCta, footerNote } = options;
+  const { title, introText, bodyBlocks, bodyHtml, cta, secondaryCta, footerNote, company = DEFAULT_COMPANY } = options;
   const year = new Date().getFullYear();
   
   let text = "";
@@ -345,14 +365,17 @@ function generatePlainTextFromTemplate(options: EmailTemplateOptions): string {
   
   text += "\n\n" + "-".repeat(40);
   text += "\nMet vriendelijke groet,";
-  text += "\nTeam Elevizion";
-  text += `\n\nElevizion B.V. | ${EMAIL_CONFIG.contactEmail} | elevizion.nl`;
+  text += `\nTeam ${company.tradeName}`;
+  text += `\n\n${company.legalName} | ${company.email} | ${company.website}`;
+  if (company.kvkNumber) {
+    text += `\nKvK: ${company.kvkNumber}${company.vatNumber ? ` | BTW: ${company.vatNumber}` : ""}`;
+  }
   
   if (footerNote) {
     text += `\n\n${footerNote}`;
   }
   
-  text += `\n\n© ${year} Elevizion B.V. Alle rechten voorbehouden.`;
+  text += `\n\n© ${year} ${company.legalName}. Alle rechten voorbehouden.`;
   
   return text;
 }
