@@ -1,0 +1,93 @@
+WEBSITE AUDIT + CONSISTENTIE + KLEUREN (GEEN REDESIGN)
+
+DOEL
+Loop de volledige marketing-website (elevizion.nl) na alsof het een echte productie-site is:
+- klopt alle inhoud met het echte aanbod?
+- werken alle knoppen/links?
+- zijn kleuren/contrast consistent en professioneel?
+- zijn er geen oude claims of foutieve teksten meer?
+- is de layout consistent op desktop/tablet/mobiel?
+
+BELANGRIJK
+- Geen grote redesign of refactor.
+- Alleen fixen, opschonen en consistent maken.
+- Alles moet passen bij de huidige brand (groen/wit/donker) en bestaande componenten.
+
+SCOPE (ALLE PAGINA’S)
+/, /adverteren, /scherm-locatie, /prijzen, /werkwijze, /veelgestelde-vragen, /contact
++ header/nav/footer
++ alle formulieren/CTA’s
++ homepage hero (watermerk/crop) en pakketten preview
+
+A) CONTENT / AANBOD-CHECK (VERPLICHT)
+1) Doorzoek hele site op claims die niet (altijd) kloppen en fix ze:
+   - “Volledig verzorgd” (moet weg)
+   - “Wij maken de advertentie” / “we ontwerpen” / “we produceren” (moet weg)
+   - “maandelijks opzegbaar vanaf maand 1” / “cancel anytime” (moet weg)
+   - “voorrang op toplocaties”, “meer zendtijd”, “langere spots” (alleen tonen als dit echt gegarandeerd is; anders verwijderen)
+   - “we stemmen altijd af…” (vervangen door iets dat altijd klopt)
+2) Overal dezelfde kernboodschap:
+   - “Klant levert advertentievideo zelf aan, wij plaatsen op schermen.”
+   - “Minimale looptijd: 6 maanden (daarna maandelijks opzegbaar)” (alleen als dit klopt; anders neem configurabele constante)
+3) Update FAQ/werkwijze/prijzen zodat ze exact dezelfde regels noemen.
+
+B) NAVIGATIE & CTA-CHECK
+1) Header menu:
+   - alle items moeten naar echte routes navigeren
+   - actieve pagina highlight moet kloppen
+2) Alle CTA knoppen moeten werken:
+   - “Ik wil adverteren” -> /adverteren
+   - “Ik wil een scherm op mijn locatie” -> /scherm-locatie
+   - Pricing knoppen -> /prijzen of /contact (custom)
+3) “Meer info” mag nooit loos zijn:
+   - vervang door “Bekijk details” (naar /prijzen) of accordion/modal met echte inhoud.
+
+C) KLEUREN / UI CONSISTENTIE (ZONDER REDESIGN)
+1) Maak een centrale theme set (Tailwind config of CSS variables):
+   - primary (Elevizion groen)
+   - secondary/neutral grijs
+   - background
+   - border
+   - text primary/secondary
+2) Zorg dat knoppen consistent zijn:
+   - Primary button: altijd dezelfde achtergrondkleur/hover/active
+   - Secondary button: outline consistent
+   - Disabled states duidelijk
+3) Check contrast en leesbaarheid:
+   - tekst op video hero moet goed leesbaar blijven
+   - cards en badges moeten consistent zijn
+4) Fix “random” afwijkende tinten of dubbele groenen.
+5) Zorg dat iconen (checkmarks etc.) dezelfde stijl/kleur gebruiken.
+
+D) RESPONSIVE CHECK
+Test layout op:
+- 1920x1080
+- 1440x900
+- 1366x768
+- mobiel (390x844 iPhone)
+Fix:
+- te brede containers
+- rare margins/paddings
+- cards die uitlijnen
+- header menu op mobiel (hamburger) moet perfect werken
+
+E) MEDIA CHECK
+1) Homepage hero video:
+   - runway watermark moet niet zichtbaar zijn door crop/zoom
+   - object-fit cover + responsive scale per breakpoint
+2) Vervang overal Replit default icons met Elevizion favicon/app icons (als dit nog niet overal klopt).
+
+F) FORMS & LEADS
+- Contactform en andere forms mogen geen mailto zijn.
+- Form submit moet:
+  1) lead record maken
+  2) bedank bevestiging tonen
+  3) (optioneel) mail naar info@elevizion.nl
+
+OUTPUT (VERPLICHT)
+Lever na de audit een korte changelog:
+1) lijst met pagina’s die je hebt aangepast
+2) alle copy-wijzigingen (bullet list)
+3) alle kleur/theme wijzigingen (waar centraal geregeld)
+4) issues die je vond + hoe je ze fixed hebt
+5) test checklist met “passed” voor: links, CTA’s, responsive, hero watermark, kleurconsistentie

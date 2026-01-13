@@ -141,7 +141,7 @@ export default function Landing() {
                 </div>
                 <CardTitle className="text-xl font-bold text-slate-800">Voor locaties</CardTitle>
                 <p className="text-sm text-slate-600 mt-1 leading-relaxed">
-                  Scherm dat past bij jouw zaak, volledig verzorgd.
+                  Scherm dat past bij jouw zaak, wij regelen alles.
                 </p>
               </CardHeader>
               <CardContent className="space-y-4">
