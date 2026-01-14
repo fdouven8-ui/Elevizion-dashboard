@@ -1091,12 +1091,12 @@ export async function checkReleaseAudit(): Promise<HealthCheckResult[]> {
       fixSuggestion: failedCount > 0 ? "Controleer Postmark configuratie en e-mailadressen" : undefined,
     });
     
-    // 2. Outbox backlog (pending or failed items)
+    // 2. Outbox backlog (queued/processing or failed items)
     const outboxBacklog = await db.select({ id: integrationOutbox.id, status: integrationOutbox.status })
       .from(integrationOutbox)
-      .where(sql`${integrationOutbox.status} IN ('pending', 'failed')`);
+      .where(sql`${integrationOutbox.status} IN ('queued', 'processing', 'failed')`);
     
-    const pendingCount = outboxBacklog.filter(o => o.status === "pending").length;
+    const pendingCount = outboxBacklog.filter(o => o.status === "queued" || o.status === "processing").length;
     const outboxFailedCount = outboxBacklog.filter(o => o.status === "failed").length;
     const totalBacklog = pendingCount + outboxFailedCount;
     
@@ -1123,15 +1123,18 @@ export async function checkReleaseAudit(): Promise<HealthCheckResult[]> {
       details: { count: waitingCount },
     });
     
-    // 4. Waitlist invites expiring soon (within 24 hours)
+    // 4. Waitlist invites expiring soon (within 24 hours, not already expired)
     const now = new Date();
     const in24Hours = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    const { isNotNull, gt } = await import("drizzle-orm");
     
     const expiringInvites = await db.select({ id: waitlistRequests.id })
       .from(waitlistRequests)
       .where(and(
         eq(waitlistRequests.status, "INVITED"),
-        lt(waitlistRequests.inviteExpiresAt, in24Hours)
+        isNotNull(waitlistRequests.inviteExpiresAt),
+        gt(waitlistRequests.inviteExpiresAt, now), // Not already expired
+        lt(waitlistRequests.inviteExpiresAt, in24Hours) // But expires within 24h
       ));
     
     const expiringCount = expiringInvites.length;
