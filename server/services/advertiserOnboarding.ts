@@ -5,6 +5,7 @@ import { eq, sql } from "drizzle-orm";
 import { sendEmail } from "../email";
 import { storage } from "../storage";
 import { DEFAULT_COMPANY } from "../companyBranding";
+import { dispatchMailEvent } from "./mailEventService";
 
 const COMPANY = DEFAULT_COMPANY;
 
@@ -297,86 +298,21 @@ export async function transitionToReadyForAsset(
     }
 
     // Generate bundled PDF asynchronously (don't block)
-    let bundledPdfUrl = "";
     try {
       const { generateContractBundle, getAdvertiserBundleContext } = await import("./contractBundleService");
       const context = await getAdvertiserBundleContext(advertiserId);
       if (context) {
-        const result = await generateContractBundle(context);
-        if (result.success && result.bundledPdfUrl) {
-          bundledPdfUrl = result.bundledPdfUrl;
-        }
+        await generateContractBundle(context);
       }
     } catch (bundleError) {
       console.error("[AdvertiserOnboarding] Error generating bundle PDF:", bundleError);
     }
 
-    // Re-fetch advertiser to get updated bundledPdfUrl
-    const [updatedAdvertiser] = await db.select().from(advertisers).where(eq(advertisers.id, advertiserId));
-    const pdfUrl = bundledPdfUrl || updatedAdvertiser?.bundledPdfUrl;
-
-    const pdfLink = pdfUrl 
-      ? `<div style="background: #eff6ff; border: 1px solid #2563eb; padding: 16px; border-radius: 8px; margin: 20px 0;">
-          <p style="margin: 0; font-weight: 600; color: #1e40af;">📄 Uw contractbundel</p>
-          <p style="margin: 8px 0 0 0;"><a href="${pdfUrl}" style="color: #2563eb;">Download uw contractdocumenten (PDF)</a></p>
-        </div>`
-      : "";
-
-    await sendEmail({
-      to: advertiser.email,
-      subject: "Volgende stap - Lever je advertentievideo aan",
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1a1a1a;">Bedankt voor uw akkoord!</h2>
-          <p>Beste ${advertiser.contactName || advertiser.companyName},</p>
-          <p>Uw aanmelding is bevestigd. De volgende stap is het aanleveren van uw advertentievideo.</p>
-          
-          ${pdfLink}
-          
-          <div style="background: #f0fdf4; border: 2px solid #22c55e; padding: 20px; border-radius: 12px; margin: 24px 0;">
-            <p style="margin: 0 0 10px 0; font-weight: 600; color: #166534;">Gebruik deze code in uw bestandsnaam:</p>
-            <div style="background: white; padding: 16px; border-radius: 8px; text-align: center;">
-              <span style="font-size: 24px; font-weight: bold; font-family: monospace; color: #2563eb;">${advertiser.linkKey}</span>
-            </div>
-          </div>
-
-          <p><strong>Bestandsnaam voorbeeld:</strong><br>
-          <code style="background: #f5f5f5; padding: 4px 8px; border-radius: 4px;">${advertiser.linkKey}_${advertiser.companyName?.replace(/[^a-zA-Z0-9]/g, "")}.mp4</code></p>
-
-          <h3 style="color: #1a1a1a; margin-top: 24px;">Specificaties:</h3>
-          <ul style="color: #666;">
-            <li>Formaat: MP4</li>
-            <li>Duur: max 10-15 seconden</li>
-            <li>Zonder audio</li>
-            <li>Resolutie: 1080p (1920x1080)</li>
-          </ul>
-
-          <p>Stuur uw video naar: <a href="mailto:info@elevizion.nl" style="color: #2563eb;">info@elevizion.nl</a></p>
-
-          <p style="color: #666; font-size: 12px; margin-top: 32px;">Met vriendelijke groet,<br>Elevizion</p>
-        </div>
-      `,
-    });
-
-    // Send internal notification with bundle link
-    await sendEmail({
-      to: "info@elevizion.nl",
-      subject: `Adverteerder akkoord: ${advertiser.companyName}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1a1a1a;">Nieuw adverteerder akkoord</h2>
-          <p><strong>Bedrijf:</strong> ${advertiser.companyName}</p>
-          <p><strong>Contact:</strong> ${advertiser.contactName}</p>
-          <p><strong>Email:</strong> ${advertiser.email}</p>
-          <p><strong>Pakket:</strong> ${advertiser.packageType}</p>
-          <p><strong>LinkKey:</strong> ${advertiser.linkKey}</p>
-          ${pdfUrl ? `<p><a href="${pdfUrl}">Download contractbundel (PDF)</a></p>` : ""}
-          <p style="text-align: center; margin: 20px 0;">
-            <a href="${baseUrl}/advertisers/${advertiserId}" style="background: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Bekijk in dashboard</a>
-          </p>
-        </div>
-      `,
-    });
+    // Use centralized mail event service (idempotent)
+    const mailResult = await dispatchMailEvent("ADVERTISER_CONTRACT_ACCEPTED", advertiserId, baseUrl);
+    if (!mailResult.success && !mailResult.skipped) {
+      console.warn("[AdvertiserOnboarding] Mail dispatch warning:", mailResult.reason);
+    }
 
     await db.update(advertisers)
       .set({

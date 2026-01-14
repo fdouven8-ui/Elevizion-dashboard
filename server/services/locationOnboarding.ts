@@ -6,6 +6,7 @@ import { sendEmail } from "../email";
 import { generateContractPdf } from "./contractPdfService";
 import { ObjectStorageService } from "../objectStorage";
 import { DEFAULT_COMPANY } from "../companyBranding";
+import { dispatchMailEvent } from "./mailEventService";
 
 const COMPANY = DEFAULT_COMPANY;
 
@@ -193,48 +194,19 @@ export async function submitIntake(
       eventData: { ip, userAgent, ...data },
     });
 
-    await sendEmail({
-      to: data.email,
-      subject: "Bedankt – we beoordelen je schermlocatie",
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1a1a1a;">Bedankt voor je aanmelding</h2>
-          <p>Beste ${data.contactName},</p>
-          <p>We hebben je aanmelding voor <strong>${data.name}</strong> goed ontvangen.</p>
-          <p>Ons team beoordeelt nu je locatie. Je hoort snel van ons of je locatie geschikt is voor een ${COMPANY.tradeName} scherm.</p>
-          <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 20px 0;">
-            <p style="margin: 0; font-size: 14px;"><strong>Ingediende gegevens:</strong></p>
-            <p style="margin: 8px 0 0 0; font-size: 14px;">${data.street} ${data.houseNumber}, ${data.zipcode} ${data.city}</p>
-            <p style="margin: 4px 0 0 0; font-size: 14px;">Bezoekers per week: ~${data.visitorsPerWeek}</p>
-          </div>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
-        </div>
-      `,
-    });
+    // Use centralized mail event service (idempotent)
+    const baseUrl = getBaseUrl();
+    dispatchMailEvent("LOCATION_INTAKE_SUBMITTED", location.id, baseUrl)
+      .then(result => {
+        if (!result.success && !result.skipped) {
+          console.warn('[LocationOnboarding] Mail dispatch warning:', result.reason);
+        }
+      })
+      .catch(err => console.error('[LocationOnboarding] Mail dispatch error:', err));
 
     await db.update(locations)
       .set({ intakeConfirmationSentAt: new Date() })
       .where(eq(locations.id, location.id));
-
-    await sendEmail({
-      to: "info@elevizion.nl",
-      subject: `Nieuwe locatie intake: ${data.name}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1a1a1a;">Nieuwe locatie ter beoordeling</h2>
-          <p><strong>Bedrijf:</strong> ${data.name}</p>
-          <p><strong>Contact:</strong> ${data.contactName}</p>
-          <p><strong>Email:</strong> ${data.email}</p>
-          <p><strong>Telefoon:</strong> ${data.phone}</p>
-          <p><strong>Adres:</strong> ${data.street} ${data.houseNumber}, ${data.zipcode} ${data.city}</p>
-          <p><strong>Type:</strong> ${data.locationType}</p>
-          <p><strong>Bezoekers/week:</strong> ${data.visitorsPerWeek}</p>
-          <p style="text-align: center; margin: 20px 0;">
-            <a href="${getBaseUrl()}/locations/${location.id}" style="background: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Bekijk in dashboard</a>
-          </p>
-        </div>
-      `,
-    });
 
     console.log(`[LocationOnboarding] Intake submitted for location ${location.id}`);
     return { success: true };
@@ -282,23 +254,14 @@ export async function approveLocation(
 
     const contractUrl = `${getBaseUrl()}/onboarding/location/contract/${contractToken}`;
 
-    await sendEmail({
-      to: location.email!,
-      subject: "Goedgekeurd – rond je schermlocatie aanmelding af",
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1a1a1a;">🎉 Je locatie is goedgekeurd!</h2>
-          <p>Beste ${location.contactName || location.name},</p>
-          <p>Goed nieuws! Na beoordeling hebben we besloten dat <strong>${location.name}</strong> een geschikte locatie is voor een ${COMPANY.tradeName} scherm.</p>
-          <p>Er rest nog één stap: je akkoord geven op de voorwaarden en je uitbetalingsgegevens invullen.</p>
-          <p style="text-align: center; margin: 30px 0;">
-            <a href="${contractUrl}" style="background: #16a34a; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold;">Aanmelding afronden</a>
-          </p>
-          <p style="color: #666; font-size: 14px;">Deze link is ${CONTRACT_TOKEN_EXPIRY_DAYS} dagen geldig.</p>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
-        </div>
-      `,
-    });
+    // Use centralized mail event service (idempotent)
+    dispatchMailEvent("LOCATION_APPROVED", locationId, getBaseUrl())
+      .then(result => {
+        if (!result.success && !result.skipped) {
+          console.warn('[LocationOnboarding] Mail dispatch warning:', result.reason);
+        }
+      })
+      .catch(err => console.error('[LocationOnboarding] Mail dispatch error:', err));
 
     await db.update(locations)
       .set({ contractEmailSentAt: new Date() })
@@ -637,46 +600,18 @@ export async function verifyLocationOtp(
         </div>`
       : "";
 
-    await sendEmail({
-      to: location.email!,
-      subject: "Bevestiging – je schermlocatie is afgerond",
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1a1a1a;">🎉 Je aanmelding is compleet!</h2>
-          <p>Beste ${location.contactName || location.name},</p>
-          <p>Bedankt voor je akkoord! De aanmelding van <strong>${location.name}</strong> is nu volledig afgerond.</p>
-          ${pdfLink}
-          <div style="background: #f0fdf4; padding: 16px; border-radius: 8px; margin: 20px 0; border: 1px solid #86efac;">
-            <p style="margin: 0; font-weight: bold; color: #166534;">Wat gebeurt er nu?</p>
-            <p style="margin: 8px 0 0 0; color: #166534;">We nemen binnenkort contact met je op om de installatie van het scherm te plannen.</p>
-          </div>
-          <p style="color: #666; font-size: 12px;">Met vriendelijke groet,<br>Team ${COMPANY.tradeName}</p>
-        </div>
-      `,
-    });
+    // Use centralized mail event service (idempotent) - sends to customer AND info@elevizion.nl
+    dispatchMailEvent("LOCATION_CONTRACT_ACCEPTED", location.id, getBaseUrl())
+      .then(result => {
+        if (!result.success && !result.skipped) {
+          console.warn('[LocationOnboarding] Mail dispatch warning:', result.reason);
+        }
+      })
+      .catch(err => console.error('[LocationOnboarding] Mail dispatch error:', err));
 
     await db.update(locations)
       .set({ completionEmailSentAt: new Date() })
       .where(eq(locations.id, location.id));
-
-    await sendEmail({
-      to: "info@elevizion.nl",
-      subject: `Schermlocatie akkoord afgerond: ${location.name}`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1a1a1a;">Schermlocatie akkoord voltooid</h2>
-          <p><strong>Bedrijf:</strong> ${location.name}</p>
-          <p><strong>Contact:</strong> ${location.contactName}</p>
-          <p><strong>Adres:</strong> ${location.address || `${location.street} ${location.houseNumber}, ${location.zipcode} ${location.city}`}</p>
-          <p><strong>IBAN:</strong> ****${location.bankAccountIban?.slice(-4) || "****"}</p>
-          <p><strong>Bezoekers/week:</strong> ${location.visitorsPerWeek}</p>
-          ${pdfUrl ? `<p><a href="${pdfUrl}">Download contractbundel (PDF)</a></p>` : ""}
-          <p style="text-align: center; margin: 20px 0;">
-            <a href="${getBaseUrl()}/locations/${location.id}" style="background: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Bekijk in dashboard</a>
-          </p>
-        </div>
-      `,
-    });
 
     console.log(`[LocationOnboarding] Contract accepted for location ${location.id}`);
     return { success: true };

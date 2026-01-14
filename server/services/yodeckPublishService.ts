@@ -13,6 +13,7 @@ import { integrationOutbox, placementPlans, adAssets, locations } from "@shared/
 import { eq, and } from "drizzle-orm";
 import crypto from "crypto";
 import { ObjectStorageService } from "../objectStorage";
+import { dispatchMailEvent } from "./mailEventService";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const REQUEST_TIMEOUT = 60000; // 60 seconds for uploads
@@ -527,6 +528,20 @@ class YodeckPublishService {
         .where(eq(placementPlans.id, planId));
 
       console.log(`[YodeckPublish] Plan ${planId} ${finalStatus}: ${report.successCount}/${report.totalTargets} successful`);
+      
+      if (finalStatus === "PUBLISHED" && report.successCount > 0) {
+        const baseUrl = process.env.REPLIT_DEV_DOMAIN 
+          ? `https://${process.env.REPLIT_DEV_DOMAIN}` 
+          : '';
+        dispatchMailEvent("ADVERTISER_PUBLISHED", plan.advertiserId, baseUrl)
+          .then(result => {
+            if (!result.success && !result.skipped) {
+              console.warn('[YodeckPublish] Mail dispatch warning:', result.reason);
+            }
+          })
+          .catch(err => console.error('[YodeckPublish] Mail dispatch error:', err));
+      }
+      
       return report;
     } catch (err: any) {
       report.completedAt = new Date().toISOString();

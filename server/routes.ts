@@ -622,6 +622,19 @@ Sitemap: ${SITE_URL}/sitemap.xml
     res.json(advertiser);
   });
 
+  app.get("/api/advertisers/:id/mail-history", async (req, res) => {
+    try {
+      const { getEmailHistoryForEntity, getLastEmailForEntity } = await import("./services/mailEventService");
+      const [history, lastEmail] = await Promise.all([
+        getEmailHistoryForEntity("advertiser", req.params.id),
+        getLastEmailForEntity("advertiser", req.params.id),
+      ]);
+      res.json({ history, lastEmail });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/advertisers/:id/placements", async (req, res) => {
     try {
       const advertiser = await storage.getAdvertiser(req.params.id);
@@ -1861,6 +1874,19 @@ Sitemap: ${SITE_URL}/sitemap.xml
     const location = await storage.getLocation(req.params.id);
     if (!location) return res.status(404).json({ message: "Location not found" });
     res.json(location);
+  });
+
+  app.get("/api/locations/:id/mail-history", async (req, res) => {
+    try {
+      const { getEmailHistoryForEntity, getLastEmailForEntity } = await import("./services/mailEventService");
+      const [history, lastEmail] = await Promise.all([
+        getEmailHistoryForEntity("location", req.params.id),
+        getLastEmailForEntity("location", req.params.id),
+      ]);
+      res.json({ history, lastEmail });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
   });
 
   app.post("/api/locations", async (req, res) => {

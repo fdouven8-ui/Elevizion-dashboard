@@ -328,6 +328,16 @@ export default function AdvertiserDetail() {
     enabled: !!id,
   });
 
+  const { data: mailHistory } = useQuery<{ lastEmail: { toEmail: string; templateKey: string; sentAt: string; status: string } | null }>({
+    queryKey: ["/api/advertisers", id, "mail-history"],
+    queryFn: async () => {
+      const res = await fetch(`/api/advertisers/${id}/mail-history`);
+      if (!res.ok) return { lastEmail: null };
+      return res.json();
+    },
+    enabled: !!id,
+  });
+
   const generateContractMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/contract-documents/generate", {
@@ -927,6 +937,26 @@ export default function AdvertiserDetail() {
                 {copiedField === "email" ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
               </Button>
             </div>
+
+            {/* Last Email */}
+            {mailHistory?.lastEmail && (
+              <div className="bg-muted/30 rounded-md p-3 mt-2" data-testid="card-last-email">
+                <p className="text-xs font-medium text-muted-foreground mb-1">Laatste mail</p>
+                <div className="flex items-center gap-2">
+                  <Send className="h-3 w-3 text-muted-foreground" />
+                  <span className="text-sm">{mailHistory.lastEmail.templateKey.replace(/_/g, " ")}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {format(new Date(mailHistory.lastEmail.sentAt), "d MMM yyyy 'om' HH:mm", { locale: nl })}
+                  {mailHistory.lastEmail.status === "sent" && (
+                    <Badge variant="outline" className="ml-2 text-xs bg-green-50 text-green-700">Verzonden</Badge>
+                  )}
+                  {mailHistory.lastEmail.status === "failed" && (
+                    <Badge variant="outline" className="ml-2 text-xs bg-red-50 text-red-700">Mislukt</Badge>
+                  )}
+                </p>
+              </div>
+            )}
             
             <Separator />
 

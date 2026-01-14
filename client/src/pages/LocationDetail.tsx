@@ -34,7 +34,7 @@ import {
   Download
 } from "lucide-react";
 import { Link, useRoute } from "wouter";
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, format } from "date-fns";
 import { nl } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
@@ -82,6 +82,16 @@ export default function LocationDetail() {
   });
 
   const linkedContact = moneybirdContacts?.find(c => c.moneybirdId === location?.moneybirdContactId);
+
+  const { data: mailHistory } = useQuery<{ lastEmail: { toEmail: string; templateKey: string; sentAt: string; status: string } | null }>({
+    queryKey: ["/api/locations", locationId, "mail-history"],
+    queryFn: async () => {
+      const res = await fetch(`/api/locations/${locationId}/mail-history`);
+      if (!res.ok) return { lastEmail: null };
+      return res.json();
+    },
+    enabled: !!locationId,
+  });
 
   const linkMutation = useMutation({
     mutationFn: async (moneybirdId: string) => {
@@ -610,6 +620,28 @@ export default function LocationDetail() {
                   <p className="text-muted-foreground">-</p>
                 )}
               </div>
+
+              {/* Last Email */}
+              {mailHistory?.lastEmail && (
+                <div className="border-t pt-4" data-testid="card-last-email-location">
+                  <p className="text-sm font-medium text-muted-foreground mb-2">Laatste mail</p>
+                  <div className="bg-muted/30 rounded-md p-3">
+                    <div className="flex items-center gap-2">
+                      <Send className="h-3 w-3 text-muted-foreground" />
+                      <span className="text-sm">{mailHistory.lastEmail.templateKey.replace(/_/g, " ")}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {format(new Date(mailHistory.lastEmail.sentAt), "d MMM yyyy 'om' HH:mm", { locale: nl })}
+                      {mailHistory.lastEmail.status === "sent" && (
+                        <Badge variant="outline" className="ml-2 text-xs bg-green-50 text-green-700">Verzonden</Badge>
+                      )}
+                      {mailHistory.lastEmail.status === "failed" && (
+                        <Badge variant="outline" className="ml-2 text-xs bg-red-50 text-red-700">Mislukt</Badge>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

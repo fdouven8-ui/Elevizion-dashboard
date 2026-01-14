@@ -12,6 +12,7 @@ import {
   DEFAULT_VIDEO_DURATION_SECONDS,
 } from './videoMetadataService';
 import { ObjectStorageService } from '../objectStorage';
+import { dispatchMailEvent } from './mailEventService';
 
 const objectStorage = new ObjectStorageService();
 
@@ -210,6 +211,17 @@ export async function processAdAssetUpload(
       .where(eq(advertisers.id, portalContext.advertiserId));
     
     console.log('[AdAssetUpload] Valid asset uploaded, advertiser status updated:', portalContext.advertiserId);
+    
+    const baseUrl = process.env.REPLIT_DEV_DOMAIN 
+      ? `https://${process.env.REPLIT_DEV_DOMAIN}` 
+      : '';
+    dispatchMailEvent("ADVERTISER_ASSET_UPLOADED_VALID", portalContext.advertiserId, baseUrl)
+      .then(result => {
+        if (!result.success && !result.skipped) {
+          console.warn('[AdAssetUpload] Mail dispatch warning:', result.reason);
+        }
+      })
+      .catch(err => console.error('[AdAssetUpload] Mail dispatch error:', err));
   } else {
     await db.update(advertisers)
       .set({

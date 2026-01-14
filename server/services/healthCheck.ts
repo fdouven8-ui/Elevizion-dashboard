@@ -755,6 +755,96 @@ export async function checkPublishQueue(): Promise<HealthCheckResult[]> {
 }
 
 // ============================================================================
+// MAIL EVENTS CHECKS
+// ============================================================================
+
+export async function checkMailEvents(): Promise<HealthCheckResult[]> {
+  const results: HealthCheckResult[] = [];
+  
+  try {
+    const { db } = await import("../db");
+    const { emailLogs } = await import("../../shared/schema");
+    const { desc, sql, eq } = await import("drizzle-orm");
+    
+    // Check if email logs table is accessible
+    const [logCount] = await db.select({ count: sql<number>`count(*)` }).from(emailLogs);
+    results.push({
+      name: "E-mail logs tabel",
+      status: "PASS",
+      message: `${logCount.count} e-mails gelogd`,
+    });
+    
+    // Check recent successful sends
+    const recentSuccessful = await db.select()
+      .from(emailLogs)
+      .where(eq(emailLogs.status, "sent"))
+      .orderBy(desc(emailLogs.sentAt))
+      .limit(1);
+    
+    if (recentSuccessful.length > 0) {
+      const lastSent = recentSuccessful[0];
+      const timeSince = Date.now() - new Date(lastSent.sentAt!).getTime();
+      const daysSince = Math.floor(timeSince / (1000 * 60 * 60 * 24));
+      
+      results.push({
+        name: "Laatste verzonden e-mail",
+        status: daysSince > 7 ? "WARNING" : "PASS",
+        message: daysSince === 0 ? "Vandaag" : `${daysSince} dagen geleden`,
+        details: { to: lastSent.toEmail, template: lastSent.templateKey, subject: lastSent.subjectRendered?.slice(0, 50) },
+        fixSuggestion: daysSince > 7 ? "Geen recente e-mails verzonden" : undefined,
+      });
+    } else {
+      results.push({
+        name: "Laatste verzonden e-mail",
+        status: "WARNING",
+        message: "Nog geen e-mails verzonden",
+      });
+    }
+    
+    // Check for failed emails
+    const failedEmails = await db.select()
+      .from(emailLogs)
+      .where(eq(emailLogs.status, "failed"))
+      .orderBy(desc(emailLogs.sentAt))
+      .limit(5);
+    
+    results.push({
+      name: "Gefaalde e-mails (recent)",
+      status: failedEmails.length > 0 ? "WARNING" : "PASS",
+      message: failedEmails.length > 0 ? `${failedEmails.length} gefaald` : "Geen gefaalde e-mails",
+      details: failedEmails.length > 0 ? { recentFailures: failedEmails.slice(0, 3).map(e => e.toEmail) } : undefined,
+    });
+    
+    // Check mail event types coverage
+    const eventTypes = ["advertiser", "location"];
+    const eventCoverage = [];
+    
+    for (const type of eventTypes) {
+      const [entityCount] = await db.select({ count: sql<number>`count(*)` })
+        .from(emailLogs)
+        .where(sql`entity_type = ${type}`);
+      eventCoverage.push({ type, count: entityCount.count });
+    }
+    
+    results.push({
+      name: "Mail events per type",
+      status: "PASS",
+      message: eventCoverage.map(e => `${e.type}: ${e.count}`).join(", "),
+    });
+    
+  } catch (error: any) {
+    results.push({
+      name: "Mail events check",
+      status: "FAIL",
+      message: error.message,
+      fixSuggestion: "Controleer emailLogs tabel en database verbinding",
+    });
+  }
+  
+  return results;
+}
+
+// ============================================================================
 // FULL HEALTH CHECK
 // ============================================================================
 
@@ -762,6 +852,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
   const [
     companyProfile,
     emailConfig,
+    mailEvents,
     contractModule,
     moneybird,
     yodeck,
@@ -772,6 +863,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
   ] = await Promise.all([
     checkCompanyProfile(),
     checkEmailConfig(),
+    checkMailEvents(),
     checkContractModule(),
     checkMoneybird(),
     checkYodeck(),
@@ -793,6 +885,12 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
       icon: "mail",
       checks: emailConfig,
       testable: true,
+    },
+    {
+      name: "E-mail Events",
+      icon: "send",
+      checks: mailEvents,
+      testable: false,
     },
     {
       name: "Contract/OTP Module",

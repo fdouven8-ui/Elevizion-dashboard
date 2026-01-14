@@ -1,0 +1,188 @@
+AUTOMATISCHE MAILFLOW — ADVERTEERDER & SCHERMLOCATIE (PRODUCTIEKLAAR)
+
+CONTEXT
+Het volledige onboarding-, upload- en publish-systeem werkt.
+Nu moeten op vaste momenten AUTOMATISCH mails worden gestuurd:
+- naar de klant (adverteerder / schermlocatie)
+- intern naar info@elevizion.nl
+Zonder dubbele mails, met juiste inhoud per status, en altijd consistent met contract, upload en publish status.
+
+DOEL
+Implementeer een centrale, betrouwbare mailflow die:
+- exact 1 mail per statuswijziging stuurt
+- de juiste content toont (linkKey, uploadlink, duur, locaties)
+- onderscheid maakt tussen adverteerder en schermlocatie
+- gebruik maakt van Postmark/no-reply@elevizion.nl
+- volledig traceerbaar is (logging)
+
+BELANGRIJK
+- Nooit mails versturen op page-loads, alleen op status transitions.
+- Nooit dubbele mails bij retries (idempotent).
+- Alle mails moeten data halen uit de database (single source of truth).
+
+────────────────────────
+A) MAIL EVENTS (ENIGE TOEGESTANE TRIGGERS)
+────────────────────────
+Implementeer een MailEvent dispatcher die alleen triggert op deze transitions:
+
+ADVERTEERDER
+1) CONTRACT_ACCEPTED
+2) ASSET_UPLOADED_VALID
+3) PUBLISHED (LIVE)
+
+SCHERMLOCATIE
+4) LOCATION_INTAKE_SUBMITTED
+5) LOCATION_APPROVED
+6) LOCATION_CONTRACT_ACCEPTED
+
+Geen andere triggers toegestaan.
+
+────────────────────────
+B) MAILS PER EVENT (INHOUD)
+────────────────────────
+
+1) ADVERTEERDER — CONTRACT_ACCEPTED
+TO:
+- klant (primary)
+- intern CC: info@elevizion.nl (optioneel)
+
+ONDERWERP:
+"Volgende stap: upload je advertentie voor Elevizion"
+
+INHOUD (verplicht):
+- Bedankje
+- Uploadlink (token-based)
+- LinkKey (copy-friendly blok)
+- Bestandsnaam voorbeeld:
+  {{linkKey}}_{{companyName}}.mp4
+- Lengte:
+  "Lengte: exact {{videoDurationSeconds}} seconden (tenzij anders overeengekomen in contract)"
+- Type:
+  "MP4 aanbevolen"
+- Call to action: “Upload je advertentie”
+
+2) ADVERTEERDER — ASSET_UPLOADED_VALID
+TO:
+- intern: info@elevizion.nl
+- (optioneel) klant bevestiging
+
+ONDERWERP (intern):
+"Nieuwe advertentie klaar voor plaatsing — {{companyName}}"
+
+INHOUD:
+- Bedrijfsnaam
+- LinkKey
+- Video specs (duur, resolutie)
+- Link naar dashboard (advertiser detail / publish queue)
+
+OPTIONEEL klant:
+"Je advertentie is ontvangen en wordt nu voorbereid voor plaatsing."
+
+3) ADVERTEERDER — PUBLISHED (LIVE)
+TO:
+- klant
+
+ONDERWERP:
+"Je advertentie staat live bij Elevizion 🎉"
+
+INHOUD:
+- Bevestiging livegang
+- Aantal locaties
+- Regio(’s)
+- Verwachte zichtbaarheid (indicatief, geen garantie)
+- Call to action:
+  “Vragen? Mail info@elevizion.nl”
+
+────────────────────────
+SCHERMLOCATIE MAILS
+────────────────────────
+
+4) SCHERMLOCATIE — LOCATION_INTAKE_SUBMITTED
+TO:
+- schermlocatie
+
+ONDERWERP:
+"Aanmelding ontvangen — Elevizion schermlocatie"
+
+INHOUD:
+- Bevestiging ontvangst
+- Uitleg: beoordeling volgt
+- Geen contract of actie nodig
+
+5) SCHERMLOCATIE — LOCATION_APPROVED
+TO:
+- schermlocatie
+
+ONDERWERP:
+"Goedkeuring locatie — bevestig je deelname"
+
+INHOUD:
+- Bevestiging goedgekeurd
+- Contract link (token-based)
+- Korte uitleg volgende stap
+
+6) SCHERMLOCATIE — LOCATION_CONTRACT_ACCEPTED
+TO:
+- schermlocatie
+- intern: info@elevizion.nl
+
+ONDERWERP:
+"Schermlocatie bevestigd — Elevizion"
+
+INHOUD:
+- Bevestiging akkoord
+- Samenvatting afspraken
+- Wat er nu gebeurt (installatie / activatie)
+
+────────────────────────
+C) TECHNISCHE IMPLEMENTATIE
+────────────────────────
+1) MailService:
+- sendMail(eventType, entityId)
+- bepaalt template + ontvangers + variabelen
+
+2) Idempotency:
+- Maak MailLog tabel:
+  - eventType
+  - entityId
+  - sentAt
+- Voor verzending:
+  - check of mail al is verzonden
+  - zo ja: skip
+
+3) Afzender:
+- From: no-reply@elevizion.nl
+- Reply-to: info@elevizion.nl
+
+4) Templates:
+- Gebruik HTML + plain text fallback
+- Zet templates centraal (MailTemplate store)
+- Variabelen:
+  {{companyName}}, {{linkKey}}, {{uploadLink}}, {{videoDurationSeconds}},
+  {{locationCount}}, {{regions}}, {{dashboardLink}}
+
+────────────────────────
+D) DASHBOARD & HEALTH
+────────────────────────
+- Toon in advertiser & locatie detail:
+  - “Laatste mail verstuurd op…”
+- System Health:
+  - Check “Mail events enabled”
+  - Check “No duplicate mail logs”
+- Logging:
+  - success/fail per mail (geen retry loops zonder delay)
+
+────────────────────────
+E) OUTPUT / ACCEPTATIE
+────────────────────────
+Na implementatie wil ik:
+1) Lijst met mail events + bijbehorende templates
+2) Waar MailLog wordt opgeslagen
+3) Bewijs dat mails 1x per status worden verzonden
+4) Testflow:
+   - contract accept → mail
+   - upload valid → interne mail
+   - publish → live mail
+   - schermlocatie intake → bevestiging
+
+IMPLEMENT NOW — NO QUESTIONS, NO PLACEHOLDERS.
