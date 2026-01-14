@@ -613,30 +613,32 @@ Sitemap: ${SITE_URL}/sitemap.xml
   
   app.get("/api/regions/active", async (_req, res) => {
     try {
-      // Get active regions based on screens with:
-      // - status = online (or at least active)
-      // - yodeckPlaylistId NOT null (has playlist assigned)
+      // Get active regions based on locations with:
+      // - status = active
       // - city NOT null/empty
-      const activeScreens = await db.select({
-        city: screens.city,
-        status: screens.status,
+      // Note: yodeckPlaylistId check removed to show all active locations for targeting
+      // PlacementEngine validates playlist availability at submit time
+      const activeLocations = await db.select({
+        locationId: locations.id,
+        city: locations.city,
+        status: locations.status,
+        hasPlaylist: sql<boolean>`${locations.yodeckPlaylistId} IS NOT NULL`.as('hasPlaylist'),
       })
-        .from(screens)
+        .from(locations)
         .where(and(
-          eq(screens.isActive, true),
-          isNotNull(screens.city),
-          sql`${screens.city} != ''`,
-          isNotNull(screens.yodeckPlayerId), // Has Yodeck player
+          eq(locations.status, "active"),
+          isNotNull(locations.city),
+          sql`${locations.city} != ''`,
         ));
       
       // Group by normalized city (lowercase, trimmed)
       const cityMap = new Map<string, { label: string; totalCount: number; onlineCount: number }>();
       
-      for (const screen of activeScreens) {
-        if (!screen.city) continue;
+      for (const loc of activeLocations) {
+        if (!loc.city) continue;
         
-        const normalizedCity = screen.city.toLowerCase().trim();
-        const label = screen.city.trim();
+        const normalizedCity = loc.city.toLowerCase().trim();
+        const label = loc.city.trim();
         
         if (!cityMap.has(normalizedCity)) {
           cityMap.set(normalizedCity, { label, totalCount: 0, onlineCount: 0 });
@@ -644,10 +646,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
         
         const entry = cityMap.get(normalizedCity)!;
         entry.totalCount++;
-        if (screen.status === "online") {
+        // Locations with playlist are considered "online" for display
+        if (loc.hasPlaylist) {
           entry.onlineCount++;
         }
-        // Use the first encountered capitalization (usually correct)
+        // Use the longest capitalization (usually most complete)
         if (entry.label.length < label.length) {
           entry.label = label;
         }

@@ -242,7 +242,9 @@ export class PlacementEngineService {
         continue;
       }
       
-      if (!anyRegion && loc.regionCode && !targetRegions.includes(loc.regionCode)) {
+      // Region matching: use regionCode if set, otherwise fall back to lowercase city
+      const effectiveRegion = loc.regionCode || (loc.city ? loc.city.toLowerCase() : null);
+      if (!anyRegion && effectiveRegion && !targetRegions.includes(effectiveRegion)) {
         rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "REGION_MISMATCH" });
         continue;
       }
@@ -579,7 +581,9 @@ export class PlacementEngineService {
         continue;
       }
       
-      if (!anyRegion && loc.regionCode && !targetRegions.includes(loc.regionCode)) {
+      // Region matching: use regionCode if set, otherwise fall back to lowercase city
+      const effectiveRegion = loc.regionCode || (loc.city ? loc.city.toLowerCase() : null);
+      if (!anyRegion && effectiveRegion && !targetRegions.includes(effectiveRegion)) {
         rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "REGION_MISMATCH" });
         continue;
       }

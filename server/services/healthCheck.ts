@@ -874,15 +874,15 @@ export async function checkPlacementDataCompleteness(): Promise<HealthCheckResul
       fixSuggestion: missingGroupCount > 0 ? "Stel competitorGroup in op de gekoppelde adverteerders" : undefined,
     });
     
-    // 3. Check locations without regionCode
-    const locationsWithoutRegion = await storage.getLocationsWithoutRegionCode();
-    const missingRegionCount = locationsWithoutRegion.length;
+    // 3. Check locations without city or regionCode (need at least one for targeting)
+    const locationsWithoutRegionOrCity = await storage.getLocationsWithoutRegionOrCity();
+    const missingRegionCount = locationsWithoutRegionOrCity.length;
     results.push({
-      name: "Locaties zonder regio/provincie",
-      status: missingRegionCount === 0 ? "PASS" : "WARNING",
-      message: missingRegionCount === 0 ? "Alle locaties hebben een regionCode" : `${missingRegionCount} locatie(s) zonder regio`,
-      details: missingRegionCount > 0 ? { locationIds: locationsWithoutRegion.slice(0, 10).map(l => l.id), locationNames: locationsWithoutRegion.slice(0, 5).map(l => l.name) } : undefined,
-      fixSuggestion: missingRegionCount > 0 ? "Stel regionCode (provincie) in voor deze locaties" : undefined,
+      name: "Locaties zonder plaats/regio",
+      status: missingRegionCount === 0 ? "PASS" : "FAIL",
+      message: missingRegionCount === 0 ? "Alle locaties hebben een plaats of regionCode" : `${missingRegionCount} locatie(s) zonder plaats/regio - niet vindbaar voor targeting!`,
+      details: missingRegionCount > 0 ? { locationIds: locationsWithoutRegionOrCity.slice(0, 10).map(l => l.id), locationNames: locationsWithoutRegionOrCity.slice(0, 5).map(l => l.name) } : undefined,
+      fixSuggestion: missingRegionCount > 0 ? "Vul plaatsnaam in voor deze locaties (of koppel aan Moneybird voor auto-sync)" : undefined,
     });
     
     // 4. Check locations without categoriesAllowed

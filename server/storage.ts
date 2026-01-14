@@ -208,6 +208,7 @@ export interface IStorage {
   getLocationsWithoutExclusivityMode(): Promise<Location[]>;
   getLocationsWithoutYodeckPlaylist(): Promise<Location[]>;
   getLocationsWithoutRegionCode(): Promise<Location[]>;
+  getLocationsWithoutRegionOrCity(): Promise<Location[]>;
   getLocationsWithoutCategories(): Promise<Location[]>;
   getStaleOnlineLocations(minutesThreshold: number): Promise<Location[]>;
   getLocationsWithoutCapacityConfig(): Promise<Location[]>;
@@ -1003,6 +1004,15 @@ export class DatabaseStorage implements IStorage {
       .where(or(
         isNull(schema.locations.regionCode),
         eq(schema.locations.regionCode, "")
+      ));
+  }
+
+  async getLocationsWithoutRegionOrCity(): Promise<Location[]> {
+    // Locations that have neither regionCode nor city - critical for targeting
+    return await db.select().from(schema.locations)
+      .where(and(
+        or(isNull(schema.locations.regionCode), eq(schema.locations.regionCode, "")),
+        or(isNull(schema.locations.city), eq(schema.locations.city, ""))
       ));
   }
 
