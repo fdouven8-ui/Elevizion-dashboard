@@ -9,7 +9,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { sql, desc, eq, and, isNull } from "drizzle-orm";
 import { db } from "./db";
-import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills } from "@shared/schema";
+import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations } from "@shared/schema";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import {

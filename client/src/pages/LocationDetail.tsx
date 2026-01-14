@@ -135,6 +135,25 @@ export default function LocationDetail() {
     },
   });
 
+  const clearReviewMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`/api/admin/locations/${locationId}/clear-review`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to clear review");
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Review-markering verwijderd" });
+      queryClient.invalidateQueries({ queryKey: ["locations"] });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+    },
+    onError: () => {
+      toast({ title: "Fout bij wissen review-markering", variant: "destructive" });
+    },
+  });
+
   const syncMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch("/api/sync/moneybird/run", {
@@ -302,9 +321,17 @@ export default function LocationDetail() {
             <Building2 className="h-6 w-6 text-primary" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold" data-testid="location-name">
-              {location.name}
-            </h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold" data-testid="location-name">
+                {location.name}
+              </h1>
+              {location.needsReview && (
+                <Badge variant="outline" className="border-amber-500 text-amber-600 bg-amber-50" data-testid="needs-review-badge">
+                  <AlertCircle className="h-3 w-3 mr-1" />
+                  Review nodig
+                </Badge>
+              )}
+            </div>
             <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2">
               <MapPin className="h-3 w-3" />
               {location.city || "Geen plaats"}
@@ -339,6 +366,35 @@ export default function LocationDetail() {
           </Button>
         </div>
       </div>
+
+      {location.needsReview && (
+        <Alert className="border-amber-500 bg-amber-50" data-testid="needs-review-alert">
+          <AlertCircle className="h-4 w-4 text-amber-600" />
+          <AlertDescription className="flex items-center justify-between w-full">
+            <div>
+              <span className="font-medium text-amber-700">Bezoekersaantal overschrijdt rapportage-limiet</span>
+              {(location as any).needsReviewReason && (
+                <span className="text-amber-600 ml-2">— {(location as any).needsReviewReason}</span>
+              )}
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-amber-500 text-amber-700 hover:bg-amber-100"
+              onClick={() => clearReviewMutation.mutate()}
+              disabled={clearReviewMutation.isPending}
+              data-testid="button-clear-review"
+            >
+              {clearReviewMutation.isPending ? (
+                <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+              ) : (
+                <CheckCircle className="h-3 w-3 mr-1" />
+              )}
+              Markeer als gecontroleerd
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {location.onboardingStatus === "PENDING_REVIEW" && (
         <Card className="border-amber-200 bg-amber-50">
