@@ -1,0 +1,170 @@
+INVENTORY INDICATOR + “BIJNA VOL” WARNINGS + MAANDELIJKSE RAPPORTAGE MVP (MAIL) — VOLLEDIGE IMPLEMENTATIE
+
+CONTEXT
+We hebben:
+- Capacity gating + waitlist + claim (cross-device, atomic)
+- Placement engine + exclusivity + publish queue
+- Mail event system (idempotent)
+Nu wil ik 2 dingen toevoegen:
+1) Op /start (en optioneel /prijzen) realtime inventory inzicht:
+   - hoeveel locaties NU beschikbaar zijn voor gekozen pakket + regio’s + branche (met exclusivity/capacity rules)
+   - “bijna vol” waarschuwing vóórdat het vol is
+2) Maandelijkse rapportage MVP mail naar adverteerders (zonder screenshots):
+   - actieve locaties count
+   - geschatte bezoekers/impressies (indicatief)
+   - periode
+   - link naar contact / support
+Alles moet status-driven en betrouwbaar zijn, zonder oversale.
+
+DOEL
+A) Inventory indicator (live availability preview)
+B) “bijna vol” warning logic
+C) Monthly reporting worker + email template + logging (idempotent)
+
+BELANGRIJK
+- Inventory preview gebruikt exact dezelfde engine als gating: PlacementEngine.dryRunSimulate()
+- Preview mag NOOIT iets muteren.
+- Rapportage is indicatief, geen harde garantie; tekst moet dat duidelijk zeggen.
+- Geen redesign, minimale UI toevoeging.
+
+────────────────────────
+A) INVENTORY PREVIEW API (READ-ONLY)
+────────────────────────
+1) Maak endpoint:
+GET /api/availability/preview?packageType=&businessCategory=&competitorGroup=&regions[]=...
+Response:
+{
+  isAvailable: boolean,
+  requiredCount: number,
+  availableCount: number,
+  nearFull: boolean,
+  bufferCount: number,
+  reasonsTop: string[],          // short reason codes / labels
+  suggestedAction: "EXPAND_REGIONS" | "WAITLIST" | "OK",
+  updatedAt: ISO
+}
+
+2) Implementatie:
+- Validate inputs (use same region/category enums)
+- Run PlacementEngine.dryRunSimulate() with:
+  - requiredCount based on packageType (1/3/10)
+  - businessCategory/competitorGroup
+  - targetRegionCodes (regions)
+- Determine:
+  availableCount = count of eligible targets found (or max eligible locations)
+  isAvailable = availableCount >= requiredCount
+  bufferCount = configurable (default 2 for single/triple, 3 for ten)
+  nearFull = availableCount >= requiredCount AND availableCount < requiredCount + bufferCount
+- reasonsTop:
+  - if not available: map top rejection reasons from simulate (NO_CAPACITY, COMPETITOR_CONFLICT, OFFLINE, NO_PLAYLIST, STALE_SYNC)
+- IMPORTANT: do not create advertiser, do not write DB.
+
+3) Performance:
+- Add small cache (e.g. 30–60 seconds) keyed by query params to reduce load.
+
+────────────────────────
+B) /START UI: INVENTORY INDICATOR + “BIJNA VOL”
+────────────────────────
+1) Wanneer tonen:
+- Zodra user Stap 2 (branche + regio’s) heeft ingevuld (en packageType bekend is)
+- Trigger preview call on:
+  - businessCategory change
+  - regions selection change
+  - packageType change
+
+2) UI block (compact):
+- If isAvailable:
+  - “Beschikbaar: {{availableCount}} locaties voor dit pakket”
+- If nearFull:
+  - badge “Bijna vol”
+  - subtext: “Tip: kies extra gebieden voor zekerheid.”
+- If not available:
+  - “Op dit moment onvoldoende plek ({{availableCount}}/{{requiredCount}}).”
+  - knop “Gebieden aanpassen” + “Wachtlijst”
+  (gating blijft server-side bij submit, dit is alleen preview)
+
+3) Optional on /prijzen:
+- Alleen globale indicator per pakket is lastig omdat regio/branche onbekend is.
+- Maar je kan een mini tekst tonen:
+  “Beschikbaarheid hangt af van regio/branche — check in 30 sec via Start.”
+(Optioneel; geen must)
+
+────────────────────────
+C) SERVER-SIDE GATING BLIJFT LEIDEND
+────────────────────────
+- /api/start blijft de echte gate gebruiken (dryRunSimulate).
+- UI preview is alleen informatief.
+- Als submit faalt op capacity: toon bestaande “regio vol” UI + waitlist CTA.
+
+────────────────────────
+D) MAANDELIJKSE RAPPORTAGE MVP (MAIL)
+────────────────────────
+1) Rapportage definitie (indicatief):
+Per adverteerder per maand:
+- monthStart, monthEnd
+- liveLocationsCount = aantal unieke locaties waar placement status PUBLISHED is én advertiser subscription ACTIVE
+- estimatedVisitors = sum(location.avgVisitorsPerWeek) * weeksInPeriod
+- estimatedImpressions = estimatedVisitors * viewFactor (zelfde factor als placement engine gebruikt)
+- regionsLabel (unique regions of live locations)
+Let op: dit is een schatting. Zeg dat duidelijk.
+
+2) Scheduling
+- Maak worker MonthlyReportWorker:
+  - draait dagelijks maar verstuurt alleen op 1e dag van de maand (of elke maand op de 1e om 09:00)
+  - voor vorige maand periode
+- Idempotency:
+  - ReportLog table:
+    advertiserId, periodKey (YYYY-MM), sentAt, status
+  - skip if already sent
+
+3) Email template
+Template key: monthly_report_mvp_nl
+Subject:
+"Maandrapportage Elevizion — {{monthLabel}}"
+
+Body (NL, kort):
+Hallo {{contactName}},
+
+Hierbij je maandrapportage voor {{monthLabel}}.
+
+- Actieve locaties: {{liveLocationsCount}}
+- Gebieden: {{regionsLabel}}
+- Geschatte bezoekers (indicatief): {{estimatedVisitors}}
+- Geschatte weergaves (indicatief): {{estimatedImpressions}}
+
+*Let op: dit zijn schattingen op basis van bezoekersdata per locatie. Hieraan kunnen geen rechten worden ontleend.*
+
+Vragen of aanpassingen? Mail info@elevizion.nl.
+
+Groet,
+Elevizion (Douven Services)
+KvK 90982541 · BTW NL004857473B37
+
+4) Recipient
+- stuur naar advertiser email
+- optioneel CC intern (uit)
+
+5) Admin visibility
+- In advertiser detail:
+  - “Laatste rapportage: …”
+- In system health:
+  - “Rapportages verstuurd laatste 30 dagen”
+  - failures count
+
+────────────────────────
+E) OUTPUT / ACCEPTANCE TESTS
+────────────────────────
+1) /start:
+- selecteer branche+regio’s → inventory preview verschijnt
+- nearFull scenario: availableCount tussen requiredCount en requiredCount+buffer -> badge “Bijna vol”
+- not available: toont 0/required en adviseert waitlist
+2) /api/start:
+- blijft gate doen; kan niet door naar contract bij no capacity
+3) Monthly report:
+- worker maakt report voor vorige maand
+- idempotent (geen dubbele)
+- emailLogs/ReportLog entries correct
+4) System health:
+- toont report stats
+
+IMPLEMENT NOW — NO QUESTIONS, KEEP UI MINIMAL.

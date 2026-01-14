@@ -139,6 +139,16 @@ export default function Start() {
   const [prefillLoading, setPrefillLoading] = useState(false);
   const [prefillError, setPrefillError] = useState<string | null>(null);
   const [prefillId, setPrefillId] = useState<string | null>(null);
+  
+  // State for availability preview
+  const [availabilityPreview, setAvailabilityPreview] = useState<{
+    isAvailable: boolean;
+    requiredCount: number;
+    availableCount: number;
+    nearFull: boolean;
+    suggestedAction: "EXPAND_REGIONS" | "WAITLIST" | "OK";
+  } | null>(null);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
 
   // Pre-fill form from server-side prefill API (cross-device claim flow)
   useEffect(() => {
@@ -177,6 +187,35 @@ export default function Start() {
         });
     }
   }, []);
+  
+  // Fetch availability preview when branche/regio/package changes
+  useEffect(() => {
+    if (!selectedPackage || !formData.businessCategory || formData.targetRegionCodes.length === 0) {
+      setAvailabilityPreview(null);
+      return;
+    }
+    
+    const packageType = PackageTypeFromPackageId(selectedPackage.id);
+    const params = new URLSearchParams();
+    params.set("packageType", packageType);
+    params.set("businessCategory", formData.businessCategory);
+    formData.targetRegionCodes.forEach(r => params.append("regions[]", r));
+    
+    setAvailabilityLoading(true);
+    fetch(`/api/availability/preview?${params.toString()}`)
+      .then(res => res.json())
+      .then(data => {
+        if (data.isAvailable !== undefined) {
+          setAvailabilityPreview(data);
+        }
+      })
+      .catch(err => {
+        console.error("Availability preview failed:", err);
+      })
+      .finally(() => {
+        setAvailabilityLoading(false);
+      });
+  }, [selectedPackage, formData.businessCategory, formData.targetRegionCodes]);
 
   const submitMutation = useMutation({
     mutationFn: async (data: FormData & { packageType: string }) => {
@@ -748,6 +787,62 @@ export default function Start() {
                     </p>
                   )}
                 </div>
+
+                {/* Availability Indicator */}
+                {(availabilityLoading || availabilityPreview) && (
+                  <div 
+                    data-testid="availability-indicator"
+                    className={`rounded-lg p-4 border ${
+                      availabilityLoading
+                        ? "bg-slate-50 border-slate-200"
+                        : availabilityPreview?.isAvailable
+                        ? availabilityPreview.nearFull
+                          ? "bg-amber-50 border-amber-300"
+                          : "bg-emerald-50 border-emerald-300"
+                        : "bg-red-50 border-red-300"
+                    }`}
+                  >
+                    {availabilityLoading ? (
+                      <div className="flex items-center gap-2 text-slate-600">
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <span className="text-sm">Beschikbaarheid controleren...</span>
+                      </div>
+                    ) : availabilityPreview?.isAvailable ? (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Check className="h-5 w-5 text-emerald-600" />
+                          <span className="font-medium text-emerald-700">
+                            Beschikbaar: {availabilityPreview.availableCount} locaties voor dit pakket
+                          </span>
+                          {availabilityPreview.nearFull && (
+                            <span className="bg-amber-500 text-white text-xs font-bold px-2 py-0.5 rounded">
+                              Bijna vol
+                            </span>
+                          )}
+                        </div>
+                        {availabilityPreview.nearFull && (
+                          <p className="text-sm text-amber-700">
+                            Tip: selecteer extra gebieden voor meer zekerheid.
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="h-5 w-5 text-red-600" />
+                          <span className="font-medium text-red-700">
+                            Op dit moment onvoldoende plek ({availabilityPreview?.availableCount || 0}/{availabilityPreview?.requiredCount || 0})
+                          </span>
+                        </div>
+                        <p className="text-sm text-red-600">
+                          {availabilityPreview?.suggestedAction === "EXPAND_REGIONS"
+                            ? "Tip: selecteer extra regio's om meer opties te krijgen."
+                            : "Je kunt je aanmelden voor de wachtlijst. We mailen je zodra er plek is."}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm text-slate-600">
                   <p>We plaatsen geen concurrerende advertenties direct naast elkaar op dezelfde locatie.</p>

@@ -2322,6 +2322,88 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // ============================================================================
+  // AVAILABILITY PREVIEW API (PUBLIC, READ-ONLY)
+  // ============================================================================
+  
+  // In-memory cache for availability preview (30 second TTL)
+  const availabilityPreviewCache = new Map<string, { data: any; timestamp: number }>();
+  const AVAILABILITY_CACHE_TTL = 30 * 1000; // 30 seconds
+  
+  // Buffer counts for "bijna vol" detection per package type
+  const NEAR_FULL_BUFFER: Record<string, number> = {
+    SINGLE: 2,
+    TRIPLE: 2,
+    TEN: 3,
+    CUSTOM: 2,
+  };
+  
+  app.get("/api/availability/preview", async (req, res) => {
+    try {
+      const { packageType, businessCategory, competitorGroup } = req.query;
+      const regions = req.query["regions[]"] || req.query.regions;
+      
+      // Validate required params
+      if (!packageType || !businessCategory) {
+        return res.status(400).json({ message: "packageType en businessCategory zijn verplicht" });
+      }
+      
+      // Parse regions
+      const targetRegionCodes: string[] = Array.isArray(regions) 
+        ? regions as string[] 
+        : (regions ? [regions as string] : []);
+      
+      // Build cache key
+      const cacheKey = `${packageType}:${businessCategory}:${competitorGroup || businessCategory}:${targetRegionCodes.sort().join(",")}`;
+      
+      // Check cache
+      const cached = availabilityPreviewCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < AVAILABILITY_CACHE_TTL) {
+        return res.json(cached.data);
+      }
+      
+      // Use capacityGateService for consistent logic
+      const { capacityGateService } = await import("./services/capacityGateService");
+      const result = await capacityGateService.checkCapacity({
+        packageType: packageType as string,
+        businessCategory: businessCategory as string,
+        competitorGroup: (competitorGroup as string) || (businessCategory as string),
+        targetRegionCodes,
+        videoDurationSeconds: 15,
+      });
+      
+      // Determine nearFull status
+      const bufferCount = NEAR_FULL_BUFFER[packageType as string] || 2;
+      const nearFull = result.isAvailable && 
+        result.availableSlotCount < result.requiredCount + bufferCount;
+      
+      // Determine suggested action
+      let suggestedAction: "EXPAND_REGIONS" | "WAITLIST" | "OK" = "OK";
+      if (!result.isAvailable) {
+        suggestedAction = targetRegionCodes.length < 3 ? "EXPAND_REGIONS" : "WAITLIST";
+      }
+      
+      const response = {
+        isAvailable: result.isAvailable,
+        requiredCount: result.requiredCount,
+        availableCount: result.availableSlotCount,
+        nearFull,
+        bufferCount,
+        reasonsTop: result.topReasons,
+        suggestedAction,
+        updatedAt: new Date().toISOString(),
+      };
+      
+      // Store in cache
+      availabilityPreviewCache.set(cacheKey, { data: response, timestamp: Date.now() });
+      
+      res.json(response);
+    } catch (error: any) {
+      console.error("[AvailabilityPreview] Error:", error);
+      res.status(500).json({ message: "Kan beschikbaarheid niet ophalen" });
+    }
+  });
+
+  // ============================================================================
   // WAITLIST API ENDPOINTS
   // ============================================================================
 
