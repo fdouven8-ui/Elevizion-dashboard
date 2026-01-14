@@ -142,7 +142,7 @@ export default function LocationDetail() {
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to clear review");
-      return response.json();
+      return { success: true };
     },
     onSuccess: () => {
       toast({ title: "Review-markering verwijderd" });
