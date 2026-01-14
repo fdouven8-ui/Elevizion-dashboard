@@ -57,6 +57,8 @@ const iconMap: Record<string, React.ReactNode> = {
   users: <Users className="h-5 w-5" />,
   "user-plus": <UserPlus className="h-5 w-5" />,
   "map-pin": <MapPin className="h-5 w-5" />,
+  "chart-bar": <Monitor className="h-5 w-5" />,
+  send: <Mail className="h-5 w-5" />,
 };
 
 const statusIcon = (status: CheckStatus) => {

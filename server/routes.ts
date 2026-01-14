@@ -2023,6 +2023,134 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  // Bulk simulate multiple placement plans
+  app.post("/api/placement-plans/bulk-simulate", isAuthenticated, async (req, res) => {
+    try {
+      const { planIds } = req.body;
+      if (!Array.isArray(planIds) || planIds.length === 0) {
+        return res.status(400).json({ message: "planIds array is verplicht" });
+      }
+      if (planIds.length > 50) {
+        return res.status(400).json({ message: "Maximaal 50 plans per keer" });
+      }
+      
+      const { placementEngine } = await import("./services/placementEngineService");
+      const results: Array<{ planId: string; success: boolean; result?: any; error?: string }> = [];
+      
+      for (const planId of planIds) {
+        try {
+          const plan = await placementEngine.getPlan(planId);
+          if (!plan || !["PROPOSED", "SIMULATED_FAIL"].includes(plan.status)) {
+            results.push({ planId, success: false, error: "Ongeldige status voor simulatie" });
+            continue;
+          }
+          const result = await placementEngine.simulate(planId);
+          results.push({ planId, success: result.success, result });
+        } catch (err: any) {
+          results.push({ planId, success: false, error: err.message });
+        }
+      }
+      
+      const successCount = results.filter(r => r.success).length;
+      res.json({ 
+        success: successCount === planIds.length,
+        total: planIds.length,
+        successCount,
+        failCount: planIds.length - successCount,
+        results 
+      });
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error bulk simulating:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Bulk publish multiple approved placement plans
+  app.post("/api/placement-plans/bulk-publish", isAuthenticated, async (req, res) => {
+    try {
+      const { planIds } = req.body;
+      if (!Array.isArray(planIds) || planIds.length === 0) {
+        return res.status(400).json({ message: "planIds array is verplicht" });
+      }
+      if (planIds.length > 20) {
+        return res.status(400).json({ message: "Maximaal 20 plans per keer publiceren" });
+      }
+      
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const { placementEngine } = await import("./services/placementEngineService");
+      const results: Array<{ planId: string; success: boolean; report?: any; error?: string }> = [];
+      
+      for (const planId of planIds) {
+        try {
+          const plan = await placementEngine.getPlan(planId);
+          if (!plan || plan.status !== "APPROVED") {
+            results.push({ planId, success: false, error: "Plan moet status APPROVED hebben om te publiceren" });
+            continue;
+          }
+          const report = await yodeckPublishService.publishPlan(planId);
+          results.push({ planId, success: true, report });
+        } catch (err: any) {
+          results.push({ planId, success: false, error: err.message });
+        }
+      }
+      
+      const successCount = results.filter(r => r.success).length;
+      res.json({
+        success: successCount === planIds.length,
+        total: planIds.length,
+        successCount,
+        failCount: planIds.length - successCount,
+        results
+      });
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error bulk publishing:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Bulk approve multiple simulated placement plans
+  app.post("/api/placement-plans/bulk-approve", isAuthenticated, async (req, res) => {
+    try {
+      const { planIds } = req.body;
+      if (!Array.isArray(planIds) || planIds.length === 0) {
+        return res.status(400).json({ message: "planIds array is verplicht" });
+      }
+      if (planIds.length > 50) {
+        return res.status(400).json({ message: "Maximaal 50 plans per keer" });
+      }
+      
+      const { placementEngine } = await import("./services/placementEngineService");
+      const user = (req as any).user;
+      const results: Array<{ planId: string; success: boolean; error?: string }> = [];
+      
+      for (const planId of planIds) {
+        try {
+          const plan = await placementEngine.getPlan(planId);
+          if (!plan || plan.status !== "SIMULATED_OK") {
+            results.push({ planId, success: false, error: "Plan moet status SIMULATED_OK hebben om goed te keuren" });
+            continue;
+          }
+          const success = await placementEngine.approve(planId, user?.id || "admin");
+          results.push({ planId, success });
+        } catch (err: any) {
+          results.push({ planId, success: false, error: err.message });
+        }
+      }
+      
+      const successCount = results.filter(r => r.success).length;
+      res.json({
+        success: successCount === planIds.length,
+        total: planIds.length,
+        successCount,
+        failCount: planIds.length - successCount,
+        results
+      });
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error bulk approving:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Public upload portal - get advertiser info
   app.get("/api/upload-portal/:token", async (req, res) => {
     try {

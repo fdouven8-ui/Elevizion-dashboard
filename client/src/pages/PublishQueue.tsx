@@ -35,6 +35,7 @@ import {
 import { format } from "date-fns";
 import { nl } from "date-fns/locale";
 import { useState } from "react";
+import { Checkbox } from "@/components/ui/checkbox";
 
 function translateRejectionReason(reason: string): string {
   const translations: Record<string, string> = {
@@ -86,6 +87,7 @@ interface PlanDetailData extends PlacementPlan {
 export default function PublishQueue() {
   const { toast } = useToast();
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  const [selectedPlanIds, setSelectedPlanIds] = useState<Set<string>>(new Set());
 
   const { data: plans = [], isLoading, refetch } = useQuery<PlacementPlan[]>({
     queryKey: ["/api/placement-plans"],
@@ -186,6 +188,90 @@ export default function PublishQueue() {
     },
   });
 
+  const bulkSimulateMutation = useMutation({
+    mutationFn: async (planIds: string[]) => {
+      const res = await fetch("/api/placement-plans/bulk-simulate", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planIds }),
+      });
+      if (!res.ok) throw new Error("Bulk simulatie mislukt");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: `${data.successCount}/${data.total} gesimuleerd` });
+      refetch();
+      setSelectedPlanIds(new Set());
+    },
+    onError: (err: any) => {
+      toast({ title: "Fout bij bulk simulatie", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const bulkApproveMutation = useMutation({
+    mutationFn: async (planIds: string[]) => {
+      const res = await fetch("/api/placement-plans/bulk-approve", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planIds }),
+      });
+      if (!res.ok) throw new Error("Bulk goedkeuring mislukt");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: `${data.successCount}/${data.total} goedgekeurd` });
+      refetch();
+      setSelectedPlanIds(new Set());
+    },
+    onError: (err: any) => {
+      toast({ title: "Fout bij bulk goedkeuring", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const bulkPublishMutation = useMutation({
+    mutationFn: async (planIds: string[]) => {
+      const res = await fetch("/api/placement-plans/bulk-publish", { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planIds }),
+      });
+      if (!res.ok) throw new Error("Bulk publiceren mislukt");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ 
+        title: `${data.successCount}/${data.total} gepubliceerd`,
+        variant: data.failCount > 0 ? "destructive" : "default"
+      });
+      refetch();
+      setSelectedPlanIds(new Set());
+    },
+    onError: (err: any) => {
+      toast({ title: "Fout bij bulk publiceren", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const togglePlanSelection = (planId: string) => {
+    const newSet = new Set(selectedPlanIds);
+    if (newSet.has(planId)) {
+      newSet.delete(planId);
+    } else {
+      newSet.add(planId);
+    }
+    setSelectedPlanIds(newSet);
+  };
+
+  const selectAllPlans = () => {
+    if (selectedPlanIds.size === plans.length) {
+      setSelectedPlanIds(new Set());
+    } else {
+      setSelectedPlanIds(new Set(plans.map(p => p.id)));
+    }
+  };
+
+  const getSelectedByStatus = (status: string) => 
+    plans.filter(p => selectedPlanIds.has(p.id) && p.status === status);
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "PROPOSED":
@@ -239,6 +325,56 @@ export default function PublishQueue() {
         </Button>
       </div>
 
+      {selectedPlanIds.size > 0 && (
+        <Card className="bg-muted/50 border-primary/20">
+          <CardContent className="flex items-center justify-between py-3 px-4">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">{selectedPlanIds.size} geselecteerd</Badge>
+              <Button variant="ghost" size="sm" onClick={() => setSelectedPlanIds(new Set())}>
+                Deselecteer alles
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
+              {getSelectedByStatus("PROPOSED").length > 0 && (
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  onClick={() => bulkSimulateMutation.mutate(getSelectedByStatus("PROPOSED").map(p => p.id))}
+                  disabled={bulkSimulateMutation.isPending}
+                  data-testid="button-bulk-simulate"
+                >
+                  {bulkSimulateMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Play className="h-4 w-4 mr-2" />}
+                  Simuleer ({getSelectedByStatus("PROPOSED").length})
+                </Button>
+              )}
+              {getSelectedByStatus("SIMULATED_OK").length > 0 && (
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  onClick={() => bulkApproveMutation.mutate(getSelectedByStatus("SIMULATED_OK").map(p => p.id))}
+                  disabled={bulkApproveMutation.isPending}
+                  data-testid="button-bulk-approve"
+                >
+                  {bulkApproveMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
+                  Keur goed ({getSelectedByStatus("SIMULATED_OK").length})
+                </Button>
+              )}
+              {getSelectedByStatus("APPROVED").length > 0 && (
+                <Button 
+                  size="sm" 
+                  onClick={() => bulkPublishMutation.mutate(getSelectedByStatus("APPROVED").map(p => p.id))}
+                  disabled={bulkPublishMutation.isPending}
+                  data-testid="button-bulk-publish"
+                >
+                  {bulkPublishMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+                  Publiceer ({getSelectedByStatus("APPROVED").length})
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {plans.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
@@ -258,6 +394,13 @@ export default function PublishQueue() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-[40px]">
+                    <Checkbox 
+                      checked={selectedPlanIds.size === plans.length && plans.length > 0}
+                      onCheckedChange={selectAllPlans}
+                      data-testid="checkbox-select-all"
+                    />
+                  </TableHead>
                   <TableHead>Adverteerder</TableHead>
                   <TableHead>Pakket</TableHead>
                   <TableHead>Status</TableHead>
@@ -270,6 +413,13 @@ export default function PublishQueue() {
               <TableBody>
                 {plans.map((plan) => (
                   <TableRow key={plan.id} data-testid={`row-plan-${plan.id}`}>
+                    <TableCell>
+                      <Checkbox 
+                        checked={selectedPlanIds.has(plan.id)}
+                        onCheckedChange={() => togglePlanSelection(plan.id)}
+                        data-testid={`checkbox-plan-${plan.id}`}
+                      />
+                    </TableCell>
                     <TableCell>
                       <div>
                         <p className="font-medium">{plan.advertiserName || plan.linkKey}</p>

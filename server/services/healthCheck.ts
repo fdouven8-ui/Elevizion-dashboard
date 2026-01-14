@@ -845,6 +845,79 @@ export async function checkMailEvents(): Promise<HealthCheckResult[]> {
 }
 
 // ============================================================================
+// PLACEMENT DATA COMPLETENESS CHECKS
+// ============================================================================
+
+export async function checkPlacementDataCompleteness(): Promise<HealthCheckResult[]> {
+  const results: HealthCheckResult[] = [];
+  
+  try {
+    // 1. Check placements without contracts
+    const placementsWithoutContracts = await storage.getPlacementsWithoutContracts();
+    const missingContractsCount = placementsWithoutContracts.length;
+    results.push({
+      name: "Plaatsingen zonder contract",
+      status: missingContractsCount === 0 ? "PASS" : "WARNING",
+      message: missingContractsCount === 0 ? "Alle plaatsingen hebben een contract" : `${missingContractsCount} plaatsing(en) zonder contract`,
+      details: missingContractsCount > 0 ? { placementIds: placementsWithoutContracts.slice(0, 5).map(p => p.id) } : undefined,
+      fixSuggestion: missingContractsCount > 0 ? "Koppel contracten aan deze plaatsingen in de beheerweergave" : undefined,
+    });
+    
+    // 2. Check placements without advertiser competitorGroup
+    const placementsWithoutCompetitorGroup = await storage.getPlacementsWithoutCompetitorGroup();
+    const missingGroupCount = placementsWithoutCompetitorGroup.length;
+    results.push({
+      name: "Plaatsingen zonder branchegroep",
+      status: missingGroupCount === 0 ? "PASS" : "WARNING",
+      message: missingGroupCount === 0 ? "Alle plaatsingen hebben een branchegroep" : `${missingGroupCount} plaatsing(en) zonder branchegroep op adverteerder`,
+      details: missingGroupCount > 0 ? { placementIds: placementsWithoutCompetitorGroup.slice(0, 5).map(p => p.id) } : undefined,
+      fixSuggestion: missingGroupCount > 0 ? "Stel competitorGroup in op de gekoppelde adverteerders" : undefined,
+    });
+    
+    // 3. Check locations without exclusivityMode
+    const locationsWithoutExclusivity = await storage.getLocationsWithoutExclusivityMode();
+    const missingExclusivityCount = locationsWithoutExclusivity.length;
+    results.push({
+      name: "Locaties zonder exclusiviteitsinstelling",
+      status: missingExclusivityCount === 0 ? "PASS" : "PASS", // Not a warning - defaults to STRICT
+      message: missingExclusivityCount === 0 ? "Alle locaties hebben een exclusiviteitsinstelling" : `${missingExclusivityCount} locatie(s) gebruiken standaard STRICT`,
+      details: missingExclusivityCount > 0 ? { locationIds: locationsWithoutExclusivity.slice(0, 5).map(l => l.id) } : undefined,
+    });
+    
+    // 4. Check locations without Yodeck playlist
+    const locationsWithoutPlaylist = await storage.getLocationsWithoutYodeckPlaylist();
+    const missingPlaylistCount = locationsWithoutPlaylist.length;
+    results.push({
+      name: "Locaties zonder Yodeck playlist",
+      status: missingPlaylistCount === 0 ? "PASS" : "WARNING",
+      message: missingPlaylistCount === 0 ? "Alle actieve locaties hebben een Yodeck playlist" : `${missingPlaylistCount} locatie(s) zonder playlist ID`,
+      details: missingPlaylistCount > 0 ? { locationIds: missingPlaylistCount <= 10 ? locationsWithoutPlaylist.map(l => l.id) : locationsWithoutPlaylist.slice(0, 10).map(l => l.id) } : undefined,
+      fixSuggestion: missingPlaylistCount > 0 ? "Koppel Yodeck playlists aan deze locaties" : undefined,
+    });
+    
+    // 5. Overall placement health summary
+    const allPlacements = await storage.listPlacements();
+    const activePlacements = allPlacements.filter(p => p.isActive);
+    results.push({
+      name: "Actieve plaatsingen totaal",
+      status: "PASS",
+      message: `${activePlacements.length} actieve plaatsingen van ${allPlacements.length} totaal`,
+      details: { active: activePlacements.length, inactive: allPlacements.length - activePlacements.length },
+    });
+    
+  } catch (error: any) {
+    results.push({
+      name: "Plaatsingsdata check",
+      status: "FAIL",
+      message: error.message,
+      fixSuggestion: "Controleer database verbinding en placements/locations tabellen",
+    });
+  }
+  
+  return results;
+}
+
+// ============================================================================
 // FULL HEALTH CHECK
 // ============================================================================
 
@@ -860,6 +933,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
     advertiserWorkflow,
     locationWorkflow,
     publishQueue,
+    placementData,
   ] = await Promise.all([
     checkCompanyProfile(),
     checkEmailConfig(),
@@ -871,6 +945,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
     checkAdvertiserWorkflow(),
     checkLocationWorkflow(),
     checkPublishQueue(),
+    checkPlacementDataCompleteness(),
   ]);
   
   return [
@@ -932,6 +1007,12 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
       name: "Publicatie Wachtrij",
       icon: "send",
       checks: publishQueue,
+      testable: false,
+    },
+    {
+      name: "Plaatsingsdata Compleetheid",
+      icon: "chart-bar",
+      checks: placementData,
       testable: false,
     },
   ];

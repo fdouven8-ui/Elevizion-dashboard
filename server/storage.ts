@@ -4,7 +4,7 @@
  */
 
 import { db } from "./db";
-import { eq, and, gte, lte, desc, sql, isNull, notInArray, ilike } from "drizzle-orm";
+import { eq, and, gte, lte, desc, sql, isNull, notInArray, ilike, or } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import type {
   Advertiser, InsertAdvertiser,
@@ -200,6 +200,11 @@ export interface IStorage {
   createPlacement(data: InsertPlacement): Promise<Placement>;
   updatePlacement(id: string, data: Partial<InsertPlacement>): Promise<Placement | undefined>;
   deletePlacement(id: string): Promise<boolean>;
+  listPlacements(): Promise<Placement[]>;
+  getPlacementsWithoutContracts(): Promise<Placement[]>;
+  getPlacementsWithoutCompetitorGroup(): Promise<Placement[]>;
+  getLocationsWithoutExclusivityMode(): Promise<Location[]>;
+  getLocationsWithoutYodeckPlaylist(): Promise<Location[]>;
 
   // Schedule Snapshots
   getScheduleSnapshots(): Promise<ScheduleSnapshot[]>;
@@ -934,6 +939,41 @@ export class DatabaseStorage implements IStorage {
   async deletePlacement(id: string): Promise<boolean> {
     await db.delete(schema.placements).where(eq(schema.placements.id, id));
     return true;
+  }
+
+  async listPlacements(): Promise<Placement[]> {
+    return await db.select().from(schema.placements).orderBy(desc(schema.placements.createdAt));
+  }
+
+  async getPlacementsWithoutContracts(): Promise<Placement[]> {
+    return await db.select().from(schema.placements)
+      .where(isNull(schema.placements.contractId));
+  }
+
+  async getPlacementsWithoutCompetitorGroup(): Promise<Placement[]> {
+    const results = await db
+      .select({ placement: schema.placements })
+      .from(schema.placements)
+      .leftJoin(schema.contracts, eq(schema.placements.contractId, schema.contracts.id))
+      .leftJoin(schema.advertisers, eq(schema.contracts.advertiserId, schema.advertisers.id))
+      .where(or(
+        isNull(schema.advertisers.competitorGroup),
+        eq(schema.advertisers.competitorGroup, "")
+      ));
+    return results.map(r => r.placement);
+  }
+
+  async getLocationsWithoutExclusivityMode(): Promise<Location[]> {
+    return await db.select().from(schema.locations)
+      .where(isNull(schema.locations.exclusivityMode));
+  }
+
+  async getLocationsWithoutYodeckPlaylist(): Promise<Location[]> {
+    return await db.select().from(schema.locations)
+      .where(and(
+        isNull(schema.locations.yodeckPlaylistId),
+        eq(schema.locations.status, "active")
+      ));
   }
 
   // ============================================================================
