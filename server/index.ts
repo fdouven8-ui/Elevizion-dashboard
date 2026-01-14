@@ -5,6 +5,7 @@ import { createServer } from "http";
 import { initializeAdminUser } from "./initAdmin";
 import { syncAllScreensContent } from "./services/yodeckContent";
 import { startOutboxWorker, stopOutboxWorker } from "./services/outboxWorker";
+import { startCapacityWatcher, stopCapacityWatcher } from "./services/capacityWatcherWorker";
 import { db } from "./db";
 import { storage } from "./storage";
 
@@ -51,6 +52,9 @@ async function gracefulShutdown(signal: string) {
   
   // Stop outbox worker
   stopOutboxWorker();
+  
+  // Stop capacity watcher
+  stopCapacityWatcher();
   
   // Close HTTP server (stop accepting new connections)
   httpServer.close(() => {
@@ -351,6 +355,14 @@ app.use((req, res, next) => {
           startOutboxWorker();
         }
       }, 15000);
+      
+      // Start capacity watcher (30 minute interval)
+      // Checks WAITING waitlist requests and sends invites when capacity available
+      setTimeout(() => {
+        if (!isShuttingDown) {
+          startCapacityWatcher();
+        }
+      }, 20000);
     },
   );
 })();

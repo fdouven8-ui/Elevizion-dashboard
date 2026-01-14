@@ -37,6 +37,7 @@ import {
   Wallet,
   Activity,
   Send,
+  Clock,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -67,6 +68,7 @@ const financieelSubItems = [
 
 const onboardingSubItems = [
   { title: "Leads", url: "/leads", icon: UserPlus },
+  { title: "Wachtlijst", url: "/wachtlijst", icon: Clock },
   { title: "Nieuw scherm", url: "/onboarding", icon: MapPin },
   { title: "Nieuwe adverteerder", url: "/onboarding", icon: Users },
   { title: "Plaatsingen koppelen", url: "/placements", icon: Link2 },
@@ -76,7 +78,7 @@ export function AppSidebar() {
   const [location] = useLocation();
   const { user, isAuthenticated, isLoading, logout, hasPermission, hasAnyPermission } = useAuth();
   const [onboardingOpen, setOnboardingOpen] = useState(
-    location.startsWith("/onboarding") || location === "/leads"
+    location.startsWith("/onboarding") || location === "/leads" || location === "/wachtlijst"
   );
   const [financieelOpen, setFinancieelOpen] = useState(
     location === "/payouts" || location === "/contracts" || location === "/finance" || location === "/financieel"

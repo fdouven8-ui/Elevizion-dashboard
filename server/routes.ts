@@ -677,6 +677,41 @@ Sitemap: ${SITE_URL}/sitemap.xml
       };
       const pkgInfo = packagePrices[data.packageType];
       
+      // CAPACITY GATING: Check if there is available placement capacity
+      const { capacityGateService } = await import("./services/capacityGateService");
+      const capacityCheck = await capacityGateService.checkCapacity({
+        packageType: data.packageType,
+        businessCategory: data.businessCategory,
+        competitorGroup: data.businessCategory, // Default to businessCategory
+        targetRegionCodes: data.targetRegionCodes,
+        videoDurationSeconds: 15,
+      });
+      
+      if (!capacityCheck.isAvailable) {
+        // Return structured response for client to show waitlist option
+        return res.status(200).json({
+          success: false,
+          noCapacity: true,
+          message: "Op dit moment is er niet genoeg plek in de gekozen regio's voor dit pakket.",
+          availableSlotCount: capacityCheck.availableSlotCount,
+          requiredCount: capacityCheck.requiredCount,
+          topReasons: capacityCheck.topReasons,
+          nextCheckAt: capacityCheck.nextCheckAt,
+          // Pass back form data so client can offer waitlist option
+          formData: {
+            companyName: data.companyName,
+            contactName: data.contactName,
+            email: normalizedEmail,
+            phone: data.phone,
+            kvkNumber: normalizedKvk,
+            vatNumber: normalizedVat,
+            packageType: data.packageType,
+            businessCategory: data.businessCategory,
+            targetRegionCodes: data.targetRegionCodes,
+          },
+        });
+      }
+      
       const { db } = await import("./db");
       const existingByKvk = await db.query.advertisers.findFirst({
         where: eq(advertisers.kvkNumber, normalizedKvk),
@@ -2000,8 +2035,42 @@ Sitemap: ${SITE_URL}/sitemap.xml
   app.post("/api/placement-plans/:id/publish", isAuthenticated, async (req, res) => {
     try {
       const { yodeckPublishService } = await import("./services/yodeckPublishService");
-      const report = await yodeckPublishService.publishPlan(req.params.id);
-      res.json({ success: true, report });
+      const { placementEngine } = await import("./services/placementEngineService");
+      const planId = req.params.id;
+      
+      // Get current plan
+      const plan = await placementEngine.getPlan(planId);
+      if (!plan) {
+        return res.status(404).json({ message: "Plan niet gevonden" });
+      }
+      if (plan.status !== "APPROVED") {
+        return res.status(400).json({ message: "Plan moet status APPROVED hebben om te publiceren" });
+      }
+      
+      // RE-SIMULATE before publish for safety (detect capacity/exclusivity changes)
+      console.log(`[Publish] Re-simulating plan ${planId} before publish...`);
+      const simResult = await placementEngine.simulate(planId);
+      
+      if (!simResult.success || simResult.status !== "SIMULATED_OK") {
+        // Re-simulation failed - revert to WAITING so plan can be re-simulated
+        console.log(`[Publish] Re-simulation failed for plan ${planId}, reverting to WAITING`);
+        await storage.updatePlacementPlan(planId, { status: "WAITING" });
+        
+        return res.status(400).json({ 
+          message: "Plan kon niet worden gepubliceerd: capaciteit of exclusiviteit is gewijzigd sinds goedkeuring. Plan is teruggezet naar WAITING.",
+          resimulationFailed: true,
+          simulationReport: simResult.report,
+          newStatus: "WAITING",
+        });
+      }
+      
+      // Re-approve after successful re-simulation
+      const user = (req as any).user;
+      await placementEngine.approve(planId, user?.id || "admin");
+      
+      // Now publish
+      const report = await yodeckPublishService.publishPlan(planId);
+      res.json({ success: true, report, resimulated: true });
     } catch (error: any) {
       console.error("[PlacementPlans] Error publishing plan:", error);
       res.status(500).json({ message: error.message });
@@ -2065,7 +2134,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
-  // Bulk publish multiple approved placement plans
+  // Bulk publish multiple approved placement plans (with re-simulate safety)
   app.post("/api/placement-plans/bulk-publish", isAuthenticated, async (req, res) => {
     try {
       const { planIds } = req.body;
@@ -2078,7 +2147,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       const { yodeckPublishService } = await import("./services/yodeckPublishService");
       const { placementEngine } = await import("./services/placementEngineService");
-      const results: Array<{ planId: string; success: boolean; report?: any; error?: string }> = [];
+      const user = (req as any).user;
+      const results: Array<{ planId: string; success: boolean; report?: any; error?: string; resimulationFailed?: boolean }> = [];
       
       for (const planId of planIds) {
         try {
@@ -2087,6 +2157,29 @@ Sitemap: ${SITE_URL}/sitemap.xml
             results.push({ planId, success: false, error: "Plan moet status APPROVED hebben om te publiceren" });
             continue;
           }
+          
+          // RE-SIMULATE before publish for safety
+          console.log(`[BulkPublish] Re-simulating plan ${planId} before publish...`);
+          const simResult = await placementEngine.simulate(planId);
+          
+          if (!simResult.success || simResult.status !== "SIMULATED_OK") {
+            // Revert to WAITING so plan can be re-simulated
+            console.log(`[BulkPublish] Re-simulation failed for plan ${planId}, reverting to WAITING`);
+            await storage.updatePlacementPlan(planId, { status: "WAITING" });
+            
+            results.push({ 
+              planId, 
+              success: false, 
+              error: "Re-simulatie gefaald: capaciteit of exclusiviteit gewijzigd. Plan teruggezet naar WAITING.",
+              resimulationFailed: true
+            });
+            continue;
+          }
+          
+          // Re-approve after successful re-simulation
+          await placementEngine.approve(planId, user?.id || "admin");
+          
+          // Now publish
           const report = await yodeckPublishService.publishPlan(planId);
           results.push({ planId, success: true, report });
         } catch (err: any) {
@@ -2095,11 +2188,13 @@ Sitemap: ${SITE_URL}/sitemap.xml
       }
       
       const successCount = results.filter(r => r.success).length;
+      const resimFailCount = results.filter(r => r.resimulationFailed).length;
       res.json({
         success: successCount === planIds.length,
         total: planIds.length,
         successCount,
         failCount: planIds.length - successCount,
+        resimulationFailures: resimFailCount,
         results
       });
     } catch (error: any) {
@@ -2147,6 +2242,318 @@ Sitemap: ${SITE_URL}/sitemap.xml
       });
     } catch (error: any) {
       console.error("[PlacementPlans] Error bulk approving:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // WAITLIST API ENDPOINTS
+  // ============================================================================
+
+  // Join the waitlist (when capacity is not available)
+  app.post("/api/waitlist/join", async (req, res) => {
+    try {
+      const { 
+        companyName, contactName, email, phone,
+        kvkNumber, vatNumber,
+        packageType, businessCategory, targetRegionCodes
+      } = req.body;
+      
+      if (!companyName || !contactName || !email || !packageType || !businessCategory) {
+        return res.status(400).json({ message: "Verplichte velden ontbreken" });
+      }
+      
+      const PACKAGE_SCREENS: Record<string, number> = {
+        SINGLE: 1, TRIPLE: 3, TEN: 10, CUSTOM: 1
+      };
+      const requiredCount = PACKAGE_SCREENS[packageType] || 1;
+      
+      // Check if already on waitlist (by email + package) - includes WAITING and INVITED
+      const existingActive = await storage.getActiveWaitlistRequest(email, packageType);
+      
+      if (existingActive) {
+        const statusMsg = existingActive.status === "INVITED" 
+          ? "Je hebt al een uitnodiging ontvangen - check je email!"
+          : "Je staat al op de wachtlijst voor dit pakket";
+        return res.status(400).json({ 
+          message: statusMsg,
+          waitlistId: existingActive.id,
+          status: existingActive.status
+        });
+      }
+      
+      const waitlistRequest = await storage.createWaitlistRequest({
+        companyName,
+        contactName,
+        email: email.toLowerCase().trim(),
+        phone,
+        kvkNumber,
+        vatNumber,
+        packageType,
+        businessCategory,
+        competitorGroup: businessCategory, // Default to businessCategory
+        targetRegionCodes,
+        requiredCount,
+        status: "WAITING",
+      });
+      
+      // Send confirmation email
+      try {
+        const { sendEmail, baseEmailTemplate } = await import("./email");
+        const emailContent = baseEmailTemplate({
+          subject: "Je staat op de wachtlijst - Elevizion",
+          preheader: "We houden je op de hoogte zodra er plek is",
+          bodyBlocks: [
+            { type: "heading", content: `Hoi ${contactName.split(" ")[0]}!` },
+            { type: "paragraph", content: `Je staat nu op de wachtlijst voor het ${packageType} pakket. Zodra er plek vrijkomt in de door jou gekozen regio's sturen we je een e-mail met een link om je plek te claimen.` },
+            { type: "paragraph", content: `Pakket: ${packageType}` },
+            { type: "paragraph", content: `Regio's: ${targetRegionCodes?.join(", ") || "Alle regio's"}` },
+            { type: "paragraph", content: "Je hoeft niets te doen - we nemen contact met je op!" },
+          ],
+        });
+        
+        await sendEmail({
+          to: email,
+          subject: "Je staat op de wachtlijst - Elevizion",
+          html: emailContent.html,
+        });
+      } catch (emailError: any) {
+        console.error("[Waitlist] Failed to send confirmation email:", emailError);
+      }
+      
+      console.log(`[Waitlist] Created waitlist request ${waitlistRequest.id} for ${email}`);
+      res.json({ 
+        success: true, 
+        waitlistId: waitlistRequest.id,
+        message: "Je staat op de wachtlijst. We sturen een e-mail zodra er plek is."
+      });
+    } catch (error: any) {
+      console.error("[Waitlist] Error joining waitlist:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Check claim token and proceed to onboarding (public)
+  app.get("/api/claim/:token", async (req, res) => {
+    try {
+      const crypto = await import("crypto");
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      
+      const request = await storage.getWaitlistRequestByTokenHash(tokenHash);
+      if (!request) {
+        return res.status(404).json({ message: "Ongeldige of verlopen claim link" });
+      }
+      
+      if (request.status !== "INVITED") {
+        if (request.status === "CLAIMED") {
+          return res.status(400).json({ message: "Deze uitnodiging is al geclaimd" });
+        }
+        if (request.status === "EXPIRED") {
+          return res.status(400).json({ message: "Deze uitnodiging is verlopen" });
+        }
+        return res.status(400).json({ message: "Ongeldige status voor claim" });
+      }
+      
+      // Check expiry
+      if (request.inviteExpiresAt && new Date(request.inviteExpiresAt) < new Date()) {
+        await storage.updateWaitlistRequest(request.id, { status: "EXPIRED" });
+        return res.status(400).json({ message: "Deze uitnodiging is verlopen. Neem contact met ons op." });
+      }
+      
+      // Re-check capacity before allowing claim
+      const { capacityGateService } = await import("./services/capacityGateService");
+      const capacityCheck = await capacityGateService.checkCapacity({
+        packageType: request.packageType,
+        businessCategory: request.businessCategory,
+        competitorGroup: request.competitorGroup || request.businessCategory,
+        targetRegionCodes: request.targetRegionCodes || [],
+        videoDurationSeconds: 15,
+      });
+      
+      if (!capacityCheck.isAvailable) {
+        // Capacity no longer available - back to waiting
+        await storage.updateWaitlistRequest(request.id, { 
+          status: "WAITING",
+          inviteTokenHash: null,
+          inviteSentAt: null,
+          inviteExpiresAt: null,
+        });
+        return res.status(400).json({ 
+          message: "Helaas is de plek alweer bezet. Je staat weer op de wachtlijst en we laten het weten zodra er weer plek is."
+        });
+      }
+      
+      // Return claim info for frontend
+      res.json({
+        success: true,
+        canClaim: true,
+        request: {
+          id: request.id,
+          companyName: request.companyName,
+          contactName: request.contactName,
+          email: request.email,
+          phone: request.phone,
+          kvkNumber: request.kvkNumber,
+          vatNumber: request.vatNumber,
+          packageType: request.packageType,
+          businessCategory: request.businessCategory,
+          targetRegionCodes: request.targetRegionCodes,
+        },
+        availableSlots: capacityCheck.availableSlotCount,
+        requiredSlots: capacityCheck.requiredCount,
+      });
+    } catch (error: any) {
+      console.error("[Claim] Error checking claim:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Confirm claim and proceed to onboarding
+  app.post("/api/claim/:token/confirm", async (req, res) => {
+    try {
+      const crypto = await import("crypto");
+      const tokenHash = crypto.createHash("sha256").update(req.params.token).digest("hex");
+      
+      const request = await storage.getWaitlistRequestByTokenHash(tokenHash);
+      if (!request || request.status !== "INVITED") {
+        return res.status(400).json({ message: "Ongeldige claim" });
+      }
+      
+      // Final capacity check
+      const { capacityGateService } = await import("./services/capacityGateService");
+      const capacityCheck = await capacityGateService.checkCapacity({
+        packageType: request.packageType,
+        businessCategory: request.businessCategory,
+        competitorGroup: request.competitorGroup || request.businessCategory,
+        targetRegionCodes: request.targetRegionCodes || [],
+        videoDurationSeconds: 15,
+      });
+      
+      if (!capacityCheck.isAvailable) {
+        await storage.updateWaitlistRequest(request.id, { status: "WAITING", inviteTokenHash: null });
+        return res.status(400).json({ message: "Plek is niet meer beschikbaar" });
+      }
+      
+      // Mark as claimed
+      await storage.updateWaitlistRequest(request.id, { 
+        status: "CLAIMED",
+        claimedAt: new Date()
+      });
+      
+      // Redirect info - client should call /api/start with prefilled data
+      res.json({ 
+        success: true, 
+        message: "Plek geclaimd! Ga door met de aanmelding.",
+        redirectToStart: true,
+        formData: {
+          companyName: request.companyName,
+          contactName: request.contactName,
+          email: request.email,
+          phone: request.phone,
+          kvkNumber: request.kvkNumber,
+          vatNumber: request.vatNumber,
+          packageType: request.packageType,
+          businessCategory: request.businessCategory,
+          targetRegionCodes: request.targetRegionCodes,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Claim] Error confirming claim:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Admin: List waitlist requests
+  app.get("/api/admin/waitlist", isAuthenticated, async (_req, res) => {
+    try {
+      const requests = await storage.getWaitlistRequests();
+      res.json(requests);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Admin: Cancel a waitlist request
+  app.post("/api/admin/waitlist/:id/cancel", isAuthenticated, async (req, res) => {
+    try {
+      const request = await storage.getWaitlistRequest(req.params.id);
+      if (!request) {
+        return res.status(404).json({ message: "Wachtlijst verzoek niet gevonden" });
+      }
+      
+      await storage.updateWaitlistRequest(req.params.id, { 
+        status: "CANCELLED",
+        cancelledAt: new Date()
+      });
+      
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Admin: Manual check for a waitlist request
+  app.post("/api/admin/waitlist/:id/check", isAuthenticated, async (req, res) => {
+    try {
+      const request = await storage.getWaitlistRequest(req.params.id);
+      if (!request) {
+        return res.status(404).json({ message: "Wachtlijst verzoek niet gevonden" });
+      }
+      
+      const { capacityGateService } = await import("./services/capacityGateService");
+      const capacityCheck = await capacityGateService.checkCapacity({
+        packageType: request.packageType,
+        businessCategory: request.businessCategory,
+        competitorGroup: request.competitorGroup || request.businessCategory,
+        targetRegionCodes: request.targetRegionCodes || [],
+        videoDurationSeconds: 15,
+      });
+      
+      await storage.updateWaitlistRequest(req.params.id, { lastCheckedAt: new Date() });
+      
+      res.json({
+        isAvailable: capacityCheck.isAvailable,
+        availableSlotCount: capacityCheck.availableSlotCount,
+        requiredCount: capacityCheck.requiredCount,
+        topReasons: capacityCheck.topReasons,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Admin: Reset a waitlist request back to WAITING
+  app.post("/api/admin/waitlist/:id/reset", isAuthenticated, async (req, res) => {
+    try {
+      const request = await storage.getWaitlistRequest(req.params.id);
+      if (!request) {
+        return res.status(404).json({ message: "Wachtlijst verzoek niet gevonden" });
+      }
+      
+      if (request.status !== "EXPIRED" && request.status !== "CANCELLED") {
+        return res.status(400).json({ message: "Alleen verlopen of geannuleerde aanvragen kunnen worden gereset" });
+      }
+      
+      await storage.updateWaitlistRequest(req.params.id, { 
+        status: "WAITING",
+        inviteTokenHash: null,
+        inviteSentAt: null,
+        inviteExpiresAt: null,
+      });
+      
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Admin: Trigger capacity check for all waiting requests
+  app.post("/api/admin/waitlist/trigger-check", isAuthenticated, async (_req, res) => {
+    try {
+      const { triggerCapacityCheck } = await import("./services/capacityWatcherWorker");
+      const result = await triggerCapacityCheck();
+      res.json(result);
+    } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
   });

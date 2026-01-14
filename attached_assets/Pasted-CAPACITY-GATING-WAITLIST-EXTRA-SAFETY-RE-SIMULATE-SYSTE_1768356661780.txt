@@ -1,0 +1,199 @@
+CAPACITY GATING + WAITLIST + EXTRA SAFETY (RE-SIMULATE) + SYSTEM HEALTH CHECKS (NO OVERSALE)
+
+CONTEXT
+We hebben:
+- /start self-serve flow (KvK/BTW/branche/regio verplicht) + Moneybird sync
+- Placement engine met harde constraints + exclusivityMode
+- Publish Queue met bulk simulate/approve/publish
+- Mail events (idempotent)
+Nu wil ik:
+1) Extra safety: publish mag NOOIT gebeuren op oude simulatie -> altijd re-simulate vlak vóór publish (single + bulk).
+2) Extra System Health checks: regio/categorie mapping, stale sync, capacity config.
+3) Oversale voorkomen: klant mag NIET door naar contract/OTP/SEPA als er geen plek is in gekozen regio’s/categorie voor hun pakket.
+4) Waitlist: als er geen plek is, zetten we ze op wachtlijst en sturen mail zodra er plek vrijkomt om hun plek te claimen.
+
+BELANGRIJK
+- No hardcoded assumptions: gating gebruikt dezelfde PlacementEngine.simulate() als publish.
+- No false promises: als niet genoeg plek → geen contract, geen incasso, geen upload.
+- Idempotent en auditbaar: mails/claims slechts 1x per event.
+- Geen redesign; minimale UI addition.
+
+────────────────────────
+A) EXTRA SYSTEM HEALTH CHECKS (BLOKKERS)
+────────────────────────
+Voeg/controleer in “Plaatsingsdata Compleetheid” ook deze checks:
+
+1) Locations without regionCode (provincie)
+- COUNT where regionCode null/empty
+- WARNING + “view list”
+
+2) Locations without categoriesAllowed/audienceCategory
+- COUNT null/empty
+- WARNING + “view list”
+
+3) Stale sync
+- COUNT where isOnline=true AND lastSyncAt older_than 15 minutes
+- WARNING + knop “Run Sync”
+
+4) Missing capacity config
+- COUNT where capacity field missing (adSlotCapacitySecondsPerLoop OR maxAdsCount)
+- WARNING
+
+5) Online locations missing yodeckPlaylistId
+- COUNT where isOnline=true AND yodeckPlaylistId missing
+- FAIL (dit blokkeert publish)
+
+Output per check:
+- count + link naar gefilterde lijst
+
+────────────────────────
+B) EXTRA SAFETY: RE-SIMULATE VÓÓR PUBLISH (SINGLE + BULK)
+────────────────────────
+1) Single publish endpoint:
+- Altijd re-run PlacementEngine.simulate(plan) direct vóór publish
+- Alleen als SIMULATED_OK met exact dezelfde approvedTargets (of opnieuw setten) -> doorgaan
+- Als re-simulate faalt: status terug naar SIMULATED_FAIL + toon reasons
+
+2) Bulk publish endpoint:
+- Voor elk plan:
+  - re-simulate -> if OK -> publish
+  - if FAIL -> skip + reason in bulk report
+- Default: PARTIAL ALLOWED (publiceer wat kan, skip wat niet kan)
+- Report: per plan status + reason
+
+3) UI:
+- In Publish Queue: bij “Publiceren” altijd melding “Laatste controle…”
+- Laat in bulk report duidelijk zien wat skipped is en waarom.
+
+────────────────────────
+C) OVERSALE PREVENTIE: CAPACITY GATING IN /START EN ONBOARDING
+────────────────────────
+Doel: klant mag pas contract tekenen als we realistisch kunnen leveren (plek voor pakket in gekozen regio’s/branche, rekening houdend met exclusivity/capacity).
+
+1) Voeg nieuw concept toe:
+AvailabilityCheck / CapacityGate
+
+- Input: packageType, businessCategory/competitorGroup, targetRegionCodes
+- Output:
+  - isAvailable (bool)
+  - availableSlotCount (int) = aantal geschikte locaties dat NU beschikbaar is
+  - requiredCount (1/3/10)
+  - topReasons if not available (NO_CAPACITY, COMPETITOR_CONFLICT, OFFLINE, NO_PLAYLIST, STALE_SYNC, MISSING_MAPPING)
+  - nextCheckAt (timestamp)
+
+2) Wanneer runnen:
+- Op /start submit (server-side), vóór doorsturen naar contract/onboarding.
+- Optioneel: ook op onboarding start (token open) voor safety.
+
+3) Gate logica:
+- Use PlacementEngine.simulate() met een “dry-run advertiser” (nog zonder asset).
+- Simulate moet kunnen werken zonder upload (alleen met regio/branche/pakket + duur=15).
+- requiredCount = package screens
+- if simulate finds >= requiredCount targets -> AVAILABLE
+- else -> NOT AVAILABLE
+
+4) Als AVAILABLE:
+- Ga door met huidige flow: maak advertiser + moneybird + redirect naar onboarding token (contract/OTP/SEPA)
+
+5) Als NOT AVAILABLE:
+- STOP: geen contract, geen SEPA, geen onboarding token voor tekenen.
+- UI toont netjes:
+  “Op dit moment is er (nog) niet genoeg plek in de gekozen regio’s voor dit pakket.”
+  Toon:
+   - “Beschikbaar: X van Y locaties”
+   - “Je kunt regio’s uitbreiden of op de wachtlijst”
+- Bied acties:
+  a) “Pas regio’s aan” (terug naar stap 2)
+  b) “Zet mij op de wachtlijst” (recommended)
+
+────────────────────────
+D) WAITLIST + “CLAIM JE PLEK” EMAILS
+────────────────────────
+1) Nieuw model: WaitlistRequest
+- id
+- createdAt
+- companyName, contactName, email, phone
+- kvkNumber, vatNumber
+- packageType
+- businessCategory
+- competitorGroup (default businessCategory)
+- targetRegionCodes (array)
+- requiredCount (1/3/10)
+- status: WAITING | INVITED | CLAIMED | EXPIRED | CANCELLED
+- lastCheckedAt
+- inviteTokenHash (nullable)
+- inviteSentAt (nullable)
+- inviteExpiresAt (nullable)
+
+2) When user clicks “Zet mij op de wachtlijst”:
+- Create WaitlistRequest WAITING
+- Stuur bevestigingsmail:
+  “Je staat op de wachtlijst — we mailen zodra er plek is.”
+- (Belangrijk) Geen Moneybird contact aanmaken als je dit nog niet wil.
+  OF maak wel, maar zet subscription/contract niet aan. (kies: liever nog NIET)
+
+3) Capacity watcher job (server cron/worker):
+- Elke X minuten (bijv 30 min) check WAITING requests:
+  - Run availability check (PlacementEngine.simulate dry-run) met huidige netwerkstatus
+  - Als nu available:
+    - set status INVITED
+    - generate inviteToken (claim link) + expiry 48 uur
+    - send “claim” mail met link
+
+4) Claim mail (INVITED):
+Onderwerp: “Er is plek vrijgekomen — claim je pakket”
+Inhoud:
+- pakket + regio’s
+- knop: “Claim nu” (link met token)
+- expiry (48 uur)
+- uitleg: na claim ga je door naar contract/OTP/SEPA en upload.
+
+5) Claim flow:
+- Link: /claim/:token
+- Bij openen:
+  - re-run availability check (nogmaals)
+  - Als nog steeds plek:
+     - status CLAIMED
+     - ga door naar normale /start/onboarding flow (prefill gegevens)
+  - Als plek alweer weg:
+     - terug naar WAITING + uitleg
+
+6) Idempotency:
+- Gebruik emailLogs voor waitlist mails
+- inviteToken single-use, hashed opgeslagen
+- No duplicate invites voor dezelfde request binnen expiry
+
+────────────────────────
+E) STATUS & ADMIN UI
+────────────────────────
+1) Admin → Wachtlijst pagina:
+- lijst WAITING/INVITED/CLAIMED
+- per item: package, regio’s, branche, laatste check, status
+- knop “Check nu” (manual availability check)
+- knop “Annuleer”
+
+2) Publish Queue blijft zoals is, maar:
+- Re-simulate on publish is enforced.
+
+────────────────────────
+F) OUTPUT / ACCEPTANCE TESTS
+────────────────────────
+1) /start met regio/branche waar < requiredCount plek is:
+- user kan NIET door naar contract
+- user kan op wachtlijst
+- bevestigingsmail gaat eruit
+
+2) Als later plek vrijkomt:
+- watcher zet request INVITED
+- claim mail verzonden
+- claim link werkt binnen expiry
+- claim link voert opnieuw availability check uit
+
+3) Bulk publish:
+- re-simulate voor elk plan
+- publish-only-ok
+- duidelijke report
+
+4) System Health toont nieuwe mapping/stale sync/capacity checks
+
+IMPLEMENT NOW — NO QUESTIONS, NO SHORTCUTS.

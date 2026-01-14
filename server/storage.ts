@@ -4,7 +4,7 @@
  */
 
 import { db } from "./db";
-import { eq, and, gte, lte, desc, sql, isNull, notInArray, ilike, or } from "drizzle-orm";
+import { eq, and, gte, lte, lt, desc, sql, isNull, notInArray, ilike, or } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import type {
   Advertiser, InsertAdvertiser,
@@ -71,6 +71,7 @@ import type {
   LocationToken, InsertLocationToken,
   LocationOnboardingEvent, InsertLocationOnboardingEvent,
   CompanyProfile, InsertCompanyProfile,
+  WaitlistRequest, InsertWaitlistRequest,
 } from "@shared/schema";
 
 // Lead query params for server-side filtering/pagination
@@ -205,6 +206,11 @@ export interface IStorage {
   getPlacementsWithoutCompetitorGroup(): Promise<Placement[]>;
   getLocationsWithoutExclusivityMode(): Promise<Location[]>;
   getLocationsWithoutYodeckPlaylist(): Promise<Location[]>;
+  getLocationsWithoutRegionCode(): Promise<Location[]>;
+  getLocationsWithoutCategories(): Promise<Location[]>;
+  getStaleOnlineLocations(minutesThreshold: number): Promise<Location[]>;
+  getLocationsWithoutCapacityConfig(): Promise<Location[]>;
+  getOnlineLocationsWithoutPlaylist(): Promise<Location[]>;
 
   // Schedule Snapshots
   getScheduleSnapshots(): Promise<ScheduleSnapshot[]>;
@@ -467,6 +473,16 @@ export interface IStorage {
   // Company Profile (singleton)
   getCompanyProfile(): Promise<CompanyProfile | undefined>;
   updateCompanyProfile(data: Partial<InsertCompanyProfile>): Promise<CompanyProfile | undefined>;
+
+  // Waitlist Requests
+  getWaitlistRequests(): Promise<WaitlistRequest[]>;
+  getWaitlistRequest(id: string): Promise<WaitlistRequest | undefined>;
+  getWaitlistRequestByStatus(status: string): Promise<WaitlistRequest[]>;
+  getWaitingRequests(): Promise<WaitlistRequest[]>;
+  getWaitlistRequestByTokenHash(tokenHash: string): Promise<WaitlistRequest | undefined>;
+  getActiveWaitlistRequest(email: string, packageType: string): Promise<WaitlistRequest | undefined>;
+  createWaitlistRequest(data: InsertWaitlistRequest): Promise<WaitlistRequest>;
+  updateWaitlistRequest(id: string, data: Partial<WaitlistRequest>): Promise<WaitlistRequest | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -973,6 +989,53 @@ export class DatabaseStorage implements IStorage {
       .where(and(
         isNull(schema.locations.yodeckPlaylistId),
         eq(schema.locations.status, "active")
+      ));
+  }
+
+  async getLocationsWithoutRegionCode(): Promise<Location[]> {
+    return await db.select().from(schema.locations)
+      .where(or(
+        isNull(schema.locations.regionCode),
+        eq(schema.locations.regionCode, "")
+      ));
+  }
+
+  async getLocationsWithoutCategories(): Promise<Location[]> {
+    return await db.select().from(schema.locations)
+      .where(or(
+        isNull(schema.locations.categoriesAllowed),
+        sql`array_length(${schema.locations.categoriesAllowed}, 1) IS NULL`
+      ));
+  }
+
+  async getStaleOnlineLocations(minutesThreshold: number): Promise<Location[]> {
+    const thresholdTime = new Date(Date.now() - minutesThreshold * 60 * 1000);
+    return await db.select().from(schema.locations)
+      .where(and(
+        eq(schema.locations.status, "active"),
+        or(
+          isNull(schema.locations.lastSyncAt),
+          lt(schema.locations.lastSyncAt, thresholdTime)
+        )
+      ));
+  }
+
+  async getLocationsWithoutCapacityConfig(): Promise<Location[]> {
+    return await db.select().from(schema.locations)
+      .where(or(
+        isNull(schema.locations.adSlotCapacitySecondsPerLoop),
+        eq(schema.locations.adSlotCapacitySecondsPerLoop, 0)
+      ));
+  }
+
+  async getOnlineLocationsWithoutPlaylist(): Promise<Location[]> {
+    return await db.select().from(schema.locations)
+      .where(and(
+        eq(schema.locations.status, "active"),
+        or(
+          isNull(schema.locations.yodeckPlaylistId),
+          eq(schema.locations.yodeckPlaylistId, "")
+        )
       ));
   }
 
@@ -3041,6 +3104,63 @@ export class DatabaseStorage implements IStorage {
       .where(eq(schema.companyProfile.id, existing.id))
       .returning();
     return profile;
+  }
+
+  // ============================================================================
+  // WAITLIST REQUESTS
+  // ============================================================================
+
+  async getWaitlistRequests(): Promise<WaitlistRequest[]> {
+    return await db.select().from(schema.waitlistRequests).orderBy(desc(schema.waitlistRequests.createdAt));
+  }
+
+  async getWaitlistRequest(id: string): Promise<WaitlistRequest | undefined> {
+    const [request] = await db.select().from(schema.waitlistRequests).where(eq(schema.waitlistRequests.id, id));
+    return request;
+  }
+
+  async getWaitlistRequestByStatus(status: string): Promise<WaitlistRequest[]> {
+    return await db.select().from(schema.waitlistRequests)
+      .where(eq(schema.waitlistRequests.status, status))
+      .orderBy(desc(schema.waitlistRequests.createdAt));
+  }
+
+  async getWaitingRequests(): Promise<WaitlistRequest[]> {
+    return await db.select().from(schema.waitlistRequests)
+      .where(eq(schema.waitlistRequests.status, "WAITING"))
+      .orderBy(schema.waitlistRequests.createdAt);
+  }
+
+  async getWaitlistRequestByTokenHash(tokenHash: string): Promise<WaitlistRequest | undefined> {
+    const [request] = await db.select().from(schema.waitlistRequests)
+      .where(eq(schema.waitlistRequests.inviteTokenHash, tokenHash));
+    return request;
+  }
+
+  async getActiveWaitlistRequest(email: string, packageType: string): Promise<WaitlistRequest | undefined> {
+    const [request] = await db.select().from(schema.waitlistRequests)
+      .where(and(
+        eq(schema.waitlistRequests.email, email.toLowerCase()),
+        eq(schema.waitlistRequests.packageType, packageType),
+        or(
+          eq(schema.waitlistRequests.status, "WAITING"),
+          eq(schema.waitlistRequests.status, "INVITED")
+        )
+      ));
+    return request;
+  }
+
+  async createWaitlistRequest(data: InsertWaitlistRequest): Promise<WaitlistRequest> {
+    const [request] = await db.insert(schema.waitlistRequests).values(data).returning();
+    return request;
+  }
+
+  async updateWaitlistRequest(id: string, data: Partial<WaitlistRequest>): Promise<WaitlistRequest | undefined> {
+    const [request] = await db.update(schema.waitlistRequests)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.waitlistRequests.id, id))
+      .returning();
+    return request;
   }
 }
 

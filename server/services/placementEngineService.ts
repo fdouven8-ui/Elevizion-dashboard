@@ -179,26 +179,44 @@ export class PlacementEngineService {
     });
     
     // Build a map of location -> competitorGroup -> count of live placements
-    // Query all active placement targets with their advertisers
+    // Query all active placement targets
     const existingPlacements = await db.query.placementTargets.findMany({
       where: eq(placementTargets.status, "live"),
-      with: {
-        plan: {
-          with: {
-            advertiser: true
-          }
+    });
+    
+    // Build plan -> advertiser map for competitor lookup
+    const planIds = Array.from(new Set(existingPlacements.map(p => p.planId)));
+    const planAdvertiserMap = new Map<string, { competitorGroup: string | null; businessCategory: string | null }>();
+    
+    if (planIds.length > 0) {
+      const plans = await db.query.placementPlans.findMany({
+        where: inArray(placementPlans.id, planIds),
+      });
+      
+      const advertiserIds = Array.from(new Set(plans.map(p => p.advertiserId)));
+      const advList = advertiserIds.length > 0 
+        ? await db.query.advertisers.findMany({ where: inArray(advertisers.id, advertiserIds) })
+        : [];
+      const advertiserMap = new Map(advList.map(a => [a.id, a]));
+      
+      for (const plan of plans) {
+        const adv = advertiserMap.get(plan.advertiserId);
+        if (adv) {
+          planAdvertiserMap.set(plan.id, {
+            competitorGroup: adv.competitorGroup || null,
+            businessCategory: adv.businessCategory || null,
+          });
         }
       }
-    });
+    }
     
     // Map locationId -> competitorGroup -> count
     const locationCompetitorCounts = new Map<string, Map<string, number>>();
     for (const placement of existingPlacements) {
-      if (placement.plan?.advertiser) {
+      const advData = planAdvertiserMap.get(placement.planId);
+      if (advData) {
         const locId = placement.locationId;
-        const compGroup = placement.plan.advertiser.competitorGroup || 
-                          placement.plan.advertiser.businessCategory || 
-                          null;
+        const compGroup = advData.competitorGroup || advData.businessCategory;
         if (compGroup) {
           if (!locationCompetitorCounts.has(locId)) {
             locationCompetitorCounts.set(locId, new Map());
@@ -475,6 +493,166 @@ export class PlacementEngineService {
     return await db.query.adAssets.findFirst({
       where: eq(adAssets.id, plan.adAssetId),
     });
+  }
+  
+  /**
+   * Dry-run simulation for capacity gating
+   * Same logic as simulate() but without creating or updating records
+   */
+  async dryRunSimulate(input: {
+    packageType: string;
+    businessCategory: string;
+    competitorGroup?: string;
+    targetRegionCodes?: string[];
+    videoDurationSeconds?: number;
+  }): Promise<SimulationResult> {
+    const requiredCount = PACKAGE_COUNTS[input.packageType] || 1;
+    const videoDuration = input.videoDurationSeconds || 15;
+    const targetRegions = input.targetRegionCodes || [];
+    const advertiserCategory = input.businessCategory;
+    const anyRegion = targetRegions.length === 0;
+    const advertiserCompetitorGroup = input.competitorGroup || input.businessCategory;
+    
+    const allLocations = await db.query.locations.findMany({
+      where: eq(locations.status, "active"),
+    });
+    
+    // Build a map of location -> competitorGroup -> count of live placements
+    const existingPlacements = await db.query.placementTargets.findMany({
+      where: eq(placementTargets.status, "live"),
+    });
+    
+    // Build plan -> advertiser map for competitor lookup
+    const dryRunPlanIds = Array.from(new Set(existingPlacements.map(p => p.planId)));
+    const dryRunPlanAdvMap = new Map<string, { competitorGroup: string | null; businessCategory: string | null }>();
+    
+    if (dryRunPlanIds.length > 0) {
+      const plans = await db.query.placementPlans.findMany({
+        where: inArray(placementPlans.id, dryRunPlanIds),
+      });
+      
+      const advIds = Array.from(new Set(plans.map(p => p.advertiserId)));
+      const advList = advIds.length > 0 
+        ? await db.query.advertisers.findMany({ where: inArray(advertisers.id, advIds) })
+        : [];
+      const advMap = new Map(advList.map(a => [a.id, a]));
+      
+      for (const plan of plans) {
+        const adv = advMap.get(plan.advertiserId);
+        if (adv) {
+          dryRunPlanAdvMap.set(plan.id, {
+            competitorGroup: adv.competitorGroup || null,
+            businessCategory: adv.businessCategory || null,
+          });
+        }
+      }
+    }
+    
+    const locationCompetitorCounts = new Map<string, Map<string, number>>();
+    for (const placement of existingPlacements) {
+      const advData = dryRunPlanAdvMap.get(placement.planId);
+      if (advData) {
+        const locId = placement.locationId;
+        const compGroup = advData.competitorGroup || advData.businessCategory;
+        if (compGroup) {
+          if (!locationCompetitorCounts.has(locId)) {
+            locationCompetitorCounts.set(locId, new Map());
+          }
+          const groupCounts = locationCompetitorCounts.get(locId)!;
+          groupCounts.set(compGroup, (groupCounts.get(compGroup) || 0) + 1);
+        }
+      }
+    }
+    
+    const eligibleLocations: EligibleLocation[] = [];
+    const rejectedLocations: RejectedLocation[] = [];
+    const staleThreshold = new Date(Date.now() - STALE_SYNC_THRESHOLD_MINUTES * 60 * 1000);
+    
+    for (const loc of allLocations) {
+      if (loc.status !== "active") {
+        rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "NOT_ACTIVE" });
+        continue;
+      }
+      
+      if (!loc.yodeckPlaylistId) {
+        rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "NO_PLAYLIST" });
+        continue;
+      }
+      
+      if (!anyRegion && loc.regionCode && !targetRegions.includes(loc.regionCode)) {
+        rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "REGION_MISMATCH" });
+        continue;
+      }
+      
+      if (advertiserCategory && loc.categoriesAllowed && loc.categoriesAllowed.length > 0) {
+        if (!loc.categoriesAllowed.includes(advertiserCategory)) {
+          rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "CATEGORY_MISMATCH" });
+          continue;
+        }
+      }
+      
+      const currentLoad = loc.currentAdLoadSeconds || 0;
+      const capacity = loc.adSlotCapacitySecondsPerLoop || 120;
+      if (currentLoad + videoDuration > capacity) {
+        rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "NO_CAPACITY" });
+        continue;
+      }
+      
+      if (loc.lastSyncAt && loc.lastSyncAt < staleThreshold) {
+        rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "STALE_SYNC" });
+        continue;
+      }
+      
+      // Competitor exclusion check
+      if (advertiserCompetitorGroup) {
+        const groupCounts = locationCompetitorCounts.get(loc.id);
+        const existingCount = groupCounts?.get(advertiserCompetitorGroup) || 0;
+        const threshold = loc.exclusivityMode === "RELAXED" ? 2 : 1;
+        if (existingCount >= threshold) {
+          rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "COMPETITOR_CONFLICT" });
+          continue;
+        }
+      }
+      
+      const avgVisitors = loc.avgVisitorsPerWeek || 100;
+      const expectedImpressions = Math.round(avgVisitors * VIEW_FACTOR);
+      const score = expectedImpressions;
+      
+      eligibleLocations.push({
+        id: loc.id,
+        name: loc.name,
+        city: loc.city,
+        regionCode: loc.regionCode,
+        yodeckPlaylistId: loc.yodeckPlaylistId,
+        avgVisitorsPerWeek: avgVisitors,
+        currentAdLoadSeconds: currentLoad,
+        adSlotCapacitySecondsPerLoop: capacity,
+        score,
+        expectedImpressionsPerWeek: expectedImpressions,
+        exclusivityMode: loc.exclusivityMode,
+      });
+    }
+    
+    eligibleLocations.sort((a, b) => b.score - a.score);
+    
+    const selectedLocations = this.selectWithSpread(eligibleLocations, requiredCount);
+    
+    const totalExpectedImpressions = selectedLocations.reduce(
+      (sum, loc) => sum + loc.expectedImpressionsPerWeek,
+      0
+    );
+    
+    const success = selectedLocations.length >= requiredCount;
+    
+    return {
+      success,
+      selectedLocations,
+      rejectedLocations,
+      totalExpectedImpressions,
+      message: success 
+        ? `${selectedLocations.length} locaties beschikbaar` 
+        : `Slechts ${selectedLocations.length} van ${requiredCount} locaties beschikbaar`,
+    };
   }
 }
 

@@ -36,6 +36,7 @@ import LocationPortal from "@/pages/LocationPortal";
 import DataHealthPage from "@/pages/DataHealthPage";
 import LocalLanding from "@/pages/LocalLanding";
 import Leads from "@/pages/Leads";
+import Wachtlijst from "@/pages/Wachtlijst";
 import Payouts from "@/pages/Payouts";
 import Contracts from "@/pages/Contracts";
 import SystemHealth from "@/pages/SystemHealth";
@@ -60,6 +61,7 @@ function DashboardRouter() {
       <Switch>
         <Route path="/dashboard" component={Home} />
         <Route path="/leads" component={Leads} />
+        <Route path="/wachtlijst" component={Wachtlijst} />
         <Route path="/onboarding" component={Onboarding} />
         <Route path="/onboarding/:wizard" component={Onboarding} />
         <Route path="/screens" component={Screens} />

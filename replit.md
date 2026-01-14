@@ -50,7 +50,14 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **Revenue Allocation Engine**: Calculates weighted screen-days allocation for location payouts with a minimum threshold and carry-over system.
 - **Template Management System**: Database-driven templates for emails, contracts, and other communications with dynamic content `{{placeholder}}` syntax.
 - **Email Logging**: Tracks all sent emails with status and integrates with Postmark.
-- **System Health Check**: Comprehensive admin page (`/system-health`) for validating all configurations, integrations, and workflows. Includes 8 check groups: Company Profile, Email/Postmark, Contract/OTP, Moneybird, Yodeck, Leads/Forms, Advertiser Workflow, and Location Workflow. Features test buttons for sending test emails, creating test Moneybird contacts, running Yodeck syncs, and creating test leads.
+- **System Health Check**: Comprehensive admin page (`/system-health`) for validating all configurations, integrations, and workflows. Includes 8 check groups: Company Profile, Email/Postmark, Contract/OTP, Moneybird, Yodeck, Leads/Forms, Advertiser Workflow, and Location Workflow. Features test buttons for sending test emails, creating test Moneybird contacts, running Yodeck syncs, and creating test leads. Enhanced with placement data completeness checks (locations without regionCode/categories/capacity config, stale syncs, online locations without playlist).
+- **Capacity Gating System**: Uses PlacementEngine dry-run simulation to check availability before allowing contract signing. Prevents overselling by validating capacity, exclusivity, and regional constraints before onboarding.
+- **Waitlist System**: When capacity is unavailable, advertisers can join a waitlist (WaitlistRequest with WAITING/INVITED/CLAIMED/EXPIRED/CANCELLED states). Includes:
+  - Background capacity watcher worker (30-minute interval) that checks WAITING requests and sends invite emails when capacity becomes available
+  - 48-hour claim tokens with SHA256 hashing
+  - Admin Wachtlijst page (`/wachtlijst`) for managing waitlist requests
+  - Automatic reset of expired invites back to WAITING for re-invitation
+- **Re-simulate Before Publish**: Single and bulk publish endpoints re-simulate plans before publishing to detect capacity/exclusivity changes since approval. Plans revert to WAITING if simulation fails.
 - **Video Upload Portal**: Self-service portal (`/upload/:token`) for advertisers to upload their own video content. Features:
   - Token-based authentication via `portal_tokens` with SHA256 hashing and usage tracking
   - Video validation using ffprobe: MP4 format, 1920x1080 resolution, contract-specific duration (±0.5s tolerance)

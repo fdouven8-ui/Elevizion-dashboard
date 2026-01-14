@@ -874,28 +874,83 @@ export async function checkPlacementDataCompleteness(): Promise<HealthCheckResul
       fixSuggestion: missingGroupCount > 0 ? "Stel competitorGroup in op de gekoppelde adverteerders" : undefined,
     });
     
-    // 3. Check locations without exclusivityMode
+    // 3. Check locations without regionCode
+    const locationsWithoutRegion = await storage.getLocationsWithoutRegionCode();
+    const missingRegionCount = locationsWithoutRegion.length;
+    results.push({
+      name: "Locaties zonder regio/provincie",
+      status: missingRegionCount === 0 ? "PASS" : "WARNING",
+      message: missingRegionCount === 0 ? "Alle locaties hebben een regionCode" : `${missingRegionCount} locatie(s) zonder regio`,
+      details: missingRegionCount > 0 ? { locationIds: locationsWithoutRegion.slice(0, 10).map(l => l.id), locationNames: locationsWithoutRegion.slice(0, 5).map(l => l.name) } : undefined,
+      fixSuggestion: missingRegionCount > 0 ? "Stel regionCode (provincie) in voor deze locaties" : undefined,
+    });
+    
+    // 4. Check locations without categoriesAllowed
+    const locationsWithoutCategories = await storage.getLocationsWithoutCategories();
+    const missingCategoriesCount = locationsWithoutCategories.length;
+    results.push({
+      name: "Locaties zonder toegestane categorieën",
+      status: missingCategoriesCount === 0 ? "PASS" : "WARNING",
+      message: missingCategoriesCount === 0 ? "Alle locaties hebben categorieën geconfigureerd" : `${missingCategoriesCount} locatie(s) zonder categoriesAllowed`,
+      details: missingCategoriesCount > 0 ? { locationIds: missingCategoriesCount <= 10 ? locationsWithoutCategories.map(l => l.id) : locationsWithoutCategories.slice(0, 10).map(l => l.id) } : undefined,
+      fixSuggestion: missingCategoriesCount > 0 ? "Stel categoriesAllowed in voor betere targeting" : undefined,
+    });
+    
+    // 5. Check stale sync (online locations with lastSyncAt > 15 minutes ago)
+    const staleSyncLocations = await storage.getStaleOnlineLocations(15);
+    const staleSyncCount = staleSyncLocations.length;
+    results.push({
+      name: "Stale sync (online, >15 min geen sync)",
+      status: staleSyncCount === 0 ? "PASS" : "WARNING",
+      message: staleSyncCount === 0 ? "Alle online locaties recent gesynchroniseerd" : `${staleSyncCount} locatie(s) met verouderde sync`,
+      details: staleSyncCount > 0 ? { locationIds: staleSyncLocations.slice(0, 10).map(l => l.id) } : undefined,
+      fixSuggestion: staleSyncCount > 0 ? "Voer Yodeck sync uit om locaties bij te werken" : undefined,
+    });
+    
+    // 6. Check missing capacity config
+    const locationsWithoutCapacity = await storage.getLocationsWithoutCapacityConfig();
+    const missingCapacityCount = locationsWithoutCapacity.length;
+    results.push({
+      name: "Locaties zonder capacity configuratie",
+      status: missingCapacityCount === 0 ? "PASS" : "WARNING",
+      message: missingCapacityCount === 0 ? "Alle locaties hebben capacity geconfigureerd" : `${missingCapacityCount} locatie(s) zonder adSlotCapacitySecondsPerLoop`,
+      details: missingCapacityCount > 0 ? { locationIds: missingCapacityCount <= 10 ? locationsWithoutCapacity.map(l => l.id) : locationsWithoutCapacity.slice(0, 10).map(l => l.id) } : undefined,
+      fixSuggestion: missingCapacityCount > 0 ? "Stel adSlotCapacitySecondsPerLoop in voor deze locaties" : undefined,
+    });
+    
+    // 7. Check online locations without Yodeck playlist (FAIL - blocks publish)
+    const onlineWithoutPlaylist = await storage.getOnlineLocationsWithoutPlaylist();
+    const onlineNoPlaylistCount = onlineWithoutPlaylist.length;
+    results.push({
+      name: "Online locaties zonder Yodeck playlist",
+      status: onlineNoPlaylistCount === 0 ? "PASS" : "FAIL",
+      message: onlineNoPlaylistCount === 0 ? "Alle online locaties hebben een playlist" : `${onlineNoPlaylistCount} online locatie(s) zonder playlist - blokkeert publicatie!`,
+      details: onlineNoPlaylistCount > 0 ? { locationIds: onlineWithoutPlaylist.slice(0, 10).map(l => l.id), locationNames: onlineWithoutPlaylist.slice(0, 5).map(l => l.name) } : undefined,
+      fixSuggestion: onlineNoPlaylistCount > 0 ? "Koppel Yodeck playlists aan deze online locaties (verplicht)" : undefined,
+    });
+    
+    // 8. Check locations without exclusivityMode (informational)
     const locationsWithoutExclusivity = await storage.getLocationsWithoutExclusivityMode();
     const missingExclusivityCount = locationsWithoutExclusivity.length;
     results.push({
       name: "Locaties zonder exclusiviteitsinstelling",
-      status: missingExclusivityCount === 0 ? "PASS" : "PASS", // Not a warning - defaults to STRICT
+      status: "PASS", // Not a warning - defaults to STRICT
       message: missingExclusivityCount === 0 ? "Alle locaties hebben een exclusiviteitsinstelling" : `${missingExclusivityCount} locatie(s) gebruiken standaard STRICT`,
       details: missingExclusivityCount > 0 ? { locationIds: locationsWithoutExclusivity.slice(0, 5).map(l => l.id) } : undefined,
     });
     
-    // 4. Check locations without Yodeck playlist
+    // 9. Check locations without Yodeck playlist (all, not just online)
     const locationsWithoutPlaylist = await storage.getLocationsWithoutYodeckPlaylist();
     const missingPlaylistCount = locationsWithoutPlaylist.length;
     results.push({
-      name: "Locaties zonder Yodeck playlist",
+      name: "Locaties zonder Yodeck playlist (totaal)",
       status: missingPlaylistCount === 0 ? "PASS" : "WARNING",
-      message: missingPlaylistCount === 0 ? "Alle actieve locaties hebben een Yodeck playlist" : `${missingPlaylistCount} locatie(s) zonder playlist ID`,
+      message: missingPlaylistCount === 0 ? "Alle locaties hebben een Yodeck playlist" : `${missingPlaylistCount} locatie(s) zonder playlist ID`,
       details: missingPlaylistCount > 0 ? { locationIds: missingPlaylistCount <= 10 ? locationsWithoutPlaylist.map(l => l.id) : locationsWithoutPlaylist.slice(0, 10).map(l => l.id) } : undefined,
       fixSuggestion: missingPlaylistCount > 0 ? "Koppel Yodeck playlists aan deze locaties" : undefined,
     });
     
-    // 5. Overall placement health summary
+    // 10. Overall placement health summary
     const allPlacements = await storage.listPlacements();
     const activePlacements = allPlacements.filter(p => p.isActive);
     results.push({

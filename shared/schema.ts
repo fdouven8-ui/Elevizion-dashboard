@@ -169,6 +169,44 @@ export const adAssets = pgTable("ad_assets", {
 });
 
 /**
+ * Waitlist Requests - Capacity waitlist for advertisers when no placement slots available
+ * Tracks waiting advertisers and sends claim invites when capacity becomes available
+ */
+export const waitlistRequests = pgTable("waitlist_requests", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  companyName: text("company_name").notNull(),
+  contactName: text("contact_name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone"),
+  kvkNumber: text("kvk_number"),
+  vatNumber: text("vat_number"),
+  packageType: text("package_type").notNull(), // SINGLE | TRIPLE | TEN | CUSTOM
+  businessCategory: text("business_category").notNull(),
+  competitorGroup: text("competitor_group"), // Default = businessCategory
+  targetRegionCodes: text("target_region_codes").array(), // Target regions
+  requiredCount: integer("required_count").notNull(), // 1/3/10 based on package
+  status: text("status").notNull().default("WAITING"), // WAITING | INVITED | CLAIMED | EXPIRED | CANCELLED
+  lastCheckedAt: timestamp("last_checked_at"),
+  inviteTokenHash: text("invite_token_hash"), // SHA256 hash of claim token
+  inviteSentAt: timestamp("invite_sent_at"),
+  inviteExpiresAt: timestamp("invite_expires_at"),
+  claimedAt: timestamp("claimed_at"),
+  cancelledAt: timestamp("cancelled_at"),
+  advertiserId: varchar("advertiser_id"), // Set after claim -> advertiser creation
+  notes: text("notes"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const insertWaitlistRequestSchema = createInsertSchema(waitlistRequests).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertWaitlistRequest = z.infer<typeof insertWaitlistRequestSchema>;
+export type WaitlistRequest = typeof waitlistRequests.$inferSelect;
+
+/**
  * Locations - Partner businesses that host screens
  * These earn revenue share based on screen time at their location
  * isPlaceholder: true means this was auto-created from Yodeck import and needs Moneybird linking
