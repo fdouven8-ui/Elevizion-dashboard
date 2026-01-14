@@ -9680,6 +9680,32 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.status(500).json({ message: error.message });
     }
   });
+  
+  // Admin: Manual trigger monthly report worker
+  app.post("/api/admin/reports/run", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const { runMonthlyReportWorker } = await import("./services/monthlyReportWorker");
+      const result = await runMonthlyReportWorker();
+      res.json({ 
+        message: "Rapportage worker uitgevoerd",
+        ...result 
+      });
+    } catch (error: any) {
+      console.error("[Reports] Manual run error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  // Admin: Get recent report logs
+  app.get("/api/admin/reports/logs", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const { days = 30 } = req.query;
+      const logs = await storage.getRecentReportLogs(Number(days));
+      res.json(logs);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
 
   // ============================================================================
   // EMAIL LOGS
