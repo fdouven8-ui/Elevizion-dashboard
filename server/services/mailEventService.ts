@@ -10,7 +10,6 @@ import { db } from "../db";
 import { emailLogs, advertisers, locations, adAssets, portalTokens, contracts, placementPlans } from "@shared/schema";
 import { eq, and, sql, desc } from "drizzle-orm";
 import { sendEmail, baseEmailTemplate, BodyBlock } from "../email";
-import crypto from "crypto";
 
 export type MailEventType = 
   | "ADVERTISER_CONTRACT_ACCEPTED"
@@ -33,7 +32,7 @@ interface MailEventResult {
  * Check if an email for this event+entity combination was already sent
  * This prevents duplicate emails on retries or page reloads
  */
-async function wasEmailAlreadySent(eventType: MailEventType, entityId: string): Promise<boolean> {
+async function wasEmailAlreadySent(eventType: string, entityId: string): Promise<boolean> {
   const [existing] = await db.select({ id: emailLogs.id })
     .from(emailLogs)
     .where(and(
@@ -111,13 +110,6 @@ async function getPublishedPlanInfo(advertiserId: string) {
   return { locationCount, cities };
 }
 
-/**
- * Generate upload portal URL for advertiser
- */
-function generateUploadUrl(baseUrl: string, advertiserId: string): string {
-  const token = crypto.randomBytes(32).toString("hex");
-  return `${baseUrl}/upload/${token}`;
-}
 
 /**
  * Build email content for ADVERTISER_CONTRACT_ACCEPTED
@@ -421,6 +413,11 @@ export async function dispatchMailEvent(
       return { success: false, skipped: false, reason: "Could not build email - entity not found or missing data" };
     }
     
+    if (!emailData.to) {
+      console.warn(`[MailEvent] Skipped ${eventType} for ${entityId} - no email address available`);
+      return { success: true, skipped: true, reason: "No email address available for recipient" };
+    }
+    
     const result = await sendEmail({
       to: emailData.to,
       subject: emailData.subject,
@@ -435,17 +432,21 @@ export async function dispatchMailEvent(
       console.log(`[MailEvent] Sent ${eventType} to ${emailData.to} for ${entityId}`);
       
       if (eventType === "LOCATION_CONTRACT_ACCEPTED") {
-        const internalEmail = await buildLocationContractInternalEmail(entityId, baseUrl);
-        if (internalEmail) {
-          await sendEmail({
-            to: internalEmail.to,
-            subject: internalEmail.subject,
-            html: internalEmail.html,
-            text: internalEmail.text,
-            templateKey: `${eventType}_INTERNAL`,
-            entityType,
-            entityId,
-          });
+        const internalKey = `${eventType}_INTERNAL`;
+        const internalAlreadySent = await wasEmailAlreadySent(internalKey as MailEventType, entityId);
+        if (!internalAlreadySent) {
+          const internalEmail = await buildLocationContractInternalEmail(entityId, baseUrl);
+          if (internalEmail) {
+            await sendEmail({
+              to: internalEmail.to,
+              subject: internalEmail.subject,
+              html: internalEmail.html,
+              text: internalEmail.text,
+              templateKey: internalKey,
+              entityType,
+              entityId,
+            });
+          }
         }
       }
       
