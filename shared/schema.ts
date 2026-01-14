@@ -101,6 +101,8 @@ export const advertisers = pgTable("advertisers", {
   // === PLACEMENT TARGETING FIELDS ===
   targetRegionCodes: text("target_region_codes").array(), // Target regions (e.g., ['NB', 'ZH']) or null/empty for ANY
   category: text("category"), // Advertiser category for location matching (horeca, retail, sport, etc.)
+  businessCategory: text("business_category"), // Business type (barber, gym, horeca, etc.) - also used as default competitorGroup
+  competitorGroup: text("competitor_group"), // Explicit competitor group (default = businessCategory, admin can override)
   desiredImpressionsPerWeek: integer("desired_impressions_per_week"), // Optional target impressions
   // Onboarding akkoord (OTP-based)
   acceptedTermsAt: timestamp("accepted_terms_at"), // Wanneer akkoord gegeven

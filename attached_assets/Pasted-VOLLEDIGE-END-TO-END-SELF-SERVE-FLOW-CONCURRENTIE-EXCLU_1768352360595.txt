@@ -1,0 +1,238 @@
+VOLLEDIGE END-TO-END SELF-SERVE FLOW + CONCURRENTIE-EXCLUSIE BIJ PLAATSING (100% CONSISTENT & WERKEND)
+
+CONTEXT
+We hebben al:
+- Upload portal met contract-driven video duur (default 15s)
+- Validatie + asset states
+- Publish Queue met SIMULATE → APPROVE → PUBLISH + rollback + idempotency
+- Moneybird integratie
+- Mail event system (idempotent)
+Nu wil ik:
+1) Website “Start nu” flow die in 1 lijn doorloopt: pakket → Moneybird-gegevens → akkoord/OTP/SEPA → upload → publish queue → admin akkoord → publiceren → live mail + rapportage later.
+2) In de placement engine extra harde business rule:
+   - Concurrenten mogen niet “bij elkaar” komen op dezelfde locatie/loop (en bij voorkeur ook niet in dezelfde categorie-blok).
+   - Dus: exclusie op basis van businessType/branche of competitorGroup.
+3) Alles moet consistent zijn met bestaande data, geen shortcuts, geen losse lead stap voor standaard pakketten.
+
+DOEL
+A) Implementeer /start flow (public) met verplichte velden:
+- KvK (verplicht)
+- BTW (verplicht)
+- Type bedrijf / categorie (verplicht)
+- Regio’s (multi-select) (verplicht)
+- Moneybird factuurgegevens (verplicht)
+B) Koppel dit direct aan Moneybird + advertiser record + onboarding token.
+C) Versterk Placement Engine met “Concurrentie Exclusion Rules” zodat we nooit concurrerende ads op dezelfde locatie tegelijk plaatsen.
+D) Zorg dat UI + mails + contracts + publish queue alles uit dezelfde bron leest (single source of truth).
+
+BELANGRIJK
+- Geen redesign, alleen functionele uitbreiding.
+- Alles status-driven (no page-load triggers).
+- Idempotent: geen dubbele Moneybird contacten, geen dubbele onboarding tokens, geen dubbele publish.
+- Plaatsingsregels zijn HARD (als exclusie niet haalbaar is: SIMULATED_FAIL of voorstel aanpassen).
+
+────────────────────────
+1) /START FLOW (WEBSITE → CHECKOUT → ONBOARDING)
+────────────────────────
+A) WEBSITE CTA’S
+- Update alle pakket CTA’s (home + /prijzen):
+  - Single -> /start?package=single
+  - Triple -> /start?package=triple
+  - Ten -> /start?package=ten
+- Custom -> /contact (aanvraag), niet self-serve.
+
+B) /START PAGINA (PUBLIC) — 3 STAPPEN (ALLES VERPLICHT)
+Stap 0: Pakket bevestigen (read-only)
+- packageType (single/triple/ten)
+- toon per-scherm prijs (primair) + min looptijd + “je levert eigen video aan”
+
+Stap 1: Bedrijfsgegevens (verplicht)
+- companyName
+- contactName
+- email
+- phone
+- kvkNumber (NL: 8 cijfers, harde format check)
+- vatNumber (NL btw: NL[0-9]{9}B[0-9]{2}, harde format check)
+
+Stap 2: Type bedrijf + regio’s (verplicht)
+- businessCategory (dropdown, required) (dit is ook placement category)
+- competitorGroup (optioneel auto of handmatig; zie sectie 3)
+- targetRegionCodes (multi-select required)
+  UX: checkbox/chips + “selecteer alles/wis” + summary
+
+Stap 3: Factuurgegevens (Moneybird required)
+- addressLine1
+- postalCode
+- city
+- country = NL
+Submit: “Doorgaan naar akkoord”
+
+C) REGIO DEFINITIES (CENTRAAL)
+Maak centrale config `regions.ts`:
+- RegionOption { code, label }
+Gebruik exact dezelfde codes in:
+- /start UI
+- dashboard advertiser detail
+- placement engine hard constraint
+
+D) API /api/start (SERVER)
+1) Validate input (server-side) + normalize:
+- kvk digits only
+- vat uppercase, remove spaces
+- email lowercase
+
+2) DEDUPE advertiser:
+- match on kvkNumber (primary)
+- fallback: email+companyName
+- update existing record if found
+
+3) Moneybird contact:
+- if advertiser.moneybirdContactId exists -> update
+- else create new contact
+- store moneybirdContactId
+- map fields:
+  - companyName, address, city, postalCode, country, kvkNumber, vatNumber, email, phone
+  - store businessCategory + targetRegionCodes in advertiser (not necessarily Moneybird)
+
+4) Set advertiser fields:
+- packageType from query
+- businessCategory = selected
+- targetRegionCodes = selected list
+- videoDurationSeconds default 15 (unless overridden later)
+- assetStatus = none (or initial state)
+- create/refresh onboarding token (advertiser)
+  IMPORTANT: one active token per advertiser; if request repeats, reuse existing active token (idempotent)
+
+5) Response:
+- redirectUrl: /onboarding/advertiser/:token (existing flow)
+No emails from /start itself; emails come from status transitions as already implemented.
+
+E) END-TO-END
+De bestaande flow gaat daarna door:
+- contract/OTP/SEPA -> upload -> publish queue -> admin approve -> publish -> live mail
+
+────────────────────────
+2) PUBLISH QUEUE & PLACEMENT ENGINE: EXTRA CONCURRENTIE-EXCLUSIE (HARD)
+────────────────────────
+We willen voorkomen dat concurrerende bedrijven op dezelfde locatie tegelijk in dezelfde loop staan.
+
+A) DEFINITIES
+1) businessCategory: algemene branche (barber/gym/cafe/retail/...)
+2) competitorGroup: specifieke concurrentiegroep (bijv. “barber”, of “barber:Sittard”, of “pizza”, etc.)
+- Default competitorGroup = businessCategory
+- Admin kan dit overschrijven in advertiser detail (bijv. “barber-premium” of “dental”)
+
+B) LOCATIE EXCLUSIE REGELS (HARD)
+Rule 1 (hard):
+- Op 1 locatie/playlist mag maximaal 1 ACTIVE ad tegelijk staan per competitorGroup.
+  Als er al een LIVE ad in dezelfde competitorGroup op die locatie staat → target is NOT eligible.
+
+Rule 2 (optioneel hard/soft toggle):
+- Op 1 locatie mag max 1 LIVE ad tegelijk staan binnen dezelfde businessCategory.
+  (Kan strenger zijn; maak dit instelbaar per locatie of global config.)
+
+Rule 3 (time window):
+- Exclusie geldt zolang de ad status LIVE is (of zolang subscription actief is).
+  Als subscription eindigt → exclusie vervalt.
+
+C) DATA NODIG VOOR EXCLUSIE
+1) Advertiser moet hebben:
+- businessCategory
+- competitorGroup
+- subscriptionStatus (ACTIVE/CANCELLED/PAST_DUE) (gebruik wat je al hebt)
+- livePlacements: list of locationIds where advertiser live is
+
+2) Location moet kunnen weten welke LIVE ads daar staan:
+- via Placement table: status PUBLISHED + advertiser subscription ACTIVE
+Of via sync mapping yodeck->dashboard (maar dashboard placements is betrouwbaarder).
+
+D) SIMULATIE UITBREIDEN (VERPLICHT)
+PlacementEngine.simulate() moet voor elke candidate location checken:
+- Hard constraints (regio/categorie/online/capacity)
+- Concurrentie exclusions:
+  - query LIVE placements op die locatie
+  - build set of competitorGroups present
+  - if candidate.advertiser.competitorGroup in set -> reject with reason COMPETITOR_CONFLICT
+  - (optioneel) if businessCategory conflict -> reject with CATEGORY_CONFLICT
+
+Simulation report moet expliciet tonen:
+- rejectedTargets met reason COMPETITOR_CONFLICT (+ welke existing advertiser/competitorGroup)
+- en hoeveel geschikte locaties overblijven
+
+E) PROPOSE LOGICA MET EXCLUSIE
+Als package=3 of 10:
+- selecteer locaties die conflict-free zijn
+- als onvoldoende:
+  - SIMULATED_FAIL met:
+    “Onvoldoende conflict-vrije locaties in geselecteerde regio’s voor deze branche.”
+  - admin kan:
+    - regio uitbreiden
+    - competitorGroup aanpassen (alleen admin)
+    - of wachten tot er ruimte is
+
+F) PUBLISH GATE (ABSOLUUT)
+Publish mag alleen als:
+- SIMULATED_OK direct voorafgaand aan publish
+- concurrency check nog steeds OK (geen nieuwe ad intussen geplaatst)
+- gebruik DB lock of transaction zodat 2 publishes niet tegelijk dezelfde competitorGroup op dezelfde locatie plaatsen
+
+Implementatie:
+- Use transaction/locking on Placement creation per location
+- Re-check competitor conflict inside transaction
+- If conflict -> fail + rollback
+
+────────────────────────
+3) UI AANPASSINGEN (ADMIN + OPTIONEEL CUSTOMER)
+────────────────────────
+A) Admin Advertiser Detail
+- Toon:
+  - businessCategory
+  - competitorGroup (editable door admin)
+  - targetRegionCodes
+- Toon “Concurrentie status”:
+  - welke locaties conflicten geven (optioneel)
+
+B) Publish Queue UI
+- In simulation modal:
+  - toon conflicten duidelijk: “conflict met bestaande LIVE ad: {existingCompany} ({competitorGroup})”
+- Laat admin alternatieve targets selecteren binnen regels.
+- Als admin target forceert die conflict heeft: blokkeer (hard).
+
+C) (OPTIONEEL) Customer transparency
+Op /start of onboarding:
+- kleine tekst:
+  “We plaatsen geen concurrerende advertenties direct naast elkaar op dezelfde locatie.”
+(niet verplicht, maar kan vertrouwen geven)
+
+────────────────────────
+4) CONSISTENTIE (SINGLE SOURCE OF TRUTH)
+────────────────────────
+- businessCategory + competitorGroup + targetRegionCodes worden opgeslagen op advertiser record
+- placement engine leest alleen daaruit
+- mails mogen regio/categorie tonen vanuit advertiser record
+- geen hardcoded regio lijsten behalve regions.ts
+
+────────────────────────
+5) TESTPLAN (VERPLICHT)
+────────────────────────
+Maak regression tests / manual tests:
+1) Startflow:
+- /start met single:
+  - valid kvk+btw -> moneybird contact created -> redirect onboarding token
+2) Concurrentie:
+- Zet advertiser A LIVE op locatie X met competitorGroup=barber
+- Probeer advertiser B (competitorGroup=barber) te simuleren naar locatie X -> SIMULATED_FAIL of reject target with COMPETITOR_CONFLICT
+- Probeer advertiser C (competitorGroup=gym) -> OK
+3) Race condition:
+- Simuleer 2 publishes tegelijk naar locatie X met dezelfde competitorGroup -> 1 moet winnen, 1 fail + rollback
+4) Capacity + conflict samen:
+- locatie vol -> NO_CAPACITY, ook al conflict-free
+5) Multi-region selection:
+- advertiser kiest 2 regio’s -> targets alleen uit die regio’s
+
+OUTPUT
+- Welke pagina’s/CTAs aangepast (home, /prijzen, nieuwe /start)
+- Welke nieuwe advertiser velden + defaults
+- Waar concurrency rule wordt enforced (simulate + publish transaction)
+- Screenshots/console logs van simulation report met conflict reasons
+IMPLEMENT NOW — NO QUESTIONS, NO SHORTCUTS.
