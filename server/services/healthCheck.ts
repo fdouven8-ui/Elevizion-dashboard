@@ -973,6 +973,93 @@ export async function checkPlacementDataCompleteness(): Promise<HealthCheckResul
 }
 
 // ============================================================================
+// REPORTING DATA QUALITY
+// ============================================================================
+
+export async function checkReportingDataQuality(): Promise<HealthCheckResult[]> {
+  const results: HealthCheckResult[] = [];
+  
+  try {
+    const { storage } = await import("../storage");
+    const { db } = await import("../db");
+    const { locations, DEFAULT_SYSTEM_SETTINGS } = await import("@shared/schema");
+    const { gt, eq, and } = await import("drizzle-orm");
+    
+    const maxVisitors = await storage.getSystemSettingNumber(
+      "maxVisitorsPerWeek", 
+      DEFAULT_SYSTEM_SETTINGS.maxVisitorsPerWeek
+    );
+    
+    const suspiciousLocations = await db.select({ 
+      id: locations.id, 
+      name: locations.name,
+      visitorsPerWeek: locations.visitorsPerWeek 
+    })
+      .from(locations)
+      .where(gt(locations.visitorsPerWeek, maxVisitors));
+    
+    const count = suspiciousLocations.length;
+    
+    results.push({
+      name: "Locaties met verdachte bezoekersaantallen",
+      status: count === 0 ? "PASS" : "WARNING",
+      message: count === 0 
+        ? "Geen locaties met verdachte bezoekersaantallen" 
+        : `${count} locatie${count !== 1 ? "s" : ""} met bezoekersaantal > ${maxVisitors.toLocaleString("nl-NL")}/week`,
+      details: count > 0 ? { 
+        count, 
+        maxVisitorsPerWeek: maxVisitors,
+        locations: suspiciousLocations.slice(0, 5).map(l => ({
+          name: l.name,
+          visitorsPerWeek: l.visitorsPerWeek
+        }))
+      } : undefined,
+      fixSuggestion: count > 0 ? "Controleer de bezoekersaantallen en markeer na review als 'gecontroleerd'" : undefined,
+    });
+    
+    const flaggedLocations = await db.select({ id: locations.id })
+      .from(locations)
+      .where(eq(locations.needsReview, true));
+    
+    const flaggedCount = flaggedLocations.length;
+    
+    results.push({
+      name: "Locaties gemarkeerd voor review",
+      status: flaggedCount === 0 ? "PASS" : "WARNING",
+      message: flaggedCount === 0 
+        ? "Geen locaties gemarkeerd voor review" 
+        : `${flaggedCount} locatie${flaggedCount !== 1 ? "s" : ""} gemarkeerd voor review`,
+      details: flaggedCount > 0 ? { count: flaggedCount } : undefined,
+      fixSuggestion: flaggedCount > 0 ? "Bekijk de locaties en wis de review-markering na controle" : undefined,
+    });
+    
+    const reportSettings = await storage.getSystemSettingsByCategory("reporting");
+    const settingsConfigured = reportSettings.length >= 3;
+    
+    results.push({
+      name: "Rapportage-instellingen geconfigureerd",
+      status: settingsConfigured ? "PASS" : "WARNING",
+      message: settingsConfigured 
+        ? `${reportSettings.length} rapportage-instellingen actief`
+        : "Rapportage-instellingen niet volledig geconfigureerd",
+      details: { 
+        settings: reportSettings.map(s => ({ key: s.key, value: s.value }))
+      },
+      fixSuggestion: !settingsConfigured ? "Configureer rapportage-instellingen via Admin → Instellingen" : undefined,
+    });
+    
+  } catch (error: any) {
+    results.push({
+      name: "Rapportagedata controle",
+      status: "FAIL",
+      message: `Fout bij controle: ${error.message}`,
+    });
+  }
+  
+  return results;
+}
+
+// ============================================================================
 // FULL HEALTH CHECK
 // ============================================================================
 
@@ -989,6 +1076,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
     locationWorkflow,
     publishQueue,
     placementData,
+    reportingQuality,
   ] = await Promise.all([
     checkCompanyProfile(),
     checkEmailConfig(),
@@ -1001,6 +1089,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
     checkLocationWorkflow(),
     checkPublishQueue(),
     checkPlacementDataCompleteness(),
+    checkReportingDataQuality(),
   ]);
   
   return [
@@ -1068,6 +1157,12 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
       name: "Plaatsingsdata Compleetheid",
       icon: "chart-bar",
       checks: placementData,
+      testable: false,
+    },
+    {
+      name: "Rapportage Datakwaliteit",
+      icon: "file-bar-chart",
+      checks: reportingQuality,
       testable: false,
     },
   ];

@@ -9712,6 +9712,85 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // SYSTEM SETTINGS (Admin configurable values)
+  // ============================================================================
+  
+  app.get("/api/admin/settings", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const { category } = req.query;
+      const settings = category 
+        ? await storage.getSystemSettingsByCategory(String(category))
+        : await storage.getAllSystemSettings();
+      res.json(settings);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  app.get("/api/admin/settings/:key", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const setting = await storage.getSystemSetting(req.params.key);
+      if (!setting) {
+        return res.status(404).json({ message: "Instelling niet gevonden" });
+      }
+      res.json(setting);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  app.put("/api/admin/settings/:key", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const { value } = req.body;
+      if (value === undefined || value === null) {
+        return res.status(400).json({ message: "Waarde is verplicht" });
+      }
+      const currentUser = (req as any).currentUser;
+      const setting = await storage.upsertSystemSetting(
+        req.params.key, 
+        String(value),
+        currentUser?.username || "admin"
+      );
+      res.json(setting);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  // Get locations that need review (suspicious visitor counts)
+  app.get("/api/admin/locations/needs-review", requirePermission("manage_placements"), async (req, res) => {
+    try {
+      const flaggedLocations = await db.select()
+        .from(locations)
+        .where(eq(locations.needsReview, true))
+        .orderBy(desc(locations.updatedAt));
+      res.json(flaggedLocations);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  // Clear needsReview flag on a location (after manual review)
+  app.post("/api/admin/locations/:id/clear-review", requirePermission("manage_placements"), async (req, res) => {
+    try {
+      const [updated] = await db.update(locations)
+        .set({ 
+          needsReview: false, 
+          needsReviewReason: null,
+          updatedAt: new Date()
+        })
+        .where(eq(locations.id, req.params.id))
+        .returning();
+      if (!updated) {
+        return res.status(404).json({ message: "Locatie niet gevonden" });
+      }
+      res.json(updated);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
   // EMAIL LOGS
   // ============================================================================
 

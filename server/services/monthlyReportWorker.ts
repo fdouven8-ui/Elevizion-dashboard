@@ -9,8 +9,8 @@
 
 import { storage } from "../storage";
 import { db } from "../db";
-import { placements, locations, advertisers } from "@shared/schema";
-import { eq, and, sql } from "drizzle-orm";
+import { placements, locations, advertisers, DEFAULT_SYSTEM_SETTINGS } from "@shared/schema";
+import { eq, and, sql, gt } from "drizzle-orm";
 
 const MONTH_LABELS_NL: Record<number, string> = {
   0: "januari", 1: "februari", 2: "maart", 3: "april",
@@ -18,7 +18,20 @@ const MONTH_LABELS_NL: Record<number, string> = {
   8: "september", 9: "oktober", 10: "november", 11: "december"
 };
 
-const VIEW_FACTOR = 2.5;
+interface ReportSettings {
+  weeksPerMonth: number;
+  viewFactor: number;
+  maxVisitorsPerWeek: number;
+}
+
+async function getReportSettings(): Promise<ReportSettings> {
+  const [weeksPerMonth, viewFactor, maxVisitorsPerWeek] = await Promise.all([
+    storage.getSystemSettingNumber("reportWeeksPerMonth", DEFAULT_SYSTEM_SETTINGS.reportWeeksPerMonth),
+    storage.getSystemSettingNumber("reportViewFactor", DEFAULT_SYSTEM_SETTINGS.reportViewFactor),
+    storage.getSystemSettingNumber("maxVisitorsPerWeek", DEFAULT_SYSTEM_SETTINGS.maxVisitorsPerWeek),
+  ]);
+  return { weeksPerMonth, viewFactor, maxVisitorsPerWeek };
+}
 
 interface ReportData {
   advertiserId: string;
@@ -31,9 +44,10 @@ interface ReportData {
   estimatedVisitors: number;
   estimatedImpressions: number;
   regionsLabel: string;
+  cappedLocationsCount: number;
 }
 
-async function generateReportData(advertiserId: string, periodKey: string): Promise<ReportData | null> {
+async function generateReportData(advertiserId: string, periodKey: string, settings: ReportSettings): Promise<ReportData | null> {
   const advertiser = await storage.getAdvertiser(advertiserId);
   if (!advertiser || !advertiser.email) {
     console.log(`[MonthlyReport] Skipping advertiser ${advertiserId}: no email`);
@@ -42,8 +56,6 @@ async function generateReportData(advertiserId: string, periodKey: string): Prom
 
   const [year, month] = periodKey.split("-").map(Number);
   const monthLabel = `${MONTH_LABELS_NL[month - 1]} ${year}`;
-  
-  const weeksInMonth = 4.33;
   
   const liveLocations = await db
     .select({
@@ -64,12 +76,20 @@ async function generateReportData(advertiserId: string, periodKey: string): Prom
   }
 
   const liveLocationsCount = liveLocations.length;
+  let cappedLocationsCount = 0;
   
   const estimatedVisitors = Math.round(
-    liveLocations.reduce((sum, loc) => sum + (loc.visitorsPerWeek || 0), 0) * weeksInMonth
+    liveLocations.reduce((sum, loc) => {
+      const rawVisitors = loc.visitorsPerWeek || 0;
+      if (rawVisitors > settings.maxVisitorsPerWeek) {
+        cappedLocationsCount++;
+        return sum + settings.maxVisitorsPerWeek;
+      }
+      return sum + rawVisitors;
+    }, 0) * settings.weeksPerMonth
   );
   
-  const estimatedImpressions = Math.round(estimatedVisitors * VIEW_FACTOR);
+  const estimatedImpressions = Math.round(estimatedVisitors * settings.viewFactor);
   
   const uniqueRegions = [...new Set(liveLocations.map(l => l.regionCode).filter(Boolean))];
   const regionsLabel = uniqueRegions.length > 0 ? uniqueRegions.join(", ") : "Diverse regio's";
@@ -85,7 +105,46 @@ async function generateReportData(advertiserId: string, periodKey: string): Prom
     estimatedVisitors,
     estimatedImpressions,
     regionsLabel,
+    cappedLocationsCount,
   };
+}
+
+export async function flagLocationsNeedingReview(): Promise<number> {
+  const maxVisitors = await storage.getSystemSettingNumber(
+    "maxVisitorsPerWeek", 
+    DEFAULT_SYSTEM_SETTINGS.maxVisitorsPerWeek
+  );
+  
+  const [result] = await db.update(locations)
+    .set({ 
+      needsReview: true,
+      needsReviewReason: `Bezoekersaantal overschrijdt rapportage-limiet (${maxVisitors.toLocaleString("nl-NL")}/week)`
+    })
+    .where(and(
+      gt(locations.visitorsPerWeek, maxVisitors),
+      eq(locations.needsReview, false)
+    ))
+    .returning();
+  
+  const flaggedCount = result ? 1 : 0;
+  
+  const allFlagged = await db.select({ id: locations.id })
+    .from(locations)
+    .where(and(
+      gt(locations.visitorsPerWeek, maxVisitors),
+      eq(locations.needsReview, false)
+    ));
+  
+  if (allFlagged.length > 0) {
+    await db.update(locations)
+      .set({ 
+        needsReview: true,
+        needsReviewReason: `Bezoekersaantal overschrijdt rapportage-limiet (${maxVisitors.toLocaleString("nl-NL")}/week)`
+      })
+      .where(gt(locations.visitorsPerWeek, maxVisitors));
+  }
+  
+  return allFlagged.length;
 }
 
 async function sendMonthlyReportEmail(data: ReportData): Promise<boolean> {
@@ -219,6 +278,14 @@ export async function runMonthlyReportWorker(options?: {
   
   console.log(`[MonthlyReport] Starting monthly report run for period: ${periodKey}`);
   
+  const settings = await getReportSettings();
+  console.log(`[MonthlyReport] Using settings: weeksPerMonth=${settings.weeksPerMonth}, viewFactor=${settings.viewFactor}, maxVisitorsPerWeek=${settings.maxVisitorsPerWeek}`);
+  
+  const flaggedCount = await flagLocationsNeedingReview();
+  if (flaggedCount > 0) {
+    console.log(`[MonthlyReport] Flagged ${flaggedCount} locations with suspicious visitor counts`);
+  }
+  
   const allAdvertisers = await db.select({ id: advertisers.id })
     .from(advertisers)
     .where(eq(advertisers.onboardingStatus, "CONTRACT_SIGNED"));
@@ -238,7 +305,7 @@ export async function runMonthlyReportWorker(options?: {
       continue;
     }
     
-    const reportData = await generateReportData(advertiserId, periodKey);
+    const reportData = await generateReportData(advertiserId, periodKey, settings);
     if (!reportData) {
       skipped++;
       continue;
