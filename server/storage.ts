@@ -3197,6 +3197,49 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ============================================================================
+  // SYSTEM SETTINGS
+  // ============================================================================
+
+  async getSystemSetting(key: string): Promise<schema.SystemSetting | undefined> {
+    const [setting] = await db.select().from(schema.systemSettings)
+      .where(eq(schema.systemSettings.key, key));
+    return setting;
+  }
+
+  async getSystemSettingValue(key: string, defaultValue: string): Promise<string> {
+    const setting = await this.getSystemSetting(key);
+    return setting?.value ?? defaultValue;
+  }
+
+  async getSystemSettingNumber(key: string, defaultValue: number): Promise<number> {
+    const value = await this.getSystemSettingValue(key, String(defaultValue));
+    const parsed = parseFloat(value);
+    return isNaN(parsed) ? defaultValue : parsed;
+  }
+
+  async getAllSystemSettings(): Promise<schema.SystemSetting[]> {
+    return db.select().from(schema.systemSettings)
+      .orderBy(schema.systemSettings.category, schema.systemSettings.key);
+  }
+
+  async getSystemSettingsByCategory(category: string): Promise<schema.SystemSetting[]> {
+    return db.select().from(schema.systemSettings)
+      .where(eq(schema.systemSettings.category, category))
+      .orderBy(schema.systemSettings.key);
+  }
+
+  async upsertSystemSetting(key: string, value: string, updatedBy?: string): Promise<schema.SystemSetting> {
+    const [setting] = await db.insert(schema.systemSettings)
+      .values({ key, value, updatedBy, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: schema.systemSettings.key,
+        set: { value, updatedBy, updatedAt: new Date() }
+      })
+      .returning();
+    return setting;
+  }
+
+  // ============================================================================
   // REPORT LOGS
   // ============================================================================
 

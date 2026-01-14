@@ -252,6 +252,34 @@ export type InsertReportLog = z.infer<typeof insertReportLogSchema>;
 export type ReportLog = typeof reportLogs.$inferSelect;
 
 /**
+ * SystemSettings - Configurable operational settings
+ * Used for thresholds, factors, and other admin-configurable values
+ */
+export const systemSettings = pgTable("system_settings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  key: text("key").notNull().unique(), // Setting key (e.g., "reportWeeksPerMonth")
+  value: text("value").notNull(), // Setting value (stored as string, parsed by consumers)
+  description: text("description"), // Human-readable description
+  category: text("category").default("general"), // Category for grouping in UI
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  updatedBy: text("updated_by"), // Who last updated this setting
+});
+
+export const insertSystemSettingSchema = createInsertSchema(systemSettings).omit({
+  id: true,
+  updatedAt: true,
+});
+export type InsertSystemSetting = z.infer<typeof insertSystemSettingSchema>;
+export type SystemSetting = typeof systemSettings.$inferSelect;
+
+// Default system settings for reporting
+export const DEFAULT_SYSTEM_SETTINGS = {
+  reportWeeksPerMonth: 4.33,
+  reportViewFactor: 2.5,
+  maxVisitorsPerWeek: 50000,
+} as const;
+
+/**
  * Locations - Partner businesses that host screens
  * These earn revenue share based on screen time at their location
  * isPlaceholder: true means this was auto-created from Yodeck import and needs Moneybird linking
@@ -337,6 +365,9 @@ export const locations = pgTable("locations", {
   exclusivityMode: text("exclusivity_mode").notNull().default("STRICT"), // STRICT = max 1 per competitorGroup, RELAXED = max 2
   yodeckPlaylistId: text("yodeck_playlist_id"), // Ad playlist for this location
   lastSyncAt: timestamp("last_sync_at"), // Last Yodeck sync time
+  // Reporting review flag - set when visitor data exceeds configured limits
+  needsReview: boolean("needs_review").default(false), // True if visitorData needs manual review
+  needsReviewReason: text("needs_review_reason"), // Reason for review (e.g., "bezoekersaantal overschrijdt limiet")
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
