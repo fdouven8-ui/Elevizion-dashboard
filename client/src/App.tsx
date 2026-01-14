@@ -46,6 +46,7 @@ import LocationIntake from "@/pages/LocationIntake";
 import LocationContract from "@/pages/LocationContract";
 import UploadPortal from "@/pages/UploadPortal";
 import PublishQueue from "@/pages/PublishQueue";
+import ClaimPage from "@/pages/ClaimPage";
 import NotFound from "@/pages/not-found";
 import Adverteren from "@/pages/marketing/Adverteren";
 import SchermLocatie from "@/pages/marketing/SchermLocatie";
@@ -118,6 +119,7 @@ function Router() {
       <Route path="/onboarding/location/intake/:token" component={LocationIntake} />
       <Route path="/onboarding/location/contract/:token" component={LocationContract} />
       <Route path="/upload/:token" component={UploadPortal} />
+      <Route path="/claim/:token" component={ClaimPage} />
       <Route component={DashboardRouter} />
     </Switch>
   );

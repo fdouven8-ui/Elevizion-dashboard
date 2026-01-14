@@ -2051,15 +2051,18 @@ Sitemap: ${SITE_URL}/sitemap.xml
       console.log(`[Publish] Re-simulating plan ${planId} before publish...`);
       const simResult = await placementEngine.simulate(planId);
       
-      if (!simResult.success || simResult.status !== "SIMULATED_OK") {
+      if (!simResult.success) {
         // Re-simulation failed - revert to WAITING so plan can be re-simulated
         console.log(`[Publish] Re-simulation failed for plan ${planId}, reverting to WAITING`);
-        await storage.updatePlacementPlan(planId, { status: "WAITING" });
+        const { db } = await import("./db");
+        const { placementPlans } = await import("@shared/schema");
+        const { eq } = await import("drizzle-orm");
+        await db.update(placementPlans).set({ status: "WAITING" }).where(eq(placementPlans.id, planId));
         
         return res.status(400).json({ 
           message: "Plan kon niet worden gepubliceerd: capaciteit of exclusiviteit is gewijzigd sinds goedkeuring. Plan is teruggezet naar WAITING.",
           resimulationFailed: true,
-          simulationReport: simResult.report,
+          reason: simResult.message || "Onvoldoende capaciteit beschikbaar",
           newStatus: "WAITING",
         });
       }
@@ -2162,10 +2165,13 @@ Sitemap: ${SITE_URL}/sitemap.xml
           console.log(`[BulkPublish] Re-simulating plan ${planId} before publish...`);
           const simResult = await placementEngine.simulate(planId);
           
-          if (!simResult.success || simResult.status !== "SIMULATED_OK") {
+          if (!simResult.success) {
             // Revert to WAITING so plan can be re-simulated
             console.log(`[BulkPublish] Re-simulation failed for plan ${planId}, reverting to WAITING`);
-            await storage.updatePlacementPlan(planId, { status: "WAITING" });
+            const { db } = await import("./db");
+            const { placementPlans } = await import("@shared/schema");
+            const { eq } = await import("drizzle-orm");
+            await db.update(placementPlans).set({ status: "WAITING" }).where(eq(placementPlans.id, planId));
             
             results.push({ 
               planId, 
@@ -2299,23 +2305,14 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       // Send confirmation email
       try {
-        const { sendEmail, baseEmailTemplate } = await import("./email");
-        const emailContent = baseEmailTemplate({
-          subject: "Je staat op de wachtlijst - Elevizion",
-          preheader: "We houden je op de hoogte zodra er plek is",
-          bodyBlocks: [
-            { type: "heading", content: `Hoi ${contactName.split(" ")[0]}!` },
-            { type: "paragraph", content: `Je staat nu op de wachtlijst voor het ${packageType} pakket. Zodra er plek vrijkomt in de door jou gekozen regio's sturen we je een e-mail met een link om je plek te claimen.` },
-            { type: "paragraph", content: `Pakket: ${packageType}` },
-            { type: "paragraph", content: `Regio's: ${targetRegionCodes?.join(", ") || "Alle regio's"}` },
-            { type: "paragraph", content: "Je hoeft niets te doen - we nemen contact met je op!" },
-          ],
-        });
-        
-        await sendEmail({
-          to: email,
-          subject: "Je staat op de wachtlijst - Elevizion",
-          html: emailContent.html,
+        const { sendWaitlistConfirmationEmail } = await import("./services/waitlistEmailService");
+        await sendWaitlistConfirmationEmail({
+          contactName,
+          companyName,
+          email,
+          packageType,
+          businessCategory,
+          targetRegionCodes: targetRegionCodes || [],
         });
       } catch (emailError: any) {
         console.error("[Waitlist] Failed to send confirmation email:", emailError);
@@ -2383,24 +2380,20 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
       
-      // Return claim info for frontend
+      const { REGIONS, BUSINESS_CATEGORIES } = await import("@shared/regions");
+      const regionsLabel = (request.targetRegionCodes || [])
+        .map(code => REGIONS.find(r => r.code === code)?.label || code)
+        .join(", ");
+      
       res.json({
-        success: true,
-        canClaim: true,
-        request: {
-          id: request.id,
-          companyName: request.companyName,
-          contactName: request.contactName,
-          email: request.email,
-          phone: request.phone,
-          kvkNumber: request.kvkNumber,
-          vatNumber: request.vatNumber,
-          packageType: request.packageType,
-          businessCategory: request.businessCategory,
-          targetRegionCodes: request.targetRegionCodes,
-        },
-        availableSlots: capacityCheck.availableSlotCount,
-        requiredSlots: capacityCheck.requiredCount,
+        valid: true,
+        available: true,
+        companyName: request.companyName,
+        contactName: request.contactName,
+        packageType: request.packageType,
+        businessCategory: request.businessCategory,
+        regionsLabel,
+        videoDurationSeconds: 15,
       });
     } catch (error: any) {
       console.error("[Claim] Error checking claim:", error);
@@ -2430,7 +2423,28 @@ Sitemap: ${SITE_URL}/sitemap.xml
       });
       
       if (!capacityCheck.isAvailable) {
-        await storage.updateWaitlistRequest(request.id, { status: "WAITING", inviteTokenHash: null });
+        await storage.updateWaitlistRequest(request.id, { 
+          status: "WAITING", 
+          inviteTokenHash: null,
+          inviteSentAt: null,
+          inviteExpiresAt: null,
+        });
+        
+        // Send unavailable email
+        try {
+          const { sendWaitlistUnavailableEmail } = await import("./services/waitlistEmailService");
+          await sendWaitlistUnavailableEmail({
+            contactName: request.contactName,
+            companyName: request.companyName,
+            email: request.email,
+            packageType: request.packageType,
+            businessCategory: request.businessCategory,
+            targetRegionCodes: request.targetRegionCodes || [],
+          });
+        } catch (emailError: any) {
+          console.error("[Claim] Failed to send unavailable email:", emailError);
+        }
+        
         return res.status(400).json({ message: "Plek is niet meer beschikbaar" });
       }
       
@@ -2440,7 +2454,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         claimedAt: new Date()
       });
       
-      // Redirect info - client should call /api/start with prefilled data
+      // Return form data to pre-fill the /start form
       res.json({ 
         success: true, 
         message: "Plek geclaimd! Ga door met de aanmelding.",

@@ -1,0 +1,232 @@
+COPY/CONTENT IMPLEMENTATIE: “GEEN PLEK” UI + WAITLIST MAILS + CLAIM PAGE TEKSTEN (NL, KANT-EN-KLAAR)
+
+CONTEXT
+Capacity gating + waitlist is volledig gebouwd en werkt.
+Nu moeten de teksten (website UI + mails + claim pagina) professioneel, duidelijk en conversie-gericht worden.
+Alles moet in het Nederlands, kort, betrouwbaar, en met placeholders.
+
+DOEL
+1) Update de /start flow UI wanneer er GEEN plek is:
+   - Geen “error” gevoel, maar professioneel: “regio vol” + opties
+   - Toon wachtrij-CTA + regio aanpassen
+2) Voeg/Update 3 e-mail templates:
+   - Wachtlijst bevestiging (na WAITING)
+   - Claim mail (na INVITED, 48 uur)
+   - Claim verlopen / plek weg (optioneel, bij EXPIRED of bij claim-check fail)
+3) Update claim page UI tekst ( /claim/:token ) voor:
+   - Success (plek beschikbaar → ga door)
+   - Fail (plek net weg → terug op wachtlijst)
+   - Expired token
+
+BELANGRIJK
+- Gebruik bestaande MailEvent/EmailLogs systeem (idempotent).
+- Gebruik bestaande template store (MailTemplate DB of files).
+- Alle teksten met placeholders, geen hardcoded prijzen.
+- Adres van Douven Services mag NIET op website zichtbaar.
+- Afzender no-reply@elevizion.nl, reply-to info@elevizion.nl.
+
+────────────────────────
+A) /START “GEEN PLEK” UI (CAPACITY GATING RESPONSE)
+────────────────────────
+Waar: op /start na submit, wanneer availability check NOT AVAILABLE.
+
+Vervang huidige foutmelding door dit UI blok:
+
+TITEL:
+"Op dit moment is deze regio vol"
+
+TEKST:
+"We willen je advertentie niet verkopen als we ’m niet direct kunnen plaatsen.
+Kies een extra gebied of zet jezelf op de wachtlijst. Je krijgt automatisch een e-mail zodra er plek vrijkomt."
+
+DETAILS BLOK (klein):
+"Pakket: {{packageLabel}}"
+"Gekozen gebieden: {{regionsLabel}}"
+"Beschikbaar: {{availableCount}} van {{requiredCount}} locaties"
+
+CTA BUTTONS:
+1) Primary: "Zet mij op de wachtlijst"
+2) Secondary: "Gebieden aanpassen"
+
+FOOTNOTE (klein):
+"Je hebt 48 uur om je plek te claimen zodra je een uitnodiging krijgt."
+
+OPTIONEEL: Toon “Waarom geen plek?”
+Accordion met reasons uit simulation:
+- "Te weinig beschikbare plekken"
+- "Concurrentie-exclusiviteit"
+- "Schermen offline"
+- "Wacht op synchronisatie"
+(tekst mapping van reason codes naar NL)
+
+────────────────────────
+B) E-MAIL TEMPLATE 1: WACHTLIJST BEVESTIGING
+────────────────────────
+Template key: waitlist_confirmation_nl
+
+SUBJECT:
+"Je staat op de wachtlijst bij Elevizion"
+
+PREHEADER:
+"We mailen je zodra er plek vrijkomt in je gekozen gebieden."
+
+BODY (HTML + TEXT):
+Hallo {{contactName}},
+
+We hebben je aanmelding ontvangen. Op dit moment is er nog niet genoeg ruimte in je gekozen gebieden om je pakket direct te plaatsen.
+
+**Jouw aanvraag**
+- Pakket: {{packageLabel}}
+- Gebieden: {{regionsLabel}}
+- Branche: {{businessCategoryLabel}}
+
+Zodra er plek vrijkomt, krijg je automatisch een e-mail waarmee je jouw plek kunt claimen.
+Daarna rond je in één keer alles af: akkoord + upload van je advertentie.
+
+**Belangrijk**
+- Een uitnodiging is 48 uur geldig.
+- Daarna komt je aanvraag automatisch terug op de wachtlijst.
+
+Vragen? Reageer op deze mail of mail naar info@elevizion.nl.
+
+Groet,
+Elevizion (Douven Services)
+
+FOOTER:
+Elevizion (Douven Services) · KvK 90982541 · BTW NL004857473B37
+
+────────────────────────
+C) E-MAIL TEMPLATE 2: CLAIM UITNODIGING (INVITED)
+────────────────────────
+Template key: waitlist_claim_invite_nl
+
+SUBJECT:
+"Er is plek vrijgekomen — claim je pakket (48 uur)"
+
+PREHEADER:
+"Je kunt nu je advertentie starten. Deze link is 48 uur geldig."
+
+BODY:
+Hallo {{contactName}},
+
+Goed nieuws: er is plek vrijgekomen binnen je gekozen gebieden.
+
+**Jouw plek staat klaar**
+- Pakket: {{packageLabel}}
+- Gebieden: {{regionsLabel}}
+- Branche: {{businessCategoryLabel}}
+
+👉 Claim je plek via deze link (48 uur geldig):
+{{claimUrl}}
+
+Na het claimen rond je direct alles af:
+1) bedrijfsgegevens bevestigen
+2) akkoord + verificatie
+3) upload je advertentie (standaard {{videoDurationSeconds}} sec, tenzij anders overeengekomen)
+
+Als je niet op tijd claimt, komt je aanvraag automatisch terug op de wachtlijst.
+
+Groet,
+Elevizion (Douven Services)
+
+FOOTER:
+Elevizion (Douven Services) · KvK 90982541 · BTW NL004857473B37
+
+────────────────────────
+D) E-MAIL TEMPLATE 3: CLAIM VERLOPEN / PLEK WEER WEG (OPTIONEEL, AANRADER)
+────────────────────────
+Template key: waitlist_claim_unavailable_nl
+
+SUBJECT:
+"Je plek is (nog) niet beschikbaar — we houden je op de hoogte"
+
+PREHEADER:
+"Je aanvraag blijft actief op de wachtlijst."
+
+BODY:
+Hallo {{contactName}},
+
+Net op dit moment is er (weer) te weinig plek beschikbaar in de gekozen gebieden om je pakket te starten.
+Geen zorgen — je staat nog steeds op de wachtlijst en we mailen je automatisch zodra er weer plek is.
+
+**Jouw aanvraag**
+- Pakket: {{packageLabel}}
+- Gebieden: {{regionsLabel}}
+
+Groet,
+Elevizion (Douven Services)
+
+FOOTER:
+Elevizion (Douven Services) · KvK 90982541 · BTW NL004857473B37
+
+Trigger:
+- bij claim-check fail (plek net weg)
+- en/of bij EXPIRED (token verlopen) als je dat wil
+
+────────────────────────
+E) CLAIM PAGE UI TEKSTEN (/claim/:token)
+────────────────────────
+1) SUCCESS (plek beschikbaar)
+TITLE:
+"Je plek is bevestigd ✅"
+
+TEXT:
+"Top! Je kunt nu direct verder met akkoord en daarna je advertentie uploaden."
+
+BUTTON:
+"Doorgaan"
+
+SMALL:
+"Let op: standaard video is {{videoDurationSeconds}} seconden (tenzij anders overeengekomen)."
+
+2) FAIL (plek net weg)
+TITLE:
+"Plek tijdelijk niet beschikbaar"
+
+TEXT:
+"Er is net te weinig plek beschikbaar in de gekozen gebieden.
+We hebben je aanvraag terug op de wachtlijst gezet en mailen je automatisch zodra er weer plek is."
+
+BUTTON:
+"Terug naar overzicht" of "Sluiten"
+
+3) EXPIRED TOKEN
+TITLE:
+"Deze uitnodiging is verlopen"
+
+TEXT:
+"De claim-link was 48 uur geldig. Je aanvraag staat weer op de wachtlijst en je ontvangt automatisch een nieuwe uitnodiging zodra er plek is."
+
+BUTTON:
+"Oké"
+
+────────────────────────
+F) IMPLEMENTATIE DETAILS
+────────────────────────
+1) Voeg deze templates toe/werk bij in MailTemplate store met keys:
+- waitlist_confirmation_nl
+- waitlist_claim_invite_nl
+- waitlist_claim_unavailable_nl
+
+2) Koppel templates aan events:
+- WaitlistRequest WAITING -> send waitlist_confirmation_nl
+- WaitlistRequest INVITED -> send waitlist_claim_invite_nl
+- Claim fail OR EXPIRED -> send waitlist_claim_unavailable_nl (optioneel, maar implementeren)
+
+3) Zorg dat placeholders gevuld worden:
+- contactName, companyName
+- packageLabel (Single/Triple/Ten)
+- regionsLabel (mooie join met komma’s)
+- businessCategoryLabel (net label, niet code)
+- claimUrl
+- videoDurationSeconds (default 15)
+
+4) Update /start UI component voor not-available state met bovengenoemde copy.
+
+OUTPUT
+- Welke UI bestanden aangepast (/start, /claim)
+- Welke mail templates keys zijn toegevoegd
+- Welke events triggert welke template
+- Screenshot/preview van UI states (beschrijving is ok)
+
+IMPLEMENT NOW — NO QUESTIONS, KEEP IT SIMPLE.

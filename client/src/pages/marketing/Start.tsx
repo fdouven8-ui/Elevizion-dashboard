@@ -14,8 +14,15 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { 
-  Monitor, Check, ArrowRight, ArrowLeft, Loader2, AlertCircle, Video, Info
+  Monitor, Check, ArrowRight, ArrowLeft, Loader2, AlertCircle, Video, Info,
+  Clock, MapPin, ChevronDown
 } from "lucide-react";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import MarketingHeader from "@/components/marketing/MarketingHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
 import { PRICING_PACKAGES, PRICING_CONSTANTS, type PricingPackage } from "@/lib/pricing";
@@ -39,6 +46,43 @@ interface FormData {
 interface FormErrors {
   [key: string]: string;
 }
+
+interface NoCapacityResponse {
+  noCapacity: true;
+  message: string;
+  availableSlotCount: number;
+  requiredCount: number;
+  topReasons: string[];
+  formData: {
+    companyName: string;
+    contactName: string;
+    email: string;
+    phone: string;
+    kvkNumber: string;
+    vatNumber: string;
+    packageType: string;
+    businessCategory: string;
+    targetRegionCodes: string[];
+    addressLine1: string;
+    postalCode: string;
+    city: string;
+  };
+}
+
+const PACKAGE_LABELS: Record<string, string> = {
+  SINGLE: "Enkelvoudig (1 scherm)",
+  TRIPLE: "Drievoudig (3 schermen)",
+  TEN: "Tien (10 schermen)",
+  CUSTOM: "Maatwerk",
+};
+
+const REASON_TRANSLATIONS: Record<string, string> = {
+  insufficient_capacity: "Te weinig beschikbare plekken",
+  competitor_exclusivity: "Concurrentie-exclusiviteit",
+  screens_offline: "Schermen offline",
+  sync_pending: "Wacht op synchronisatie",
+  no_locations_in_region: "Geen locaties in deze regio",
+};
 
 function getPackageByQueryParam(param: string | null): PricingPackage | null {
   if (!param) return null;
@@ -69,6 +113,7 @@ export default function Start() {
   const selectedPackage = getPackageByQueryParam(packageParam);
 
   const [step, setStep] = useState(0);
+  const [noCapacityData, setNoCapacityData] = useState<NoCapacityResponse | null>(null);
   const [formData, setFormData] = useState<FormData>({
     companyName: "",
     contactName: "",
@@ -90,6 +135,34 @@ export default function Start() {
     }
   }, [selectedPackage, navigate]);
 
+  // Pre-fill form from waitlist claim data if coming from claim page
+  useEffect(() => {
+    const fromClaim = urlParams.get("fromClaim");
+    if (fromClaim === "true") {
+      const claimDataStr = sessionStorage.getItem("waitlistClaimData");
+      if (claimDataStr) {
+        try {
+          const claimData = JSON.parse(claimDataStr);
+          setFormData((prev) => ({
+            ...prev,
+            companyName: claimData.companyName || prev.companyName,
+            contactName: claimData.contactName || prev.contactName,
+            email: claimData.email || prev.email,
+            phone: claimData.phone || prev.phone,
+            kvkNumber: claimData.kvkNumber || prev.kvkNumber,
+            vatNumber: claimData.vatNumber || prev.vatNumber,
+            businessCategory: claimData.businessCategory || prev.businessCategory,
+            targetRegionCodes: claimData.targetRegionCodes || prev.targetRegionCodes,
+          }));
+          // Clear the sessionStorage after using it
+          sessionStorage.removeItem("waitlistClaimData");
+        } catch (e) {
+          console.error("Failed to parse claim data from sessionStorage", e);
+        }
+      }
+    }
+  }, []);
+
   const submitMutation = useMutation({
     mutationFn: async (data: FormData & { packageType: string }) => {
       const response = await fetch("/api/start", {
@@ -104,9 +177,44 @@ export default function Start() {
       return response.json();
     },
     onSuccess: (data) => {
+      if (data.noCapacity) {
+        setNoCapacityData(data as NoCapacityResponse);
+        return;
+      }
       if (data.redirectUrl) {
         window.location.href = data.redirectUrl;
       }
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Fout",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const waitlistMutation = useMutation({
+    mutationFn: async () => {
+      if (!noCapacityData) throw new Error("Geen gegevens beschikbaar");
+      const response = await fetch("/api/waitlist/join", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(noCapacityData.formData),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Er is een fout opgetreden");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Op de wachtlijst",
+        description: "Je staat nu op de wachtlijst. We mailen je zodra er plek is.",
+      });
+      setNoCapacityData(null);
+      navigate("/");
     },
     onError: (error: Error) => {
       toast({
@@ -265,7 +373,109 @@ export default function Start() {
           ))}
         </div>
 
-        <Card className="border-2 border-slate-200">
+        {noCapacityData ? (
+          <Card className="border-2 border-amber-300 bg-amber-50/50">
+            <CardHeader className="pb-2">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center">
+                  <Clock className="h-6 w-6 text-amber-600" />
+                </div>
+                <div>
+                  <CardTitle className="text-xl text-slate-800">Op dit moment is deze regio vol</CardTitle>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <p className="text-slate-600">
+                We willen je advertentie niet verkopen als we 'm niet direct kunnen plaatsen. 
+                Kies een extra gebied of zet jezelf op de wachtlijst. Je krijgt automatisch een e-mail zodra er plek vrijkomt.
+              </p>
+
+              <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <Monitor className="h-4 w-4 text-slate-500" />
+                  <span className="text-slate-600">Pakket:</span>
+                  <span className="font-medium">{PACKAGE_LABELS[noCapacityData.formData.packageType] || noCapacityData.formData.packageType}</span>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  <MapPin className="h-4 w-4 text-slate-500" />
+                  <span className="text-slate-600">Gekozen gebieden:</span>
+                  <span className="font-medium">
+                    {noCapacityData.formData.targetRegionCodes
+                      .map(code => REGIONS.find(r => r.code === code)?.label || code)
+                      .join(", ")}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  <AlertCircle className="h-4 w-4 text-amber-500" />
+                  <span className="text-slate-600">Beschikbaar:</span>
+                  <span className="font-medium text-amber-600">
+                    {noCapacityData.availableSlotCount} van {noCapacityData.requiredCount} locaties
+                  </span>
+                </div>
+              </div>
+
+              {noCapacityData.topReasons && noCapacityData.topReasons.length > 0 && (
+                <Accordion type="single" collapsible className="w-full">
+                  <AccordionItem value="reasons" className="border-slate-200">
+                    <AccordionTrigger className="text-sm text-slate-600 hover:no-underline">
+                      Waarom geen plek?
+                    </AccordionTrigger>
+                    <AccordionContent>
+                      <ul className="space-y-1">
+                        {noCapacityData.topReasons.map((reason, i) => (
+                          <li key={i} className="text-sm text-slate-600 flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 bg-amber-500 rounded-full" />
+                            {REASON_TRANSLATIONS[reason] || reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </AccordionContent>
+                  </AccordionItem>
+                </Accordion>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-3">
+                <Button
+                  onClick={() => waitlistMutation.mutate()}
+                  disabled={waitlistMutation.isPending}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+                  data-testid="button-join-waitlist"
+                >
+                  {waitlistMutation.isPending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Bezig...
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="h-4 w-4 mr-2" />
+                      Zet mij op de wachtlijst
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setNoCapacityData(null);
+                    setStep(2);
+                  }}
+                  disabled={waitlistMutation.isPending}
+                  className="flex-1"
+                  data-testid="button-adjust-regions"
+                >
+                  <MapPin className="h-4 w-4 mr-2" />
+                  Gebieden aanpassen
+                </Button>
+              </div>
+
+              <p className="text-xs text-slate-500 text-center">
+                Je hebt 48 uur om je plek te claimen zodra je een uitnodiging krijgt.
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card className="border-2 border-slate-200">
           <CardHeader>
             <CardTitle className="text-xl">{steps[step].title}</CardTitle>
             <CardDescription>{steps[step].description}</CardDescription>
@@ -562,6 +772,7 @@ export default function Start() {
             </div>
           </CardContent>
         </Card>
+        )}
 
         <p className="text-center text-sm text-slate-500 mt-6">
           Vragen? Neem <a href="/contact" className="underline hover:text-emerald-600">contact</a> op.

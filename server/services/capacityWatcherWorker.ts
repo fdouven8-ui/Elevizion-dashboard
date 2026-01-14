@@ -64,25 +64,21 @@ async function checkWaitingRequests(): Promise<{
           
           // Send claim email
           try {
-            const { sendEmail, baseEmailTemplate } = await import("../email");
-            const claimUrl = `${process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : "http://localhost:5000"}/claim/${claimToken}`;
+            const { sendWaitlistClaimInviteEmail } = await import("./waitlistEmailService");
+            const baseUrl = process.env.REPLIT_DEV_DOMAIN 
+              ? `https://${process.env.REPLIT_DEV_DOMAIN}` 
+              : "http://localhost:5000";
+            const claimUrl = `${baseUrl}/claim/${claimToken}`;
             
-            const emailContent = baseEmailTemplate({
-              subject: "Er is plek! Claim je pakket - Elevizion",
-              preheader: "Je kunt nu je plek claimen",
-              title: `Goed nieuws, ${request.contactName.split(" ")[0]}!`,
-              introText: `Er is plek vrijgekomen voor het ${request.packageType} pakket in de door jou gekozen regio's.`,
-              bodyBlocks: [
-                { type: "paragraph", content: `Claim nu je plek voordat iemand anders het doet. De link is ${INVITE_EXPIRY_HOURS} uur geldig.` },
-                { type: "paragraph", content: `Claim link: ${claimUrl}` },
-              ],
-              cta: { label: "Claim je plek", url: claimUrl },
-            });
-            
-            await sendEmail({
-              to: request.email,
-              subject: "Er is plek! Claim je pakket - Elevizion",
-              html: emailContent.html,
+            await sendWaitlistClaimInviteEmail({
+              contactName: request.contactName,
+              companyName: request.companyName,
+              email: request.email,
+              packageType: request.packageType,
+              businessCategory: request.businessCategory,
+              targetRegionCodes: request.targetRegionCodes || [],
+              claimUrl,
+              videoDurationSeconds: 15,
             });
             
             stats.invited++;
