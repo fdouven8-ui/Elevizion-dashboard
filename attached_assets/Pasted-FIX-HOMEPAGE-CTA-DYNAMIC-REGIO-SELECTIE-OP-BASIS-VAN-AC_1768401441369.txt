@@ -1,0 +1,130 @@
+FIX HOMEPAGE CTA + DYNAMIC REGIO SELECTIE OP BASIS VAN ACTUELE SCHERMLOCATIES (GEEN PROVINCIES)
+
+CONTEXT
+- /start self-serve flow is live en moet de standaard route zijn voor adverteerders.
+- Homepage CTA “Ik wil adverteren” gaat nog naar oude contact/lead flow → moet naar pakketten (/start).
+- Regio selectie op /start toont nu alle provincies → dit moet dynamisch worden op basis van actuele schermlocaties (plaatsen/gebieden waar we écht schermen hebben).
+- Capacity gating/waitlist en placement engine bestaan al.
+
+DOEL
+1) Update homepage (en alle plekken op de site) zodat “Ik wil adverteren” altijd naar /start (pakket keuze) gaat.
+2) Vervang de regio selector in /start:
+   - Geen provincies meer
+   - Toon actuele plaatsnamen/gebieden gebaseerd op ScreenLocation records (die aan Yodeck gekoppeld zijn)
+   - Alleen gebieden tonen die “actief” zijn (online + playlist gekoppeld + region/city bekend)
+3) Zorg dat PlacementEngine en gating dezelfde regio-codes gebruiken als /start UI (single source of truth).
+
+BELANGRIJK
+- Geen redesign; alleen routing en data source aanpassen.
+- Geen hardcoded provincielijst meer in UI.
+- Duidelijke UX: zoekveld + selecteer alles/wis + “toon alleen beschikbare” toggle.
+- Gebruik bestaande data klein houden: regio lijst is compact.
+
+────────────────────────
+A) HOMEPAGE CTA “IK WIL ADVERTEREN”
+────────────────────────
+1) Zoek overal in de website code waar “Ik wil adverteren” button/link bestaat (home hero, header, sections, footer).
+2) Vervang destination:
+- Oude lead/contact route -> /start
+3) Zorg dat er OF:
+- /start eerst een pakketkeuze toont (recommended)
+OF:
+- Als je al package knoppen hebt op home: dan direct naar /start?package=single/triple/ten
+
+Recommended UX:
+- “Ik wil adverteren” -> /start (pakket kiezen)
+- “Pakketten bekijken” -> /prijzen (met knoppen die naar /start?package=... gaan)
+
+4) Verwijder/disable oude adverteerder lead flow ONLY als het nergens meer gebruikt wordt (maar laat code bestaan als backup).
+
+────────────────────────
+B) DYNAMIC REGIO LIJST (PLAATSNAMEN VAN SCHERMEN)
+────────────────────────
+1) Define “Region/Area” concept als “plaatsnaam (city)”, eventueel + subgebied.
+We gebruiken:
+- regionCode = slug van city (bijv. "sittard", "maastricht")
+- label = nette city name (Sittard, Maastricht)
+Optioneel: als je meerdere steden met dezelfde naam zou hebben (niet likely), include province suffix.
+
+2) Data source:
+- Use ScreenLocation table als bron.
+- Region/Area opties worden afgeleid uit locaties die:
+  - isOnline = true (of minimaal “active=true”)
+  - yodeckPlaylistId NOT null
+  - city NOT null/empty
+  - (optioneel) lastSyncAt recent genoeg (bijv < 7 dagen) zodat list “actueel” blijft
+
+3) Implement API endpoint:
+GET /api/regions/active
+Returns:
+[
+  { code: "sittard", label: "Sittard", locationCount: 4, onlineCount: 3 },
+  ...
+]
+Rules:
+- Group by normalized city
+- Sort by onlineCount desc, then label asc
+- Deduplicate (case-insensitive, trim)
+- If no locations exist -> return empty list
+
+4) Optional “All areas”:
+- We support multi-select cities.
+- No “provincie” options.
+
+────────────────────────
+C) /START UI REGIO SELECTOR UPDATE
+────────────────────────
+1) Replace the current provinces multi-select with dynamic options from /api/regions/active.
+2) UX requirements:
+- Search input (“Zoek plaats…”)
+- Checkbox list with chips for selected
+- Buttons: “Selecteer alles” / “Wis selectie”
+- Show counts: “X plaatsen geselecteerd”
+- If list is empty:
+  - Show message:
+    “Nog geen actieve schermlocaties beschikbaar. Laat je gegevens achter via /contact.”
+  - Provide button to /contact
+3) Optional toggle:
+- “Toon alleen plaatsen met beschikbare ruimte” (default OFF)
+If ON:
+- For each region option, call lightweight availability preview (or batch endpoint) and hide those with 0 capacity for the chosen package/category.
+(Keep it minimal: if too heavy, skip this toggle for now.)
+
+4) Validation:
+- targetRegionCodes required.
+- Must be subset of codes returned by /api/regions/active.
+- Server-side validation in /api/start: reject unknown codes with Dutch error:
+  “Selecteer een plaats uit de lijst.”
+
+────────────────────────
+D) PLACEMENT ENGINE ALIGNMENT (SINGLE SOURCE OF TRUTH)
+────────────────────────
+1) Ensure ScreenLocation.regionCode is set consistently:
+- regionCode = slug(city)
+- Migration/repair:
+  - For existing locations: if regionCode empty but city exists -> backfill regionCode
+2) PlacementEngine region match must compare against these city-based codes.
+3) Claim/Waitlist/Start all use same targetRegionCodes array.
+
+────────────────────────
+E) SYSTEM HEALTH ADDITIONS (OPTIONAL BUT HELPFUL)
+────────────────────────
+Add checks:
+- “Locaties zonder city” (WARNING)
+- “Locaties zonder yodeckPlaylistId maar online” (FAIL)
+- “Regio-lijst leeg” (WARNING/FAIL depending on stage)
+
+────────────────────────
+F) ACCEPTANCE TESTS
+────────────────────────
+1) Homepage:
+- Click “Ik wil adverteren” -> lands on /start (pakket keuze)
+2) /start:
+- Regio selector shows cities from ScreenLocation, not provinces
+- Selecting cities submits and passes server validation
+3) /api/start:
+- Rejects unknown region codes
+4) Placement:
+- Advertiser targets match city-based regionCode correctly
+
+IMPLEMENT NOW — NO QUESTIONS, NO REDESIGN.

@@ -45,15 +45,16 @@ export default function Landing() {
               Adverteer op digitale reclame schermen bij kappers, sportscholen en horeca in Limburg. Lokale zichtbaarheid voor jouw bedrijf.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center mb-5">
-              <Button 
-                size="lg" 
-                className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-8 py-6 w-full sm:w-auto text-base font-medium shadow-lg shadow-emerald-900/20 transition-colors" 
-                data-testid="button-cta-adverteren"
-                onClick={() => setAdvertiserModalOpen(true)}
-              >
-                <Megaphone className="h-5 w-5" />
-                Ik wil adverteren
-              </Button>
+              <Link href="/start?package=triple">
+                <Button 
+                  size="lg" 
+                  className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-8 py-6 w-full sm:w-auto text-base font-medium shadow-lg shadow-emerald-900/20 transition-colors" 
+                  data-testid="button-cta-adverteren"
+                >
+                  <Megaphone className="h-5 w-5" />
+                  Ik wil adverteren
+                </Button>
+              </Link>
               <Button 
                 size="lg" 
                 variant="outline" 
@@ -124,13 +125,14 @@ export default function Landing() {
                     <span>Zichtbaar waar je doelgroep komt</span>
                   </li>
                 </ul>
-                <Button 
-                  className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 mt-4 transition-colors font-semibold shadow-lg"
-                  onClick={() => setAdvertiserModalOpen(true)}
-                >
-                  <Megaphone className="h-4 w-4" />
-                  Ik wil adverteren
-                </Button>
+                <Link href="/start?package=triple">
+                  <Button 
+                    className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 mt-4 transition-colors font-semibold shadow-lg"
+                  >
+                    <Megaphone className="h-4 w-4" />
+                    Ik wil adverteren
+                  </Button>
+                </Link>
               </CardContent>
             </Card>
             
@@ -189,14 +191,15 @@ export default function Landing() {
             <p className="text-white/80 mb-8 leading-relaxed text-lg">
               Je boodschap komt in beeld waar mensen wachten, kijken en besluiten.
             </p>
-            <Button 
-              size="lg" 
-              className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20"
-              onClick={() => setAdvertiserModalOpen(true)}
-            >
-              <Megaphone className="h-5 w-5" />
-              Ik wil adverteren
-            </Button>
+            <Link href="/start?package=triple">
+              <Button 
+                size="lg" 
+                className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20"
+              >
+                <Megaphone className="h-5 w-5" />
+                Ik wil adverteren
+              </Button>
+            </Link>
           </div>
         </div>
       </section>
@@ -535,14 +538,15 @@ export default function Landing() {
               Wij regelen de schermen en planning. Jij levert de video, en wordt gezien.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Button 
-                size="lg" 
-                className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8 shadow-xl"
-                onClick={() => setAdvertiserModalOpen(true)}
-              >
-                <Megaphone className="h-5 w-5" />
-                Ik wil adverteren
-              </Button>
+              <Link href="/start?package=triple">
+                <Button 
+                  size="lg" 
+                  className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8 shadow-xl"
+                >
+                  <Megaphone className="h-5 w-5" />
+                  Ik wil adverteren
+                </Button>
+              </Link>
               <Button 
                 size="lg" 
                 variant="outline" 

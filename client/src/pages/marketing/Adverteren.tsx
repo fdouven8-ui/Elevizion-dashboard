@@ -206,15 +206,16 @@ export default function Adverteren() {
             <p className="text-slate-300 mb-8">
               Vraag vrijblijvend informatie aan. Wij nemen binnen 24 uur contact op.
             </p>
-            <Button 
-              size="lg" 
-              className="gap-2 bg-emerald-500 hover:bg-emerald-600 font-semibold py-6 px-8"
-              onClick={() => setModalOpen(true)}
-              data-testid="button-cta-adverteren-bottom"
-            >
-              <Megaphone className="h-5 w-5" />
-              Ik wil adverteren
-            </Button>
+            <Link href="/start?package=triple">
+              <Button 
+                size="lg" 
+                className="gap-2 bg-emerald-500 hover:bg-emerald-600 font-semibold py-6 px-8"
+                data-testid="button-cta-adverteren-bottom"
+              >
+                <Megaphone className="h-5 w-5" />
+                Ik wil adverteren
+              </Button>
+            </Link>
           </div>
         </div>
       </section>
