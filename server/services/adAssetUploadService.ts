@@ -238,6 +238,12 @@ export async function getAdAssetsByAdvertiser(advertiserId: string) {
   });
 }
 
+export async function getAdAssetById(assetId: string) {
+  return await db.query.adAssets.findFirst({
+    where: eq(adAssets.id, assetId),
+  });
+}
+
 export async function getLatestValidAsset(advertiserId: string) {
   return await db.query.adAssets.findFirst({
     where: and(

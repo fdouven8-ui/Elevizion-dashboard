@@ -82,6 +82,189 @@ type EnrichedPlacement = {
   contractName: string;
 };
 
+interface AdAsset {
+  id: string;
+  advertiserId: string;
+  linkKey: string;
+  originalFileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  durationSeconds: string | null;
+  width: number | null;
+  height: number | null;
+  aspectRatio: string | null;
+  codec: string | null;
+  validationStatus: string;
+  validationErrors: string[];
+  validationWarnings: string[];
+  uploadedAt: string;
+  reviewedByAdminAt: string | null;
+}
+
+function VideoPreviewCard({ advertiserId }: { advertiserId: string }) {
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const { toast } = useToast();
+  
+  const { data: assets = [], isLoading } = useQuery<AdAsset[]>({
+    queryKey: ["/api/advertisers", advertiserId, "ad-assets"],
+    queryFn: async () => {
+      const res = await fetch(`/api/advertisers/${advertiserId}/ad-assets`);
+      if (!res.ok) throw new Error("Assets niet gevonden");
+      return res.json();
+    },
+    enabled: !!advertiserId,
+  });
+  
+  const latestAsset = assets[0];
+  
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <Skeleton className="h-6 w-48" />
+        </CardHeader>
+        <CardContent>
+          <Skeleton className="h-48 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+  
+  if (!latestAsset) {
+    return null;
+  }
+  
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+  
+  const formatDuration = (seconds: string | null) => {
+    if (!seconds) return "-";
+    const num = parseFloat(seconds);
+    return `${num.toFixed(1)}s`;
+  };
+  
+  return (
+    <Card data-testid="card-video-preview">
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-lg flex items-center gap-2">
+          <Camera className="h-5 w-5" />
+          Video Preview
+        </CardTitle>
+        <div className="flex items-center gap-2">
+          {latestAsset.validationStatus === "valid" ? (
+            <Badge className="bg-green-100 text-green-800">
+              <CheckCircle2 className="h-3 w-3 mr-1" />
+              Geldig
+            </Badge>
+          ) : (
+            <Badge className="bg-red-100 text-red-800">
+              <XCircle className="h-3 w-3 mr-1" />
+              Ongeldig
+            </Badge>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Video Player */}
+        <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
+          <video
+            ref={videoRef}
+            src={`/api/ad-assets/${latestAsset.id}/stream`}
+            className="w-full h-full object-contain"
+            controls
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            data-testid="video-player"
+          />
+        </div>
+        
+        {/* Video Info */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div>
+            <p className="text-muted-foreground">Bestandsnaam</p>
+            <p className="font-medium truncate">{latestAsset.originalFileName}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Duur</p>
+            <p className="font-medium">{formatDuration(latestAsset.durationSeconds)}</p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Resolutie</p>
+            <p className="font-medium">
+              {latestAsset.width && latestAsset.height 
+                ? `${latestAsset.width}x${latestAsset.height}` 
+                : "-"}
+            </p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">Grootte</p>
+            <p className="font-medium">{formatFileSize(latestAsset.sizeBytes)}</p>
+          </div>
+        </div>
+        
+        {/* Validation Errors/Warnings */}
+        {latestAsset.validationErrors?.length > 0 && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+            <p className="font-medium text-red-800 mb-1 flex items-center gap-1">
+              <AlertCircle className="h-4 w-4" />
+              Validatie fouten
+            </p>
+            <ul className="text-sm text-red-700 list-disc list-inside">
+              {latestAsset.validationErrors.map((err, i) => (
+                <li key={i}>{err}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        
+        {latestAsset.validationWarnings?.length > 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+            <p className="font-medium text-amber-800 mb-1 flex items-center gap-1">
+              <AlertTriangle className="h-4 w-4" />
+              Waarschuwingen
+            </p>
+            <ul className="text-sm text-amber-700 list-disc list-inside">
+              {latestAsset.validationWarnings.map((warn, i) => (
+                <li key={i}>{warn}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        
+        {/* Action Buttons */}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.open(`/api/ad-assets/${latestAsset.id}/download`, "_blank")}
+            data-testid="button-download-video"
+          >
+            <Download className="h-4 w-4 mr-1" />
+            Download
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => window.open(`/api/ad-assets/${latestAsset.id}/stream`, "_blank")}
+            data-testid="button-open-new-tab"
+          >
+            <ExternalLink className="h-4 w-4 mr-1" />
+            Open in nieuw tab
+          </Button>
+        </div>
+        
+        {/* Upload date */}
+        <p className="text-xs text-muted-foreground">
+          Geüpload op {format(new Date(latestAsset.uploadedAt), "d MMMM yyyy 'om' HH:mm", { locale: nl })}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function AdvertiserDetail() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
@@ -688,6 +871,14 @@ export default function AdvertiserDetail() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Video Preview Card */}
+      {(advertiser.assetStatus === "uploaded_valid" || 
+        advertiser.assetStatus === "ready_for_yodeck" || 
+        advertiser.assetStatus === "live" ||
+        advertiser.assetStatus === "uploaded_invalid") && (
+        <VideoPreviewCard advertiserId={advertiser.id} />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-1">

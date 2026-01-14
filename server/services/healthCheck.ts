@@ -676,6 +676,85 @@ export async function checkLocationWorkflow(): Promise<HealthCheckResult[]> {
 }
 
 // ============================================================================
+// PUBLISH QUEUE & OBJECT STORAGE CHECKS
+// ============================================================================
+
+export async function checkPublishQueue(): Promise<HealthCheckResult[]> {
+  const results: HealthCheckResult[] = [];
+  
+  try {
+    // Check Object Storage configuration
+    const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
+    results.push({
+      name: "Object Storage bucket",
+      status: bucketId ? "PASS" : "FAIL",
+      message: bucketId ? `Bucket: ${bucketId.substring(0, 20)}...` : "Niet geconfigureerd",
+      fixSuggestion: !bucketId ? "Object Storage moet worden geconfigureerd voor video uploads" : undefined,
+    });
+    
+    // Check placement plans table exists and counts
+    const { db } = await import("../db");
+    const { placementPlans, adAssets } = await import("@shared/schema");
+    const { count, eq } = await import("drizzle-orm");
+    
+    const [planCounts] = await db.select({
+      total: count(),
+    }).from(placementPlans);
+    
+    results.push({
+      name: "Publicatie plannen tabel",
+      status: "PASS",
+      message: `${planCounts.total} plannen in database`,
+    });
+    
+    // Check pending/approved plans
+    const pendingPlans = await db.select({ id: placementPlans.id })
+      .from(placementPlans)
+      .where(eq(placementPlans.status, "PROPOSED"));
+    
+    const approvedPlans = await db.select({ id: placementPlans.id })
+      .from(placementPlans)
+      .where(eq(placementPlans.status, "APPROVED"));
+    
+    results.push({
+      name: "Wachtende plannen",
+      status: pendingPlans.length > 5 ? "WARNING" : "PASS",
+      message: `${pendingPlans.length} voorgesteld, ${approvedPlans.length} goedgekeurd`,
+      fixSuggestion: pendingPlans.length > 5 ? "Er zijn plannen die wachten op simulatie" : undefined,
+    });
+    
+    // Check ad assets with valid status
+    const [assetCounts] = await db.select({
+      total: count(),
+    }).from(adAssets).where(eq(adAssets.validationStatus, "valid"));
+    
+    results.push({
+      name: "Gevalideerde video's",
+      status: "PASS",
+      message: `${assetCounts.total} gevalideerde video assets`,
+    });
+    
+    // Check Yodeck publish configuration
+    const yodeckToken = process.env.YODECK_AUTH_TOKEN;
+    results.push({
+      name: "Yodeck API voor publicatie",
+      status: yodeckToken ? "PASS" : "WARNING",
+      message: yodeckToken ? "Geconfigureerd" : "Niet geconfigureerd",
+      fixSuggestion: !yodeckToken ? "YODECK_AUTH_TOKEN nodig voor automatische publicatie" : undefined,
+    });
+    
+  } catch (error: any) {
+    results.push({
+      name: "Publicatie wachtrij check",
+      status: "FAIL",
+      message: error.message,
+    });
+  }
+  
+  return results;
+}
+
+// ============================================================================
 // FULL HEALTH CHECK
 // ============================================================================
 
@@ -689,6 +768,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
     leads,
     advertiserWorkflow,
     locationWorkflow,
+    publishQueue,
   ] = await Promise.all([
     checkCompanyProfile(),
     checkEmailConfig(),
@@ -698,6 +778,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
     checkLeads(),
     checkAdvertiserWorkflow(),
     checkLocationWorkflow(),
+    checkPublishQueue(),
   ]);
   
   return [
@@ -747,6 +828,12 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
       name: "Workflow: Schermlocatie",
       icon: "map-pin",
       checks: locationWorkflow,
+      testable: false,
+    },
+    {
+      name: "Publicatie Wachtrij",
+      icon: "send",
+      checks: publishQueue,
       testable: false,
     },
   ];

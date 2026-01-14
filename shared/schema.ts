@@ -98,6 +98,10 @@ export const advertisers = pgTable("advertisers", {
   // Video specification (contract-driven)
   videoDurationSeconds: integer("video_duration_seconds").default(15), // Required video length (default 15s, can be custom per contract)
   strictResolution: boolean("strict_resolution").default(false), // If true, resolution/aspect ratio mismatches are errors instead of warnings
+  // === PLACEMENT TARGETING FIELDS ===
+  targetRegionCodes: text("target_region_codes").array(), // Target regions (e.g., ['NB', 'ZH']) or null/empty for ANY
+  category: text("category"), // Advertiser category for location matching (horeca, retail, sport, etc.)
+  desiredImpressionsPerWeek: integer("desired_impressions_per_week"), // Optional target impressions
   // Onboarding akkoord (OTP-based)
   acceptedTermsAt: timestamp("accepted_terms_at"), // Wanneer akkoord gegeven
   acceptedTermsIp: text("accepted_terms_ip"), // IP adres bij akkoord
@@ -237,6 +241,16 @@ export const locations = pgTable("locations", {
   reminderEmailSentAt: timestamp("reminder_email_sent_at"),
   lastReminderSentAt: timestamp("last_reminder_sent_at"), // Voor herinnering tracking
   notes: text("notes"),
+  // === PLACEMENT ENGINE FIELDS ===
+  regionCode: text("region_code"), // Province/region code for targeting (e.g., NB, ZH, NH)
+  categoriesAllowed: text("categories_allowed").array(), // Allowed advertiser categories (horeca, retail, sport, etc.)
+  audienceCategory: text("audience_category"), // Primary audience type at this location
+  avgVisitorsPerWeek: integer("avg_visitors_per_week"), // Estimated weekly visitors for impression calculation
+  adSlotCapacitySecondsPerLoop: integer("ad_slot_capacity_seconds_per_loop").default(120), // Max seconds of ads per loop
+  currentAdLoadSeconds: integer("current_ad_load_seconds").default(0), // Current ad load in seconds
+  loopDurationSeconds: integer("loop_duration_seconds").default(300), // Total loop duration (5 min default)
+  yodeckPlaylistId: text("yodeck_playlist_id"), // Ad playlist for this location
+  lastSyncAt: timestamp("last_sync_at"), // Last Yodeck sync time
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -2254,3 +2268,164 @@ export function getVisitorWeight(visitorsPerWeek: number | null): number {
   }
   return 1.5; // Max weight for very high traffic
 }
+
+// ============================================================================
+// PLACEMENT ENGINE (AUTO-PUBLISH)
+// ============================================================================
+
+/**
+ * PlacementPlan - Orchestrates the placement workflow from proposal to publish
+ * Status flow: PROPOSED → SIMULATED_OK/SIMULATED_FAIL → APPROVED → PUBLISHING → PUBLISHED/FAILED/ROLLED_BACK
+ */
+export const placementPlans = pgTable("placement_plans", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),
+  adAssetId: varchar("ad_asset_id").notNull().references(() => adAssets.id, { onDelete: "cascade" }),
+  linkKey: text("link_key").notNull(), // Copy from advertiser for quick lookup
+  // Workflow status
+  status: text("status").notNull().default("PROPOSED"), // PROPOSED | SIMULATED_OK | SIMULATED_FAIL | APPROVED | PUBLISHING | PUBLISHED | FAILED | ROLLED_BACK
+  // Target counts from package
+  packageType: text("package_type").notNull(), // SINGLE | TRIPLE | TEN | CUSTOM
+  requiredTargetCount: integer("required_target_count").notNull(), // 1, 3, 10, or custom
+  // Proposed and approved targets stored as JSON
+  proposedTargets: jsonb("proposed_targets").$type<{
+    locationId: string;
+    locationName: string;
+    yodeckPlaylistId: string;
+    score: number;
+    expectedImpressionsPerWeek: number;
+    capacityBefore: number;
+    capacityAfter: number;
+  }[]>(),
+  approvedTargets: jsonb("approved_targets").$type<{
+    locationId: string;
+    locationName: string;
+    yodeckPlaylistId: string;
+    score: number;
+    expectedImpressionsPerWeek: number;
+  }[]>(),
+  // Reports
+  simulationReport: jsonb("simulation_report").$type<{
+    selectedCount: number;
+    rejectedCount: number;
+    totalExpectedImpressions: number;
+    rejectedReasons: { locationId: string; locationName: string; reason: string }[];
+    capacitySnapshot: { locationId: string; before: number; after: number; max: number }[];
+    simulatedAt: string;
+    isFresh: boolean;
+  }>(),
+  publishReport: jsonb("publish_report").$type<{
+    successCount: number;
+    failedCount: number;
+    yodeckMediaId: string | null;
+    targets: { locationId: string; status: string; error?: string }[];
+    publishedAt?: string;
+    rolledBackAt?: string;
+  }>(),
+  // Idempotency
+  idempotencyKey: text("idempotency_key").unique(), // hash(advertiserId + adAssetId + approvedTargets)
+  // Timestamps
+  simulatedAt: timestamp("simulated_at"),
+  approvedAt: timestamp("approved_at"),
+  approvedByUserId: varchar("approved_by_user_id"),
+  publishedAt: timestamp("published_at"),
+  failedAt: timestamp("failed_at"),
+  rolledBackAt: timestamp("rolled_back_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+/**
+ * PlacementTarget - Individual screen/location placements within a plan
+ * Tracks the publish status per location
+ */
+export const placementTargets = pgTable("placement_targets", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  planId: varchar("plan_id").notNull().references(() => placementPlans.id, { onDelete: "cascade" }),
+  locationId: varchar("location_id").notNull().references(() => locations.id),
+  yodeckPlaylistId: text("yodeck_playlist_id").notNull(),
+  // Yodeck integration
+  yodeckMediaId: text("yodeck_media_id"), // Media ID after upload to Yodeck
+  yodeckMediaName: text("yodeck_media_name"), // Name in Yodeck
+  // Status
+  status: text("status").notNull().default("PENDING"), // PENDING | PUBLISHING | PUBLISHED | FAILED | ROLLED_BACK
+  errorMessage: text("error_message"),
+  // Metrics
+  expectedImpressionsPerWeek: integer("expected_impressions_per_week"),
+  score: decimal("score", { precision: 10, scale: 4 }), // Ranking score for this location
+  // Timestamps
+  publishedAt: timestamp("published_at"),
+  rolledBackAt: timestamp("rolled_back_at"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+// Placement Plan Schemas
+export const insertPlacementPlanSchema = createInsertSchema(placementPlans).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertPlacementTargetSchema = createInsertSchema(placementTargets).omit({
+  id: true,
+  createdAt: true,
+});
+
+// Placement Plan Types
+export type PlacementPlan = typeof placementPlans.$inferSelect;
+export type InsertPlacementPlan = z.infer<typeof insertPlacementPlanSchema>;
+
+export type PlacementTarget = typeof placementTargets.$inferSelect;
+export type InsertPlacementTarget = z.infer<typeof insertPlacementTargetSchema>;
+
+// Placement Status Constants
+export const PLACEMENT_PLAN_STATUSES = [
+  "PROPOSED",
+  "SIMULATED_OK",
+  "SIMULATED_FAIL",
+  "APPROVED",
+  "PUBLISHING",
+  "PUBLISHED",
+  "FAILED",
+  "ROLLED_BACK",
+] as const;
+export type PlacementPlanStatus = typeof PLACEMENT_PLAN_STATUSES[number];
+
+export const PLACEMENT_TARGET_STATUSES = [
+  "PENDING",
+  "PUBLISHING",
+  "PUBLISHED",
+  "FAILED",
+  "ROLLED_BACK",
+] as const;
+export type PlacementTargetStatus = typeof PLACEMENT_TARGET_STATUSES[number];
+
+// Region Codes (Dutch provinces)
+export const REGION_CODES = [
+  { code: "DR", name: "Drenthe" },
+  { code: "FL", name: "Flevoland" },
+  { code: "FR", name: "Friesland" },
+  { code: "GE", name: "Gelderland" },
+  { code: "GR", name: "Groningen" },
+  { code: "LI", name: "Limburg" },
+  { code: "NB", name: "Noord-Brabant" },
+  { code: "NH", name: "Noord-Holland" },
+  { code: "OV", name: "Overijssel" },
+  { code: "UT", name: "Utrecht" },
+  { code: "ZE", name: "Zeeland" },
+  { code: "ZH", name: "Zuid-Holland" },
+] as const;
+export type RegionCode = typeof REGION_CODES[number]["code"];
+
+// Advertiser Categories
+export const ADVERTISER_CATEGORIES = [
+  "horeca",
+  "retail",
+  "sport",
+  "zorg",
+  "automotive",
+  "beauty",
+  "diensten",
+  "overig",
+] as const;
+export type AdvertiserCategory = typeof ADVERTISER_CATEGORIES[number];

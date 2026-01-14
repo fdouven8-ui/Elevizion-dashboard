@@ -1,0 +1,233 @@
+YODECK AUTO-PUBLISH 2.1 — FOUTLOZE PLAATSING + REGIO/CATEGORIE/CAPACITY/IMPRESSIES + VIDEO PREVIEW/DOWNLOAD
+
+CONTEXT
+We hebben:
+- Advertiser upload portal met validatie (linkKey, type, duur contract-driven)
+- Dashboard statuses (uploaded_valid → ready_for_yodeck → live)
+- Yodeck integratie (sync)
+Nu wil ik volledig foutloze auto-publicatie:
+- rekening houden met categorie, regio, beschikbare plek/capacity in loop, expected weergaves/impressies
+- eerst simuleren, dan admin akkoord, dan publish
+EN: ik moet als admin de geüploade video kunnen bekijken (preview/stream) en downloaden.
+
+DOEL
+1) Placement Engine bouwen met PROPOSE → SIMULATE → APPROVE → PUBLISH, met harde constraints.
+2) UI voor “Publish Queue” met voorstel, simulatie rapport, en admin akkoord.
+3) Yodeck publish idempotent + rollback bij failure.
+4) Video Asset Management: admin kan video inzien (player), specs zien, downloaden, en (optioneel) herkeuren.
+5) Alles 100% consistent, geen shortcuts, geen verkeerde regio/categorie, geen over-capacity publish.
+
+BELANGRIJK
+- “Foutloos” = nooit publiceren buiten regels, nooit dupliceren, altijd duidelijke status/rapport.
+- Idempotent publish (geen dubbele plaatsing bij herhaald klikken).
+- Gebruik linkKey als enige koppelsleutel.
+- Prefer tag-based playlists, maar alleen als mapping klopt. Anders fallback: classic playlist injection.
+- Geen grote refactor; bouw als services + admin UI.
+
+────────────────────────
+A) DATA MODEL (UITBREIDEN/CONTROLEREN)
+────────────────────────
+1) ScreenLocation (scherm/locatie) moet (of voeg toe):
+- id, name, city
+- regionCode (consistent systeem: bijv. provincies/gebieden)
+- categoriesAllowed (array) OF audienceCategory
+- avgVisitorsPerWeek (int)
+- isOnline (bool)
+- yodeckScreenId
+- yodeckPlaylistId (ad-playlist per locatie)
+- adSlotCapacitySecondsPerLoop (int) OF maxAdsCount (kies 1 en gebruik overal)
+- currentAdLoadSeconds/currentAdsCount (berekend via sync)
+- loopDurationSeconds (optional)
+- lastSyncAt
+
+2) Advertiser moet:
+- packageType (SINGLE/TRIPLE/TEN/CUSTOM)
+- targetRegionCodes (array) (default ANY of standaard regio)
+- category (single of array)
+- desiredImpressionsPerWeek (optional)
+- videoDurationSeconds (default 15; contract-driven)
+- linkKey
+
+3) AdAsset (uit upload portal) uitbreiden met:
+- id, advertiserId, linkKey
+- originalFileName, mimeType, sizeBytes
+- durationSeconds, width, height
+- validationStatus: VALID | INVALID
+- validationErrors[], validationWarnings[]
+- storageRef/url
+- yodeckMediaId (nullable)
+- uploadedAt
+- createdAt
+
+4) PlacementPlan:
+- id, advertiserId, adAssetId, linkKey
+- status: PROPOSED | SIMULATED_OK | SIMULATED_FAIL | APPROVED | PUBLISHING | PUBLISHED | FAILED | ROLLED_BACK
+- proposedTargets: [{locationId, yodeckPlaylistId, score, expectedImpressionsPerWeek}]
+- approvedTargets: same
+- simulationReport (json)
+- publishReport (json)
+- idempotencyKey (string) = advertiserId + adAssetId + hash(approvedTargets)
+- createdAt/approvedAt/publishedAt
+
+5) Placement:
+- id, planId, locationId, yodeckPlaylistId
+- yodeckMediaId
+- status: PUBLISHED | FAILED | ROLLED_BACK
+- createdAt
+
+────────────────────────
+B) PLACEMENT RULES (HARD CONSTRAINTS)
+────────────────────────
+HARD (anders reject locatie):
+1) Regio match:
+- location.regionCode moet in advertiser.targetRegionCodes zitten (tenzij advertiser ANY)
+2) Categorie match:
+- advertiser.category moet matchen met location.categoriesAllowed/audienceCategory
+3) Online + gekoppeld:
+- location.isOnline true
+- yodeckPlaylistId aanwezig + geldig
+4) Capacity:
+- Gebruik seconden of count (kies 1):
+  - currentAdLoadSeconds + advertiser.videoDurationSeconds <= adSlotCapacitySecondsPerLoop
+  OF
+  - currentAdsCount + 1 <= maxAdsCount
+
+SOFT (ranking/optimalisatie):
+5) Expected impressions:
+- expectedImpressionsPerWeek = avgVisitorsPerWeek * viewFactor (const)
+6) Spreiding:
+- bij 3/10: spreid over verschillende steden waar mogelijk
+7) Package fulfillment:
+- SINGLE=1, TRIPLE=3, TEN=10, CUSTOM=admin bepaalt
+
+Onvoldoende geschikte locaties:
+- SIMULATED_FAIL met exacte redenen per locatie (REGION_MISMATCH, CATEGORY_MISMATCH, NO_CAPACITY, OFFLINE, NO_PLAYLIST, STALE_SYNC)
+
+────────────────────────
+C) SIMULATIE (VERPLICHT)
+────────────────────────
+PlacementEngine.simulate(plan):
+- Eis dat lastSyncAt per locatie < 15 min, anders eerst sync, of return STALE_SYNC
+- Bereken current ad load op basis van Yodeck playlist content:
+  - Som van durations van items met category=ad (of tag criteria)
+- Selecteer targets tot pakket count gehaald is
+- Maak simulationReport:
+  - selectedTargets + expectedImpressions totals
+  - rejectedTargets met reason
+  - capacity snapshot (voor/na)
+Result:
+- SIMULATED_OK of SIMULATED_FAIL
+
+Admin APPROVE kan alleen bij SIMULATED_OK.
+
+────────────────────────
+D) ADMIN UI — PUBLISH QUEUE
+────────────────────────
+Nieuwe pagina: Admin → “Publicatie wachtrij”
+Toon per plan:
+- adverteerder, pakket, regio, categorie
+- linkKey
+- asset specs (duur, formaat)
+- SIMULATIE knop + rapport
+- lijst targets met toggles
+- indicator “plek OK” (groen) / “bijna vol” (oranje) / “vol” (rood)
+Knoppen:
+- “Simuleer”
+- “Akkoord” (sets APPROVED + saves approvedTargets)
+- “Akkoord & Publiceer” (runs simulate again -> publish)
+Blokkeer publish als:
+- SIMULATED_FAIL
+- approvedTargets != pakket count
+- sync stale
+
+────────────────────────
+E) VIDEO ASSET MANAGEMENT (ADMIN PREVIEW/DOWNLOAD)
+────────────────────────
+EIS: In dashboard moet ik de video kunnen:
+- bekijken (in-browser player)
+- downloaden
+- specs zien (duur/resolutie/size/filename/linkKey)
+- zien waarom invalid (errors)
+- (optioneel) markeren als “approved for publish” of “reject” (admin review)
+
+Implementatie:
+1) In Advertiser detail page:
+- Toon laatste AdAsset kaart met:
+  - HTML5 <video> preview (stream)
+  - knop “Download”
+  - knop “Open in nieuw tab”
+  - specs table
+  - status badge VALID/INVALID
+  - errors/warnings lijst
+
+2) In Publish Queue detail:
+- Toon video preview inline boven voorstel
+
+3) Secure streaming/download:
+- Maak endpoints:
+  - GET /api/ad-assets/:id/stream (admin only) -> streams file with correct headers
+  - GET /api/ad-assets/:id/download (admin only) -> attachment download
+- Zorg dat links niet publiek zijn (token or admin auth required)
+- Voeg signed URLs toe als storage dat vereist (S3 presigned), maar verberg intern.
+
+4) Performance:
+- Gebruik byte-range requests (Accept-Ranges) zodat video scrubben werkt
+- Zet juiste Content-Type + Content-Length headers
+
+────────────────────────
+F) PUBLISH NAAR YODECK (IDEMPOTENT + ROLLBACK)
+────────────────────────
+Publish flow:
+1) Lock plan (PUBLISHING) + idempotency check:
+- Als idempotencyKey al PUBLISHED -> no-op success
+2) Re-run simulate (laatste check)
+3) Upload media naar Yodeck als yodeckMediaId ontbreekt
+4) Plaatsing methode:
+OPTION 1 (preferred): Tag-based
+- set media tags die exact de juiste playlists/locaties targeten
+- precheck: playlist is correct tag-based configured
+OPTION 2 (fallback): Classic injection
+- add media to playlist, maar check first if exists
+5) Update Placement records per target
+6) Bij partial failure:
+- default: rollback alles (remove from playlists or remove tags)
+- plan status FAILED/ROLLED_BACK met publishReport details
+7) Bij success:
+- plan PUBLISHED
+- advertiser.assetStatus LIVE
+- mail naar admin: “published op N locaties”
+
+────────────────────────
+G) ONBOARDING & DATA INPUT (REGIO/CATEGORIE/IMPRESSIES)
+────────────────────────
+Zorg dat advertiser onboarding velden opslaat:
+- category (dropdown)
+- targetRegionCodes (multi-select)
+- desiredImpressionsPerWeek (optional)
+Als niet ingevuld:
+- region ANY of standaard (jouw keuze, maar consistent)
+- category verplicht kiezen of default “general”
+
+────────────────────────
+H) SYSTEM HEALTH UITBREIDING
+────────────────────────
+Voeg checks toe:
+- “Publish Queue enabled”
+- “Can stream/download assets” (endpoints ok)
+- “Fresh sync enforcement” (stale sync blocks publish)
+- “Idempotency lock” aanwezig
+
+────────────────────────
+I) OUTPUT / ACCEPTANCE CRITERIA
+────────────────────────
+1) Ik kan als admin elke geüploade video bekijken + downloaden
+2) Plaatsingsvoorstel houdt rekening met:
+   - regio
+   - categorie
+   - capacity/plek
+   - expected impressions
+3) Publish gebeurt alleen na SIMULATED_OK en admin akkoord
+4) Geen duplicates, rollback bij failure
+5) Duidelijke logs/rapporten zichtbaar in UI
+
+IMPLEMENT NOW — NO QUESTIONS, NO SHORTCUTS.

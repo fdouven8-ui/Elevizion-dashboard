@@ -44,6 +44,7 @@ import AdvertiserOnboarding from "@/pages/AdvertiserOnboarding";
 import LocationIntake from "@/pages/LocationIntake";
 import LocationContract from "@/pages/LocationContract";
 import UploadPortal from "@/pages/UploadPortal";
+import PublishQueue from "@/pages/PublishQueue";
 import NotFound from "@/pages/not-found";
 import Adverteren from "@/pages/marketing/Adverteren";
 import SchermLocatie from "@/pages/marketing/SchermLocatie";
@@ -82,6 +83,7 @@ function DashboardRouter() {
         </Route>
         <Route path="/data-health" component={DataHealthPage} />
         <Route path="/system-health" component={SystemHealth} />
+        <Route path="/publish-queue" component={PublishQueue} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>

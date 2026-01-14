@@ -1552,6 +1552,216 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  // Stream video asset (admin only) - supports byte-range for video player seeking
+  app.get("/api/ad-assets/:id/stream", isAuthenticated, async (req, res) => {
+    try {
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const { ObjectStorageService } = await import("./objectStorage");
+      
+      const asset = await getAdAssetById(req.params.id);
+      if (!asset) {
+        return res.status(404).json({ message: "Asset niet gevonden" });
+      }
+      
+      if (!asset.storagePath) {
+        return res.status(404).json({ message: "Bestand niet gevonden in storage" });
+      }
+      
+      const objectStorage = new ObjectStorageService();
+      const file = await objectStorage.getFileByPath(asset.storagePath);
+      
+      if (!file) {
+        return res.status(404).json({ message: "Bestand niet gevonden" });
+      }
+      
+      await objectStorage.streamVideoWithRange(file, req, res);
+    } catch (error: any) {
+      console.error("[AdAsset] Stream error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Download video asset (admin only)
+  app.get("/api/ad-assets/:id/download", isAuthenticated, async (req, res) => {
+    try {
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const { ObjectStorageService } = await import("./objectStorage");
+      
+      const asset = await getAdAssetById(req.params.id);
+      if (!asset) {
+        return res.status(404).json({ message: "Asset niet gevonden" });
+      }
+      
+      if (!asset.storagePath) {
+        return res.status(404).json({ message: "Bestand niet gevonden in storage" });
+      }
+      
+      const objectStorage = new ObjectStorageService();
+      const file = await objectStorage.getFileByPath(asset.storagePath);
+      
+      if (!file) {
+        return res.status(404).json({ message: "Bestand niet gevonden" });
+      }
+      
+      const [metadata] = await file.getMetadata();
+      res.set({
+        "Content-Disposition": `attachment; filename="${asset.originalFileName}"`,
+        "Content-Type": metadata.contentType || "video/mp4",
+        "Content-Length": String(metadata.size),
+      });
+      
+      const stream = file.createReadStream();
+      stream.pipe(res);
+    } catch (error: any) {
+      console.error("[AdAsset] Download error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get single ad asset details (admin only)
+  app.get("/api/ad-assets/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const asset = await getAdAssetById(req.params.id);
+      if (!asset) {
+        return res.status(404).json({ message: "Asset niet gevonden" });
+      }
+      res.json(asset);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // PLACEMENT PLANS API (AUTO-PUBLISH)
+  // ============================================================================
+
+  // Get all placement plans (admin queue)
+  app.get("/api/placement-plans", isAuthenticated, async (req, res) => {
+    try {
+      const { placementEngine } = await import("./services/placementEngineService");
+      const status = req.query.status as string | undefined;
+      const plans = await placementEngine.getPlans(status);
+      
+      const enrichedPlans = await Promise.all(plans.map(async (plan) => {
+        const advertiser = await placementEngine.getPlanAdvertiser(plan.id);
+        const asset = await placementEngine.getPlanAsset(plan.id);
+        return {
+          ...plan,
+          advertiserName: advertiser?.companyName,
+          assetFileName: asset?.originalFileName,
+        };
+      }));
+      
+      res.json(enrichedPlans);
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error getting plans:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Create new placement plan from ad asset
+  app.post("/api/placement-plans", isAuthenticated, async (req, res) => {
+    try {
+      const { placementEngine } = await import("./services/placementEngineService");
+      const { advertiserId, adAssetId } = req.body;
+      
+      if (!advertiserId || !adAssetId) {
+        return res.status(400).json({ message: "advertiserId en adAssetId zijn vereist" });
+      }
+      
+      const result = await placementEngine.createPlan(advertiserId, adAssetId);
+      if (!result) {
+        return res.status(400).json({ message: "Kon plan niet aanmaken" });
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error creating plan:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get single placement plan
+  app.get("/api/placement-plans/:id", isAuthenticated, async (req, res) => {
+    try {
+      const { placementEngine } = await import("./services/placementEngineService");
+      const plan = await placementEngine.getPlan(req.params.id);
+      if (!plan) {
+        return res.status(404).json({ message: "Plan niet gevonden" });
+      }
+      
+      const advertiser = await placementEngine.getPlanAdvertiser(plan.id);
+      const asset = await placementEngine.getPlanAsset(plan.id);
+      const targets = await placementEngine.getPlanTargets(plan.id);
+      
+      res.json({
+        ...plan,
+        advertiser,
+        asset,
+        targets,
+      });
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error getting plan:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Re-run simulation for a plan
+  app.post("/api/placement-plans/:id/simulate", isAuthenticated, async (req, res) => {
+    try {
+      const { placementEngine } = await import("./services/placementEngineService");
+      const result = await placementEngine.simulate(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error simulating plan:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Approve a placement plan
+  app.post("/api/placement-plans/:id/approve", isAuthenticated, async (req, res) => {
+    try {
+      const { placementEngine } = await import("./services/placementEngineService");
+      const user = (req as any).user;
+      const success = await placementEngine.approve(req.params.id, user?.id || "admin");
+      if (!success) {
+        return res.status(400).json({ message: "Kon plan niet goedkeuren. Status moet SIMULATED_OK zijn." });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error approving plan:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Publish an approved placement plan to Yodeck
+  app.post("/api/placement-plans/:id/publish", isAuthenticated, async (req, res) => {
+    try {
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const report = await yodeckPublishService.publishPlan(req.params.id);
+      res.json({ success: true, report });
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error publishing plan:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Rollback a published plan
+  app.post("/api/placement-plans/:id/rollback", isAuthenticated, async (req, res) => {
+    try {
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const result = await yodeckPublishService.rollbackPlan(req.params.id);
+      if (!result.ok) {
+        return res.status(400).json({ message: result.error });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error rolling back plan:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Public upload portal - get advertiser info
   app.get("/api/upload-portal/:token", async (req, res) => {
     try {

@@ -23,6 +23,7 @@ const pageNames: Record<string, string> = {
   "advertisers": "Adverteerders",
   "settings": "Instellingen",
   "system-health": "Systeemcheck",
+  "publish-queue": "Publicatie Wachtrij",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

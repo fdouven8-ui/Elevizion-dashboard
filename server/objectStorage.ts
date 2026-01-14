@@ -194,6 +194,87 @@ export class ObjectStorageService {
   }
 
   /**
+   * Stream video with byte-range support for seeking/scrubbing
+   * Handles Range headers properly for HTML5 video players
+   */
+  async streamVideoWithRange(
+    file: File,
+    req: { headers: { range?: string } },
+    res: Response
+  ): Promise<void> {
+    try {
+      const [metadata] = await file.getMetadata();
+      const fileSize = parseInt(String(metadata.size), 10);
+      const contentType = metadata.contentType || "video/mp4";
+      const rangeHeader = req.headers.range;
+
+      if (rangeHeader) {
+        const parts = rangeHeader.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+        const chunkSize = end - start + 1;
+
+        res.status(206);
+        res.set({
+          "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+          "Accept-Ranges": "bytes",
+          "Content-Length": chunkSize.toString(),
+          "Content-Type": contentType,
+          "Cache-Control": "private, max-age=3600",
+        });
+
+        const stream = file.createReadStream({ start, end });
+        stream.on("error", (err) => {
+          console.error("[ObjectStorage] Stream range error:", err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: "Error streaming file" });
+          }
+        });
+        stream.pipe(res);
+      } else {
+        res.set({
+          "Content-Length": fileSize.toString(),
+          "Content-Type": contentType,
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "private, max-age=3600",
+        });
+        const stream = file.createReadStream();
+        stream.on("error", (err) => {
+          console.error("[ObjectStorage] Stream error:", err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: "Error streaming file" });
+          }
+        });
+        stream.pipe(res);
+      }
+    } catch (error) {
+      console.error("[ObjectStorage] Error streaming video:", error);
+      if (!res.headersSent) {
+        res.status(500).json({ error: "Error streaming video" });
+      }
+    }
+  }
+
+  /**
+   * Get a file by its storage path (for ad assets)
+   */
+  async getFileByPath(storagePath: string): Promise<File | null> {
+    try {
+      const { bucketName, objectName } = parseObjectPath(storagePath);
+      const bucket = objectStorageClient.bucket(bucketName);
+      const file = bucket.file(objectName);
+      const [exists] = await file.exists();
+      if (!exists) {
+        return null;
+      }
+      return file;
+    } catch (error) {
+      console.error("[ObjectStorage] Error getting file by path:", error);
+      return null;
+    }
+  }
+
+  /**
    * Upload a file to object storage
    * Returns the public URL of the uploaded file
    */
