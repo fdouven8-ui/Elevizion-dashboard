@@ -21,7 +21,9 @@ import {
   MapPin,
   Play,
   Loader2,
-  Info
+  Info,
+  FileBarChart,
+  ShieldCheck
 } from "lucide-react";
 
 type CheckStatus = "PASS" | "WARNING" | "FAIL";
@@ -59,6 +61,8 @@ const iconMap: Record<string, React.ReactNode> = {
   "map-pin": <MapPin className="h-5 w-5" />,
   "chart-bar": <Monitor className="h-5 w-5" />,
   send: <Mail className="h-5 w-5" />,
+  "file-bar-chart": <FileBarChart className="h-5 w-5" />,
+  "shield-check": <ShieldCheck className="h-5 w-5" />,
 };
 
 const statusIcon = (status: CheckStatus) => {
@@ -250,6 +254,67 @@ export default function SystemHealth() {
                 </div>
               </div>
             </CardHeader>
+          </Card>
+
+          {/* Go-Live Checklist */}
+          <Card className="border-emerald-200 bg-emerald-50/30">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-emerald-700">
+                <ShieldCheck className="h-5 w-5" />
+                Go-Live Checklist
+              </CardTitle>
+              <CardDescription>
+                Pre-launch verificatie voor live money tests
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid md:grid-cols-2 gap-4">
+                {(() => {
+                  const releaseGroup = data.groups.find(g => g.name === "Release Audit");
+                  const allPass = releaseGroup?.checks.every(c => c.status === "PASS") ?? false;
+                  const hasFailures = releaseGroup?.checks.some(c => c.status === "FAIL") ?? false;
+                  
+                  const checklistItems = [
+                    { label: "Bedrijfsprofiel compleet", group: "Bedrijfsprofiel" },
+                    { label: "E-mail configuratie OK", group: "E-mail (Postmark)" },
+                    { label: "Contract templates aanwezig", group: "Contract/OTP Module" },
+                    { label: "Moneybird verbonden", group: "Moneybird" },
+                    { label: "Yodeck verbonden", group: "Yodeck" },
+                    { label: "Release Audit OK", group: "Release Audit" },
+                  ];
+                  
+                  return checklistItems.map((item, idx) => {
+                    const group = data.groups.find(g => g.name === item.group);
+                    const groupStatus = group ? getGroupStatus(group.checks) : "FAIL";
+                    return (
+                      <div 
+                        key={idx}
+                        className="flex items-center gap-2 p-2 rounded-lg bg-white/60"
+                      >
+                        {statusIcon(groupStatus)}
+                        <span className="text-sm">{item.label}</span>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+              {data.overall === "PASS" && (
+                <div className="mt-4 p-3 bg-emerald-100 rounded-lg border border-emerald-200">
+                  <div className="flex items-center gap-2 text-emerald-700 font-medium">
+                    <CheckCircle2 className="h-4 w-4" />
+                    Systeem gereed voor live tests
+                  </div>
+                </div>
+              )}
+              {data.overall === "FAIL" && (
+                <div className="mt-4 p-3 bg-red-100 rounded-lg border border-red-200">
+                  <div className="flex items-center gap-2 text-red-700 font-medium">
+                    <XCircle className="h-4 w-4" />
+                    Kritieke problemen gevonden - los deze eerst op
+                  </div>
+                </div>
+              )}
+            </CardContent>
           </Card>
 
           <Accordion type="multiple" className="space-y-3" defaultValue={data.groups.map((_, i) => `group-${i}`)}>

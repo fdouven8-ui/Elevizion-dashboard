@@ -1,0 +1,151 @@
+RELEASE AUDIT & FIX — FULL END-TO-END CHECK FOR LIVE MONEY TESTS
+
+CONTEXT
+We are preparing for first real-money tests. I need a strict release audit across:
+- Website homepage + navigation links/buttons
+- /start self-serve flow + gating + waitlist + claim
+- Contracts/OTP/SEPA + PDF bundle
+- Upload portal + validation
+- Publish Queue + simulate/approve/publish + re-simulate safety + competitor exclusion + rollback
+- Emails (idempotent) + monthly reporting
+- Moneybird + Yodeck integrations
+- System Health checks
+
+GOAL
+1) Create a “Release Audit” report page in Admin (or extend /system-health) that runs automated checks and lists PASS/WARN/FAIL with exact fixes.
+2) Perform a code-level audit of all frontend routes and CTA links so no buttons go to wrong pages or dead pages.
+3) Add an end-to-end “Test Run” mode that uses test data (no external writes if configured) to validate the full journey.
+4) Fix any mismatches found (copy claims, wrong links, missing guards, missing template hooks, missing icons).
+
+CRITICAL RULES
+- Do NOT redesign the app.
+- Do NOT remove existing working flows.
+- Only add audit code and minimal fixes.
+- All checks must be deterministic and actionable.
+- No background promises; implement everything now.
+
+A) WEBSITE / NAVIGATION LINK AUDIT
+1) Scan homepage and pricing page components:
+- Verify “Start nu” CTA destinations:
+  /start?package=single
+  /start?package=triple
+  /start?package=ten
+- Verify “Custom” CTA goes to /contact (or configured path)
+2) Verify header menu links route to existing pages (no 404):
+- For each link, ensure route exists and loads
+3) Copy correctness audit:
+- Ensure no text claims “volledig verzorgd” or “Elevizion maakt de advertentie”.
+- Ensure cancellation/term text matches our chosen policy.
+4) Icons audit:
+- Verify favicon/app icons/OG meta are set to Elevizion icon (not Replit).
+- Ensure manifest/app icon appears in browser tab.
+
+B) /START FLOW AUDIT
+1) Validate required fields enforced server-side:
+- KvK (8 digits)
+- VAT (NL#########B##)
+- postal code (####AA)
+- businessCategory required
+- targetRegionCodes length >= 1
+2) Validate normalization:
+- email lowercase
+- kvk digits only
+- vat uppercase no spaces
+- postal uppercase no spaces
+3) Inventory preview:
+- Confirm preview endpoint never mutates DB.
+- Confirm preview uses PlacementEngine.dryRunSimulate.
+4) Capacity gate:
+- Confirm /api/start blocks (NOT AVAILABLE) and shows “regio vol” UI with waitlist CTA.
+- Confirm AVAILABLE proceeds to onboarding token.
+
+C) WAITLIST + CLAIM AUDIT
+1) Waitlist signup:
+- Creates WaitlistRequest WAITING
+- Sends waitlist confirmation mail (idempotent)
+2) CapacityWatcher:
+- Creates INVITED with 48h token when capacity becomes available
+- Sends claim invite mail (idempotent)
+3) Claim:
+- Confirm 409 on no capacity at confirm stage
+- Confirm cross-device prefill exists 60 min
+- Confirm atomic transaction: consume prefill + create advertiser
+- Confirm 410 on expired/used/concurrent
+4) Ensure claim cannot bypass gating.
+
+D) CONTRACTS/OTP/SEPA AUDIT
+1) Ensure templates exist:
+- algemene_voorwaarden
+- adverteerder_overeenkomst
+- sepa_machtiging
+- locatie_overeenkomst
+2) OTP:
+- 6-digit
+- logs IP/UA/time
+- never stores OTP code in audit trail
+3) PDF bundle:
+- Ensure bundle generation works for advertiser (AV+OVK+SEPA) and location (AV+LOC)
+- Ensure downloadable endpoints work
+
+E) UPLOAD PORTAL AUDIT
+1) Access control:
+- Only after CONTRACT_ACCEPTED
+2) Validation:
+- filename starts with linkKey_
+- duration exact contract duration (default 15) with tolerance
+- allowed mime types
+- resolution warning/strict config
+3) Admin can preview (byte-range) and download.
+
+F) PUBLISH QUEUE + YODECK AUDIT
+1) Status guards:
+- approve only SIMULATED_OK
+- publish only APPROVED
+2) Re-simulate safety:
+- publish re-simulates always
+- if fails -> revert to WAITING with clear Dutch message
+3) Competitor exclusion:
+- enforced in simulate and in transactional publish gate
+- exclusivityMode STRICT/RELAXED works
+4) Rollback:
+- tested path when publish partial fails
+5) Bulk operations:
+- bulk publish runs re-simulate per plan; publish-only-ok; returns report
+6) Idempotency:
+- outbox prevents duplicates
+
+G) EMAIL AUDIT
+1) Verify mail events are idempotent via emailLogs.
+2) Verify “Wat nu” mail contains:
+- upload link
+- linkKey copy block
+- filename rule
+- video duration
+3) Verify live mail triggers on PUBLISHED.
+4) Verify waitlist mails and claim mails are sent.
+5) Monthly report:
+- worker schedule + manual endpoint
+- ReportLog idempotency
+- Settings used (weeks/viewFactor) + sanity cap + “Review nodig” UI.
+
+H) SYSTEM HEALTH EXTENSIONS
+Add a new “Release Audit” group showing:
+- Broken links count
+- Missing icon/meta count
+- Missing mapping (region/category/playlist/capacity) counts
+- Stale sync count
+- Email failures last 7 days
+- Outbox backlog
+- Waitlist backlog and invited expiring soon
+
+I) END-TO-END TEST RUNNER (SAFE)
+Add an Admin action “Run E2E Test (Sandbox)”:
+- Runs through: start availability preview -> start submit (with a test advertiser) -> contract accepted (mock) -> upload valid (mock) -> simulate -> approve -> publish (mock mode)
+- In mock mode, do NOT write to Moneybird/Yodeck; simulate their responses.
+- Produce a clear checklist result with PASS/FAIL and exact failing step.
+
+OUTPUT
+- Provide the Release Audit report UI with PASS/WARN/FAIL
+- Fix all broken links/copy/icon issues found
+- Provide a short “Go-Live checklist” in admin page
+IMPLEMENT NOW, NO QUESTIONS.
