@@ -43,7 +43,8 @@ type RejectionReason =
   | "OFFLINE"
   | "NO_PLAYLIST"
   | "STALE_SYNC"
-  | "NOT_ACTIVE";
+  | "NOT_ACTIVE"
+  | "COMPETITOR_CONFLICT";
 
 interface EligibleLocation {
   id: string;
@@ -170,10 +171,41 @@ export class PlacementEngineService {
     const targetRegions = advertiser.targetRegionCodes || [];
     const advertiserCategory = advertiser.category || null;
     const anyRegion = targetRegions.length === 0;
+    const advertiserCompetitorGroup = advertiser.competitorGroup || advertiser.businessCategory || null;
     
     const allLocations = await db.query.locations.findMany({
       where: eq(locations.status, "active"),
     });
+    
+    // Build a map of location -> competitor groups already placed there
+    // Query all active placement targets with their advertisers
+    const existingPlacements = await db.query.placementTargets.findMany({
+      where: eq(placementTargets.status, "live"),
+      with: {
+        plan: {
+          with: {
+            advertiser: true
+          }
+        }
+      }
+    });
+    
+    // Map locationId -> set of competitor groups
+    const locationCompetitorGroups = new Map<string, Set<string>>();
+    for (const placement of existingPlacements) {
+      if (placement.plan?.advertiser) {
+        const locId = placement.locationId;
+        const compGroup = placement.plan.advertiser.competitorGroup || 
+                          placement.plan.advertiser.businessCategory || 
+                          null;
+        if (compGroup) {
+          if (!locationCompetitorGroups.has(locId)) {
+            locationCompetitorGroups.set(locId, new Set());
+          }
+          locationCompetitorGroups.get(locId)!.add(compGroup);
+        }
+      }
+    }
     
     const eligibleLocations: EligibleLocation[] = [];
     const rejectedLocations: RejectedLocation[] = [];
@@ -212,6 +244,15 @@ export class PlacementEngineService {
       if (loc.lastSyncAt && loc.lastSyncAt < staleThreshold) {
         rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "STALE_SYNC" });
         continue;
+      }
+      
+      // Competitor exclusion check: reject if same competitorGroup is already on this location
+      if (advertiserCompetitorGroup) {
+        const existingGroups = locationCompetitorGroups.get(loc.id);
+        if (existingGroups && existingGroups.has(advertiserCompetitorGroup)) {
+          rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "COMPETITOR_CONFLICT" });
+          continue;
+        }
       }
       
       const avgVisitors = loc.avgVisitorsPerWeek || 100;

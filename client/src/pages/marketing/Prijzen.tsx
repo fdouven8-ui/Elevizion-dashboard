@@ -1,16 +1,23 @@
-import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { 
-  Monitor, Check, ArrowRight, Megaphone, MessageSquare, Info
+  Monitor, Check, Megaphone, MessageSquare, Info
 } from "lucide-react";
 import { Link } from "wouter";
-import { AdvertiserLeadModal } from "@/components/LeadModals";
 import MarketingHeader from "@/components/marketing/MarketingHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
 import { PRICING_PACKAGES, PRICING_CONSTANTS, type PricingPackage } from "@/lib/pricing";
 
-function PricingCard({ pkg, onCtaClick }: { pkg: PricingPackage; onCtaClick: () => void }) {
+function getPackageStartParam(pkgId: string): string {
+  const mapping: Record<string, string> = {
+    starter: "single",
+    "local-plus": "triple",
+    premium: "ten",
+  };
+  return mapping[pkgId] || "single";
+}
+
+function PricingCard({ pkg }: { pkg: PricingPackage }) {
   const isPopular = pkg.isPopular;
   const isCustom = pkg.isCustom;
 
@@ -80,10 +87,12 @@ function PricingCard({ pkg, onCtaClick }: { pkg: PricingPackage; onCtaClick: () 
         ) : (
           <Button 
             className={`w-full bg-emerald-600 hover:bg-emerald-700 font-semibold ${isPopular ? "text-base py-5" : ""}`}
-            onClick={onCtaClick}
+            asChild
             data-testid={`button-pricing-${pkg.screens}`}
           >
-            {pkg.ctaText}
+            <Link href={`/start?package=${getPackageStartParam(pkg.id)}`}>
+              {pkg.ctaText}
+            </Link>
           </Button>
         )}
       </CardContent>
@@ -92,8 +101,6 @@ function PricingCard({ pkg, onCtaClick }: { pkg: PricingPackage; onCtaClick: () 
 }
 
 export default function Prijzen() {
-  const [modalOpen, setModalOpen] = useState(false);
-
   return (
     <div className="min-h-screen bg-white">
       <MarketingHeader />
@@ -118,8 +125,7 @@ export default function Prijzen() {
             {PRICING_PACKAGES.map((pkg) => (
               <PricingCard 
                 key={pkg.id} 
-                pkg={pkg} 
-                onCtaClick={() => setModalOpen(true)} 
+                pkg={pkg}
               />
             ))}
           </div>
@@ -178,10 +184,12 @@ export default function Prijzen() {
               <Button 
                 size="lg" 
                 className="gap-2 bg-emerald-500 hover:bg-emerald-600 font-semibold py-6 px-8"
-                onClick={() => setModalOpen(true)}
+                asChild
               >
-                <Megaphone className="h-5 w-5" />
-                Start vanaf €30 per scherm
+                <Link href="/start?package=triple">
+                  <Megaphone className="h-5 w-5" />
+                  Start vanaf €30 per scherm
+                </Link>
               </Button>
               <Button 
                 size="lg" 
@@ -199,7 +207,6 @@ export default function Prijzen() {
       </section>
 
       <MarketingFooter />
-      <AdvertiserLeadModal open={modalOpen} onOpenChange={setModalOpen} />
     </div>
   );
 }

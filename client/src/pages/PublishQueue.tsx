@@ -36,6 +36,20 @@ import { format } from "date-fns";
 import { nl } from "date-fns/locale";
 import { useState } from "react";
 
+function translateRejectionReason(reason: string): string {
+  const translations: Record<string, string> = {
+    REGION_MISMATCH: "Buiten regio",
+    CATEGORY_MISMATCH: "Categorie uitgesloten",
+    NO_CAPACITY: "Geen capaciteit",
+    OFFLINE: "Offline",
+    NO_PLAYLIST: "Geen playlist",
+    STALE_SYNC: "Sync verouderd",
+    NOT_ACTIVE: "Niet actief",
+    COMPETITOR_CONFLICT: "Concurrent op locatie",
+  };
+  return translations[reason] || reason;
+}
+
 interface PlacementPlan {
   id: string;
   advertiserId: string;
@@ -485,7 +499,7 @@ export default function PublishQueue() {
                                   <TableCell>{item.locationName}</TableCell>
                                   <TableCell>
                                     <Badge variant="outline" className="text-red-600">
-                                      {item.reason}
+                                      {translateRejectionReason(item.reason)}
                                     </Badge>
                                   </TableCell>
                                 </TableRow>

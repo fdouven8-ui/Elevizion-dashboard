@@ -1,0 +1,574 @@
+import { useState, useEffect } from "react";
+import { useLocation, useSearch } from "wouter";
+import { useMutation } from "@tanstack/react-query";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { 
+  Monitor, Check, ArrowRight, ArrowLeft, Loader2, AlertCircle, Video, Info
+} from "lucide-react";
+import MarketingHeader from "@/components/marketing/MarketingHeader";
+import MarketingFooter from "@/components/marketing/MarketingFooter";
+import { PRICING_PACKAGES, PRICING_CONSTANTS, type PricingPackage } from "@/lib/pricing";
+import { REGIONS, BUSINESS_CATEGORIES } from "@shared/regions";
+import { useToast } from "@/hooks/use-toast";
+
+interface FormData {
+  companyName: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  kvkNumber: string;
+  vatNumber: string;
+  businessCategory: string;
+  targetRegionCodes: string[];
+  addressLine1: string;
+  postalCode: string;
+  city: string;
+}
+
+interface FormErrors {
+  [key: string]: string;
+}
+
+function getPackageByQueryParam(param: string | null): PricingPackage | null {
+  if (!param) return null;
+  const mapping: Record<string, string> = {
+    single: "starter",
+    triple: "local-plus",
+    ten: "premium",
+  };
+  const id = mapping[param.toLowerCase()] || param.toLowerCase();
+  return PRICING_PACKAGES.find(p => p.id === id) || null;
+}
+
+function PackageTypeFromPackageId(pkgId: string): string {
+  const mapping: Record<string, string> = {
+    starter: "SINGLE",
+    "local-plus": "TRIPLE",
+    premium: "TEN",
+  };
+  return mapping[pkgId] || "SINGLE";
+}
+
+export default function Start() {
+  const searchParams = useSearch();
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const urlParams = new URLSearchParams(searchParams);
+  const packageParam = urlParams.get("package");
+  const selectedPackage = getPackageByQueryParam(packageParam);
+
+  const [step, setStep] = useState(0);
+  const [formData, setFormData] = useState<FormData>({
+    companyName: "",
+    contactName: "",
+    email: "",
+    phone: "",
+    kvkNumber: "",
+    vatNumber: "",
+    businessCategory: "",
+    targetRegionCodes: [],
+    addressLine1: "",
+    postalCode: "",
+    city: "",
+  });
+  const [errors, setErrors] = useState<FormErrors>({});
+
+  useEffect(() => {
+    if (!selectedPackage || selectedPackage.isCustom) {
+      navigate("/prijzen");
+    }
+  }, [selectedPackage, navigate]);
+
+  const submitMutation = useMutation({
+    mutationFn: async (data: FormData & { packageType: string }) => {
+      const response = await fetch("/api/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || "Er is een fout opgetreden");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.redirectUrl) {
+        window.location.href = data.redirectUrl;
+      }
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Fout",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  function updateField(field: keyof FormData, value: string | string[]) {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+    if (errors[field]) {
+      setErrors((prev) => {
+        const newErrors = { ...prev };
+        delete newErrors[field];
+        return newErrors;
+      });
+    }
+  }
+
+  function validateStep0(): boolean {
+    return !!selectedPackage && !selectedPackage.isCustom;
+  }
+
+  function validateStep1(): boolean {
+    const newErrors: FormErrors = {};
+    
+    if (!formData.companyName.trim()) newErrors.companyName = "Bedrijfsnaam is verplicht";
+    if (!formData.contactName.trim()) newErrors.contactName = "Contactpersoon is verplicht";
+    if (!formData.email.trim()) {
+      newErrors.email = "E-mailadres is verplicht";
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+      newErrors.email = "Ongeldig e-mailadres";
+    }
+    if (!formData.phone.trim()) newErrors.phone = "Telefoonnummer is verplicht";
+    
+    if (!formData.kvkNumber.trim()) {
+      newErrors.kvkNumber = "KvK-nummer is verplicht";
+    } else if (!/^\d{8}$/.test(formData.kvkNumber.replace(/\s/g, ""))) {
+      newErrors.kvkNumber = "KvK-nummer moet 8 cijfers zijn";
+    }
+    
+    if (!formData.vatNumber.trim()) {
+      newErrors.vatNumber = "BTW-nummer is verplicht";
+    } else {
+      const normalizedVat = formData.vatNumber.toUpperCase().replace(/\s/g, "");
+      if (!/^NL\d{9}B\d{2}$/.test(normalizedVat)) {
+        newErrors.vatNumber = "BTW-nummer moet formaat NL123456789B01 hebben";
+      }
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  }
+
+  function validateStep2(): boolean {
+    const newErrors: FormErrors = {};
+    
+    if (!formData.businessCategory) {
+      newErrors.businessCategory = "Type bedrijf is verplicht";
+    }
+    if (formData.targetRegionCodes.length === 0) {
+      newErrors.targetRegionCodes = "Selecteer minimaal één regio";
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  }
+
+  function validateStep3(): boolean {
+    const newErrors: FormErrors = {};
+    
+    if (!formData.addressLine1.trim()) newErrors.addressLine1 = "Adres is verplicht";
+    if (!formData.postalCode.trim()) {
+      newErrors.postalCode = "Postcode is verplicht";
+    } else if (!/^\d{4}\s?[A-Za-z]{2}$/.test(formData.postalCode)) {
+      newErrors.postalCode = "Ongeldige postcode (bijv. 1234 AB)";
+    }
+    if (!formData.city.trim()) newErrors.city = "Plaats is verplicht";
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  }
+
+  function handleNext() {
+    if (step === 0 && validateStep0()) setStep(1);
+    else if (step === 1 && validateStep1()) setStep(2);
+    else if (step === 2 && validateStep2()) setStep(3);
+    else if (step === 3 && validateStep3()) handleSubmit();
+  }
+
+  function handleBack() {
+    if (step > 0) setStep(step - 1);
+  }
+
+  function handleSubmit() {
+    if (!selectedPackage) return;
+    
+    submitMutation.mutate({
+      ...formData,
+      kvkNumber: formData.kvkNumber.replace(/\s/g, ""),
+      vatNumber: formData.vatNumber.toUpperCase().replace(/\s/g, ""),
+      email: formData.email.toLowerCase().trim(),
+      packageType: PackageTypeFromPackageId(selectedPackage.id),
+    });
+  }
+
+  function toggleRegion(code: string) {
+    const current = formData.targetRegionCodes;
+    if (current.includes(code)) {
+      updateField("targetRegionCodes", current.filter(c => c !== code));
+    } else {
+      updateField("targetRegionCodes", [...current, code]);
+    }
+  }
+
+  function selectAllRegions() {
+    updateField("targetRegionCodes", REGIONS.map(r => r.code));
+  }
+
+  function clearAllRegions() {
+    updateField("targetRegionCodes", []);
+  }
+
+  if (!selectedPackage) return null;
+
+  const steps = [
+    { title: "Pakket", description: "Bevestig je keuze" },
+    { title: "Bedrijfsgegevens", description: "Je bedrijf & contact" },
+    { title: "Type & Regio", description: "Branche & locaties" },
+    { title: "Factuurgegevens", description: "Adres & betaling" },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
+      <MarketingHeader />
+
+      <div className="container mx-auto px-4 py-12 max-w-2xl">
+        <div className="flex items-center justify-center gap-2 mb-8">
+          {steps.map((s, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
+                i < step 
+                  ? "bg-emerald-600 text-white" 
+                  : i === step 
+                    ? "bg-emerald-600 text-white ring-2 ring-emerald-200" 
+                    : "bg-slate-200 text-slate-500"
+              }`}>
+                {i < step ? <Check className="h-4 w-4" /> : i + 1}
+              </div>
+              {i < steps.length - 1 && (
+                <div className={`w-8 h-0.5 ${i < step ? "bg-emerald-600" : "bg-slate-200"}`} />
+              )}
+            </div>
+          ))}
+        </div>
+
+        <Card className="border-2 border-slate-200">
+          <CardHeader>
+            <CardTitle className="text-xl">{steps[step].title}</CardTitle>
+            <CardDescription>{steps[step].description}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {step === 0 && (
+              <div className="space-y-6">
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-4">
+                  <div className="flex items-start gap-4">
+                    <div className="w-12 h-12 rounded-full bg-emerald-600 text-white flex items-center justify-center flex-shrink-0">
+                      <Monitor className="h-6 w-6" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="font-bold text-lg text-slate-800">{selectedPackage.name}</h3>
+                      <p className="text-emerald-600 font-medium">
+                        {selectedPackage.screens} scherm{selectedPackage.screens > 1 ? "en" : ""} • €{selectedPackage.perScreenPrice.toFixed(2).replace(".", ",")} per scherm/maand
+                      </p>
+                      <p className="text-sm text-slate-600 mt-1">
+                        Totaal: €{selectedPackage.totalPrice.toFixed(2).replace(".", ",")} per maand excl. BTW
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex gap-3">
+                  <Video className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-slate-800">Je levert zelf een video aan</p>
+                    <p className="text-sm text-slate-600">
+                      Na aanmelding kun je via ons uploadportaal je video uploaden. Wij plaatsen deze op de schermen.
+                    </p>
+                  </div>
+                </div>
+
+                <ul className="space-y-2 text-sm text-slate-700">
+                  {selectedPackage.features.map((f, i) => (
+                    <li key={i} className="flex items-center gap-2">
+                      <Check className="h-4 w-4 text-emerald-600" />
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+
+                <div className="flex items-center gap-2 text-sm text-slate-500">
+                  <Info className="h-4 w-4" />
+                  <span>{PRICING_CONSTANTS.minTermText}, {PRICING_CONSTANTS.afterTermText}</span>
+                </div>
+              </div>
+            )}
+
+            {step === 1 && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="companyName">Bedrijfsnaam *</Label>
+                  <Input
+                    id="companyName"
+                    data-testid="input-companyName"
+                    value={formData.companyName}
+                    onChange={(e) => updateField("companyName", e.target.value)}
+                    placeholder="Jouw Bedrijf B.V."
+                    className={errors.companyName ? "border-red-500" : ""}
+                  />
+                  {errors.companyName && <p className="text-sm text-red-500">{errors.companyName}</p>}
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="contactName">Contactpersoon *</Label>
+                  <Input
+                    id="contactName"
+                    data-testid="input-contactName"
+                    value={formData.contactName}
+                    onChange={(e) => updateField("contactName", e.target.value)}
+                    placeholder="Jan Jansen"
+                    className={errors.contactName ? "border-red-500" : ""}
+                  />
+                  {errors.contactName && <p className="text-sm text-red-500">{errors.contactName}</p>}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="email">E-mailadres *</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      data-testid="input-email"
+                      value={formData.email}
+                      onChange={(e) => updateField("email", e.target.value)}
+                      placeholder="info@jouwbedrijf.nl"
+                      className={errors.email ? "border-red-500" : ""}
+                    />
+                    {errors.email && <p className="text-sm text-red-500">{errors.email}</p>}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="phone">Telefoonnummer *</Label>
+                    <Input
+                      id="phone"
+                      data-testid="input-phone"
+                      value={formData.phone}
+                      onChange={(e) => updateField("phone", e.target.value)}
+                      placeholder="06-12345678"
+                      className={errors.phone ? "border-red-500" : ""}
+                    />
+                    {errors.phone && <p className="text-sm text-red-500">{errors.phone}</p>}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="kvkNumber">KvK-nummer *</Label>
+                    <Input
+                      id="kvkNumber"
+                      data-testid="input-kvkNumber"
+                      value={formData.kvkNumber}
+                      onChange={(e) => updateField("kvkNumber", e.target.value)}
+                      placeholder="12345678"
+                      maxLength={8}
+                      className={errors.kvkNumber ? "border-red-500" : ""}
+                    />
+                    {errors.kvkNumber && <p className="text-sm text-red-500">{errors.kvkNumber}</p>}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="vatNumber">BTW-nummer *</Label>
+                    <Input
+                      id="vatNumber"
+                      data-testid="input-vatNumber"
+                      value={formData.vatNumber}
+                      onChange={(e) => updateField("vatNumber", e.target.value.toUpperCase())}
+                      placeholder="NL123456789B01"
+                      className={errors.vatNumber ? "border-red-500" : ""}
+                    />
+                    {errors.vatNumber && <p className="text-sm text-red-500">{errors.vatNumber}</p>}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {step === 2 && (
+              <div className="space-y-6">
+                <div className="space-y-2">
+                  <Label>Type bedrijf / branche *</Label>
+                  <Select
+                    value={formData.businessCategory}
+                    onValueChange={(v) => updateField("businessCategory", v)}
+                  >
+                    <SelectTrigger data-testid="select-businessCategory" className={errors.businessCategory ? "border-red-500" : ""}>
+                      <SelectValue placeholder="Selecteer type bedrijf" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {BUSINESS_CATEGORIES.map((cat) => (
+                        <SelectItem key={cat.code} value={cat.code}>
+                          {cat.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {errors.businessCategory && <p className="text-sm text-red-500">{errors.businessCategory}</p>}
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <Label>Gewenste regio's *</Label>
+                    <div className="flex gap-2">
+                      <Button type="button" variant="ghost" size="sm" onClick={selectAllRegions}>
+                        Selecteer alles
+                      </Button>
+                      <Button type="button" variant="ghost" size="sm" onClick={clearAllRegions}>
+                        Wis alles
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {REGIONS.map((region) => (
+                      <label
+                        key={region.code}
+                        className={`flex items-center gap-2 p-3 border rounded-lg cursor-pointer transition-colors ${
+                          formData.targetRegionCodes.includes(region.code)
+                            ? "bg-emerald-50 border-emerald-300"
+                            : "bg-white border-slate-200 hover:border-slate-300"
+                        }`}
+                      >
+                        <Checkbox
+                          checked={formData.targetRegionCodes.includes(region.code)}
+                          onCheckedChange={() => toggleRegion(region.code)}
+                          data-testid={`checkbox-region-${region.code}`}
+                        />
+                        <span className="text-sm font-medium">{region.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {errors.targetRegionCodes && <p className="text-sm text-red-500">{errors.targetRegionCodes}</p>}
+                  
+                  {formData.targetRegionCodes.length > 0 && (
+                    <p className="text-sm text-slate-600">
+                      {formData.targetRegionCodes.length} regio{formData.targetRegionCodes.length !== 1 ? "'s" : ""} geselecteerd
+                    </p>
+                  )}
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm text-slate-600">
+                  <p>We plaatsen geen concurrerende advertenties direct naast elkaar op dezelfde locatie.</p>
+                </div>
+              </div>
+            )}
+
+            {step === 3 && (
+              <div className="space-y-4">
+                <p className="text-sm text-slate-600">
+                  Deze gegevens gebruiken we voor de facturatie via automatische incasso.
+                </p>
+
+                <div className="space-y-2">
+                  <Label htmlFor="addressLine1">Adres (straat + huisnummer) *</Label>
+                  <Input
+                    id="addressLine1"
+                    data-testid="input-addressLine1"
+                    value={formData.addressLine1}
+                    onChange={(e) => updateField("addressLine1", e.target.value)}
+                    placeholder="Hoofdstraat 123"
+                    className={errors.addressLine1 ? "border-red-500" : ""}
+                  />
+                  {errors.addressLine1 && <p className="text-sm text-red-500">{errors.addressLine1}</p>}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="postalCode">Postcode *</Label>
+                    <Input
+                      id="postalCode"
+                      data-testid="input-postalCode"
+                      value={formData.postalCode}
+                      onChange={(e) => updateField("postalCode", e.target.value.toUpperCase())}
+                      placeholder="1234 AB"
+                      className={errors.postalCode ? "border-red-500" : ""}
+                    />
+                    {errors.postalCode && <p className="text-sm text-red-500">{errors.postalCode}</p>}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="city">Plaats *</Label>
+                    <Input
+                      id="city"
+                      data-testid="input-city"
+                      value={formData.city}
+                      onChange={(e) => updateField("city", e.target.value)}
+                      placeholder="Amsterdam"
+                      className={errors.city ? "border-red-500" : ""}
+                    />
+                    {errors.city && <p className="text-sm text-red-500">{errors.city}</p>}
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-slate-600">
+                  <p>Land: Nederland (NL). Voor buitenlandse bedrijven, neem contact met ons op.</p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-between mt-8 pt-4 border-t">
+              {step > 0 ? (
+                <Button type="button" variant="outline" onClick={handleBack} disabled={submitMutation.isPending}>
+                  <ArrowLeft className="h-4 w-4 mr-2" />
+                  Terug
+                </Button>
+              ) : (
+                <div />
+              )}
+              
+              <Button 
+                onClick={handleNext} 
+                disabled={submitMutation.isPending}
+                data-testid="button-next"
+                className="bg-emerald-600 hover:bg-emerald-700"
+              >
+                {submitMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Bezig...
+                  </>
+                ) : step === 3 ? (
+                  <>
+                    Doorgaan naar akkoord
+                    <ArrowRight className="h-4 w-4 ml-2" />
+                  </>
+                ) : (
+                  <>
+                    Volgende
+                    <ArrowRight className="h-4 w-4 ml-2" />
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <p className="text-center text-sm text-slate-500 mt-6">
+          Vragen? Neem <a href="/contact" className="underline hover:text-emerald-600">contact</a> op.
+        </p>
+      </div>
+
+      <MarketingFooter />
+    </div>
+  );
+}

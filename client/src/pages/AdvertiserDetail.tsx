@@ -56,6 +56,7 @@ import { format, subDays } from "date-fns";
 import { nl } from "date-fns/locale";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import type { Advertiser } from "@shared/schema";
+import { BUSINESS_CATEGORIES } from "@shared/regions";
 
 interface Template {
   id: string;
@@ -991,6 +992,33 @@ export default function AdvertiserDetail() {
               <div>
                 <p className="text-sm font-medium text-muted-foreground mb-1">KVK-nummer</p>
                 <p className="text-sm font-mono">{advertiser.kvkNumber || "-"}</p>
+              </div>
+            </div>
+            
+            <Separator />
+            
+            {/* Business Category & Competitor Group */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-1">Branche</p>
+                <p className="text-sm">
+                  {advertiser.businessCategory 
+                    ? BUSINESS_CATEGORIES.find(c => c.code === advertiser.businessCategory)?.label || advertiser.businessCategory
+                    : "-"}
+                </p>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-1">Concurrent Groep</p>
+                <p className="text-sm">
+                  {advertiser.competitorGroup 
+                    ? BUSINESS_CATEGORIES.find(c => c.code === advertiser.competitorGroup)?.label || advertiser.competitorGroup
+                    : advertiser.businessCategory 
+                      ? BUSINESS_CATEGORIES.find(c => c.code === advertiser.businessCategory)?.label || advertiser.businessCategory
+                      : "-"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {!advertiser.competitorGroup && advertiser.businessCategory && "(zelfde als branche)"}
+                </p>
               </div>
             </div>
             

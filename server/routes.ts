@@ -7,9 +7,9 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { z } from "zod";
 import crypto from "crypto";
-import { sql, desc, eq } from "drizzle-orm";
+import { sql, desc, eq, and } from "drizzle-orm";
 import { db } from "./db";
-import { emailLogs, contractDocuments, termsAcceptance } from "@shared/schema";
+import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens } from "@shared/schema";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import {
@@ -608,6 +608,228 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
   
   // ============================================================================
+  // SELF-SERVICE START FLOW
+  // ============================================================================
+  
+  const startFlowSchema = z.object({
+    companyName: z.string().min(1, "Bedrijfsnaam is verplicht"),
+    contactName: z.string().min(1, "Contactpersoon is verplicht"),
+    email: z.string().email("Ongeldig e-mailadres"),
+    phone: z.string().min(1, "Telefoonnummer is verplicht"),
+    kvkNumber: z.string().regex(/^\d{8}$/, "KvK-nummer moet 8 cijfers zijn"),
+    vatNumber: z.string().regex(/^NL\d{9}B\d{2}$/, "BTW-nummer moet formaat NL123456789B01 hebben"),
+    businessCategory: z.string().min(1, "Type bedrijf is verplicht"),
+    targetRegionCodes: z.array(z.string()).min(1, "Selecteer minimaal één regio"),
+    addressLine1: z.string().min(1, "Adres is verplicht"),
+    postalCode: z.string().regex(/^\d{4}\s?[A-Za-z]{2}$/, "Ongeldige postcode"),
+    city: z.string().min(1, "Plaats is verplicht"),
+    packageType: z.enum(["SINGLE", "TRIPLE", "TEN"]),
+  });
+
+  app.post("/api/start", async (req, res) => {
+    try {
+      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      
+      if (!checkLeadRateLimit(ip)) {
+        return res.status(429).json({ message: "Te veel aanvragen. Probeer het later opnieuw." });
+      }
+      
+      const result = startFlowSchema.safeParse(req.body);
+      if (!result.success) {
+        return res.status(400).json({ message: result.error.errors[0].message });
+      }
+      
+      const data = result.data;
+      const normalizedEmail = data.email.toLowerCase().trim();
+      const normalizedKvk = data.kvkNumber.replace(/\s/g, "");
+      const normalizedVat = data.vatNumber.toUpperCase().replace(/\s/g, "");
+      
+      const packagePrices: Record<string, { screens: number; price: number }> = {
+        SINGLE: { screens: 1, price: 49.99 },
+        TRIPLE: { screens: 3, price: 129.99 },
+        TEN: { screens: 10, price: 299.99 },
+      };
+      const pkgInfo = packagePrices[data.packageType];
+      
+      const { db } = await import("./db");
+      const existingByKvk = await db.query.advertisers.findFirst({
+        where: eq(advertisers.kvkNumber, normalizedKvk),
+      });
+      
+      let existingAdvertiser = existingByKvk;
+      if (!existingAdvertiser) {
+        const existingByEmailAndCompany = await db.query.advertisers.findFirst({
+          where: and(
+            eq(advertisers.email, normalizedEmail),
+            eq(advertisers.companyName, data.companyName)
+          ),
+        });
+        existingAdvertiser = existingByEmailAndCompany || null;
+      }
+      
+      const generateLinkKey = (companyName: string): string => {
+        const sanitized = companyName
+          .toUpperCase()
+          .replace(/[^A-Z0-9]/g, "")
+          .substring(0, 20);
+        const randomChars = crypto.randomBytes(3).toString("hex").toUpperCase();
+        return `ADV-${sanitized}-${randomChars}`;
+      };
+      
+      let advertiserId: string;
+      
+      if (existingAdvertiser) {
+        // Preserve existing competitorGroup if admin has manually set it
+        // Only default to businessCategory if competitorGroup is null
+        const preservedCompetitorGroup = existingAdvertiser.competitorGroup || data.businessCategory;
+        
+        await db.update(advertisers)
+          .set({
+            companyName: data.companyName,
+            contactName: data.contactName,
+            email: normalizedEmail,
+            phone: data.phone,
+            kvkNumber: normalizedKvk,
+            vatNumber: normalizedVat,
+            street: data.addressLine1,
+            zipcode: data.postalCode.toUpperCase(),
+            city: data.city,
+            country: "NL",
+            businessCategory: data.businessCategory,
+            competitorGroup: preservedCompetitorGroup,
+            targetRegionCodes: data.targetRegionCodes,
+            packageType: data.packageType,
+            screensIncluded: pkgInfo.screens,
+            packagePrice: pkgInfo.price.toString(),
+            videoDurationSeconds: 15,
+            onboardingStatus: existingAdvertiser.onboardingStatus === "INVITED" ? "DETAILS_SUBMITTED" : existingAdvertiser.onboardingStatus,
+            source: "Website /start",
+            updatedAt: new Date(),
+          })
+          .where(eq(advertisers.id, existingAdvertiser.id));
+        advertiserId = existingAdvertiser.id;
+        console.log(`[StartFlow] Updated existing advertiser ${advertiserId}`);
+      } else {
+        const linkKey = generateLinkKey(data.companyName);
+        const [newAdvertiser] = await db.insert(advertisers)
+          .values({
+            companyName: data.companyName,
+            contactName: data.contactName,
+            email: normalizedEmail,
+            phone: data.phone,
+            kvkNumber: normalizedKvk,
+            vatNumber: normalizedVat,
+            street: data.addressLine1,
+            zipcode: data.postalCode.toUpperCase(),
+            city: data.city,
+            country: "NL",
+            businessCategory: data.businessCategory,
+            competitorGroup: data.businessCategory,
+            targetRegionCodes: data.targetRegionCodes,
+            packageType: data.packageType,
+            screensIncluded: pkgInfo.screens,
+            packagePrice: pkgInfo.price.toString(),
+            videoDurationSeconds: 15,
+            onboardingStatus: "DETAILS_SUBMITTED",
+            assetStatus: "none",
+            linkKey,
+            linkKeyGeneratedAt: new Date(),
+            source: "Website /start",
+          })
+          .returning();
+        advertiserId = newAdvertiser.id;
+        console.log(`[StartFlow] Created new advertiser ${advertiserId} with linkKey ${linkKey}`);
+      }
+      
+      const existingTokens = await storage.getPortalTokensForAdvertiser(advertiserId);
+      const activeToken = existingTokens.find(t => !t.usedAt && new Date(t.expiresAt) > new Date());
+      
+      let portalToken: string;
+      if (activeToken) {
+        const allTokens = await db.query.portalTokens.findMany({
+          where: eq(portalTokens.advertiserId, advertiserId),
+        });
+        const validToken = allTokens.find(t => !t.usedAt && new Date(t.expiresAt) > new Date());
+        portalToken = crypto.randomBytes(32).toString("hex");
+        const tokenHash = crypto.createHash("sha256").update(portalToken).digest("hex");
+        const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        await db.insert(portalTokens).values({
+          advertiserId,
+          tokenHash,
+          expiresAt,
+        });
+        console.log(`[StartFlow] Created new portal token for ${advertiserId}`);
+      } else {
+        portalToken = crypto.randomBytes(32).toString("hex");
+        const tokenHash = crypto.createHash("sha256").update(portalToken).digest("hex");
+        const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        await db.insert(portalTokens).values({
+          advertiserId,
+          tokenHash,
+          expiresAt,
+        });
+        console.log(`[StartFlow] Created new portal token for ${advertiserId}`);
+      }
+      
+      try {
+        const moneybirdClient = await getMoneybirdClient();
+        if (moneybirdClient) {
+          const advertiserRecord = await storage.getAdvertiser(advertiserId);
+          if (advertiserRecord) {
+            const mappedData = {
+              company_name: advertiserRecord.companyName,
+              firstname: advertiserRecord.contactName?.split(" ")[0] || "",
+              lastname: advertiserRecord.contactName?.split(" ").slice(1).join(" ") || "",
+              address1: advertiserRecord.street || "",
+              zipcode: advertiserRecord.zipcode || "",
+              city: advertiserRecord.city || "",
+              country: "NL",
+              email: advertiserRecord.email,
+              phone: advertiserRecord.phone || "",
+              chamber_of_commerce: advertiserRecord.kvkNumber || "",
+              tax_number: advertiserRecord.vatNumber || "",
+            };
+            
+            const { contact } = await moneybirdClient.createOrUpdateContact(
+              advertiserRecord.moneybirdContactId || null,
+              mappedData
+            );
+            
+            await db.update(advertisers)
+              .set({
+                moneybirdContactId: contact.id,
+                moneybirdSyncStatus: "synced",
+                moneybirdLastSyncAt: new Date(),
+              })
+              .where(eq(advertisers.id, advertiserId));
+            console.log(`[StartFlow] Moneybird contact synced for ${advertiserId}: ${contact.id}`);
+          }
+        }
+      } catch (mbError: any) {
+        console.error(`[StartFlow] Moneybird sync failed for ${advertiserId}:`, mbError.message);
+        await db.update(advertisers)
+          .set({
+            moneybirdSyncStatus: "failed",
+            moneybirdSyncError: mbError.message?.substring(0, 255) || "Unknown error",
+          })
+          .where(eq(advertisers.id, advertiserId));
+      }
+      
+      const baseUrl = `${req.protocol}://${req.get("host")}`;
+      const redirectUrl = `${baseUrl}/advertiser-onboarding/${portalToken}`;
+      
+      res.json({ 
+        success: true, 
+        advertiserId,
+        redirectUrl,
+      });
+    } catch (error: any) {
+      console.error("[StartFlow] Error:", error);
+      res.status(500).json({ message: "Er ging iets mis. Probeer het later opnieuw." });
+    }
+  });
+
+  // ============================================================================
   // ADVERTISERS
   // ============================================================================
   
@@ -1056,9 +1278,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
               tax_number: updatedAdvertiser.vatNumber || undefined,
             };
             
-            const { contact } = await moneybirdClient.upsertOrCreateContact(
-              contactData,
-              updatedAdvertiser.moneybirdContactId || undefined
+            const { contact } = await moneybirdClient.createOrUpdateContact(
+              updatedAdvertiser.moneybirdContactId || null,
+              contactData
             );
             
             // Update advertiser with Moneybird contact ID
