@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation, useSearch } from "wouter";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { 
   Monitor, Check, ArrowRight, ArrowLeft, Loader2, AlertCircle, Video, Info,
-  Clock, MapPin, ChevronDown
+  Clock, MapPin, ChevronDown, Search, X
 } from "lucide-react";
 import {
   Accordion,
@@ -26,8 +26,15 @@ import {
 import MarketingHeader from "@/components/marketing/MarketingHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
 import { PRICING_PACKAGES, PRICING_CONSTANTS, type PricingPackage } from "@/lib/pricing";
-import { REGIONS, BUSINESS_CATEGORIES } from "@shared/regions";
+import { BUSINESS_CATEGORIES } from "@shared/regions";
 import { useToast } from "@/hooks/use-toast";
+
+interface ActiveRegion {
+  code: string;
+  label: string;
+  locationCount: number;
+  onlineCount: number;
+}
 
 interface FormData {
   companyName: string;
@@ -149,6 +156,24 @@ export default function Start() {
     suggestedAction: "EXPAND_REGIONS" | "WAITLIST" | "OK";
   } | null>(null);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  
+  // Dynamic regions from actual screen locations
+  const [regionSearch, setRegionSearch] = useState("");
+  
+  const { data: activeRegions = [], isLoading: regionsLoading } = useQuery<ActiveRegion[]>({
+    queryKey: ["active-regions"],
+    queryFn: async () => {
+      const res = await fetch("/api/regions/active");
+      if (!res.ok) throw new Error("Failed to fetch regions");
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+  });
+  
+  // Filter regions based on search
+  const filteredRegions = activeRegions.filter(r => 
+    r.label.toLowerCase().includes(regionSearch.toLowerCase())
+  );
 
   // Pre-fill form from server-side prefill API (cross-device claim flow)
   useEffect(() => {
@@ -389,11 +414,12 @@ export default function Start() {
   }
 
   function selectAllRegions() {
-    updateField("targetRegionCodes", REGIONS.map(r => r.code));
+    updateField("targetRegionCodes", activeRegions.map(r => r.code));
   }
 
   function clearAllRegions() {
     updateField("targetRegionCodes", []);
+    setRegionSearch("");
   }
 
   // Prefill loading state
@@ -513,7 +539,7 @@ export default function Start() {
                   <span className="text-slate-600">Gekozen gebieden:</span>
                   <span className="font-medium">
                     {noCapacityData.formData.targetRegionCodes
-                      .map(code => REGIONS.find(r => r.code === code)?.label || code)
+                      .map(code => activeRegions.find(r => r.code === code)?.label || code)
                       .join(", ")}
                   </span>
                 </div>
@@ -749,41 +775,114 @@ export default function Start() {
 
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
-                    <Label>Gewenste regio's *</Label>
+                    <Label>Gewenste plaatsen *</Label>
                     <div className="flex gap-2">
-                      <Button type="button" variant="ghost" size="sm" onClick={selectAllRegions}>
+                      <Button type="button" variant="ghost" size="sm" onClick={selectAllRegions} disabled={regionsLoading}>
                         Selecteer alles
                       </Button>
                       <Button type="button" variant="ghost" size="sm" onClick={clearAllRegions}>
-                        Wis alles
+                        Wis selectie
                       </Button>
                     </div>
                   </div>
                   
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                    {REGIONS.map((region) => (
-                      <label
-                        key={region.code}
-                        className={`flex items-center gap-2 p-3 border rounded-lg cursor-pointer transition-colors ${
-                          formData.targetRegionCodes.includes(region.code)
-                            ? "bg-emerald-50 border-emerald-300"
-                            : "bg-white border-slate-200 hover:border-slate-300"
-                        }`}
+                  {regionsLoading ? (
+                    <div className="flex items-center gap-2 text-slate-600 p-4 bg-slate-50 rounded-lg">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <span className="text-sm">Plaatsen laden...</span>
+                    </div>
+                  ) : activeRegions.length === 0 ? (
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
+                      <p className="text-amber-800">
+                        Nog geen actieve schermlocaties beschikbaar. Laat je gegevens achter zodat we contact kunnen opnemen.
+                      </p>
+                      <Button 
+                        variant="outline" 
+                        onClick={() => navigate("/contact")}
+                        className="border-amber-300 text-amber-700 hover:bg-amber-100"
                       >
-                        <Checkbox
-                          checked={formData.targetRegionCodes.includes(region.code)}
-                          onCheckedChange={() => toggleRegion(region.code)}
-                          data-testid={`checkbox-region-${region.code}`}
+                        Naar contact
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                        <Input
+                          placeholder="Zoek plaats..."
+                          value={regionSearch}
+                          onChange={(e) => setRegionSearch(e.target.value)}
+                          className="pl-9 pr-8"
+                          data-testid="input-region-search"
                         />
-                        <span className="text-sm font-medium">{region.label}</span>
-                      </label>
-                    ))}
-                  </div>
+                        {regionSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setRegionSearch("")}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+                      
+                      {formData.targetRegionCodes.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {formData.targetRegionCodes.map(code => {
+                            const region = activeRegions.find(r => r.code === code);
+                            return (
+                              <span 
+                                key={code}
+                                className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-700 text-xs font-medium px-2 py-1 rounded-full"
+                              >
+                                {region?.label || code}
+                                <button
+                                  type="button"
+                                  onClick={() => toggleRegion(code)}
+                                  className="hover:text-emerald-900"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                      
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-64 overflow-y-auto">
+                        {filteredRegions.map((region) => (
+                          <label
+                            key={region.code}
+                            className={`flex items-center gap-2 p-3 border rounded-lg cursor-pointer transition-colors ${
+                              formData.targetRegionCodes.includes(region.code)
+                                ? "bg-emerald-50 border-emerald-300"
+                                : "bg-white border-slate-200 hover:border-slate-300"
+                            }`}
+                          >
+                            <Checkbox
+                              checked={formData.targetRegionCodes.includes(region.code)}
+                              onCheckedChange={() => toggleRegion(region.code)}
+                              data-testid={`checkbox-region-${region.code}`}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm font-medium block truncate">{region.label}</span>
+                              <span className="text-xs text-slate-500">{region.onlineCount} online</span>
+                            </div>
+                          </label>
+                        ))}
+                        {filteredRegions.length === 0 && regionSearch && (
+                          <p className="col-span-full text-sm text-slate-500 text-center py-4">
+                            Geen plaatsen gevonden voor "{regionSearch}"
+                          </p>
+                        )}
+                      </div>
+                    </>
+                  )}
                   {errors.targetRegionCodes && <p className="text-sm text-red-500">{errors.targetRegionCodes}</p>}
                   
                   {formData.targetRegionCodes.length > 0 && (
                     <p className="text-sm text-slate-600">
-                      {formData.targetRegionCodes.length} regio{formData.targetRegionCodes.length !== 1 ? "'s" : ""} geselecteerd
+                      {formData.targetRegionCodes.length} plaats{formData.targetRegionCodes.length !== 1 ? "en" : ""} geselecteerd
                     </p>
                   )}
                 </div>

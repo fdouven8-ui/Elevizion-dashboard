@@ -7,9 +7,9 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { z } from "zod";
 import crypto from "crypto";
-import { sql, desc, eq, and, isNull } from "drizzle-orm";
+import { sql, desc, eq, and, isNull, isNotNull } from "drizzle-orm";
 import { db } from "./db";
-import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations } from "@shared/schema";
+import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens } from "@shared/schema";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import {
@@ -607,6 +607,72 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
   
+  // ============================================================================
+  // DYNAMIC REGIONS API (City-based from actual screen locations)
+  // ============================================================================
+  
+  app.get("/api/regions/active", async (_req, res) => {
+    try {
+      // Get active regions based on screens with:
+      // - status = online (or at least active)
+      // - yodeckPlaylistId NOT null (has playlist assigned)
+      // - city NOT null/empty
+      const activeScreens = await db.select({
+        city: screens.city,
+        status: screens.status,
+      })
+        .from(screens)
+        .where(and(
+          eq(screens.isActive, true),
+          isNotNull(screens.city),
+          sql`${screens.city} != ''`,
+          isNotNull(screens.yodeckPlayerId), // Has Yodeck player
+        ));
+      
+      // Group by normalized city (lowercase, trimmed)
+      const cityMap = new Map<string, { label: string; totalCount: number; onlineCount: number }>();
+      
+      for (const screen of activeScreens) {
+        if (!screen.city) continue;
+        
+        const normalizedCity = screen.city.toLowerCase().trim();
+        const label = screen.city.trim();
+        
+        if (!cityMap.has(normalizedCity)) {
+          cityMap.set(normalizedCity, { label, totalCount: 0, onlineCount: 0 });
+        }
+        
+        const entry = cityMap.get(normalizedCity)!;
+        entry.totalCount++;
+        if (screen.status === "online") {
+          entry.onlineCount++;
+        }
+        // Use the first encountered capitalization (usually correct)
+        if (entry.label.length < label.length) {
+          entry.label = label;
+        }
+      }
+      
+      // Convert to array and sort by onlineCount desc, then label asc
+      const regions = Array.from(cityMap.entries())
+        .map(([code, data]) => ({
+          code,
+          label: data.label,
+          locationCount: data.totalCount,
+          onlineCount: data.onlineCount,
+        }))
+        .sort((a, b) => {
+          if (b.onlineCount !== a.onlineCount) return b.onlineCount - a.onlineCount;
+          return a.label.localeCompare(b.label, "nl");
+        });
+      
+      res.json(regions);
+    } catch (error: any) {
+      console.error("Error fetching active regions:", error);
+      res.status(500).json({ message: "Fout bij ophalen van regio's" });
+    }
+  });
+
   // ============================================================================
   // SELF-SERVICE START FLOW
   // ============================================================================
