@@ -191,22 +191,31 @@ KvK 90982541 · BTW NL004857473B37
   }
 }
 
-export async function runMonthlyReportWorker(): Promise<{
+export async function runMonthlyReportWorker(options?: { 
+  force?: boolean;
+  periodKey?: string; 
+}): Promise<{
   processed: number;
   sent: number;
   skipped: number;
   failed: number;
+  periodKey: string;
 }> {
   const now = new Date();
   const dayOfMonth = now.getDate();
+  const force = options?.force ?? false;
   
-  if (dayOfMonth !== 1) {
-    console.log(`[MonthlyReport] Not the 1st of the month (day ${dayOfMonth}), skipping`);
-    return { processed: 0, sent: 0, skipped: 0, failed: 0 };
+  if (dayOfMonth !== 1 && !force) {
+    console.log(`[MonthlyReport] Not the 1st of the month (day ${dayOfMonth}), skipping. Use force=true for manual runs.`);
+    return { processed: 0, sent: 0, skipped: 0, failed: 0, periodKey: "" };
+  }
+  
+  if (force) {
+    console.log(`[MonthlyReport] Force mode enabled - running outside scheduled time`);
   }
   
   const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const periodKey = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, "0")}`;
+  const periodKey = options?.periodKey ?? `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, "0")}`;
   
   console.log(`[MonthlyReport] Starting monthly report run for period: ${periodKey}`);
   
@@ -267,7 +276,7 @@ export async function runMonthlyReportWorker(): Promise<{
   }
   
   console.log(`[MonthlyReport] Completed: processed=${processed} sent=${sent} skipped=${skipped} failed=${failed}`);
-  return { processed, sent, skipped, failed };
+  return { processed, sent, skipped, failed, periodKey };
 }
 
 let workerInterval: NodeJS.Timeout | null = null;

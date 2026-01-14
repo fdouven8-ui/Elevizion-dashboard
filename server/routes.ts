@@ -9684,10 +9684,14 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   // Admin: Manual trigger monthly report worker
   app.post("/api/admin/reports/run", requirePermission("manage_users"), async (req, res) => {
     try {
+      const { periodKey } = req.body;
       const { runMonthlyReportWorker } = await import("./services/monthlyReportWorker");
-      const result = await runMonthlyReportWorker();
+      const result = await runMonthlyReportWorker({ 
+        force: true, 
+        periodKey: periodKey || undefined 
+      });
       res.json({ 
-        message: "Rapportage worker uitgevoerd",
+        message: "Rapportage worker uitgevoerd (handmatig)",
         ...result 
       });
     } catch (error: any) {
