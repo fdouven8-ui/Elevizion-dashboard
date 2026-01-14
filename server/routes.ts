@@ -143,6 +143,10 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
   
+  // Mount Yodeck routes (mapping endpoints)
+  const yodeckRouter = (await import("./routes/yodeck")).default;
+  app.use("/api/yodeck", yodeckRouter);
+  
   // ============================================================================
   // SEO & PUBLIC ROUTES (no auth required)
   // ============================================================================
@@ -6935,18 +6939,20 @@ Sitemap: ${SITE_URL}/sitemap.xml
   // Bulk update location Yodeck mappings
   app.post("/api/locations/bulk-yodeck-mapping", requirePermission("manage_integrations"), async (req, res) => {
     try {
-      const mappingsSchema = z.array(z.object({
-        locationId: z.string(),
-        yodeckPlayerId: z.string().nullable().optional(),
-        yodeckPlaylistId: z.string().nullable().optional(),
-      }));
+      const bodySchema = z.object({
+        mappings: z.array(z.object({
+          locationId: z.string(),
+          yodeckPlayerId: z.string().nullable().optional(),
+          yodeckPlaylistId: z.string().nullable().optional(),
+        })),
+      });
       
-      const parsed = mappingsSchema.safeParse(req.body.mappings);
+      const parsed = bodySchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ message: "Ongeldige invoer", errors: parsed.error.errors });
       }
       
-      const mappings = parsed.data;
+      const mappings = parsed.data.mappings;
       let updated = 0;
       let errors: string[] = [];
       
