@@ -1,0 +1,70 @@
+HARDEN CLAIM → START PREFILL + EMAIL TEMPLATE FALLBACK + CLAIM AVAILABILITY GATE
+
+CONTEXT
+Claim flow werkt nu via sessionStorage + /start?fromClaim=true.
+We willen dit productie-proof maken, cross-device, en future-proof voor Postmark templates.
+
+DOEL
+1) Maak claim-to-start prefill server-side (niet afhankelijk van sessionStorage).
+2) Email sending: templateKey ondersteunen met fallback naar plain HTML als template ontbreekt.
+3) Claim gating: altijd availability check vlak vóór doorgaan, ook bij claim.
+
+A) SERVER-SIDE PREFILL RECORD
+1) Maak tabel/collection ClaimPrefill:
+- id (random, short token)
+- waitlistRequestId
+- formData (JSON)
+- createdAt
+- expiresAt (60 min)
+- usedAt (nullable)
+
+2) POST /api/claim/:token/confirm:
+- Doe huidige claim-validatie
+- Run availability check:
+  - if NOT available: return 409 + message, set request WAITING, optionally send “unavailable” mail
+- If available:
+  - Create ClaimPrefill record (expiresAt=now+60m)
+  - Return { prefillId }
+
+3) Update ClaimPage:
+- On success redirect:
+  /start?prefill={{prefillId}}  (vervang sessionStorage route)
+- Toon nette messages voor 409 (plek net weg)
+
+4) Add GET /api/prefill/:id:
+- Validate exists, not expired, not used
+- Return formData
+- Mark usedAt (of mark used on final submit; choose safest: mark used when /start loads is OK, but better: mark used on /api/start success)
+
+5) Update Start.tsx:
+- If prefill param exists:
+  - fetch /api/prefill/:id
+  - prefill form
+  - handle errors: expired/not found -> show “uitnodiging verlopen, je staat weer op wachtlijst”
+- Keep sessionStorage fallback as secondary (optional), but prefer prefill.
+
+B) EMAIL TEMPLATE FALLBACK (POSTMARK)
+1) Re-introduce templateKey parameter in waitlistEmailService, but:
+- Try send with templateKey if configured
+- If template missing/error -> fallback to sending HTML/text content directly
+- Log fallback usage (non-fatal)
+
+2) Restore intended template keys:
+- waitlist_confirmation_nl
+- waitlist_claim_invite_nl
+- waitlist_claim_unavailable_nl
+
+C) CLAIM AVAILABILITY GATE (MUST)
+- Ensure claim confirm always runs availability check right before issuing prefillId.
+- If fails: 409 + clear Dutch message + WAITING state.
+
+OUTPUT
+- New endpoints added
+- Updated ClaimPage and Start prefill logic
+- Email fallback behavior
+- Test cases:
+  - claim on mobile, finish on desktop (prefillId link works)
+  - expired prefillId
+  - claim when capacity gone (409 + back to WAITING)
+  - template missing -> fallback plain email
+IMPLEMENT NOW.

@@ -9,20 +9,8 @@ import MarketingFooter from "@/components/marketing/MarketingFooter";
 
 interface ClaimResponse {
   success?: boolean;
-  available?: boolean;
-  contractId?: string;
-  redirectToStart?: boolean;
-  formData?: {
-    companyName: string;
-    contactName: string;
-    email: string;
-    phone?: string;
-    kvkNumber?: string;
-    vatNumber?: string;
-    packageType: string;
-    businessCategory: string;
-    targetRegionCodes?: string[];
-  };
+  prefillId?: string;
+  capacityGone?: boolean;
   message?: string;
 }
 
@@ -56,23 +44,33 @@ export default function ClaimPage() {
     retry: false,
   });
 
+  const [capacityGone, setCapacityGone] = useState(false);
+  const [capacityGoneMessage, setCapacityGoneMessage] = useState("");
+
   const confirmMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch(`/api/claim/${token}/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
+      const data = await response.json();
+      
+      // Handle 409 Conflict (capacity gone)
+      if (response.status === 409) {
+        setCapacityGone(true);
+        setCapacityGoneMessage(data.message || "Plek is niet meer beschikbaar");
+        return data;
+      }
+      
       if (!response.ok) {
-        const data = await response.json();
         throw new Error(data.message || "Fout bij claimen");
       }
-      return response.json();
+      return data;
     },
     onSuccess: (data: ClaimResponse) => {
-      if (data.redirectToStart && data.formData) {
-        // Store formData in sessionStorage and redirect to /start
-        sessionStorage.setItem("waitlistClaimData", JSON.stringify(data.formData));
-        window.location.href = "/start?fromClaim=true";
+      if (data.prefillId) {
+        // Redirect to /start with prefillId (server-side prefill, cross-device support)
+        window.location.href = `/start?prefill=${data.prefillId}`;
       }
     },
   });
@@ -176,6 +174,43 @@ export default function ClaimPage() {
                 data-testid="button-close"
               >
                 Terug naar overzicht
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+        <MarketingFooter />
+      </div>
+    );
+  }
+
+  // Handle 409 capacity gone state
+  if (capacityGone) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
+        <MarketingHeader />
+        <div className="container mx-auto px-4 py-20 max-w-lg">
+          <Card className="border-2 border-amber-300 bg-amber-50/50">
+            <CardHeader className="pb-2">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center">
+                  <Clock className="h-6 w-6 text-amber-600" />
+                </div>
+                <CardTitle className="text-xl text-slate-800">
+                  Net te laat
+                </CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-slate-600">
+                {capacityGoneMessage}
+              </p>
+              <Button 
+                onClick={() => window.location.href = "/"}
+                variant="outline"
+                className="w-full"
+                data-testid="button-capacity-gone-ok"
+              >
+                Oké
               </Button>
             </CardContent>
           </Card>

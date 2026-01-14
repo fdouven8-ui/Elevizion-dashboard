@@ -72,6 +72,7 @@ import type {
   LocationOnboardingEvent, InsertLocationOnboardingEvent,
   CompanyProfile, InsertCompanyProfile,
   WaitlistRequest, InsertWaitlistRequest,
+  ClaimPrefill, InsertClaimPrefill,
 } from "@shared/schema";
 
 // Lead query params for server-side filtering/pagination
@@ -483,6 +484,11 @@ export interface IStorage {
   getActiveWaitlistRequest(email: string, packageType: string): Promise<WaitlistRequest | undefined>;
   createWaitlistRequest(data: InsertWaitlistRequest): Promise<WaitlistRequest>;
   updateWaitlistRequest(id: string, data: Partial<WaitlistRequest>): Promise<WaitlistRequest | undefined>;
+
+  // Claim Prefill Records
+  createClaimPrefill(data: InsertClaimPrefill): Promise<ClaimPrefill>;
+  getClaimPrefill(id: string): Promise<ClaimPrefill | undefined>;
+  markClaimPrefillUsed(id: string): Promise<ClaimPrefill | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3161,6 +3167,33 @@ export class DatabaseStorage implements IStorage {
       .where(eq(schema.waitlistRequests.id, id))
       .returning();
     return request;
+  }
+
+  // ============================================================================
+  // CLAIM PREFILL RECORDS
+  // ============================================================================
+
+  async createClaimPrefill(data: InsertClaimPrefill): Promise<ClaimPrefill> {
+    const [prefill] = await db.insert(schema.claimPrefills).values(data).returning();
+    return prefill;
+  }
+
+  async getClaimPrefill(id: string): Promise<ClaimPrefill | undefined> {
+    const [prefill] = await db.select().from(schema.claimPrefills)
+      .where(eq(schema.claimPrefills.id, id));
+    return prefill;
+  }
+
+  async markClaimPrefillUsed(id: string): Promise<ClaimPrefill | undefined> {
+    // Only update if usedAt is null (single-use enforcement for concurrent requests)
+    const [prefill] = await db.update(schema.claimPrefills)
+      .set({ usedAt: new Date() })
+      .where(and(
+        eq(schema.claimPrefills.id, id),
+        isNull(schema.claimPrefills.usedAt)
+      ))
+      .returning();
+    return prefill; // Returns undefined if already used (concurrent protection)
   }
 }
 

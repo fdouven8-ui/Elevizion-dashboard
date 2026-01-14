@@ -207,6 +207,26 @@ export type InsertWaitlistRequest = z.infer<typeof insertWaitlistRequestSchema>;
 export type WaitlistRequest = typeof waitlistRequests.$inferSelect;
 
 /**
+ * Claim Prefill Records - Server-side prefill data for cross-device claim flow
+ * Created when claim is confirmed, consumed when advertiser loads /start with prefill param
+ */
+export const claimPrefills = pgTable("claim_prefills", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  waitlistRequestId: varchar("waitlist_request_id").notNull().references(() => waitlistRequests.id, { onDelete: "cascade" }),
+  formData: text("form_data").notNull(), // JSON stringified form data
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  expiresAt: timestamp("expires_at").notNull(), // 60 minutes from creation
+  usedAt: timestamp("used_at"), // Marked when prefill is consumed
+});
+
+export const insertClaimPrefillSchema = createInsertSchema(claimPrefills).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertClaimPrefill = z.infer<typeof insertClaimPrefillSchema>;
+export type ClaimPrefill = typeof claimPrefills.$inferSelect;
+
+/**
  * Locations - Partner businesses that host screens
  * These earn revenue share based on screen time at their location
  * isPlaceholder: true means this was auto-created from Yodeck import and needs Moneybird linking

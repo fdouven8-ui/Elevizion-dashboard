@@ -57,6 +57,14 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
   - 48-hour claim tokens with SHA256 hashing
   - Admin Wachtlijst page (`/wachtlijst`) for managing waitlist requests
   - Automatic reset of expired invites back to WAITING for re-invitation
+  - **Cross-device claim flow** with ClaimPrefill records:
+    - Claim confirmation creates a prefill record with 60-minute expiry
+    - User redirected to /start?prefill={id} with form data pre-filled
+    - Works across devices (claim on mobile, continue on desktop via API fetch)
+    - **Transactional single-use enforcement**: Prefill consumption and advertiser creation wrapped in database transaction
+    - Concurrent submissions handled atomically (WHERE usedAt IS NULL guard)
+    - Failed advertiser creation rolls back prefill consumption
+    - 410 response for expired, used, or concurrently consumed prefills
 - **Re-simulate Before Publish**: Single and bulk publish endpoints re-simulate plans before publishing to detect capacity/exclusivity changes since approval. Plans revert to WAITING if simulation fails.
 - **Video Upload Portal**: Self-service portal (`/upload/:token`) for advertisers to upload their own video content. Features:
   - Token-based authentication via `portal_tokens` with SHA256 hashing and usage tracking

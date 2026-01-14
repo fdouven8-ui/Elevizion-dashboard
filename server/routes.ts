@@ -7,9 +7,9 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { z } from "zod";
 import crypto from "crypto";
-import { sql, desc, eq, and } from "drizzle-orm";
+import { sql, desc, eq, and, isNull } from "drizzle-orm";
 import { db } from "./db";
-import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens } from "@shared/schema";
+import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills } from "@shared/schema";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import {
@@ -624,6 +624,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
     postalCode: z.string().regex(/^\d{4}\s?[A-Za-z]{2}$/, "Ongeldige postcode"),
     city: z.string().min(1, "Plaats is verplicht"),
     packageType: z.enum(["SINGLE", "TRIPLE", "TEN"]),
+    // Optional prefillId for claim flow - used to mark prefill as consumed
+    prefillId: z.string().optional(),
   });
 
   app.post("/api/start", async (req, res) => {
@@ -669,6 +671,36 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const normalizedEmail = data.email;
       const normalizedKvk = data.kvkNumber;
       const normalizedVat = data.vatNumber;
+      
+      // Validate prefillId if provided (claim flow) - consumption happens later
+      let validatedPrefill: { id: string } | null = null;
+      if (data.prefillId) {
+        const prefill = await storage.getClaimPrefill(data.prefillId);
+        
+        if (!prefill) {
+          return res.status(404).json({ 
+            message: "Prefill niet gevonden. Start opnieuw via de wachtlijst link.",
+            prefillExpired: true
+          });
+        }
+        
+        if (new Date() > new Date(prefill.expiresAt)) {
+          return res.status(410).json({ 
+            message: "Deze link is verlopen. Je staat weer op de wachtlijst en ontvangt automatisch een nieuwe uitnodiging zodra er plek is.",
+            prefillExpired: true
+          });
+        }
+        
+        if (prefill.usedAt) {
+          return res.status(410).json({ 
+            message: "Deze aanvraag is al ingediend.",
+            prefillExpired: true
+          });
+        }
+        
+        validatedPrefill = { id: prefill.id };
+        // Note: consumption happens after all validations pass (capacity, duplicates)
+      }
       
       const packagePrices: Record<string, { screens: number; price: number }> = {
         SINGLE: { screens: 1, price: 49.99 },
@@ -737,70 +769,97 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return `ADV-${sanitized}-${randomChars}`;
       };
       
+      // Transaction: atomically consume prefill AND create/update advertiser
+      // If prefill consumption fails (concurrent), throws error to abort transaction
+      // If advertiser creation fails, prefill consumption is rolled back
       let advertiserId: string;
       
-      if (existingAdvertiser) {
-        // Preserve existing competitorGroup if admin has manually set it
-        // Only default to businessCategory if competitorGroup is null
-        const preservedCompetitorGroup = existingAdvertiser.competitorGroup || data.businessCategory;
+      const txResult = await db.transaction(async (tx) => {
+        // Atomically consume prefill FIRST (inside transaction)
+        if (validatedPrefill) {
+          const [marked] = await tx.update(claimPrefills)
+            .set({ usedAt: new Date() })
+            .where(and(
+              eq(claimPrefills.id, validatedPrefill.id),
+              isNull(claimPrefills.usedAt)
+            ))
+            .returning();
+          
+          if (!marked) {
+            // Race condition: another request consumed this prefill first
+            throw { type: 'PREFILL_CONSUMED', message: 'Deze aanvraag is zojuist door een andere sessie ingediend.' };
+          }
+          console.log(`[StartFlow] Consumed prefill ${validatedPrefill.id} in transaction`);
+        }
         
-        await db.update(advertisers)
-          .set({
-            companyName: data.companyName,
-            contactName: data.contactName,
-            email: normalizedEmail,
-            phone: data.phone,
-            kvkNumber: normalizedKvk,
-            vatNumber: normalizedVat,
-            street: data.addressLine1,
-            zipcode: data.postalCode.toUpperCase(),
-            city: data.city,
-            country: "NL",
-            businessCategory: data.businessCategory,
-            competitorGroup: preservedCompetitorGroup,
-            targetRegionCodes: data.targetRegionCodes,
-            packageType: data.packageType,
-            screensIncluded: pkgInfo.screens,
-            packagePrice: pkgInfo.price.toString(),
-            videoDurationSeconds: 15,
-            onboardingStatus: existingAdvertiser.onboardingStatus === "INVITED" ? "DETAILS_SUBMITTED" : existingAdvertiser.onboardingStatus,
-            source: "Website /start",
-            updatedAt: new Date(),
-          })
-          .where(eq(advertisers.id, existingAdvertiser.id));
-        advertiserId = existingAdvertiser.id;
-        console.log(`[StartFlow] Updated existing advertiser ${advertiserId}`);
-      } else {
-        const linkKey = generateLinkKey(data.companyName);
-        const [newAdvertiser] = await db.insert(advertisers)
-          .values({
-            companyName: data.companyName,
-            contactName: data.contactName,
-            email: normalizedEmail,
-            phone: data.phone,
-            kvkNumber: normalizedKvk,
-            vatNumber: normalizedVat,
-            street: data.addressLine1,
-            zipcode: data.postalCode.toUpperCase(),
-            city: data.city,
-            country: "NL",
-            businessCategory: data.businessCategory,
-            competitorGroup: data.businessCategory,
-            targetRegionCodes: data.targetRegionCodes,
-            packageType: data.packageType,
-            screensIncluded: pkgInfo.screens,
-            packagePrice: pkgInfo.price.toString(),
-            videoDurationSeconds: 15,
-            onboardingStatus: "DETAILS_SUBMITTED",
-            assetStatus: "none",
-            linkKey,
-            linkKeyGeneratedAt: new Date(),
-            source: "Website /start",
-          })
-          .returning();
-        advertiserId = newAdvertiser.id;
-        console.log(`[StartFlow] Created new advertiser ${advertiserId} with linkKey ${linkKey}`);
-      }
+        // Create or update advertiser
+        let txAdvertiserId: string;
+        
+        if (existingAdvertiser) {
+          const preservedCompetitorGroup = existingAdvertiser.competitorGroup || data.businessCategory;
+          
+          await tx.update(advertisers)
+            .set({
+              companyName: data.companyName,
+              contactName: data.contactName,
+              email: normalizedEmail,
+              phone: data.phone,
+              kvkNumber: normalizedKvk,
+              vatNumber: normalizedVat,
+              street: data.addressLine1,
+              zipcode: data.postalCode.toUpperCase(),
+              city: data.city,
+              country: "NL",
+              businessCategory: data.businessCategory,
+              competitorGroup: preservedCompetitorGroup,
+              targetRegionCodes: data.targetRegionCodes,
+              packageType: data.packageType,
+              screensIncluded: pkgInfo.screens,
+              packagePrice: pkgInfo.price.toString(),
+              videoDurationSeconds: 15,
+              onboardingStatus: existingAdvertiser.onboardingStatus === "INVITED" ? "DETAILS_SUBMITTED" : existingAdvertiser.onboardingStatus,
+              source: "Website /start",
+              updatedAt: new Date(),
+            })
+            .where(eq(advertisers.id, existingAdvertiser.id));
+          txAdvertiserId = existingAdvertiser.id;
+          console.log(`[StartFlow] Updated existing advertiser ${txAdvertiserId}`);
+        } else {
+          const linkKey = generateLinkKey(data.companyName);
+          const [newAdvertiser] = await tx.insert(advertisers)
+            .values({
+              companyName: data.companyName,
+              contactName: data.contactName,
+              email: normalizedEmail,
+              phone: data.phone,
+              kvkNumber: normalizedKvk,
+              vatNumber: normalizedVat,
+              street: data.addressLine1,
+              zipcode: data.postalCode.toUpperCase(),
+              city: data.city,
+              country: "NL",
+              businessCategory: data.businessCategory,
+              competitorGroup: data.businessCategory,
+              targetRegionCodes: data.targetRegionCodes,
+              packageType: data.packageType,
+              screensIncluded: pkgInfo.screens,
+              packagePrice: pkgInfo.price.toString(),
+              videoDurationSeconds: 15,
+              onboardingStatus: "DETAILS_SUBMITTED",
+              assetStatus: "none",
+              linkKey,
+              linkKeyGeneratedAt: new Date(),
+              source: "Website /start",
+            })
+            .returning();
+          txAdvertiserId = newAdvertiser.id;
+          console.log(`[StartFlow] Created new advertiser ${txAdvertiserId} with linkKey ${linkKey}`);
+        }
+        
+        return { advertiserId: txAdvertiserId };
+      });
+      
+      advertiserId = txResult.advertiserId;
       
       const existingTokens = await storage.getPortalTokensForAdvertiser(advertiserId);
       const activeToken = existingTokens.find(t => !t.usedAt && new Date(t.expiresAt) > new Date());
@@ -879,12 +938,22 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const baseUrl = `${req.protocol}://${req.get("host")}`;
       const redirectUrl = `${baseUrl}/advertiser-onboarding/${portalToken}`;
       
+      // Note: prefillId was atomically marked as used inside the transaction
+      // along with advertiser creation for full transactional consistency
+      
       res.json({ 
         success: true, 
         advertiserId,
         redirectUrl,
       });
     } catch (error: any) {
+      // Handle PREFILL_CONSUMED error from transaction
+      if (error?.type === 'PREFILL_CONSUMED') {
+        return res.status(410).json({ 
+          message: error.message,
+          prefillExpired: true
+        });
+      }
       console.error("[StartFlow] Error:", error);
       res.status(500).json({ message: "Er ging iets mis. Probeer het later opnieuw." });
     }
@@ -2445,7 +2514,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
           console.error("[Claim] Failed to send unavailable email:", emailError);
         }
         
-        return res.status(400).json({ message: "Plek is niet meer beschikbaar" });
+        // 409 Conflict: capacity no longer available
+        return res.status(409).json({ 
+          message: "Helaas, er is net iemand anders voor. Je staat weer op de wachtlijst en ontvangt automatisch een nieuwe uitnodiging zodra er plek is.",
+          capacityGone: true
+        });
       }
       
       // Mark as claimed
@@ -2454,25 +2527,73 @@ Sitemap: ${SITE_URL}/sitemap.xml
         claimedAt: new Date()
       });
       
-      // Return form data to pre-fill the /start form
+      // Create server-side prefill record for cross-device support
+      const formData = {
+        companyName: request.companyName,
+        contactName: request.contactName,
+        email: request.email,
+        phone: request.phone,
+        kvkNumber: request.kvkNumber,
+        vatNumber: request.vatNumber,
+        packageType: request.packageType,
+        businessCategory: request.businessCategory,
+        targetRegionCodes: request.targetRegionCodes,
+      };
+      
+      const prefill = await storage.createClaimPrefill({
+        waitlistRequestId: request.id,
+        formData: JSON.stringify(formData),
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000), // 60 minutes
+      });
+      
       res.json({ 
         success: true, 
         message: "Plek geclaimd! Ga door met de aanmelding.",
-        redirectToStart: true,
-        formData: {
-          companyName: request.companyName,
-          contactName: request.contactName,
-          email: request.email,
-          phone: request.phone,
-          kvkNumber: request.kvkNumber,
-          vatNumber: request.vatNumber,
-          packageType: request.packageType,
-          businessCategory: request.businessCategory,
-          targetRegionCodes: request.targetRegionCodes,
-        },
+        prefillId: prefill.id,
       });
     } catch (error: any) {
       console.error("[Claim] Error confirming claim:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get prefill data for /start form (cross-device claim flow)
+  app.get("/api/prefill/:id", async (req, res) => {
+    try {
+      const prefill = await storage.getClaimPrefill(req.params.id);
+      
+      if (!prefill) {
+        return res.status(404).json({ 
+          message: "Prefill niet gevonden", 
+          expired: true 
+        });
+      }
+      
+      // Check expiration
+      if (new Date() > new Date(prefill.expiresAt)) {
+        return res.status(410).json({ 
+          message: "Deze link is verlopen. Je staat weer op de wachtlijst en ontvangt automatisch een nieuwe uitnodiging zodra er plek is.",
+          expired: true 
+        });
+      }
+      
+      // Check if already used
+      if (prefill.usedAt) {
+        return res.status(410).json({ 
+          message: "Deze link is al gebruikt.",
+          expired: true 
+        });
+      }
+      
+      // Return the form data (don't mark as used yet - mark on /api/start success)
+      const formData = JSON.parse(prefill.formData);
+      res.json({ 
+        success: true,
+        formData,
+        prefillId: prefill.id
+      });
+    } catch (error: any) {
+      console.error("[Prefill] Error fetching prefill:", error);
       res.status(500).json({ message: error.message });
     }
   });

@@ -135,14 +135,27 @@ export default function Start() {
     }
   }, [selectedPackage, navigate]);
 
-  // Pre-fill form from waitlist claim data if coming from claim page
+  // State for prefill loading and errors
+  const [prefillLoading, setPrefillLoading] = useState(false);
+  const [prefillError, setPrefillError] = useState<string | null>(null);
+  const [prefillId, setPrefillId] = useState<string | null>(null);
+
+  // Pre-fill form from server-side prefill API (cross-device claim flow)
   useEffect(() => {
-    const fromClaim = urlParams.get("fromClaim");
-    if (fromClaim === "true") {
-      const claimDataStr = sessionStorage.getItem("waitlistClaimData");
-      if (claimDataStr) {
-        try {
-          const claimData = JSON.parse(claimDataStr);
+    const prefillParam = urlParams.get("prefill");
+    if (prefillParam) {
+      setPrefillId(prefillParam);
+      setPrefillLoading(true);
+      
+      fetch(`/api/prefill/${prefillParam}`)
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) {
+            setPrefillError(data.message || "Prefill niet gevonden");
+            return;
+          }
+          
+          const claimData = data.formData;
           setFormData((prev) => ({
             ...prev,
             companyName: claimData.companyName || prev.companyName,
@@ -154,12 +167,14 @@ export default function Start() {
             businessCategory: claimData.businessCategory || prev.businessCategory,
             targetRegionCodes: claimData.targetRegionCodes || prev.targetRegionCodes,
           }));
-          // Clear the sessionStorage after using it
-          sessionStorage.removeItem("waitlistClaimData");
-        } catch (e) {
-          console.error("Failed to parse claim data from sessionStorage", e);
-        }
-      }
+        })
+        .catch((err) => {
+          console.error("Failed to fetch prefill data:", err);
+          setPrefillError("Kon gegevens niet ophalen");
+        })
+        .finally(() => {
+          setPrefillLoading(false);
+        });
     }
   }, []);
 
@@ -320,6 +335,8 @@ export default function Start() {
       vatNumber: formData.vatNumber.toUpperCase().replace(/\s/g, ""),
       email: formData.email.toLowerCase().trim(),
       packageType: PackageTypeFromPackageId(selectedPackage.id),
+      // Include prefillId if this was a claim flow (for server to mark as used)
+      ...(prefillId ? { prefillId } : {}),
     });
   }
 
@@ -338,6 +355,61 @@ export default function Start() {
 
   function clearAllRegions() {
     updateField("targetRegionCodes", []);
+  }
+
+  // Prefill loading state
+  if (prefillLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
+        <MarketingHeader />
+        <div className="container mx-auto px-4 py-20 max-w-lg">
+          <Card className="border-2 border-slate-200">
+            <CardContent className="py-12 text-center">
+              <Loader2 className="h-12 w-12 mx-auto text-emerald-600 animate-spin mb-4" />
+              <p className="text-slate-600">Gegevens worden opgehaald...</p>
+            </CardContent>
+          </Card>
+        </div>
+        <MarketingFooter />
+      </div>
+    );
+  }
+
+  // Prefill error state (link expired or already used)
+  if (prefillError) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
+        <MarketingHeader />
+        <div className="container mx-auto px-4 py-20 max-w-lg">
+          <Card className="border-2 border-amber-300 bg-amber-50/50">
+            <CardHeader className="pb-2">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center">
+                  <Clock className="h-6 w-6 text-amber-600" />
+                </div>
+                <CardTitle className="text-xl text-slate-800">
+                  Link verlopen of al gebruikt
+                </CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <p className="text-slate-600">
+                {prefillError}
+              </p>
+              <Button 
+                onClick={() => window.location.href = "/"}
+                variant="outline"
+                className="w-full"
+                data-testid="button-prefill-error-ok"
+              >
+                Terug naar home
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+        <MarketingFooter />
+      </div>
+    );
   }
 
   if (!selectedPackage) return null;

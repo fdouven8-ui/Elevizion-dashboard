@@ -94,6 +94,7 @@ Elevizion (Douven Services)`;
     subject: "Je staat op de wachtlijst bij Elevizion",
     html,
     text,
+    templateKey: "waitlist_confirmation_nl",
   });
   
   console.log(`[WaitlistEmail] Sent confirmation email to ${data.email}`);
@@ -162,6 +163,7 @@ Elevizion (Douven Services)`;
     subject: "Er is plek vrijgekomen — claim je pakket (48 uur)",
     html,
     text,
+    templateKey: "waitlist_claim_invite_nl",
   });
   
   console.log(`[WaitlistEmail] Sent claim invite email to ${data.email}`);
@@ -201,6 +203,7 @@ Elevizion (Douven Services)`;
     subject: "Je plek is (nog) niet beschikbaar — we houden je op de hoogte",
     html,
     text,
+    templateKey: "waitlist_claim_unavailable_nl",
   });
   
   console.log(`[WaitlistEmail] Sent unavailable email to ${data.email}`);
