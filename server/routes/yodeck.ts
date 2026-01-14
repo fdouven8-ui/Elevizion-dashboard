@@ -377,4 +377,105 @@ router.get("/stats", async (req: Request, res: Response) => {
   }
 });
 
+// ============================================================================
+// PLAYLIST MAPPING ENDPOINTS (for admin bulk mapping page)
+// ============================================================================
+
+// Short-lived cache for mapping page (60s)
+let screensListCache: { data: any[]; timestamp: number } | null = null;
+let playlistsListCache: { data: any[]; timestamp: number } | null = null;
+const MAPPING_CACHE_TTL = 60 * 1000; // 60 seconds
+
+/**
+ * GET /api/yodeck/mapping/screens
+ * Get simplified list of Yodeck screens for mapping dropdown
+ */
+router.get("/mapping/screens", async (req: Request, res: Response) => {
+  if (isMockMode()) {
+    return res.json([
+      { id: 591895, name: "Basil's Barber Shop", status: "online" },
+      { id: 591896, name: "Test Screen", status: "offline" },
+    ]);
+  }
+
+  try {
+    // Check cache
+    if (screensListCache && Date.now() - screensListCache.timestamp < MAPPING_CACHE_TTL) {
+      return res.json(screensListCache.data);
+    }
+
+    const client = await getYodeckClient();
+    if (!client) {
+      return res.status(503).json({ error: "Yodeck API not configured" });
+    }
+
+    const screens = await client.getScreens();
+    const simplified = screens.map(s => ({
+      id: s.id,
+      name: s.name,
+      status: s.state?.online ? "online" : "offline",
+      workspace: s.workspace?.name || null,
+    }));
+
+    // Cache results
+    screensListCache = { data: simplified, timestamp: Date.now() };
+    
+    return res.json(simplified);
+  } catch (error: any) {
+    console.error("[Yodeck Routes] Error fetching screens for mapping:", error);
+    return res.status(500).json({ error: error.message || "Failed to fetch screens" });
+  }
+});
+
+/**
+ * GET /api/yodeck/mapping/playlists
+ * Get simplified list of Yodeck playlists for mapping dropdown
+ */
+router.get("/mapping/playlists", async (req: Request, res: Response) => {
+  if (isMockMode()) {
+    return res.json([
+      { id: 12345, name: "Basil's Ads" },
+      { id: 12346, name: "Test Playlist" },
+    ]);
+  }
+
+  try {
+    // Check cache
+    if (playlistsListCache && Date.now() - playlistsListCache.timestamp < MAPPING_CACHE_TTL) {
+      return res.json(playlistsListCache.data);
+    }
+
+    const client = await getYodeckClient();
+    if (!client) {
+      return res.status(503).json({ error: "Yodeck API not configured" });
+    }
+
+    const playlists = await client.getPlaylists();
+    const simplified = playlists.map(p => ({
+      id: p.id,
+      name: p.name,
+      workspace: p.workspace?.name || null,
+    }));
+
+    // Cache results
+    playlistsListCache = { data: simplified, timestamp: Date.now() };
+    
+    return res.json(simplified);
+  } catch (error: any) {
+    console.error("[Yodeck Routes] Error fetching playlists for mapping:", error);
+    return res.status(500).json({ error: error.message || "Failed to fetch playlists" });
+  }
+});
+
+/**
+ * POST /api/yodeck/mapping/clear-cache
+ * Clear the mapping caches (for refresh button)
+ */
+router.post("/mapping/clear-cache", async (req: Request, res: Response) => {
+  screensListCache = null;
+  playlistsListCache = null;
+  clearYodeckClient();
+  return res.json({ success: true, message: "Cache cleared" });
+});
+
 export default router;

@@ -352,6 +352,13 @@ export class YodeckClient {
     }
     return null;
   }
+  
+  async getPlaylists(): Promise<YodeckPlaylist[]> {
+    console.log("[YodeckClient] Fetching all playlists...");
+    const playlists = await this.listAll<YodeckPlaylist>("/playlists");
+    console.log(`[YodeckClient] Found ${playlists.length} playlists`);
+    return playlists;
+  }
 
   async getLayout(id: number): Promise<YodeckLayout | null> {
     const cached = this.layoutCache.get(`layout:${id}`);

@@ -6927,6 +6927,165 @@ Sitemap: ${SITE_URL}/sitemap.xml
       res.status(500).json({ message: error.message });
     }
   });
+  
+  // ============================================================================
+  // YODECK PLAYLIST MAPPING (Bulk update for admin page)
+  // ============================================================================
+  
+  // Bulk update location Yodeck mappings
+  app.post("/api/locations/bulk-yodeck-mapping", requirePermission("manage_integrations"), async (req, res) => {
+    try {
+      const mappingsSchema = z.array(z.object({
+        locationId: z.string(),
+        yodeckPlayerId: z.string().nullable().optional(),
+        yodeckPlaylistId: z.string().nullable().optional(),
+      }));
+      
+      const parsed = mappingsSchema.safeParse(req.body.mappings);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Ongeldige invoer", errors: parsed.error.errors });
+      }
+      
+      const mappings = parsed.data;
+      let updated = 0;
+      let errors: string[] = [];
+      
+      for (const mapping of mappings) {
+        try {
+          const location = await storage.getLocation(mapping.locationId);
+          if (!location) {
+            errors.push(`Locatie ${mapping.locationId} niet gevonden`);
+            continue;
+          }
+          
+          await storage.updateLocation(mapping.locationId, {
+            yodeckPlayerId: mapping.yodeckPlayerId || null,
+            yodeckPlaylistId: mapping.yodeckPlaylistId || null,
+          });
+          updated++;
+        } catch (err: any) {
+          errors.push(`Fout bij ${mapping.locationId}: ${err.message}`);
+        }
+      }
+      
+      console.log(`[Bulk Yodeck Mapping] ${updated} locaties bijgewerkt, ${errors.length} fouten`);
+      
+      res.json({
+        success: true,
+        updated,
+        errors: errors.length > 0 ? errors : undefined,
+        message: `${updated} locatie(s) bijgewerkt${errors.length > 0 ? `, ${errors.length} fout(en)` : ""}`,
+      });
+    } catch (error: any) {
+      console.error("[Bulk Yodeck Mapping] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  // Auto-match locations to Yodeck screens/playlists
+  app.post("/api/locations/auto-match-yodeck", requirePermission("manage_integrations"), async (_req, res) => {
+    try {
+      const locations = await storage.getLocations();
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      
+      if (!client) {
+        return res.status(503).json({ message: "Yodeck API niet geconfigureerd" });
+      }
+      
+      const [screens, playlists] = await Promise.all([
+        client.getScreens(),
+        client.getPlaylists()
+      ]);
+      
+      const normalize = (str: string | null | undefined): string => {
+        if (!str) return "";
+        return str.toLowerCase()
+          .replace(/[^a-z0-9\s]/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+      };
+      
+      const tokenSimilarity = (a: string, b: string): number => {
+        const tokensA = normalize(a).split(" ").filter(t => t.length > 2);
+        const tokensB = normalize(b).split(" ").filter(t => t.length > 2);
+        if (tokensA.length === 0 || tokensB.length === 0) return 0;
+        
+        let matches = 0;
+        for (const tokenA of tokensA) {
+          if (tokensB.some(tokenB => tokenB.includes(tokenA) || tokenA.includes(tokenB))) {
+            matches++;
+          }
+        }
+        return matches / Math.max(tokensA.length, tokensB.length);
+      };
+      
+      const suggestions: Array<{
+        locationId: string;
+        locationName: string;
+        suggestedScreenId: number | null;
+        suggestedScreenName: string | null;
+        suggestedPlaylistId: number | null;
+        suggestedPlaylistName: string | null;
+        screenScore: number;
+        playlistScore: number;
+      }> = [];
+      
+      for (const location of locations) {
+        let bestScreen: { id: number; name: string; score: number } | null = null;
+        let bestPlaylist: { id: number; name: string; score: number } | null = null;
+        
+        // Match screens
+        for (const screen of screens) {
+          const similarity = tokenSimilarity(location.name, screen.name);
+          if (similarity > 0.5 && (!bestScreen || similarity > bestScreen.score)) {
+            bestScreen = { id: screen.id, name: screen.name, score: similarity };
+          }
+        }
+        
+        // Match playlists - look for "{location} ads" or exact match
+        for (const playlist of playlists) {
+          const playlistName = playlist.name || "";
+          const similarity = tokenSimilarity(location.name, playlistName);
+          
+          // Boost score if playlist name contains "ads" pattern
+          const adsPatternBoost = 
+            playlistName.toLowerCase().includes("ads") || 
+            playlistName.toLowerCase().includes("advertenties") ? 0.1 : 0;
+          
+          const totalScore = similarity + adsPatternBoost;
+          if (totalScore > 0.5 && (!bestPlaylist || totalScore > bestPlaylist.score)) {
+            bestPlaylist = { id: playlist.id, name: playlistName, score: totalScore };
+          }
+        }
+        
+        // Only add to suggestions if at least one match found
+        if (bestScreen || bestPlaylist) {
+          suggestions.push({
+            locationId: location.id,
+            locationName: location.name,
+            suggestedScreenId: bestScreen?.id || null,
+            suggestedScreenName: bestScreen?.name || null,
+            suggestedPlaylistId: bestPlaylist?.id || null,
+            suggestedPlaylistName: bestPlaylist?.name || null,
+            screenScore: bestScreen?.score || 0,
+            playlistScore: bestPlaylist?.score || 0,
+          });
+        }
+      }
+      
+      res.json({
+        success: true,
+        suggestions,
+        totalLocations: locations.length,
+        totalScreens: screens.length,
+        totalPlaylists: playlists.length,
+      });
+    } catch (error: any) {
+      console.error("[Auto-match Yodeck] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
 
   // Get ontbrekende gegevens overview (missing data)
   app.get("/api/ontbrekende-gegevens", requirePermission("view_screens"), async (_req, res) => {
