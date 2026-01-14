@@ -57,6 +57,7 @@ interface EligibleLocation {
   adSlotCapacitySecondsPerLoop: number;
   score: number;
   expectedImpressionsPerWeek: number;
+  exclusivityMode: string;
 }
 
 interface RejectedLocation {
@@ -177,7 +178,7 @@ export class PlacementEngineService {
       where: eq(locations.status, "active"),
     });
     
-    // Build a map of location -> competitor groups already placed there
+    // Build a map of location -> competitorGroup -> count of live placements
     // Query all active placement targets with their advertisers
     const existingPlacements = await db.query.placementTargets.findMany({
       where: eq(placementTargets.status, "live"),
@@ -190,8 +191,8 @@ export class PlacementEngineService {
       }
     });
     
-    // Map locationId -> set of competitor groups
-    const locationCompetitorGroups = new Map<string, Set<string>>();
+    // Map locationId -> competitorGroup -> count
+    const locationCompetitorCounts = new Map<string, Map<string, number>>();
     for (const placement of existingPlacements) {
       if (placement.plan?.advertiser) {
         const locId = placement.locationId;
@@ -199,10 +200,11 @@ export class PlacementEngineService {
                           placement.plan.advertiser.businessCategory || 
                           null;
         if (compGroup) {
-          if (!locationCompetitorGroups.has(locId)) {
-            locationCompetitorGroups.set(locId, new Set());
+          if (!locationCompetitorCounts.has(locId)) {
+            locationCompetitorCounts.set(locId, new Map());
           }
-          locationCompetitorGroups.get(locId)!.add(compGroup);
+          const groupCounts = locationCompetitorCounts.get(locId)!;
+          groupCounts.set(compGroup, (groupCounts.get(compGroup) || 0) + 1);
         }
       }
     }
@@ -246,10 +248,13 @@ export class PlacementEngineService {
         continue;
       }
       
-      // Competitor exclusion check: reject if same competitorGroup is already on this location
+      // Competitor exclusion check based on exclusivityMode
+      // STRICT = max 1 per competitorGroup, RELAXED = max 2
       if (advertiserCompetitorGroup) {
-        const existingGroups = locationCompetitorGroups.get(loc.id);
-        if (existingGroups && existingGroups.has(advertiserCompetitorGroup)) {
+        const groupCounts = locationCompetitorCounts.get(loc.id);
+        const existingCount = groupCounts?.get(advertiserCompetitorGroup) || 0;
+        const threshold = loc.exclusivityMode === "RELAXED" ? 2 : 1;
+        if (existingCount >= threshold) {
           rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "COMPETITOR_CONFLICT" });
           continue;
         }
@@ -270,6 +275,7 @@ export class PlacementEngineService {
         adSlotCapacitySecondsPerLoop: capacity,
         score,
         expectedImpressionsPerWeek: expectedImpressions,
+        exclusivityMode: loc.exclusivityMode,
       });
     }
     

@@ -634,15 +634,41 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(429).json({ message: "Te veel aanvragen. Probeer het later opnieuw." });
       }
       
-      const result = startFlowSchema.safeParse(req.body);
+      // Normalize inputs before validation
+      const body = req.body || {};
+      const normalizedBody = {
+        ...body,
+        companyName: typeof body.companyName === "string" ? body.companyName.trim().replace(/\s+/g, " ") : body.companyName,
+        contactName: typeof body.contactName === "string" ? body.contactName.trim() : body.contactName,
+        email: typeof body.email === "string" ? body.email.toLowerCase().trim() : body.email,
+        phone: typeof body.phone === "string" ? body.phone.trim() : body.phone,
+        kvkNumber: typeof body.kvkNumber === "string" ? body.kvkNumber.replace(/\D/g, "") : body.kvkNumber,
+        vatNumber: typeof body.vatNumber === "string" ? body.vatNumber.toUpperCase().replace(/\s/g, "") : body.vatNumber,
+        postalCode: typeof body.postalCode === "string" ? body.postalCode.toUpperCase().replace(/\s/g, "") : body.postalCode,
+        addressLine1: typeof body.addressLine1 === "string" ? body.addressLine1.trim() : body.addressLine1,
+        city: typeof body.city === "string" ? body.city.trim() : body.city,
+      };
+      
+      const result = startFlowSchema.safeParse(normalizedBody);
       if (!result.success) {
-        return res.status(400).json({ message: result.error.errors[0].message });
+        // Return structured field errors
+        const fieldErrors: Record<string, string> = {};
+        for (const error of result.error.errors) {
+          const field = error.path[0] as string;
+          if (!fieldErrors[field]) {
+            fieldErrors[field] = error.message;
+          }
+        }
+        return res.status(400).json({ 
+          message: Object.values(fieldErrors)[0],
+          fieldErrors 
+        });
       }
       
       const data = result.data;
-      const normalizedEmail = data.email.toLowerCase().trim();
-      const normalizedKvk = data.kvkNumber.replace(/\s/g, "");
-      const normalizedVat = data.vatNumber.toUpperCase().replace(/\s/g, "");
+      const normalizedEmail = data.email;
+      const normalizedKvk = data.kvkNumber;
+      const normalizedVat = data.vatNumber;
       
       const packagePrices: Record<string, { screens: number; price: number }> = {
         SINGLE: { screens: 1, price: 49.99 },

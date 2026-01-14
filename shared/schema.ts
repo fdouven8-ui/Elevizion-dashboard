@@ -251,6 +251,7 @@ export const locations = pgTable("locations", {
   adSlotCapacitySecondsPerLoop: integer("ad_slot_capacity_seconds_per_loop").default(120), // Max seconds of ads per loop
   currentAdLoadSeconds: integer("current_ad_load_seconds").default(0), // Current ad load in seconds
   loopDurationSeconds: integer("loop_duration_seconds").default(300), // Total loop duration (5 min default)
+  exclusivityMode: text("exclusivity_mode").notNull().default("STRICT"), // STRICT = max 1 per competitorGroup, RELAXED = max 2
   yodeckPlaylistId: text("yodeck_playlist_id"), // Ad playlist for this location
   lastSyncAt: timestamp("last_sync_at"), // Last Yodeck sync time
   createdAt: timestamp("created_at").notNull().defaultNow(),

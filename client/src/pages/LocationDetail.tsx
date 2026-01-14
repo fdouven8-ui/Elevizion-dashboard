@@ -114,6 +114,27 @@ export default function LocationDetail() {
     },
   });
 
+  const updateExclusivityMutation = useMutation({
+    mutationFn: async (exclusivityMode: string) => {
+      const response = await fetch(`/api/locations/${locationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ exclusivityMode }),
+      });
+      if (!response.ok) throw new Error("Update failed");
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Concurrent uitsluiting bijgewerkt" });
+      queryClient.invalidateQueries({ queryKey: ["locations"] });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+    },
+    onError: () => {
+      toast({ title: "Fout bij bijwerken", variant: "destructive" });
+    },
+  });
+
   const syncMutation = useMutation({
     mutationFn: async () => {
       const response = await fetch("/api/sync/moneybird/run", {
@@ -676,6 +697,72 @@ export default function LocationDetail() {
                 ))}
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Building2 className="h-5 w-5" />
+              Plaatsing Instellingen
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div>
+                <p className="text-sm font-medium text-muted-foreground mb-2">Concurrent Uitsluiting</p>
+                <Select 
+                  value={(location as any).exclusivityMode || "STRICT"}
+                  onValueChange={(value) => updateExclusivityMutation.mutate(value)}
+                  disabled={updateExclusivityMutation.isPending}
+                >
+                  <SelectTrigger data-testid="select-exclusivity-mode">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="STRICT">
+                      <div className="flex flex-col">
+                        <span>STRICT</span>
+                      </div>
+                    </SelectItem>
+                    <SelectItem value="RELAXED">
+                      <div className="flex flex-col">
+                        <span>RELAXED</span>
+                      </div>
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground mt-2">
+                  {((location as any).exclusivityMode || "STRICT") === "STRICT" 
+                    ? "Max 1 concurrent per branchegroep op deze locatie"
+                    : "Max 2 concurrenten per branchegroep op deze locatie"}
+                </p>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 border-t pt-4">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Regio</p>
+                  <p>{(location as any).regionCode || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Yodeck Playlist</p>
+                  <p className={!(location as any).yodeckPlaylistId ? "text-orange-600" : ""}>
+                    {(location as any).yodeckPlaylistId || "Niet ingesteld"}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 border-t pt-4">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Ad Capaciteit</p>
+                  <p>{(location as any).adSlotCapacitySecondsPerLoop || 120}s per loop</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground mb-1">Huidige Belasting</p>
+                  <p>{(location as any).currentAdLoadSeconds || 0}s</p>
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
