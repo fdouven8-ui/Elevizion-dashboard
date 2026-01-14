@@ -3195,6 +3195,39 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return prefill; // Returns undefined if already used (concurrent protection)
   }
+
+  // ============================================================================
+  // REPORT LOGS
+  // ============================================================================
+
+  async getReportLog(advertiserId: string, periodKey: string): Promise<schema.ReportLog | undefined> {
+    const [log] = await db.select().from(schema.reportLogs)
+      .where(and(
+        eq(schema.reportLogs.advertiserId, advertiserId),
+        eq(schema.reportLogs.periodKey, periodKey)
+      ));
+    return log;
+  }
+
+  async createReportLog(data: schema.InsertReportLog): Promise<schema.ReportLog> {
+    const [log] = await db.insert(schema.reportLogs).values(data).returning();
+    return log;
+  }
+
+  async updateReportLog(id: string, data: Partial<schema.ReportLog>): Promise<schema.ReportLog | undefined> {
+    const [log] = await db.update(schema.reportLogs)
+      .set(data)
+      .where(eq(schema.reportLogs.id, id))
+      .returning();
+    return log;
+  }
+
+  async getRecentReportLogs(days: number = 30): Promise<schema.ReportLog[]> {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    return db.select().from(schema.reportLogs)
+      .where(sql`${schema.reportLogs.createdAt} >= ${since}`)
+      .orderBy(desc(schema.reportLogs.createdAt));
+  }
 }
 
 export const storage = new DatabaseStorage();

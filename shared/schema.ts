@@ -227,6 +227,31 @@ export type InsertClaimPrefill = z.infer<typeof insertClaimPrefillSchema>;
 export type ClaimPrefill = typeof claimPrefills.$inferSelect;
 
 /**
+ * ReportLogs - Track monthly reports sent to advertisers
+ * Used for idempotency: only send one report per advertiser per month
+ */
+export const reportLogs = pgTable("report_logs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),
+  periodKey: text("period_key").notNull(), // YYYY-MM format
+  liveLocationsCount: integer("live_locations_count").notNull().default(0),
+  estimatedVisitors: integer("estimated_visitors").default(0),
+  estimatedImpressions: integer("estimated_impressions").default(0),
+  regionsLabel: text("regions_label"),
+  status: text("status").notNull().default("pending"), // pending, sent, failed
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  sentAt: timestamp("sent_at"),
+});
+
+export const insertReportLogSchema = createInsertSchema(reportLogs).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertReportLog = z.infer<typeof insertReportLogSchema>;
+export type ReportLog = typeof reportLogs.$inferSelect;
+
+/**
  * Locations - Partner businesses that host screens
  * These earn revenue share based on screen time at their location
  * isPlaceholder: true means this was auto-created from Yodeck import and needs Moneybird linking

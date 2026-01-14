@@ -6,6 +6,7 @@ import { initializeAdminUser } from "./initAdmin";
 import { syncAllScreensContent } from "./services/yodeckContent";
 import { startOutboxWorker, stopOutboxWorker } from "./services/outboxWorker";
 import { startCapacityWatcher, stopCapacityWatcher } from "./services/capacityWatcherWorker";
+import { startMonthlyReportWorker, stopMonthlyReportWorker } from "./services/monthlyReportWorker";
 import { db } from "./db";
 import { storage } from "./storage";
 
@@ -55,6 +56,9 @@ async function gracefulShutdown(signal: string) {
   
   // Stop capacity watcher
   stopCapacityWatcher();
+  
+  // Stop monthly report worker
+  stopMonthlyReportWorker();
   
   // Close HTTP server (stop accepting new connections)
   httpServer.close(() => {
@@ -363,6 +367,13 @@ app.use((req, res, next) => {
           startCapacityWatcher();
         }
       }, 20000);
+      
+      // Start monthly report worker (daily check, sends on 1st of month)
+      setTimeout(() => {
+        if (!isShuttingDown) {
+          startMonthlyReportWorker();
+        }
+      }, 25000);
     },
   );
 })();

@@ -1,0 +1,309 @@
+/**
+ * Monthly Report Worker
+ * 
+ * Generates and sends monthly reports to active advertisers
+ * - Runs daily but only sends on the 1st of each month (for previous month)
+ * - Idempotent: uses ReportLog table to prevent duplicates
+ * - Calculates estimated visitors/impressions based on placement data
+ */
+
+import { storage } from "../storage";
+import { db } from "../db";
+import { placements, locations, advertisers } from "@shared/schema";
+import { eq, and, sql } from "drizzle-orm";
+
+const MONTH_LABELS_NL: Record<number, string> = {
+  0: "januari", 1: "februari", 2: "maart", 3: "april",
+  4: "mei", 5: "juni", 6: "juli", 7: "augustus",
+  8: "september", 9: "oktober", 10: "november", 11: "december"
+};
+
+const VIEW_FACTOR = 2.5;
+
+interface ReportData {
+  advertiserId: string;
+  advertiserEmail: string;
+  contactName: string;
+  companyName: string;
+  periodKey: string;
+  monthLabel: string;
+  liveLocationsCount: number;
+  estimatedVisitors: number;
+  estimatedImpressions: number;
+  regionsLabel: string;
+}
+
+async function generateReportData(advertiserId: string, periodKey: string): Promise<ReportData | null> {
+  const advertiser = await storage.getAdvertiser(advertiserId);
+  if (!advertiser || !advertiser.email) {
+    console.log(`[MonthlyReport] Skipping advertiser ${advertiserId}: no email`);
+    return null;
+  }
+
+  const [year, month] = periodKey.split("-").map(Number);
+  const monthLabel = `${MONTH_LABELS_NL[month - 1]} ${year}`;
+  
+  const weeksInMonth = 4.33;
+  
+  const liveLocations = await db
+    .select({
+      locationId: placements.locationId,
+      regionCode: locations.regionCode,
+      visitorsPerWeek: locations.visitorsPerWeek,
+    })
+    .from(placements)
+    .innerJoin(locations, eq(placements.locationId, locations.id))
+    .where(and(
+      eq(placements.advertiserId, advertiserId),
+      eq(placements.status, "PUBLISHED")
+    ));
+
+  if (liveLocations.length === 0) {
+    console.log(`[MonthlyReport] Skipping advertiser ${advertiserId}: no live placements`);
+    return null;
+  }
+
+  const liveLocationsCount = liveLocations.length;
+  
+  const estimatedVisitors = Math.round(
+    liveLocations.reduce((sum, loc) => sum + (loc.visitorsPerWeek || 0), 0) * weeksInMonth
+  );
+  
+  const estimatedImpressions = Math.round(estimatedVisitors * VIEW_FACTOR);
+  
+  const uniqueRegions = [...new Set(liveLocations.map(l => l.regionCode).filter(Boolean))];
+  const regionsLabel = uniqueRegions.length > 0 ? uniqueRegions.join(", ") : "Diverse regio's";
+
+  return {
+    advertiserId,
+    advertiserEmail: advertiser.email,
+    contactName: advertiser.contactName || "Beste klant",
+    companyName: advertiser.companyName,
+    periodKey,
+    monthLabel,
+    liveLocationsCount,
+    estimatedVisitors,
+    estimatedImpressions,
+    regionsLabel,
+  };
+}
+
+async function sendMonthlyReportEmail(data: ReportData): Promise<boolean> {
+  try {
+    const { sendEmailWithHTML } = await import("./postmarkService");
+    
+    const subject = `Maandrapportage Elevizion — ${data.monthLabel}`;
+    const htmlBody = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px; }
+    .header { text-align: center; margin-bottom: 30px; }
+    .header h1 { color: #10b981; margin: 0; }
+    .stats { background: #f8fafc; padding: 20px; border-radius: 8px; margin: 20px 0; }
+    .stat-item { margin: 10px 0; }
+    .stat-label { font-weight: bold; color: #64748b; }
+    .stat-value { font-size: 18px; color: #1e293b; }
+    .disclaimer { font-size: 12px; color: #94a3b8; margin-top: 20px; font-style: italic; }
+    .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #64748b; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Elevizion</h1>
+    <p>Maandrapportage</p>
+  </div>
+  
+  <p>Hallo ${data.contactName},</p>
+  
+  <p>Hierbij je maandrapportage voor <strong>${data.monthLabel}</strong>.</p>
+  
+  <div class="stats">
+    <div class="stat-item">
+      <span class="stat-label">Actieve locaties:</span>
+      <span class="stat-value">${data.liveLocationsCount}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Gebieden:</span>
+      <span class="stat-value">${data.regionsLabel}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Geschatte bezoekers (indicatief):</span>
+      <span class="stat-value">${data.estimatedVisitors.toLocaleString("nl-NL")}</span>
+    </div>
+    <div class="stat-item">
+      <span class="stat-label">Geschatte weergaves (indicatief):</span>
+      <span class="stat-value">${data.estimatedImpressions.toLocaleString("nl-NL")}</span>
+    </div>
+  </div>
+  
+  <p class="disclaimer">
+    *Let op: dit zijn schattingen op basis van bezoekersdata per locatie. Hieraan kunnen geen rechten worden ontleend.*
+  </p>
+  
+  <p>Vragen of aanpassingen? Mail <a href="mailto:info@elevizion.nl">info@elevizion.nl</a>.</p>
+  
+  <p>Groet,<br>Elevizion (Douven Services)</p>
+  
+  <div class="footer">
+    KvK 90982541 · BTW NL004857473B37<br>
+    <a href="https://elevizion.nl">www.elevizion.nl</a>
+  </div>
+</body>
+</html>
+    `.trim();
+    
+    const textBody = `
+Hallo ${data.contactName},
+
+Hierbij je maandrapportage voor ${data.monthLabel}.
+
+- Actieve locaties: ${data.liveLocationsCount}
+- Gebieden: ${data.regionsLabel}
+- Geschatte bezoekers (indicatief): ${data.estimatedVisitors.toLocaleString("nl-NL")}
+- Geschatte weergaves (indicatief): ${data.estimatedImpressions.toLocaleString("nl-NL")}
+
+*Let op: dit zijn schattingen op basis van bezoekersdata per locatie. Hieraan kunnen geen rechten worden ontleend.*
+
+Vragen of aanpassingen? Mail info@elevizion.nl.
+
+Groet,
+Elevizion (Douven Services)
+KvK 90982541 · BTW NL004857473B37
+    `.trim();
+    
+    await sendEmailWithHTML({
+      to: data.advertiserEmail,
+      subject,
+      htmlBody,
+      textBody,
+      templateKey: "monthly_report_mvp_nl",
+      entityType: "advertiser",
+      entityId: data.advertiserId,
+    });
+    
+    return true;
+  } catch (error) {
+    console.error(`[MonthlyReport] Email send failed for ${data.advertiserId}:`, error);
+    return false;
+  }
+}
+
+export async function runMonthlyReportWorker(): Promise<{
+  processed: number;
+  sent: number;
+  skipped: number;
+  failed: number;
+}> {
+  const now = new Date();
+  const dayOfMonth = now.getDate();
+  
+  if (dayOfMonth !== 1) {
+    console.log(`[MonthlyReport] Not the 1st of the month (day ${dayOfMonth}), skipping`);
+    return { processed: 0, sent: 0, skipped: 0, failed: 0 };
+  }
+  
+  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const periodKey = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, "0")}`;
+  
+  console.log(`[MonthlyReport] Starting monthly report run for period: ${periodKey}`);
+  
+  const allAdvertisers = await db.select({ id: advertisers.id })
+    .from(advertisers)
+    .where(eq(advertisers.onboardingStatus, "CONTRACT_SIGNED"));
+  
+  let processed = 0;
+  let sent = 0;
+  let skipped = 0;
+  let failed = 0;
+  
+  for (const { id: advertiserId } of allAdvertisers) {
+    processed++;
+    
+    const existingLog = await storage.getReportLog(advertiserId, periodKey);
+    if (existingLog && existingLog.status === "sent") {
+      console.log(`[MonthlyReport] Already sent for ${advertiserId} ${periodKey}`);
+      skipped++;
+      continue;
+    }
+    
+    const reportData = await generateReportData(advertiserId, periodKey);
+    if (!reportData) {
+      skipped++;
+      continue;
+    }
+    
+    let reportLog = existingLog;
+    if (!reportLog) {
+      reportLog = await storage.createReportLog({
+        advertiserId,
+        periodKey,
+        liveLocationsCount: reportData.liveLocationsCount,
+        estimatedVisitors: reportData.estimatedVisitors,
+        estimatedImpressions: reportData.estimatedImpressions,
+        regionsLabel: reportData.regionsLabel,
+        status: "pending",
+      });
+    }
+    
+    const success = await sendMonthlyReportEmail(reportData);
+    
+    if (success) {
+      await storage.updateReportLog(reportLog.id, {
+        status: "sent",
+        sentAt: new Date(),
+      });
+      sent++;
+      console.log(`[MonthlyReport] Sent report to ${reportData.advertiserEmail}`);
+    } else {
+      await storage.updateReportLog(reportLog.id, {
+        status: "failed",
+        errorMessage: "Email send failed",
+      });
+      failed++;
+    }
+  }
+  
+  console.log(`[MonthlyReport] Completed: processed=${processed} sent=${sent} skipped=${skipped} failed=${failed}`);
+  return { processed, sent, skipped, failed };
+}
+
+let workerInterval: NodeJS.Timeout | null = null;
+
+export function startMonthlyReportWorker(): void {
+  if (workerInterval) {
+    console.log("[MonthlyReport] Worker already running");
+    return;
+  }
+  
+  console.log("[MonthlyReport] Starting worker (daily check at 09:00)");
+  
+  const checkAndRun = () => {
+    const now = new Date();
+    if (now.getHours() === 9 && now.getMinutes() < 5) {
+      runMonthlyReportWorker().catch(err => {
+        console.error("[MonthlyReport] Worker error:", err);
+      });
+    }
+  };
+  
+  workerInterval = setInterval(checkAndRun, 5 * 60 * 1000);
+  
+  setTimeout(() => {
+    if (new Date().getDate() === 1 && new Date().getHours() >= 9) {
+      runMonthlyReportWorker().catch(err => {
+        console.error("[MonthlyReport] Initial run error:", err);
+      });
+    }
+  }, 10000);
+}
+
+export function stopMonthlyReportWorker(): void {
+  if (workerInterval) {
+    clearInterval(workerInterval);
+    workerInterval = null;
+    console.log("[MonthlyReport] Worker stopped");
+  }
+}
