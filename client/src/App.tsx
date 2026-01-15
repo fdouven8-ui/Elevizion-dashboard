@@ -3,7 +3,13 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { queryClient } from "./lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import DashboardLayout from "@/components/layout/DashboardLayout";
+import ScrollToTop from "@/components/ScrollToTop";
 import { useEffect } from "react";
+
+// Disable browser scroll restoration globally
+if (typeof window !== "undefined" && "scrollRestoration" in window.history) {
+  window.history.scrollRestoration = "manual";
+}
 
 function EmailCenterRedirect() {
   const [, navigate] = useLocation();
@@ -98,8 +104,10 @@ function DashboardRouter() {
 
 function Router() {
   return (
-    <Switch>
-      <Route path="/" component={Landing} />
+    <>
+      <ScrollToTop />
+      <Switch>
+        <Route path="/" component={Landing} />
       <Route path="/login" component={Login} />
       <Route path="/adverteren" component={Adverteren} />
       <Route path="/scherm-locatie" component={SchermLocatie} />
@@ -122,8 +130,9 @@ function Router() {
       <Route path="/onboarding/location/contract/:token" component={LocationContract} />
       <Route path="/upload/:token" component={UploadPortal} />
       <Route path="/claim/:token" component={ClaimPage} />
-      <Route component={DashboardRouter} />
-    </Switch>
+        <Route component={DashboardRouter} />
+      </Switch>
+    </>
   );
 }
 

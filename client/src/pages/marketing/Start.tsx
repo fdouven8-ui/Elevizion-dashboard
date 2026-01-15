@@ -124,6 +124,14 @@ export default function Start() {
   const selectedPackage = getPackageByQueryParam(packageParam);
 
   const [step, setStep] = useState(0);
+  
+  // Scroll to top when step changes (wizard navigation)
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  }, [step]);
+  
   const [noCapacityData, setNoCapacityData] = useState<NoCapacityResponse | null>(null);
   const [formData, setFormData] = useState<FormData>({
     companyName: "",

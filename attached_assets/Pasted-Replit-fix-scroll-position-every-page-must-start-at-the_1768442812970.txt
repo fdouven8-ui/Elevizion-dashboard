@@ -1,0 +1,51 @@
+Replit — fix scroll position: every page must start at the TOP (no scroll retention)
+
+Problem
+When opening/navigating to a new page, the view starts near the bottom instead of at the top.
+This must be fixed globally for all routes and also for step-to-step navigation in the flow.
+
+Goal
+On every route change (and step change), force the scroll position to:
+top = 0, left = 0
+So the user always lands at the top of the page.
+
+Implementation (do this robustly)
+
+1) Add a global ScrollToTop component
+- Create `client/src/components/ScrollToTop.tsx` (or similar)
+- Use the router’s location/pathname hook (React Router: `useLocation()`).
+- On pathname change, run:
+  - `window.scrollTo({ top: 0, left: 0, behavior: "auto" })`
+  - Also set `document.documentElement.scrollTop = 0` and `document.body.scrollTop = 0` as fallback.
+
+2) Mount it once at the app root
+- Insert <ScrollToTop /> inside the Router, above Routes, so it runs for every navigation.
+- If using nested routers/layouts, ensure it is in the highest-level layout that wraps all pages.
+
+3) Disable browser scroll restoration (prevents back/forward weirdness)
+- In a top-level effect (e.g. App.tsx), set:
+  - `if ("scrollRestoration" in window.history) window.history.scrollRestoration = "manual";`
+
+4) Also handle “same route, content changes” (wizard steps)
+If the start flow changes “step” via state or query param without changing pathname:
+- Add a second effect in the flow page (Start.tsx) that scrolls to top when `step` changes.
+- Only do this for the flow (not global) if step changes don’t trigger a pathname change.
+
+5) Fix any layout/container that forces scroll to bottom
+- Check if any container uses:
+  - `scrollIntoView()`
+  - `element.focus()` on a field near bottom
+  - `flex` + `justify-end`
+  - `overflow-auto` with preserved scrollTop
+If found, remove/adjust so it doesn’t auto-scroll to the bottom on mount.
+
+Acceptance criteria
+- Opening any route always starts at the top.
+- Clicking menu links always starts at the top.
+- Clicking “Volgende” in the flow always starts at the top of the next step.
+- Works on desktop and mobile.
+- Back/forward doesn’t jump to weird positions.
+
+Constraints
+- No redesign, logic-only fix.
+- Keep behavior consistent across the whole app.
