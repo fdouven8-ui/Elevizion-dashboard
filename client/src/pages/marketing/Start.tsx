@@ -32,8 +32,10 @@ import { useToast } from "@/hooks/use-toast";
 interface ActiveRegion {
   code: string;
   label: string;
-  locationCount: number;
-  onlineCount: number;
+  screensTotal: number;
+  screensWithSpace: number;
+  screensFull: number;
+  maxAdsPerScreen: number;
 }
 
 interface FormData {
@@ -866,7 +868,11 @@ export default function Start() {
                             />
                             <div className="flex-1 min-w-0">
                               <span className="text-sm font-medium block truncate">{region.label}</span>
-                              <span className="text-xs text-slate-500">{region.onlineCount} online</span>
+                              <span className={`text-xs ${region.screensWithSpace === 0 ? "text-red-500 font-medium" : "text-slate-500"}`}>
+                                {region.screensWithSpace === 0 
+                                  ? "vol" 
+                                  : `${region.screensWithSpace} schermen met plek`}
+                              </span>
                             </div>
                           </label>
                         ))}
