@@ -41,6 +41,10 @@ import { useState } from "react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { Zap, Settings2 } from "lucide-react";
 
 interface MoneybirdContact {
   id: string;
@@ -132,6 +136,55 @@ export default function LocationDetail() {
     },
     onError: () => {
       toast({ title: "Fout bij bijwerken", variant: "destructive" });
+    },
+  });
+
+  // Mutation for updating sellable fields (city, status, readyForAds)
+  const updateSellableMutation = useMutation({
+    mutationFn: async (updates: { city?: string; status?: string; readyForAds?: boolean }) => {
+      const response = await fetch(`/api/locations/${locationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(updates),
+      });
+      if (!response.ok) throw new Error("Update failed");
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Locatie bijgewerkt" });
+      queryClient.invalidateQueries({ queryKey: ["locations"] });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+      queryClient.invalidateQueries({ queryKey: ["active-regions"] });
+    },
+    onError: () => {
+      toast({ title: "Fout bij bijwerken", variant: "destructive" });
+    },
+  });
+
+  // "Go Live" mutation - sets status=active and readyForAds=true in one click
+  const goLiveMutation = useMutation({
+    mutationFn: async () => {
+      if (!location?.city?.trim()) {
+        throw new Error("Stad moet ingevuld zijn om live te gaan");
+      }
+      const response = await fetch(`/api/locations/${locationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ status: "active", readyForAds: true }),
+      });
+      if (!response.ok) throw new Error("Update failed");
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Locatie is nu live voor advertenties!" });
+      queryClient.invalidateQueries({ queryKey: ["locations"] });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+      queryClient.invalidateQueries({ queryKey: ["active-regions"] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
     },
   });
 
@@ -511,6 +564,95 @@ export default function LocationDetail() {
           <AlertDescription>Deze locatie is afgewezen</AlertDescription>
         </Alert>
       )}
+
+      {/* Go Live Controls for Ads */}
+      <Card className="border-primary/20 bg-primary/5">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Settings2 className="h-5 w-5 text-primary" />
+            Advertentie-instellingen
+            {location.status === "active" && (location as any).readyForAds ? (
+              <Badge className="ml-auto bg-green-500 text-white">
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Live
+              </Badge>
+            ) : (
+              <Badge variant="outline" className="ml-auto text-amber-600 border-amber-400">
+                <AlertCircle className="h-3 w-3 mr-1" />
+                Niet live
+              </Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <Label>Stad *</Label>
+              <Input
+                value={location.city || ""}
+                onChange={(e) => updateSellableMutation.mutate({ city: e.target.value })}
+                placeholder="Bijv. Sittard"
+                data-testid="input-location-city"
+              />
+              {!location.city?.trim() && (
+                <p className="text-xs text-amber-600">Stad is verplicht voor advertenties</p>
+              )}
+            </div>
+            
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <Select
+                value={location.status || "pending_details"}
+                onValueChange={(value) => updateSellableMutation.mutate({ status: value })}
+              >
+                <SelectTrigger data-testid="select-location-status">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending_details">In behandeling</SelectItem>
+                  <SelectItem value="active">Actief</SelectItem>
+                  <SelectItem value="paused">Gepauzeerd</SelectItem>
+                  <SelectItem value="terminated">Beëindigd</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            
+            <div className="space-y-2">
+              <Label>Klaar voor advertenties</Label>
+              <div className="flex items-center gap-2 pt-1">
+                <Switch
+                  checked={(location as any).readyForAds || false}
+                  onCheckedChange={(checked) => updateSellableMutation.mutate({ readyForAds: checked })}
+                  data-testid="switch-ready-for-ads"
+                />
+                <span className="text-sm text-muted-foreground">
+                  {(location as any).readyForAds ? "Ja" : "Nee"}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick Go-Live button */}
+          {!(location.status === "active" && (location as any).readyForAds) && (
+            <div className="pt-4 border-t">
+              <Button
+                onClick={() => goLiveMutation.mutate()}
+                disabled={goLiveMutation.isPending || !location.city?.trim()}
+                className="bg-green-600 hover:bg-green-700"
+                data-testid="button-go-live"
+              >
+                <Zap className="h-4 w-4 mr-2" />
+                Zet dit scherm live voor advertenties
+              </Button>
+              {!location.city?.trim() && (
+                <p className="text-sm text-amber-600 mt-2">
+                  Vul eerst de stad in om live te kunnen gaan.
+                </p>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
