@@ -7,6 +7,12 @@
  * - Placement engine hard constraints
  */
 
+/**
+ * Maximum number of active advertisements allowed per screen/location.
+ * Locations with activeAdsCount >= MAX_ADS_PER_SCREEN are considered "full".
+ */
+export const MAX_ADS_PER_SCREEN = 20;
+
 export interface RegionOption {
   code: string;
   label: string;

@@ -9,7 +9,8 @@ import { z } from "zod";
 import crypto from "crypto";
 import { sql, desc, eq, and, isNull, isNotNull } from "drizzle-orm";
 import { db } from "./db";
-import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens } from "@shared/schema";
+import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens, placements } from "@shared/schema";
+import { MAX_ADS_PER_SCREEN } from "@shared/regions";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
 import {
@@ -613,20 +614,17 @@ Sitemap: ${SITE_URL}/sitemap.xml
   
   // ============================================================================
   // DYNAMIC REGIONS API (City-based from actual screen locations)
+  // Shows "screens with space" - locations that have room for more ads
   // ============================================================================
   
   app.get("/api/regions/active", async (_req, res) => {
     try {
-      // Get active regions based on locations with:
-      // - status = active
-      // - city NOT null/empty
-      // Note: yodeckPlaylistId check removed to show all active locations for targeting
-      // PlacementEngine validates playlist availability at submit time
+      const today = new Date().toISOString().split("T")[0];
+      
+      // Step 1: Get active locations with city
       const activeLocations = await db.select({
         locationId: locations.id,
         city: locations.city,
-        status: locations.status,
-        hasPlaylist: sql<boolean>`${locations.yodeckPlaylistId} IS NOT NULL`.as('hasPlaylist'),
       })
         .from(locations)
         .where(and(
@@ -635,41 +633,78 @@ Sitemap: ${SITE_URL}/sitemap.xml
           sql`${locations.city} != ''`,
         ));
       
-      // Group by normalized city (lowercase, trimmed)
-      const cityMap = new Map<string, { label: string; totalCount: number; onlineCount: number }>();
+      if (activeLocations.length === 0) {
+        return res.json([]);
+      }
+      
+      // Step 2: Count active placements per location (single aggregated query)
+      // Active placement = isActive AND (startDate IS NULL OR startDate <= today) AND (endDate IS NULL OR endDate >= today)
+      const placementCounts = await db.select({
+        locationId: screens.locationId,
+        activeAdsCount: sql<number>`count(${placements.id})::int`.as("activeAdsCount"),
+      })
+        .from(placements)
+        .innerJoin(screens, eq(placements.screenId, screens.id))
+        .where(and(
+          eq(placements.isActive, true),
+          sql`(${placements.startDate} IS NULL OR ${placements.startDate} <= ${today})`,
+          sql`(${placements.endDate} IS NULL OR ${placements.endDate} >= ${today})`,
+        ))
+        .groupBy(screens.locationId);
+      
+      // Build lookup map: locationId -> activeAdsCount
+      const adsCountMap = new Map<string, number>();
+      for (const pc of placementCounts) {
+        if (pc.locationId) {
+          adsCountMap.set(pc.locationId, pc.activeAdsCount);
+        }
+      }
+      
+      // Step 3: Group by city and calculate screensWithSpace
+      const cityMap = new Map<string, { 
+        label: string; 
+        screensTotal: number; 
+        screensWithSpace: number; 
+        screensFull: number; 
+      }>();
       
       for (const loc of activeLocations) {
         if (!loc.city) continue;
         
         const normalizedCity = loc.city.toLowerCase().trim();
         const label = loc.city.trim();
+        const activeAdsCount = adsCountMap.get(loc.locationId) || 0;
+        const hasSpace = activeAdsCount < MAX_ADS_PER_SCREEN;
         
         if (!cityMap.has(normalizedCity)) {
-          cityMap.set(normalizedCity, { label, totalCount: 0, onlineCount: 0 });
+          cityMap.set(normalizedCity, { label, screensTotal: 0, screensWithSpace: 0, screensFull: 0 });
         }
         
         const entry = cityMap.get(normalizedCity)!;
-        entry.totalCount++;
-        // Locations with playlist are considered "online" for display
-        if (loc.hasPlaylist) {
-          entry.onlineCount++;
+        entry.screensTotal++;
+        if (hasSpace) {
+          entry.screensWithSpace++;
+        } else {
+          entry.screensFull++;
         }
-        // Use the longest capitalization (usually most complete)
+        // Use longest capitalization (usually most complete)
         if (entry.label.length < label.length) {
           entry.label = label;
         }
       }
       
-      // Convert to array and sort by onlineCount desc, then label asc
+      // Convert to array and sort by screensWithSpace desc, then label asc
       const regions = Array.from(cityMap.entries())
         .map(([code, data]) => ({
           code,
           label: data.label,
-          locationCount: data.totalCount,
-          onlineCount: data.onlineCount,
+          screensTotal: data.screensTotal,
+          screensWithSpace: data.screensWithSpace,
+          screensFull: data.screensFull,
+          maxAdsPerScreen: MAX_ADS_PER_SCREEN,
         }))
         .sort((a, b) => {
-          if (b.onlineCount !== a.onlineCount) return b.onlineCount - a.onlineCount;
+          if (b.screensWithSpace !== a.screensWithSpace) return b.screensWithSpace - a.screensWithSpace;
           return a.label.localeCompare(b.label, "nl");
         });
       

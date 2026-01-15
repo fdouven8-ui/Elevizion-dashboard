@@ -1,0 +1,67 @@
+Replit — implement “screens with space” indicator (max 20 ads per screen)
+
+Context
+We already have the dynamic city selector backed by GET /api/regions/active. Right now it shows “online screens”. That must be removed.
+
+Goal
+In the city/places selector (and any place where we show city availability), show:
+“{City} — {X} schermen met plek voor uw advertentie”
+Where X = number of screens/locations in that city that still have at least 1 available ad spot.
+
+Business rule
+- MAX_ADS_PER_SCREEN = 20
+- A screen/location has space if: activeAdsCount < 20
+- This must be independent of online/offline status and independent of Yodeck mapping/playlists.
+- “activeAdsCount” must be based on our internal placement/publishing data (not Yodeck). Count only ads that are actually live/active on that location.
+
+Implementation requirements
+
+1) Add config constant
+- Add MAX_ADS_PER_SCREEN = 20 (env or config file).
+- Use this value everywhere, no magic numbers.
+
+2) Define how to count “active ads on a location”
+- Implement a single backend function, e.g. getActiveAdsCountForLocation(locationId).
+- It must count ONLY placements/assignments that represent ads that are currently LIVE.
+- Exclude: drafts, proposed, simulated, approved-but-not-published, cancelled, expired, removed.
+- IMPORTANT: if there is ambiguity in statuses, use the same statuses used by the publishing pipeline when the ad is truly published (e.g. PUBLISHED/ACTIVE). Do not count anything pre-publish.
+
+3) Update GET /api/regions/active
+Replace the existing “online” logic entirely.
+Return per city:
+- city
+- screensTotal: number of “sellable” locations in that city
+- screensWithSpace: number of sellable locations where activeAdsCount < 20
+- screensFull: number of sellable locations where activeAdsCount >= 20
+Optionally include:
+- maxAdsPerScreen: 20 (for frontend display/debug)
+
+Sellable locations definition (keep it simple and safe):
+- location is active/enabled in the system
+- has a city OR regionCode (already required by system health)
+- DO NOT require yodeckScreenId or playlist mapping
+(If you already have a “hasScreenInstalled/readyForAds” flag, use it; otherwise use “active locations” as sellable.)
+
+4) Frontend changes (city selector)
+- Update the dropdown label to show:
+  “{City} — {screensWithSpace} schermen met plek voor uw advertentie”
+- Remove any “online” badge/counter.
+- If screensWithSpace == 0, show:
+  “{City} — vol”
+(or “0 schermen met plek” if that’s clearer for users, but prefer “vol”.)
+
+5) Performance
+- Do NOT query per location in a loop if it causes N+1.
+- Prefer a single aggregated query/group-by in the DB to compute activeAdsCount per location, then aggregate per city.
+- If caching is needed, keep it short (e.g., 30–60s) like we do elsewhere, but correctness > caching.
+
+6) Tests / sanity checks
+- Add a small test or scriptable check:
+  - If a city has 10 sellable locations and none have placements, screensWithSpace should be 10.
+  - If a location has exactly 20 active ads, it must NOT be counted as “with space”.
+  - If a location has 19 active ads, it MUST be counted as “with space”.
+- Make sure System Health doesn’t break; it can remain focused on mapping/playlists separately.
+
+Deliverable
+- Updated backend endpoint + updated frontend selector + any shared helper(s) + minimal tests/logs.
+- No unrelated refactors.
