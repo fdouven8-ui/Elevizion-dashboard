@@ -1,0 +1,83 @@
+Replit — Fix final step “region full” logic + end-to-end flow validation
+
+Bug / Symptom
+The city selector now correctly shows “X schermen met plek” based on MAX_ADS_PER_SCREEN=20 and active placements.
+However, the final step still shows “Op dit moment is deze regio vol” and “Beschikbaar: 0 van 1 locaties” for the same selection (e.g. Sittard, package 1 screen).
+This indicates the final availability/claim/waitlist gating still uses old logic and is inconsistent with the new “screensWithSpace” logic.
+
+Goal
+Make the availability logic consistent across the ENTIRE flow:
+- The city selector
+- The validation message (available/required)
+- The final step that decides “can proceed” vs “region full / waitlist”
+All must use the SAME rule:
+MAX_ADS_PER_SCREEN = 20
+A location has space iff activeAdsCount(location) < 20
+Active ads are internal live placements only (PUBLISHED/ACTIVE). Not online/offline, not Yodeck mapping.
+
+Required Changes
+
+1) Create a single shared availability function/service (backend)
+Implement ONE canonical function (e.g. computeLocationAvailability or AvailabilityService) used by:
+- GET /api/regions/active (aggregated per city)
+- The endpoint used in the final step to decide if user can proceed / must waitlist
+- Any “availability count” shown in summaries (e.g. “0 van 1 locaties”)
+
+Definition:
+- activeAdsCount = count of placements that are truly live on that location (status PUBLISHED/ACTIVE OR isActive=true — use the publishing pipeline’s true-live definition)
+- hasSpace = activeAdsCount < 20
+
+2) Fix the final-step gating to use the canonical logic
+Find the code that renders:
+“Op dit moment is deze regio vol”
+and “Beschikbaar: X van Y locaties”
+This must be computed from:
+- selectedCities (or selected regions)
+- sellable locations in those cities
+- hasSpace rule above
+
+For package requirement:
+- requiredScreens = package screens (1 / 3 / 10)
+- availableScreens = count(locations with hasSpace=true within selected cities)
+
+Behavior:
+- If availableScreens >= requiredScreens:
+  - user proceeds normally (NO “region full” page)
+  - summary should show “Beschikbaar: {availableScreens} van {screensTotal} locaties” (or show screensWithSpace count)
+- If availableScreens < requiredScreens:
+  - show the “region full / waitlist” UI
+  - summary must show the correct counts (e.g. 1 of 1 if that’s true), never 0 if selector showed 1.
+
+3) Make UI texts consistent (screen vs locatie)
+Currently selector shows “schermen met plek” but final step says “locaties”.
+Choose ONE user-facing term and use it consistently in all steps.
+Suggestion:
+- Use “schermen” everywhere (since the business rule is per screen), but if internal model is “location”, display as “scherm” to users.
+
+Also fix singular/plural:
+- 1 scherm met plek
+- n schermen met plek
+
+4) Remove any remaining dependency on “online” or Yodeck mapping for capacity checks
+The final step must NOT require yodeckPlaylistId/yodeckScreenId to consider space.
+It should only use internal placement counts and the max 20 rule.
+
+5) End-to-end flow verification (must be done)
+Do a full flow test from start to end:
+A) Landing CTA “Ik wil adverteren” -> Pricing/packages screen shows, no default package selected
+B) Select SINGLE (1 screen) -> choose city with screensWithSpace=1
+C) Validation should show enough capacity (1/1) and allow next
+D) Final step must NOT show “regio vol” and must show availability consistent with earlier steps
+E) Repeat with TRIPLE (3 screens) and only 1 available -> should show “onvoldoende (1/3)” and the waitlist page (correctly)
+F) Repeat with a city where screensWithSpace=0 -> should show “vol” consistently everywhere
+
+Add temporary debug logging (server-side) for a day:
+- selectedCities
+- screensTotal, screensWithSpace (availableScreens)
+- requiredScreens
+- the final decision (proceed vs waitlist)
+Remove noisy logs after confirmation.
+
+Constraints
+- No major refactors outside of unifying the availability logic.
+- Keep existing UI structure; only correct the logic and texts.

@@ -3,14 +3,17 @@
  * 
  * Checks if there is available capacity for a new advertiser placement
  * before allowing them to proceed to contract signing.
- * Uses PlacementEngine.dryRunSimulate() for consistent simulation logic.
+ * 
+ * Uses the unified availability service with count-based capacity:
+ * MAX_ADS_PER_SCREEN = 20, based on active placements count.
+ * Does NOT require Yodeck mapping or online status.
  */
 
-import { placementEngine } from "./placementEngineService";
+import { availabilityService } from "./availabilityService";
 
 export interface AvailabilityCheckInput {
   packageType: string; // SINGLE | TRIPLE | TEN | CUSTOM
-  businessCategory: string;
+  businessCategory?: string;
   competitorGroup?: string;
   targetRegionCodes?: string[];
   videoDurationSeconds?: number;
@@ -28,50 +31,30 @@ export interface AvailabilityCheckResult {
   };
 }
 
-// Package type to screen count mapping
-const PACKAGE_SCREENS: Record<string, number> = {
-  SINGLE: 1,
-  TRIPLE: 3,
-  TEN: 10,
-  CUSTOM: 1, // Minimum for custom
-};
-
 /**
  * Check availability for a potential advertiser placement
- * Uses PlacementEngine.dryRunSimulate() for consistent capacity/exclusivity logic
+ * Uses unified count-based capacity logic (MAX_ADS_PER_SCREEN = 20)
  */
 export async function checkCapacity(input: AvailabilityCheckInput): Promise<AvailabilityCheckResult> {
-  const requiredCount = PACKAGE_SCREENS[input.packageType] || 1;
-  
-  // Use PlacementEngine's dry-run simulation
-  const simulation = await placementEngine.dryRunSimulate({
+  const result = await availabilityService.checkCapacity({
     packageType: input.packageType,
-    businessCategory: input.businessCategory,
-    competitorGroup: input.competitorGroup || input.businessCategory,
-    targetRegionCodes: input.targetRegionCodes || [],
-    videoDurationSeconds: input.videoDurationSeconds || 15,
+    targetRegionCodes: input.targetRegionCodes,
   });
-  
-  // Aggregate rejection reasons
+
+  // Build rejected reasons map for backward compatibility
   const rejectedReasons: Record<string, number> = {};
-  for (const rejected of simulation.rejectedLocations) {
-    rejectedReasons[rejected.reason] = (rejectedReasons[rejected.reason] || 0) + 1;
+  for (const reason of result.topReasons) {
+    rejectedReasons[reason] = 1;
   }
-  
-  // Get top reasons for rejection
-  const topReasons = Object.entries(rejectedReasons)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([reason]) => reason);
-  
+
   return {
-    isAvailable: simulation.success,
-    availableSlotCount: simulation.selectedLocations.length,
-    requiredCount,
-    topReasons,
-    nextCheckAt: new Date(Date.now() + 30 * 60 * 1000), // Check again in 30 minutes
+    isAvailable: result.isAvailable,
+    availableSlotCount: result.availableScreens,
+    requiredCount: result.requiredScreens,
+    topReasons: result.topReasons,
+    nextCheckAt: result.nextCheckAt,
     details: {
-      eligibleLocations: simulation.selectedLocations.length,
+      eligibleLocations: result.availableScreens,
       rejectedReasons,
     },
   };
