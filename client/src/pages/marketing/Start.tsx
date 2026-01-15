@@ -92,7 +92,7 @@ const REASON_TRANSLATIONS: Record<string, string> = {
   competitor_exclusivity: "Concurrentie-exclusiviteit",
   screens_offline: "Schermen offline",
   sync_pending: "Wacht op synchronisatie",
-  no_locations_in_region: "Geen locaties in deze regio",
+  no_locations_in_region: "Geen schermen in deze regio",
 };
 
 function getPackageByQueryParam(param: string | null): PricingPackage | null {
@@ -505,7 +505,7 @@ export default function Start() {
   const steps = [
     { title: "Pakket", description: "Bevestig je keuze" },
     { title: "Bedrijfsgegevens", description: "Je bedrijf & contact" },
-    { title: "Type & Regio", description: "Branche & locaties" },
+    { title: "Type & Regio", description: "Branche & schermen" },
     { title: "Factuurgegevens", description: "Adres & betaling" },
   ];
 
@@ -817,7 +817,7 @@ export default function Start() {
                   ) : activeRegions.length === 0 ? (
                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
                       <p className="text-amber-800">
-                        Nog geen actieve schermlocaties beschikbaar. Laat je gegevens achter zodat we contact kunnen opnemen.
+                        Nog geen actieve schermen beschikbaar. Laat je gegevens achter zodat we contact kunnen opnemen.
                       </p>
                       <Button 
                         variant="outline" 
@@ -964,7 +964,7 @@ export default function Start() {
                 )}
 
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-sm text-slate-600">
-                  <p>We plaatsen geen concurrerende advertenties direct naast elkaar op dezelfde locatie.</p>
+                  <p>We plaatsen geen concurrerende advertenties direct naast elkaar op hetzelfde scherm.</p>
                 </div>
               </div>
             )}

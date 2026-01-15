@@ -5,15 +5,18 @@
  * Uses count-based capacity: MAX_ADS_PER_SCREEN = 20
  * A location has space if activeAdsCount < 20
  * 
- * Active ads = placements where:
+ * LIVE placements (tightened definition) = placements where:
  *   - isActive = true
  *   - startDate IS NULL OR startDate <= current_date
  *   - endDate IS NULL OR endDate >= current_date
+ *   - Contract is signed (signedAt IS NOT NULL OR status IN ('signed', 'active'))
+ * 
+ * Excluded: queued, proposed, simulated, approved-not-published placements
  */
 
 import { db } from "../db";
-import { locations, screens, placements } from "@shared/schema";
-import { eq, and, sql, isNotNull } from "drizzle-orm";
+import { locations, screens, placements, contracts } from "@shared/schema";
+import { eq, and, sql, isNotNull, or, inArray } from "drizzle-orm";
 import { MAX_ADS_PER_SCREEN } from "@shared/regions";
 
 export interface LocationAvailability {
@@ -52,8 +55,9 @@ const PACKAGE_SCREENS: Record<string, number> = {
 };
 
 /**
- * Get active ads count per location
- * Uses the canonical definition: isActive=true, within date range
+ * Get LIVE ads count per location
+ * Tightened definition: only counts placements where contract is signed
+ * Excludes: queued, proposed, simulated, approved-not-published
  */
 export async function getLocationPlacementCounts(): Promise<Map<string, number>> {
   const placementCounts = await db.select({
@@ -62,10 +66,16 @@ export async function getLocationPlacementCounts(): Promise<Map<string, number>>
   })
     .from(placements)
     .innerJoin(screens, eq(placements.screenId, screens.id))
+    .innerJoin(contracts, eq(placements.contractId, contracts.id))
     .where(and(
       eq(placements.isActive, true),
       sql`(${placements.startDate} IS NULL OR ${placements.startDate}::date <= current_date)`,
       sql`(${placements.endDate} IS NULL OR ${placements.endDate}::date >= current_date)`,
+      // Only count LIVE placements: contract must be signed
+      or(
+        isNotNull(contracts.signedAt),
+        inArray(contracts.status, ["signed", "active"])
+      )
     ))
     .groupBy(screens.locationId);
 

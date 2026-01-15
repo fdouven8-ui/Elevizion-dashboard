@@ -59,7 +59,7 @@ function PricingCard({ pkg }: { pkg: PricingPackage }) {
               </div>
               {pkg.screens > 1 && (
                 <p className="text-xs text-slate-400">
-                  Totaal €{pkg.totalPrice.toFixed(2).replace('.', ',')} p/m · {pkg.screens} schermlocaties
+                  Totaal €{pkg.totalPrice.toFixed(2).replace('.', ',')} p/m · {pkg.screens} schermen
                 </p>
               )}
             </>
