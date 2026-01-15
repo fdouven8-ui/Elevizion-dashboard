@@ -3187,9 +3187,45 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   app.patch("/api/locations/:id", async (req, res) => {
-    const location = await storage.updateLocation(req.params.id, req.body);
-    if (!location) return res.status(404).json({ message: "Location not found" });
-    res.json(location);
+    try {
+      const { readyForAds, city, regionCode, ...otherUpdates } = req.body;
+      
+      // If setting readyForAds=true, validate that city or regionCode exists
+      if (readyForAds === true) {
+        const existingLocation = await storage.getLocation(req.params.id);
+        if (!existingLocation) {
+          return res.status(404).json({ message: "Location not found" });
+        }
+        
+        // Check if city/region will be present after update
+        const finalCity = city !== undefined ? city : existingLocation.city;
+        const finalRegionCode = regionCode !== undefined ? regionCode : existingLocation.regionCode;
+        
+        if ((!finalCity || finalCity.trim() === "") && (!finalRegionCode || finalRegionCode.trim() === "")) {
+          return res.status(400).json({ 
+            message: "Vul eerst een plaats (city) of regio (regionCode) in voordat je readyForAds activeert." 
+          });
+        }
+      }
+      
+      const updates = { ...otherUpdates };
+      if (readyForAds !== undefined) updates.readyForAds = readyForAds;
+      if (city !== undefined) updates.city = city;
+      if (regionCode !== undefined) updates.regionCode = regionCode;
+      
+      const location = await storage.updateLocation(req.params.id, updates);
+      if (!location) return res.status(404).json({ message: "Location not found" });
+      
+      // Invalidate availability cache when sellable fields change
+      if (readyForAds !== undefined || city !== undefined || regionCode !== undefined || req.body.status !== undefined) {
+        invalidateAvailabilityCache();
+      }
+      
+      res.json(location);
+    } catch (error: any) {
+      console.error("Error updating location:", error);
+      res.status(500).json({ message: error.message });
+    }
   });
 
   app.delete("/api/locations/:id", async (req, res) => {
