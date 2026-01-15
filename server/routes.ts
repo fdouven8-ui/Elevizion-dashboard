@@ -67,6 +67,11 @@ import { getScreenStats, getAdvertiserStats, clearStatsCache, checkYodeckScreenH
 import { classifyMediaItems } from "./services/mediaClassifier";
 import * as advertiserOnboarding from "./services/advertiserOnboarding";
 import { clearBrandingCache } from "./companyBranding";
+import { 
+  getCityAvailability, 
+  invalidateAvailabilityCache,
+  getAvailabilityStats,
+} from "./services/availabilityService";
 
 // ============================================================================
 // IN-MEMORY CACHE (10 second TTL for control-room endpoints)
@@ -619,93 +624,18 @@ Sitemap: ${SITE_URL}/sitemap.xml
   
   app.get("/api/regions/active", async (_req, res) => {
     try {
-      // Step 1: Get active locations with city
-      const activeLocations = await db.select({
-        locationId: locations.id,
-        city: locations.city,
-      })
-        .from(locations)
-        .where(and(
-          eq(locations.status, "active"),
-          isNotNull(locations.city),
-          sql`${locations.city} != ''`,
-        ));
+      // Use the unified availability service (with caching)
+      const cityAvailability = await getCityAvailability();
       
-      if (activeLocations.length === 0) {
-        return res.json([]);
-      }
-      
-      // Step 2: Count active placements per location (single aggregated query)
-      // Active placement = isActive AND (startDate IS NULL OR startDate <= current_date) AND (endDate IS NULL OR endDate >= current_date)
-      // Using SQL current_date for proper date comparison without timezone issues
-      const placementCounts = await db.select({
-        locationId: screens.locationId,
-        activeAdsCount: sql<number>`count(${placements.id})::int`.as("activeAdsCount"),
-      })
-        .from(placements)
-        .innerJoin(screens, eq(placements.screenId, screens.id))
-        .where(and(
-          eq(placements.isActive, true),
-          sql`(${placements.startDate} IS NULL OR ${placements.startDate}::date <= current_date)`,
-          sql`(${placements.endDate} IS NULL OR ${placements.endDate}::date >= current_date)`,
-        ))
-        .groupBy(screens.locationId);
-      
-      // Build lookup map: locationId -> activeAdsCount
-      const adsCountMap = new Map<string, number>();
-      for (const pc of placementCounts) {
-        if (pc.locationId) {
-          adsCountMap.set(pc.locationId, pc.activeAdsCount);
-        }
-      }
-      
-      // Step 3: Group by city and calculate screensWithSpace
-      const cityMap = new Map<string, { 
-        label: string; 
-        screensTotal: number; 
-        screensWithSpace: number; 
-        screensFull: number; 
-      }>();
-      
-      for (const loc of activeLocations) {
-        if (!loc.city) continue;
-        
-        const normalizedCity = loc.city.toLowerCase().trim();
-        const label = loc.city.trim();
-        const activeAdsCount = adsCountMap.get(loc.locationId) || 0;
-        const hasSpace = activeAdsCount < MAX_ADS_PER_SCREEN;
-        
-        if (!cityMap.has(normalizedCity)) {
-          cityMap.set(normalizedCity, { label, screensTotal: 0, screensWithSpace: 0, screensFull: 0 });
-        }
-        
-        const entry = cityMap.get(normalizedCity)!;
-        entry.screensTotal++;
-        if (hasSpace) {
-          entry.screensWithSpace++;
-        } else {
-          entry.screensFull++;
-        }
-        // Use longest capitalization (usually most complete)
-        if (entry.label.length < label.length) {
-          entry.label = label;
-        }
-      }
-      
-      // Convert to array and sort by screensWithSpace desc, then label asc
-      const regions = Array.from(cityMap.entries())
-        .map(([code, data]) => ({
-          code,
-          label: data.label,
-          screensTotal: data.screensTotal,
-          screensWithSpace: data.screensWithSpace,
-          screensFull: data.screensFull,
-          maxAdsPerScreen: MAX_ADS_PER_SCREEN,
-        }))
-        .sort((a, b) => {
-          if (b.screensWithSpace !== a.screensWithSpace) return b.screensWithSpace - a.screensWithSpace;
-          return a.label.localeCompare(b.label, "nl");
-        });
+      // Add maxAdsPerScreen to each city for client-side use
+      const regions = cityAvailability.map(city => ({
+        code: city.code,
+        label: city.label,
+        screensTotal: city.screensTotal,
+        screensWithSpace: city.screensWithSpace,
+        screensFull: city.screensFull,
+        maxAdsPerScreen: MAX_ADS_PER_SCREEN,
+      }));
       
       res.json(regions);
     } catch (error: any) {
@@ -2531,25 +2461,48 @@ Sitemap: ${SITE_URL}/sitemap.xml
         SINGLE: 1, TRIPLE: 3, TEN: 10, CUSTOM: 1
       };
       const requiredCount = PACKAGE_SCREENS[packageType] || 1;
+      const normalizedEmail = email.toLowerCase().trim();
       
-      // Check if already on waitlist (by email + package) - includes WAITING and INVITED
-      const existingActive = await storage.getActiveWaitlistRequest(email, packageType);
+      // Check if already on waitlist (by email + package + businessCategory)
+      // De-duplication: UPDATE existing WAITING entries instead of rejecting
+      const existingActive = await storage.getActiveWaitlistRequest(normalizedEmail, packageType);
       
       if (existingActive) {
-        const statusMsg = existingActive.status === "INVITED" 
-          ? "Je hebt al een uitnodiging ontvangen - check je email!"
-          : "Je staat al op de wachtlijst voor dit pakket";
-        return res.status(400).json({ 
-          message: statusMsg,
+        // If INVITED, tell user to check email
+        if (existingActive.status === "INVITED") {
+          return res.status(400).json({ 
+            message: "Je hebt al een uitnodiging ontvangen - check je email!",
+            waitlistId: existingActive.id,
+            status: "existing"
+          });
+        }
+        
+        // If WAITING, update the existing entry with new details
+        const updated = await storage.updateWaitlistRequest(existingActive.id, {
+          companyName,
+          contactName,
+          phone,
+          kvkNumber,
+          vatNumber,
+          businessCategory,
+          competitorGroup: businessCategory,
+          targetRegionCodes,
+          requiredCount,
+        });
+        
+        console.log(`[Waitlist] Updated existing request ${existingActive.id} for ${normalizedEmail}`);
+        return res.json({ 
+          status: "updated",
           waitlistId: existingActive.id,
-          status: existingActive.status
+          message: "Je gegevens zijn bijgewerkt. We houden je op de hoogte!"
         });
       }
       
+      // Create new waitlist entry
       const waitlistRequest = await storage.createWaitlistRequest({
         companyName,
         contactName,
-        email: email.toLowerCase().trim(),
+        email: normalizedEmail,
         phone,
         kvkNumber,
         vatNumber,
@@ -2576,9 +2529,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
         console.error("[Waitlist] Failed to send confirmation email:", emailError);
       }
       
-      console.log(`[Waitlist] Created waitlist request ${waitlistRequest.id} for ${email}`);
+      console.log(`[Waitlist] Created waitlist request ${waitlistRequest.id} for ${normalizedEmail}`);
       res.json({ 
-        success: true, 
+        status: "created",
         waitlistId: waitlistRequest.id,
         message: "Je staat op de wachtlijst. We sturen een e-mail zodra er plek is."
       });
@@ -7632,6 +7585,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
         signedUserAgent: userAgent,
         signatureData: signatureData || null,
       });
+      
+      // Invalidate availability cache (signed = reserved capacity)
+      invalidateAvailabilityCache();
 
       // Log signing event with full audit trail
       await storage.createContractEvent({

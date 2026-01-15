@@ -5,11 +5,16 @@
  * Uses count-based capacity: MAX_ADS_PER_SCREEN = 20
  * A location has space if activeAdsCount < 20
  * 
+ * SELLABLE screens = locations where:
+ *   - status = 'active'
+ *   - readyForAds = true (fully set up, approved for ads)
+ * 
  * LIVE placements (tightened definition) = placements where:
  *   - isActive = true
  *   - startDate IS NULL OR startDate <= current_date
  *   - endDate IS NULL OR endDate >= current_date
  *   - Contract is signed (signedAt IS NOT NULL OR status IN ('signed', 'active'))
+ *     = spot reserved immediately on signature
  * 
  * Excluded: queued, proposed, simulated, approved-not-published placements
  */
@@ -18,6 +23,42 @@ import { db } from "../db";
 import { locations, screens, placements, contracts } from "@shared/schema";
 import { eq, and, sql, isNotNull, or, inArray } from "drizzle-orm";
 import { MAX_ADS_PER_SCREEN } from "@shared/regions";
+
+// ============================================================================
+// AVAILABILITY CACHE (45s TTL with manual invalidation)
+// ============================================================================
+interface AvailabilityCacheEntry {
+  data: CityAvailability[];
+  timestamp: number;
+}
+
+let availabilityCache: AvailabilityCacheEntry | null = null;
+const AVAILABILITY_CACHE_TTL_MS = 45_000; // 45 seconds
+
+/**
+ * Invalidate the availability cache
+ * Call this when capacity-changing events occur:
+ * - Contract signed/cancelled
+ * - Location activated/deactivated
+ * - readyForAds flag changed
+ */
+export function invalidateAvailabilityCache(): void {
+  availabilityCache = null;
+  console.log("[AvailabilityService] Cache invalidated");
+}
+
+function getCachedAvailability(): CityAvailability[] | null {
+  if (!availabilityCache) return null;
+  if (Date.now() - availabilityCache.timestamp > AVAILABILITY_CACHE_TTL_MS) {
+    availabilityCache = null;
+    return null;
+  }
+  return availabilityCache.data;
+}
+
+function setCachedAvailability(data: CityAvailability[]): void {
+  availabilityCache = { data, timestamp: Date.now() };
+}
 
 export interface LocationAvailability {
   locationId: string;
@@ -89,10 +130,11 @@ export async function getLocationPlacementCounts(): Promise<Map<string, number>>
 }
 
 /**
- * Get all active locations with their availability status
+ * Get all SELLABLE locations with their availability status
+ * SELLABLE = status='active' AND readyForAds=true
  */
 export async function getLocationsWithAvailability(): Promise<LocationAvailability[]> {
-  const activeLocations = await db.select({
+  const sellableLocations = await db.select({
     id: locations.id,
     city: locations.city,
     regionCode: locations.regionCode,
@@ -100,13 +142,14 @@ export async function getLocationsWithAvailability(): Promise<LocationAvailabili
     .from(locations)
     .where(and(
       eq(locations.status, "active"),
+      eq(locations.readyForAds, true),
       isNotNull(locations.city),
       sql`${locations.city} != ''`,
     ));
 
   const adsCountMap = await getLocationPlacementCounts();
 
-  return activeLocations.map(loc => {
+  return sellableLocations.map(loc => {
     const activeAdsCount = adsCountMap.get(loc.id) || 0;
     const hasSpace = activeAdsCount < MAX_ADS_PER_SCREEN;
     return {
@@ -121,9 +164,15 @@ export async function getLocationsWithAvailability(): Promise<LocationAvailabili
 }
 
 /**
- * Get availability aggregated by city
+ * Get availability aggregated by city (with caching)
  */
 export async function getCityAvailability(): Promise<CityAvailability[]> {
+  // Check cache first
+  const cached = getCachedAvailability();
+  if (cached) {
+    return cached;
+  }
+
   const locationsWithAvailability = await getLocationsWithAvailability();
 
   const cityMap = new Map<string, CityAvailability>();
@@ -154,13 +203,17 @@ export async function getCityAvailability(): Promise<CityAvailability[]> {
     }
   }
 
-  return Array.from(cityMap.values())
+  const result = Array.from(cityMap.values())
     .sort((a, b) => {
       if (b.screensWithSpace !== a.screensWithSpace) {
         return b.screensWithSpace - a.screensWithSpace;
       }
       return a.label.localeCompare(b.label, "nl");
     });
+
+  // Cache the result
+  setCachedAvailability(result);
+  return result;
 }
 
 /**
@@ -220,9 +273,44 @@ export async function checkCapacity(input: {
   };
 }
 
+/**
+ * Get availability monitoring stats for System Health
+ */
+export async function getAvailabilityStats(): Promise<{
+  totalSellableScreens: number;
+  totalScreensWithSpace: number;
+  totalScreensFull: number;
+  citiesWithZeroSpace: string[];
+}> {
+  const cityAvailability = await getCityAvailability();
+  
+  let totalSellableScreens = 0;
+  let totalScreensWithSpace = 0;
+  let totalScreensFull = 0;
+  const citiesWithZeroSpace: string[] = [];
+  
+  for (const city of cityAvailability) {
+    totalSellableScreens += city.screensTotal;
+    totalScreensWithSpace += city.screensWithSpace;
+    totalScreensFull += city.screensFull;
+    if (city.screensWithSpace === 0) {
+      citiesWithZeroSpace.push(city.label);
+    }
+  }
+  
+  return {
+    totalSellableScreens,
+    totalScreensWithSpace,
+    totalScreensFull,
+    citiesWithZeroSpace,
+  };
+}
+
 export const availabilityService = {
   getLocationPlacementCounts,
   getLocationsWithAvailability,
   getCityAvailability,
   checkCapacity,
+  getAvailabilityStats,
+  invalidateAvailabilityCache,
 };

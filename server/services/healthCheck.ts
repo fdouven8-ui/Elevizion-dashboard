@@ -1221,6 +1221,104 @@ export async function checkReleaseAudit(): Promise<HealthCheckResult[]> {
 }
 
 // ============================================================================
+// AVAILABILITY & WAITLIST CHECK
+// ============================================================================
+
+export async function checkAvailabilityAndWaitlist(): Promise<HealthCheckResult[]> {
+  const results: HealthCheckResult[] = [];
+  
+  try {
+    // Get availability stats
+    const { getAvailabilityStats } = await import("./availabilityService");
+    const stats = await getAvailabilityStats();
+    
+    // Total sellable screens
+    results.push({
+      name: "Totaal verkoopbare schermen",
+      status: stats.totalSellableScreens > 0 ? "PASS" : "FAIL",
+      message: `${stats.totalSellableScreens} schermen`,
+      details: { 
+        total: stats.totalSellableScreens,
+        withSpace: stats.totalScreensWithSpace,
+        full: stats.totalScreensFull,
+      },
+    });
+    
+    // Screens with space
+    const spacePercent = stats.totalSellableScreens > 0 
+      ? Math.round((stats.totalScreensWithSpace / stats.totalSellableScreens) * 100)
+      : 0;
+    results.push({
+      name: "Schermen met plek",
+      status: spacePercent > 20 ? "PASS" : spacePercent > 0 ? "WARNING" : "FAIL",
+      message: `${stats.totalScreensWithSpace} schermen (${spacePercent}% beschikbaar)`,
+      details: { 
+        screensWithSpace: stats.totalScreensWithSpace,
+        screensFull: stats.totalScreensFull,
+        percentAvailable: spacePercent,
+      },
+      fixSuggestion: spacePercent === 0 ? "Alle schermen vol - overweeg uitbreiding" : undefined,
+    });
+    
+    // Cities with no space
+    if (stats.citiesWithZeroSpace.length > 0) {
+      results.push({
+        name: "Steden zonder beschikbare plekken",
+        status: "WARNING",
+        message: `${stats.citiesWithZeroSpace.length} stad(en) vol`,
+        details: { cities: stats.citiesWithZeroSpace.slice(0, 10) },
+      });
+    }
+    
+    // Waitlist stats
+    const now = new Date();
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    
+    const allWaitlist = await storage.getWaitlistRequests();
+    const last24h = allWaitlist.filter((w: { createdAt: Date | null }) => w.createdAt && new Date(w.createdAt) >= oneDayAgo);
+    const last7d = allWaitlist.filter((w: { createdAt: Date | null }) => w.createdAt && new Date(w.createdAt) >= sevenDaysAgo);
+    const backlog = allWaitlist.filter((w: { status: string }) => w.status === "WAITING" || w.status === "INVITED");
+    
+    results.push({
+      name: "Wachtlijst inschrijvingen (24u)",
+      status: "PASS",
+      message: `${last24h.length} nieuwe aanmeldingen`,
+      details: { count: last24h.length },
+    });
+    
+    results.push({
+      name: "Wachtlijst inschrijvingen (7d)",
+      status: "PASS",
+      message: `${last7d.length} aanmeldingen afgelopen week`,
+      details: { count: last7d.length },
+    });
+    
+    const waitingCount = backlog.filter((b: { status: string }) => b.status === "WAITING").length;
+    const invitedCount = backlog.filter((b: { status: string }) => b.status === "INVITED").length;
+    results.push({
+      name: "Wachtlijst backlog",
+      status: backlog.length > 20 ? "WARNING" : "PASS",
+      message: `${backlog.length} actieve wachtenden`,
+      details: { 
+        waiting: waitingCount,
+        invited: invitedCount,
+      },
+      fixSuggestion: backlog.length > 20 ? "Overweeg capaciteit uit te breiden" : undefined,
+    });
+    
+  } catch (error: any) {
+    results.push({
+      name: "Beschikbaarheid controle",
+      status: "FAIL",
+      message: `Fout: ${error.message}`,
+    });
+  }
+  
+  return results;
+}
+
+// ============================================================================
 // FULL HEALTH CHECK
 // ============================================================================
 
@@ -1239,6 +1337,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
     placementData,
     reportingQuality,
     releaseAudit,
+    availabilityWaitlist,
   ] = await Promise.all([
     checkCompanyProfile(),
     checkEmailConfig(),
@@ -1253,6 +1352,7 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
     checkPlacementDataCompleteness(),
     checkReportingDataQuality(),
     checkReleaseAudit(),
+    checkAvailabilityAndWaitlist(),
   ]);
   
   return [
@@ -1332,6 +1432,12 @@ export async function runFullHealthCheck(): Promise<HealthCheckGroup[]> {
       name: "Release Audit",
       icon: "shield-check",
       checks: releaseAudit,
+      testable: false,
+    },
+    {
+      name: "Beschikbaarheid & Wachtlijst",
+      icon: "bar-chart",
+      checks: availabilityWaitlist,
       testable: false,
     },
   ];

@@ -548,7 +548,10 @@ export default function Start() {
             <CardContent className="space-y-6">
               <p className="text-slate-600">
                 We willen je advertentie niet verkopen als we 'm niet direct kunnen plaatsen. 
-                Kies een extra gebied of zet jezelf op de wachtlijst. Je krijgt automatisch een e-mail zodra er plek vrijkomt.
+                Kies een extra gebied of zet jezelf op de wachtlijst.
+              </p>
+              <p className="text-sm text-emerald-700 font-medium">
+                Je krijgt automatisch een e-mail zodra er weer plek is.
               </p>
 
               <div className="bg-white border border-slate-200 rounded-lg p-4 space-y-2">

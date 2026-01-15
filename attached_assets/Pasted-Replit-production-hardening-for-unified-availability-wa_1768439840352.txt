@@ -1,0 +1,79 @@
+Replit — production hardening for unified availability + waitlist (signed = reserved)
+
+Context / decision
+We explicitly treat SIGNED as “spot reserved”.
+So capacity is consumed as soon as a contract is signed, even if the ad is not yet published.
+
+Goal
+Add a few small “production hardening” improvements WITHOUT refactoring the flow:
+1) Cache + invalidation for /api/regions/active
+2) Strict sellable-screen definition to avoid selling non-ready screens
+3) Waitlist de-duplication (update instead of duplicates)
+4) Basic monitoring counters surfaced in System Health
+5) Small copy improvement on the “region full” / waitlist card (no hard promises)
+
+Must keep
+- availabilityService remains the single source of truth
+- Signed = reserved capacity
+
+Implementations
+
+1) Cache + invalidation for /api/regions/active
+- Add short cache to /api/regions/active (30–60s) if not already present.
+- Add an internal function to invalidate this cache.
+- Trigger invalidation when any event occurs that can change capacity:
+  - contract signed (signedAt set / status becomes signed/active)
+  - contract cancelled/expired (status changes away from signed/active OR signedAt cleared)
+  - placement removed/unpublished if that affects capacity (if applicable)
+  - screen/location activated/deactivated or readiness flag changes
+- If there is already a cache utility used for Yodeck mapping, reuse the same pattern.
+
+2) Strict sellable-screen definition
+We must not count screens that are not actually sellable yet.
+- Introduce/standardize a boolean on Location, e.g. `isSellable` OR `readyForAds` (preferred),
+  or use existing fields (e.g. `isActive` + `hasScreenInstalled`).
+- Update availabilityService queries so “screensTotal / screensWithSpace / screensFull” only include sellable screens.
+- If the DB currently lacks a readiness flag, add one with a safe default:
+  - New locations default to NOT sellable until approved/installed.
+  - Existing active locations can be backfilled to sellable=true (migration).
+
+3) Waitlist de-duplication (server-side)
+Even though the client shows the waitlist card immediately (no round trip), the submit endpoint should avoid duplicates.
+Implement:
+- Unique key: (email, packageType, businessCategory, selectedCitiesHash)
+  - selectedCitiesHash = stable sorted list joined + sha256 (or store sorted array and compare)
+- On POST /api/waitlist/join (or equivalent):
+  - If a matching entry exists in WAITING/INVITED state, UPDATE it (companyName/contactName + timestamps) instead of creating a new row.
+  - If it exists but is CLAIMED/EXPIRED/CANCELLED, create a new one.
+- Return a consistent response: { status: "updated" | "created", waitlistId }
+
+4) Monitoring / System Health additions
+Add lightweight counters (no dashboards needed):
+- In /system-health (or the existing health checks page), add:
+  - Total sellable screens
+  - Total screensWithSpace
+  - Cities with 0 screensWithSpace (top list)
+  - Waitlist submissions last 24h and last 7d
+  - Waitlist backlog count (WAITING + INVITED)
+Implementation:
+- Add a small backend endpoint (admin-only) that returns these aggregates, or compute inside existing system-health endpoint.
+- Keep queries aggregated (no N+1).
+
+5) Copy improvement on “region full” card (no promises)
+Update the Dutch text on the waitlist/region-full card:
+- Keep the current message, but add one short trust line under it:
+  “Je krijgt automatisch een e-mail zodra er weer plek is.”
+Do NOT add time estimates.
+
+Acceptance tests (manual)
+- Make one signed contract and verify:
+  - screensWithSpace decreases immediately (signed = reserved)
+  - cache invalidates and UI updates within expected time (or instantly via invalidation)
+- Toggle a location to not-sellable and confirm it disappears from availability counts.
+- Submit waitlist twice with same email/package/category/cities and confirm the second call updates existing entry (no duplicate).
+- System Health shows the new counters and loads fast.
+
+Constraints
+- No UI redesigns.
+- No changes to the required waitlist fields (address remains optional).
+- No unrelated refactors; implement narrowly in services/endpoints where needed.

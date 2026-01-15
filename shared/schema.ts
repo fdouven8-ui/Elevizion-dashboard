@@ -322,6 +322,7 @@ export const locations = pgTable("locations", {
   isPlaceholder: boolean("is_placeholder").default(false), // Auto-created from Yodeck, needs Moneybird linking
   source: text("source").default("manual"), // manual, yodeck, onboarding
   status: text("status").notNull().default("pending_details"), // pending_details | pending_pi | ready_for_pi | active | paused | terminated
+  readyForAds: boolean("ready_for_ads").notNull().default(false), // Only true when location is fully set up and can accept ads
   // Onboarding status - 2-phase flow
   onboardingStatus: text("onboarding_status").default("draft"), // INVITED_INTAKE | INTAKE_SUBMITTED | PENDING_REVIEW | APPROVED_AWAITING_CONTRACT | CONTRACT_PENDING_OTP | CONTRACT_ACCEPTED | READY_FOR_INSTALL | ACTIVE | REJECTED
   // Intake token (Phase A)
