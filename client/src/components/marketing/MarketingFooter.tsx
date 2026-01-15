@@ -1,5 +1,6 @@
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
+import Logo from "@/components/Logo";
 
 interface PublicCompanyProfile {
   legalName: string;
@@ -37,12 +38,7 @@ export default function MarketingFooter() {
       <div className="container mx-auto px-4">
         <div className="grid md:grid-cols-4 gap-8 mb-8">
           <div>
-            <img 
-              src="/elevizion-logo.png" 
-              alt={tradeName}
-              className="h-8 w-auto mb-4 brightness-0 invert opacity-80"
-              loading="lazy"
-            />
+            <Logo className="h-8 w-auto mb-4 brightness-0 invert opacity-80" alt={tradeName} />
             <p className="text-sm">
               Digital signage en narrowcasting in Limburg. 
               Lokale schermreclame bij kappers, sportscholen en horeca.

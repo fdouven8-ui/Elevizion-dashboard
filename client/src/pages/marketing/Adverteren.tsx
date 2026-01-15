@@ -9,7 +9,7 @@ import { Link } from "wouter";
 import { AdvertiserLeadModal } from "@/components/LeadModals";
 import MarketingHeader from "@/components/marketing/MarketingHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
-import elevizionLogo from "@/assets/elevizion-logo.png";
+import Logo from "@/components/Logo";
 
 export default function Adverteren() {
   const [modalOpen, setModalOpen] = useState(false);
@@ -22,12 +22,7 @@ export default function Adverteren() {
         <div className="container mx-auto px-4">
           <div className="max-w-3xl mx-auto text-center">
             <div className="mb-10">
-              <img 
-                src={elevizionLogo}
-                alt="Elevizion - See Your Business Grow" 
-                className="h-20 md:h-28 w-auto mx-auto drop-shadow-lg brightness-0 invert"
-                loading="eager"
-              />
+              <Logo className="h-20 md:h-28 w-auto mx-auto drop-shadow-lg brightness-0 invert" />
             </div>
             <h1 className="text-3xl md:text-5xl font-bold mb-6 leading-tight">
               Adverteren op digitale schermen

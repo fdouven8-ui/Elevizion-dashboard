@@ -45,6 +45,7 @@ import { PERMISSIONS } from "@shared/models/auth";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
+import Logo from "@/components/Logo";
 
 interface MenuItem {
   title: string;
@@ -146,11 +147,7 @@ export function AppSidebar() {
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground px-2">
-              <img 
-                src="/elevizion-logo.png" 
-                alt="Elevizion" 
-                className="h-5 w-auto object-contain"
-              />
+              <Logo className="h-5 w-auto object-contain" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

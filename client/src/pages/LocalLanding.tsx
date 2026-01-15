@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Link } from "wouter";
 import { AdvertiserLeadModal, ScreenLeadModal } from "@/components/LeadModals";
+import Logo from "@/components/Logo";
 
 interface CityData {
   name: string;
@@ -79,12 +80,7 @@ export default function LocalLanding({ city }: { city: string }) {
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
           <Link href="/">
             <a className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-              <img 
-                src="/elevizion-logo.png" 
-                alt="Elevizion - Digital Signage Limburg" 
-                className="h-9 w-auto"
-                loading="lazy"
-              />
+              <Logo className="h-9 w-auto" />
             </a>
           </Link>
           <nav className="flex items-center gap-2">

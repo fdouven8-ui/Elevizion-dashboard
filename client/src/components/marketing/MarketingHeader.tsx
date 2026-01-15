@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Link, useLocation } from "wouter";
 import { Menu, X } from "lucide-react";
+import Logo from "@/components/Logo";
 
 const navItems = [
   { label: "Adverteren", href: "/adverteren" },
@@ -20,18 +21,7 @@ export default function MarketingHeader() {
     <header className="border-b border-slate-100 bg-white/95 backdrop-blur-sm sticky top-0 z-50">
       <div className="container mx-auto px-4 py-3 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-          <img 
-            src="/elevizion-logo.png" 
-            alt="Elevizion - Digital Signage" 
-            className="h-9 w-auto"
-            loading="lazy"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
-              const textEl = e.currentTarget.nextElementSibling as HTMLElement;
-              if (textEl) textEl.style.display = 'block';
-            }}
-          />
-          <span className="text-xl font-bold text-slate-900 hidden">Elevizion</span>
+          <Logo className="h-9 w-auto" />
         </Link>
 
         <nav className="hidden lg:flex items-center gap-1">
