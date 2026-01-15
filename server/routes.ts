@@ -622,8 +622,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
   // Shows "screens with space" - locations that have room for more ads
   // ============================================================================
   
-  app.get("/api/regions/active", async (_req, res) => {
+  app.get("/api/regions/active", async (req, res) => {
     try {
+      const debugMode = req.query.debug === "1";
+      
       // Use the unified availability service (with caching)
       const cityAvailability = await getCityAvailability();
       
@@ -636,6 +638,93 @@ Sitemap: ${SITE_URL}/sitemap.xml
         screensFull: city.screensFull,
         maxAdsPerScreen: MAX_ADS_PER_SCREEN,
       }));
+      
+      // Debug mode: add diagnostic information
+      if (debugMode) {
+        // Filter counts at each step
+        const locationsTotal = await db.select({ count: sql<number>`count(*)::int` })
+          .from(locations);
+        
+        const locationsWithActiveTrue = await db.select({ count: sql<number>`count(*)::int` })
+          .from(locations)
+          .where(eq(locations.status, "active"));
+        
+        const locationsWithReadyTrue = await db.select({ count: sql<number>`count(*)::int` })
+          .from(locations)
+          .where(and(
+            eq(locations.status, "active"),
+            eq(locations.readyForAds, true)
+          ));
+        
+        const locationsWithCityOrRegion = await db.select({ count: sql<number>`count(*)::int` })
+          .from(locations)
+          .where(and(
+            eq(locations.status, "active"),
+            eq(locations.readyForAds, true),
+            or(
+              and(isNotNull(locations.city), sql`${locations.city} != ''`),
+              and(isNotNull(locations.regionCode), sql`${locations.regionCode} != ''`)
+            )
+          ));
+        
+        // Get sample of all locations to show exclusion reasons
+        const allLocations = await db.select({
+          id: locations.id,
+          name: locations.name,
+          city: locations.city,
+          regionCode: locations.regionCode,
+          status: locations.status,
+          readyForAds: locations.readyForAds,
+        })
+          .from(locations)
+          .limit(15);
+        
+        // Compute exclusion reasons
+        const excludedLocations = allLocations.map(loc => {
+          let exclusionReason = null;
+          if (loc.status !== "active") {
+            exclusionReason = "inactive";
+          } else if (!loc.readyForAds) {
+            exclusionReason = "not_ready_for_ads";
+          } else if ((!loc.city || loc.city.trim() === "") && (!loc.regionCode || loc.regionCode.trim() === "")) {
+            exclusionReason = "missing_city_and_region";
+          }
+          return {
+            ...loc,
+            exclusionReason,
+            isIncluded: exclusionReason === null,
+          };
+        });
+        
+        // Count active placements
+        const activePlacementsCount = await db.select({ count: sql<number>`count(*)::int` })
+          .from(placements)
+          .where(eq(placements.isActive, true));
+        
+        const debugInfo = {
+          environment: {
+            nodeEnv: process.env.NODE_ENV || "unknown",
+            databaseHost: process.env.PGHOST ? `${process.env.PGHOST.substring(0, 20)}...` : "not_set",
+            databaseName: process.env.PGDATABASE || "not_set",
+          },
+          filterCounts: {
+            locationsTotal: locationsTotal[0]?.count || 0,
+            locationsWithActiveTrue: locationsWithActiveTrue[0]?.count || 0,
+            locationsWithReadyTrue: locationsWithReadyTrue[0]?.count || 0,
+            locationsWithCityOrRegion: locationsWithCityOrRegion[0]?.count || 0,
+            locationsConsideredSellable: locationsWithCityOrRegion[0]?.count || 0,
+            placementsCountedAsActive: activePlacementsCount[0]?.count || 0,
+          },
+          sampleLocations: excludedLocations,
+          maxAdsPerScreen: MAX_ADS_PER_SCREEN,
+          timestamp: new Date().toISOString(),
+        };
+        
+        return res.json({
+          regions,
+          debug: debugInfo,
+        });
+      }
       
       res.json(regions);
     } catch (error: any) {

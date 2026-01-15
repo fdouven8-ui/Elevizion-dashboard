@@ -1,0 +1,102 @@
+Replit — /api/regions/active still returns empty: add hard debug + fix root cause so Sittard shows 1
+
+Status
+The UI still shows the empty-state: “Nog geen actieve schermen beschikbaar…”
+That means /api/regions/active returns 0 cities in the current deployed environment.
+But we DO have 2 screens/locations; at least 1 is temporarily linked and should appear as:
+Sittard — 1 scherm met plek
+
+Goal
+1) Make /api/regions/active return the correct cities (Sittard must appear).
+2) Identify and fix the exact root cause (data missing vs filters vs wrong DB).
+3) Provide a definitive debug output that proves why locations are excluded.
+
+Non-negotiable
+- Keep unified availabilityService.
+- Signed = reserved capacity.
+- Do NOT depend on online/offline.
+- Do NOT require Yodeck mapping for a location to count as sellable.
+- Minimal changes, but must be conclusive.
+
+Step 1 — Add “debug mode” to /api/regions/active (TEMP)
+Add a query param `?debug=1` (admin-only / protected in production).
+When debug=1, return normal response plus a `debug` object that includes:
+
+A) Environment / DB sanity
+- process.env.NODE_ENV
+- database name/host (mask sensitive parts if needed)
+- schema name (if applicable)
+
+B) Location counts at each filter step (this is critical)
+Compute these counts using separate aggregated queries:
+- locationsTotal
+- locationsWithActiveTrue
+- locationsWithReadyTrue (if readyForAds/isSellable exists)
+- locationsWithCityOrRegion
+- locationsConsideredSellable (the final set your service uses)
+- placementsCountedAsActive (total rows that count toward capacity)
+
+C) Sample of excluded locations (up to 10)
+Return a list of location rows with:
+- id, name, city, regionCode
+- isActive
+- readyForAds / isSellable (or null if not present)
+- yodeckScreenId, yodeckPlaylistId
+- computed activeAdsCount and hasSpace boolean
+Also return exclusionReason for each excluded location:
+- “inactive”
+- “not ready/sellable”
+- “missing city/region”
+- “wrong join removed row” (if join issue found)
+- “not found in this DB” (if totals show 0)
+
+This debug mode must make it impossible to hide the truth.
+
+Step 2 — Fix the actual root cause based on debug results
+Use the debug output to fix whichever is true:
+
+Case 1: locationsTotal = 0
+=> You are pointing to the wrong database or production has no seeded locations.
+Fix by:
+- Ensuring production uses the correct DB connection string
+- Adding a safe seed/migration to insert the 2 known locations in prod
+- Or exporting/importing locations from dev/staging
+
+Case 2: locations exist but excluded by readyForAds/isSellable
+=> Set the correct flag(s) for those 2 screens.
+Fix by:
+- Adding an admin action (temporary) “Markeer als sellable/readyForAds” on /schermen admin page
+OR
+- A one-time migration/script updating ONLY those known locations
+
+Case 3: excluded by missing city/regionCode
+=> Ensure city is set to “Sittard” (no trailing spaces) for those locations.
+Fix by:
+- Trim city values in DB (TRIM) and enforce normalization in code on save
+- Update existing prod rows to have correct city
+
+Case 4: query drops rows due to INNER JOIN
+=> Ensure availabilityService uses LEFT JOINs so locations without placements/mapping still count.
+Capacity should default activeAdsCount = 0 if no placements exist.
+
+Step 3 — Add a simple “production self-check” in System Health
+Add a check under “Beschikbaarheid & Wachtlijst”:
+- If totalSellableScreens == 0 => FAIL with action link to /schermen
+- Display the same key counts from debug (totals only, no sensitive DB info)
+
+Step 4 — Verification (must be performed)
+- Call /api/regions/active?debug=1 in the deployed environment.
+- Confirm debug shows:
+  - locationsTotal >= 2
+  - locationsConsideredSellable >= 1
+- Confirm normal /api/regions/active includes:
+  - city = “Sittard”
+  - screensWithSpace >= 1
+- Confirm UI shows:
+  “Sittard — 1 scherm met plek”
+and empty-state is gone.
+
+Step 5 — Cleanup
+- Keep debug behind admin-only AND optionally remove after confirmation.
+- Ensure no secrets are leaked in debug output (mask host/user).
+No unrelated refactors.
