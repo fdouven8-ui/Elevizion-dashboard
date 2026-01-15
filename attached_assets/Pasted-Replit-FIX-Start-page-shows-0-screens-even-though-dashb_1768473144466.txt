@@ -1,0 +1,112 @@
+Replit — FIX: Start page shows 0 screens even though dashboard has locations. Diagnose + repair.
+
+Symptom
+Marketing flow step “Type & Regio” shows “Nog geen actieve schermen beschikbaar”.
+This means the client thinks totalSellableScreens === 0 OR the regions API call fails.
+But admin dashboard clearly shows locations, ads, and capacity.
+So marketing flow is not reading the same data or is being filtered out.
+
+GOAL
+Make the marketing flow show real cities/screens from the existing dashboard data.
+Specifically, /api/regions/active must return Sittard (>=1 screen with space) and the UI must render it.
+
+Part A — Add hard diagnostics (must be implemented first)
+
+1) Add GET /api/regions/active?debug=1 (admin-only)
+When debug=1, return:
+{
+  data: <normal response>,
+  debug: {
+    env: { NODE_ENV, APP_ENV },
+    db: { databaseNameMasked, schemaName, hostMasked },
+    api: { requestUserRole, authMode },
+    counts: {
+      locationsTotal,
+      locationsActive,
+      locationsHaveCityOrRegion,
+      locationsReadyForAdsTrue,   // if field exists
+      locationsSellableFinal,
+      placementsCounted,
+    },
+    sampleLocations: [
+      {
+        id, name, city, regionCode,
+        isActive,
+        readyForAds, isSellable,   // whichever exists
+        yodeckScreenId, yodeckPlaylistId,
+        activeAdsCount,
+        hasSpace,
+        exclusionReason
+      }
+    ],
+    lastError: null
+  }
+}
+
+exclusionReason must be one of:
+- "inactive"
+- "not_ready"
+- "missing_city"
+- "removed_by_join"
+- "unknown"
+
+2) On the frontend Start.tsx, add a TEMP debug panel shown only when:
+- URL has ?debug=1
+It should display:
+- HTTP status of /api/regions/active
+- length of returned cities
+- if debug object exists, show counts + first sample location
+This makes it obvious if the call is failing (401/403/500) vs returning empty.
+
+Part B — Fix the root cause (based on what debug shows)
+
+Case 1: API call is failing (401/403/500) and UI falls back to “no screens”
+- Fix auth/CORS/routing so marketing page can call /api/regions/active successfully.
+- Ensure this endpoint is PUBLIC (it is marketing) or has correct auth for non-logged users.
+- Ensure production base URL/proxy config is correct.
+- Ensure errors do NOT map to “0 screens” silently; show “laden mislukt” if fetch fails.
+
+Case 2: API call succeeds but locationsSellableFinal = 0 while locationsTotal > 0
+Then filtering is excluding all locations.
+Fix sellable definition in availabilityService to match reality:
+
+Sellable must be:
+- location.isActive === true
+- AND city OR regionCode exists
+- AND (readyForAds/isSellable only if we truly use it AND it’s set correctly)
+IMPORTANT:
+- DO NOT require Yodeck mapping to count as sellable.
+- DO NOT require playlist names.
+- DO NOT depend on online/offline.
+- DO NOT inner join to placements/mapping in a way that drops locations.
+Use LEFT JOIN and COALESCE(activeAdsCount, 0).
+
+Case 3: locationsTotal = 0 in debug
+- Marketing API is pointing to the wrong DB/schema.
+Fix environment config so both dashboard and marketing API use the same DB.
+After fixing, confirm locationsTotal >= 2.
+
+Part C — “Use existing dashboard data” guarantee
+The marketing flow must reflect the same Locations that the dashboard shows.
+So:
+- If dashboard lists a location with city=Sittard and isActive=true,
+  it MUST appear in /api/regions/active unless explicitly disabled.
+
+Part D — Verification (mandatory)
+1) Open /api/regions/active?debug=1 in the deployed environment and confirm:
+- locationsTotal >= 2
+- locationsSellableFinal >= 1
+- sampleLocations shows city “Sittard” and hasSpace=true
+2) Open marketing flow with ?debug=1 and confirm:
+- HTTP 200 from /api/regions/active
+- cities list includes Sittard
+3) UI shows city cards instead of empty-state.
+
+Part E — Cleanup
+- Keep debug behind admin-only OR remove after fix is confirmed.
+- Remove debug UI panel after verification.
+
+Constraints
+- Minimal, focused changes.
+- Do not change availability rules (MAX_ADS_PER_SCREEN=20, signed=reserved stays).
+- Do not fake availability.

@@ -162,12 +162,49 @@ export default function Start() {
   // Dynamic regions from actual screen locations
   const [regionSearch, setRegionSearch] = useState("");
   
-  const { data: activeRegions = [], isLoading: regionsLoading } = useQuery<ActiveRegion[]>({
+  // Debug mode for diagnosing production issues
+  const isDebugMode = urlParams.get("debug") === "1";
+  const [debugInfo, setDebugInfo] = useState<{
+    httpStatus: number | null;
+    error: string | null;
+    responseLength: number;
+    rawResponse: any;
+  }>({ httpStatus: null, error: null, responseLength: 0, rawResponse: null });
+  
+  const { data: activeRegions = [], isLoading: regionsLoading, error: regionsError } = useQuery<ActiveRegion[]>({
     queryKey: ["active-regions"],
     queryFn: async () => {
-      const res = await fetch("/api/regions/active");
-      if (!res.ok) throw new Error("Failed to fetch regions");
-      return res.json();
+      try {
+        const res = await fetch("/api/regions/active");
+        const data = await res.json();
+        
+        // Update debug info
+        if (isDebugMode) {
+          setDebugInfo({
+            httpStatus: res.status,
+            error: res.ok ? null : `HTTP ${res.status}`,
+            responseLength: Array.isArray(data) ? data.length : 0,
+            rawResponse: data,
+          });
+        }
+        
+        if (!res.ok) throw new Error(`Failed to fetch regions: HTTP ${res.status}`);
+        
+        // Handle both array and object (debug mode) responses
+        if (Array.isArray(data)) {
+          return data;
+        } else if (data && Array.isArray(data.regions)) {
+          return data.regions;
+        }
+        
+        console.error("[Start] Unexpected response format:", data);
+        return [];
+      } catch (err: any) {
+        if (isDebugMode) {
+          setDebugInfo(prev => ({ ...prev, error: err.message }));
+        }
+        throw err;
+      }
     },
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
@@ -820,10 +857,39 @@ export default function Start() {
                     </div>
                   </div>
                   
+                  {/* Debug panel - only shown when ?debug=1 in URL */}
+                  {isDebugMode && (
+                    <div className="mb-4 p-4 bg-slate-100 border border-slate-300 rounded-lg text-xs font-mono">
+                      <div className="font-bold text-slate-700 mb-2">DEBUG: /api/regions/active</div>
+                      <div className="space-y-1">
+                        <p>HTTP Status: <span className={debugInfo.httpStatus === 200 ? "text-green-600" : "text-red-600"}>{debugInfo.httpStatus || "pending"}</span></p>
+                        <p>Error: <span className={debugInfo.error ? "text-red-600" : "text-green-600"}>{debugInfo.error || "none"}</span></p>
+                        <p>Regions count: <span className="text-blue-600">{activeRegions.length}</span></p>
+                        <p>Response length: <span className="text-blue-600">{debugInfo.responseLength}</span></p>
+                        {regionsError && <p className="text-red-600">Query error: {String(regionsError)}</p>}
+                        {debugInfo.rawResponse && (
+                          <details className="mt-2">
+                            <summary className="cursor-pointer text-slate-600">Raw response</summary>
+                            <pre className="mt-1 p-2 bg-white rounded text-[10px] overflow-auto max-h-40">
+                              {JSON.stringify(debugInfo.rawResponse, null, 2)}
+                            </pre>
+                          </details>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
                   {regionsLoading ? (
                     <div className="flex items-center gap-2 text-slate-600 p-4 bg-slate-50 rounded-lg">
                       <Loader2 className="h-4 w-4 animate-spin" />
                       <span className="text-sm">Plaatsen laden...</span>
+                    </div>
+                  ) : regionsError ? (
+                    <div className="bg-red-50 border border-red-200 rounded-lg p-4 space-y-3">
+                      <p className="text-red-800">
+                        Laden mislukt. Probeer de pagina te vernieuwen.
+                      </p>
+                      <p className="text-red-600 text-sm">{String(regionsError)}</p>
                     </div>
                   ) : activeRegions.length === 0 ? (
                     <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
