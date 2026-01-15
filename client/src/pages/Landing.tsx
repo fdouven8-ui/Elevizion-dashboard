@@ -45,7 +45,7 @@ export default function Landing() {
               Adverteer op digitale reclame schermen bij kappers, sportscholen en horeca in Limburg. Lokale zichtbaarheid voor jouw bedrijf.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center mb-5">
-              <Link href="/start?package=triple">
+              <Link href="/prijzen">
                 <Button 
                   size="lg" 
                   className="gap-2 bg-emerald-600 hover:bg-emerald-700 px-8 py-6 w-full sm:w-auto text-base font-medium shadow-lg shadow-emerald-900/20 transition-colors" 
@@ -125,7 +125,7 @@ export default function Landing() {
                     <span>Zichtbaar waar je doelgroep komt</span>
                   </li>
                 </ul>
-                <Link href="/start?package=triple">
+                <Link href="/prijzen">
                   <Button 
                     className="w-full gap-2 bg-emerald-600 hover:bg-emerald-700 mt-4 transition-colors font-semibold shadow-lg"
                   >
@@ -191,7 +191,7 @@ export default function Landing() {
             <p className="text-white/80 mb-8 leading-relaxed text-lg">
               Je boodschap komt in beeld waar mensen wachten, kijken en besluiten.
             </p>
-            <Link href="/start?package=triple">
+            <Link href="/prijzen">
               <Button 
                 size="lg" 
                 className="gap-2 bg-emerald-500 hover:bg-emerald-600 transition-colors font-semibold text-base py-6 px-8 shadow-lg shadow-emerald-500/20"
@@ -538,7 +538,7 @@ export default function Landing() {
               Wij regelen de schermen en planning. Jij levert de video, en wordt gezien.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center">
-              <Link href="/start?package=triple">
+              <Link href="/prijzen">
                 <Button 
                   size="lg" 
                   className="gap-2 bg-white text-emerald-700 hover:bg-emerald-50 w-full sm:w-auto transition-colors font-semibold text-base py-6 px-8 shadow-xl"

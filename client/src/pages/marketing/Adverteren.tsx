@@ -206,7 +206,7 @@ export default function Adverteren() {
             <p className="text-slate-300 mb-8">
               Vraag vrijblijvend informatie aan. Wij nemen binnen 24 uur contact op.
             </p>
-            <Link href="/start?package=triple">
+            <Link href="/prijzen">
               <Button 
                 size="lg" 
                 className="gap-2 bg-emerald-500 hover:bg-emerald-600 font-semibold py-6 px-8"

@@ -1,0 +1,36 @@
+Replit — fix “Ik wil adverteren” start flow (must show pricing first, not auto-select 3 screens)
+
+Problem
+When I click the main CTA button “Ik wil adverteren”, the app immediately navigates into the start/onboarding menu as if the user already selected the “3 schermen” package. This is wrong.
+
+Goal
+The “Ik wil adverteren” CTA must always land on the package/pricing selection view first (the screen where prices/packages are shown), WITHOUT preselecting any package.
+
+Required behavior
+1) Clicking “Ik wil adverteren” should route to the pricing/packages step (e.g. /start or /start/advertiseren — whichever is the correct route in this app).
+2) On that page:
+   - No package is preselected by default.
+   - The user must actively choose a package (1 / 3 / 10).
+   - Only AFTER a package is selected, the flow continues to the next step (region/city selection etc.).
+3) If we currently pass a query param/state that sets default package (e.g. package=TRIPLE, screens=3, tier=3), remove it from the CTA link and remove any default selection logic.
+4) If the pricing screen already exists, ensure the CTA links to that exact component/step.
+5) Make sure the internal state initializes as:
+   - selectedPackage = null
+   - requiredScreens = 0 until selectedPackage is set
+   - any “insufficient capacity (x/y)” message should not appear until a package is selected (or show a neutral hint like “Kies eerst een pakket”).
+
+Implementation steps
+- Find the “Ik wil adverteren” button/link (likely on landing page header/hero).
+- Remove any hardcoded selection or navigation to a deeper step that assumes 3 screens.
+- Update routing so it always goes to the pricing/packages selection step.
+- In the pricing/packages component:
+  - Ensure it does NOT default to TRIPLE/3.
+  - Ensure the next step is gated: user cannot proceed until a package is chosen.
+
+Acceptance criteria
+- Clicking “Ik wil adverteren” always shows the pricing/packages first.
+- No package is selected by default.
+- The user must click a package to continue.
+- The flow never behaves as if “3 screens” was chosen unless the user explicitly picks it.
+- Add a quick manual test checklist in the PR notes: CTA → pricing visible → select 1/3/10 works → then city selector step.
+No unrelated refactors.
