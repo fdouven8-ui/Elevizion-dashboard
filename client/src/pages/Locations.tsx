@@ -23,16 +23,48 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Label } from "@/components/ui/label";
 import { useForm } from "react-hook-form";
 import { Link } from "wouter";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
+import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Location } from "@shared/schema";
 
 export default function Locations() {
   const { locations, addLocation } = useAppData();
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  
+  // Mutation for toggling readyForAds
+  const toggleReadyMutation = useMutation({
+    mutationFn: async ({ locationId, readyForAds }: { locationId: string; readyForAds: boolean }) => {
+      const response = await fetch(`/api/locations/${locationId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ readyForAds }),
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.message || "Update failed");
+      }
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Locatie bijgewerkt" });
+      queryClient.invalidateQueries({ queryKey: ["locations"] });
+      queryClient.invalidateQueries({ queryKey: ["app-data"] });
+      queryClient.invalidateQueries({ queryKey: ["active-regions"] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
 
   const filteredLocations = locations.filter(loc => 
     loc.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    loc.address.toLowerCase().includes(searchTerm.toLowerCase())
+    (loc.address || "").toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -75,7 +107,8 @@ export default function Locations() {
             <TableRow>
               <TableHead>Naam</TableHead>
               <TableHead>Adres</TableHead>
-              <TableHead>Adres status</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead>Advertenties</TableHead>
               <TableHead>Moneybird</TableHead>
               <TableHead>Contactpersoon</TableHead>
               <TableHead className="w-[50px]"></TableHead>
@@ -104,17 +137,48 @@ export default function Locations() {
                     </div>
                   </TableCell>
                   <TableCell>
-                    {addressComplete ? (
-                      <Badge variant="outline" className="text-green-600 border-green-600">
-                        <CheckCircle className="h-3 w-3 mr-1" />
-                        Compleet
+                    <div className="flex flex-col gap-1">
+                      <Badge 
+                        variant={loc.status === "active" ? "default" : "outline"}
+                        className={loc.status === "active" ? "bg-green-500 text-white w-fit" : "text-muted-foreground w-fit"}
+                      >
+                        {loc.status === "active" ? "Actief" : 
+                         loc.status === "paused" ? "Gepauzeerd" :
+                         loc.status === "terminated" ? "Beëindigd" : "In behandeling"}
                       </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-orange-600 border-orange-600">
-                        <MapPin className="h-3 w-3 mr-1" />
-                        Onvolledig
-                      </Badge>
-                    )}
+                      {!hasCity && (
+                        <span className="text-xs text-orange-500 flex items-center gap-1">
+                          <AlertCircle className="h-3 w-3" />
+                          Geen stad
+                        </span>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div className="flex items-center gap-2">
+                            <Switch
+                              checked={(loc as any).readyForAds || false}
+                              onCheckedChange={(checked) => {
+                                toggleReadyMutation.mutate({ locationId: loc.id, readyForAds: checked });
+                              }}
+                              disabled={toggleReadyMutation.isPending}
+                              data-testid={`switch-ready-${loc.id}`}
+                            />
+                            <span className="text-xs text-muted-foreground">
+                              {(loc as any).readyForAds ? "Live" : "Uit"}
+                            </span>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          {!hasCity && !loc.regionCode ? 
+                            "Vul eerst een stad in op de detailpagina" : 
+                            (loc as any).readyForAds ? "Scherm is live voor advertenties" : "Klik om live te zetten"}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
                   </TableCell>
                   <TableCell>
                     {loc.moneybirdContactId ? (
@@ -163,7 +227,7 @@ export default function Locations() {
             })}
             {filteredLocations.length === 0 && (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center">
+                <TableCell colSpan={7} className="h-24 text-center">
                   Geen locaties gevonden.
                 </TableCell>
               </TableRow>
