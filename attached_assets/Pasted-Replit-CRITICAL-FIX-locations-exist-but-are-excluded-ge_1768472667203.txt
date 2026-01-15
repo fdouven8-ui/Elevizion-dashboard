@@ -1,0 +1,101 @@
+Replit — CRITICAL FIX: locations exist but are excluded → “geen actieve schermen beschikbaar”
+
+Symptom (confirmed by UI screenshot)
+The “Type & Regio” step shows:
+“Nog geen actieve schermen beschikbaar”
+This only happens when totalSellableScreens === 0.
+
+However:
+- There ARE 2 Yodeck screens
+- Both have playlists
+- At least 1 is already linked
+- City = Sittard
+So Sittard MUST appear with at least “1 scherm met plek”.
+
+Goal
+Fix the backend so existing locations are counted as sellable and returned by
+GET /api/regions/active.
+The UI must then show the city selector instead of the empty-state.
+
+Step 1 — HARD DEBUG (must be implemented first)
+Add a TEMPORARY admin-only debug mode to GET /api/regions/active via ?debug=1.
+
+When debug=1, return normal response PLUS a `debug` object with:
+
+A) Environment sanity
+- NODE_ENV
+- database name or identifier (masked)
+- schema name (if applicable)
+
+B) Location counts at EACH filter step (separate queries, no joins):
+- locationsTotal
+- locationsIsActiveTrue
+- locationsReadyForAdsTrue (or isSellableTrue)
+- locationsWithCityOrRegion
+- locationsFinalSellable (what availabilityService actually uses)
+
+C) Sample locations (max 10) with exclusion reason
+Return array with:
+- id, name, city
+- isActive
+- readyForAds / isSellable
+- yodeckScreenId
+- yodeckPlaylistId
+- exclusionReason:
+  one of:
+  - "inactive"
+  - "not_ready_for_ads"
+  - "missing_city"
+  - "removed_by_join"
+  - "unknown"
+
+This debug output must make it impossible for locations to be silently excluded.
+
+Step 2 — FIX sellable logic (this is the real fix)
+Update availabilityService so a location is considered sellable if:
+
+- location.isActive === true
+- AND (readyForAds / isSellable === true OR this flag does not exist yet)
+- AND (city OR regionCode is present)
+
+IMPORTANT:
+- Do NOT require yodeckScreenId or yodeckPlaylistId to be set
+- Do NOT require playlist name matching
+- Do NOT use INNER JOINs that remove locations
+- Any joins to placements or mapping MUST be LEFT JOINs
+- If no placements exist, activeAdsCount must default to 0
+
+Step 3 — One-time production data safety fix
+If debug shows:
+- locations exist but readyForAds/isSellable is false
+Then:
+- Add a minimal admin repair:
+  “Markeer als actief voor advertenties”
+- OR run a safe one-time script that sets:
+  readyForAds = true
+ONLY for the known 2 locations.
+
+Do NOT mass-update unknown locations.
+
+Step 4 — Verification (mandatory)
+After fixes, in the deployed environment:
+
+- GET /api/regions/active?debug=1 must show:
+  locationsFinalSellable >= 1
+- Normal GET /api/regions/active must return:
+  city = "Sittard"
+  screensWithSpace >= 1
+- The UI must:
+  - NOT show the empty-state
+  - Show: “Sittard — 1 scherm met plek”
+
+Step 5 — Cleanup
+- Keep debug behind admin-only
+- Remove or disable debug after verification
+- No UI hacks, no fake availability
+
+Constraints
+- Signed = reserved stays unchanged
+- Capacity stays internal (MAX_ADS_PER_SCREEN=20)
+- No dependency on online/offline or playlist names
+- Minimal, focused changes only
