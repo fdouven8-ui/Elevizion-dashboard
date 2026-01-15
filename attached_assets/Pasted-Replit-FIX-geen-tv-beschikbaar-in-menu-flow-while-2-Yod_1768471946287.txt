@@ -1,0 +1,93 @@
+Replit — FIX “geen tv beschikbaar” in menu/flow while 2 Yodeck screens + playlists exist (work even if playlist names are not final)
+
+Symptom
+When navigating via the menu into the advertising flow, the UI still shows:
+“Geen tv beschikbaar / Nog geen actieve schermen beschikbaar”
+even though we have 2 Yodeck screens and both have a playlist in Yodeck.
+The playlists may not have the final correct names yet, but the system must still work.
+
+Goal
+Make the system show availability (e.g. Sittard appears) and allow selection, using robust fallback logic:
+- A location should count as sellable if it exists and is active/ready,
+  even if playlist names are not matching yet.
+- The flow must not depend on playlist NAME correctness.
+- Mapping must be resilient: use IDs, not name matching.
+
+Non-negotiable rules
+- Unified availability remains the single source of truth.
+- Capacity is internal: MAX_ADS_PER_SCREEN=20, signed=reserved.
+- Availability must NOT depend on online/offline.
+- Availability must NOT require playlist name matching.
+- Locations must NOT disappear because mapping is missing.
+
+What to implement / fix
+
+1) Stop using playlist name matching as a requirement anywhere
+Search the codebase for:
+- “online”
+- “playlist name”
+- “name similarity”
+- any filter that requires yodeckPlaylistName / yodeckScreenName to match location name/city
+If any of these affect:
+- /api/regions/active
+- the “no screens” empty state
+- menu click flows
+Remove that dependency.
+
+2) Ensure locations are counted even if Yodeck mapping is incomplete
+In availabilityService (or the query used by /api/regions/active):
+- Do NOT INNER JOIN to yodeck mapping tables/fields in a way that drops rows.
+- If you join placements, use LEFT JOIN so locations with zero placements remain with activeAdsCount = 0.
+- If you join yodeck fields at all, use LEFT JOIN and never filter them out.
+
+Sellable logic must be:
+- location.isActive = true
+- and location.readyForAds/isSellable = true (or fallback to isActive if that’s what we use)
+- and location has city OR regionCode
+That’s it.
+
+3) Make Yodeck mapping based on IDs (not names)
+The /playlist-mapping admin page should set:
+- location.yodeckScreenId
+- location.yodeckPlaylistId
+These IDs must be the only thing used for linking (if linking is needed).
+Do NOT require playlist name to equal business name, city, etc.
+
+4) Add a temporary “Yodeck sync sanity” indicator to System Health
+Add a health check that reports:
+- Count of locations with yodeckScreenId set
+- Count of locations with yodeckPlaylistId set
+- List top 5 locations missing mapping (actionUrl to /playlist-mapping)
+This helps confirm prod data is present.
+
+5) Add a one-click admin repair: “Auto match + Save”
+Because playlist names are not final, auto-match might fail. We still need an easy path:
+- In /playlist-mapping, allow selecting any screen/playlist from dropdown and saving.
+- Ensure the mapping persists and is used via IDs.
+
+6) Critical: Fix the “No TV available” empty state condition
+Right now it triggers incorrectly.
+The empty-state should ONLY show if:
+- totalSellableScreens === 0 (from /api/regions/active totals)
+NOT because:
+- yodeck mapping missing
+- yodeck playlist name mismatch
+- yodeck online status
+If sellable screens exist, always show the city selector.
+
+Verification steps (must be performed)
+A) In the deployed environment:
+- Confirm /api/regions/active returns cities (at least Sittard) with screensTotal >= 1.
+B) Open menu → advertising flow:
+- The selector shows at least 1 city (Sittard) and does NOT show “geen tv beschikbaar”.
+C) If mapping is incomplete:
+- It should STILL show cities and allow selection (availability is internal).
+D) Use /playlist-mapping to set IDs for the 2 locations:
+- After saving, nothing should break even if playlist names are “wrong”.
+E) Confirm the flow proceeds normally.
+
+Constraints
+- Minimal changes.
+- Do not redesign UI.
+- Do not introduce new requirements on playlist naming.
+- The system must work with the current two Yodeck screens even with imperfect naming.

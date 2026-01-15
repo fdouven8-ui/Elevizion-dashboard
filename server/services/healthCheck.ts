@@ -430,6 +430,50 @@ export async function checkYodeck(): Promise<HealthCheckResult[]> {
           message: "Sync beschikbaar",
         });
       }
+      
+      // Yodeck mapping sanity check
+      // This checks how many locations have Yodeck IDs set (informational, not blocking)
+      const allLocations = await storage.getAllLocations();
+      const activeLocations = allLocations.filter(l => l.status === "active");
+      const withScreenId = activeLocations.filter(l => l.yodeckScreenId);
+      const withPlaylistId = activeLocations.filter(l => l.yodeckPlaylistId);
+      const missingMapping = activeLocations.filter(l => !l.yodeckScreenId && !l.yodeckPlaylistId);
+      
+      results.push({
+        name: "Locaties met Yodeck screen ID",
+        status: withScreenId.length === activeLocations.length ? "PASS" : "WARNING",
+        message: `${withScreenId.length}/${activeLocations.length} locaties hebben yodeckScreenId`,
+        details: { count: withScreenId.length, total: activeLocations.length },
+        fixSuggestion: withScreenId.length < activeLocations.length 
+          ? "Koppel locaties aan Yodeck schermen via playlist-mapping" : undefined,
+        actionUrl: "/playlist-mapping",
+        actionLabel: "Playlist Mapping",
+      });
+      
+      results.push({
+        name: "Locaties met Yodeck playlist ID",
+        status: withPlaylistId.length === activeLocations.length ? "PASS" : "WARNING",
+        message: `${withPlaylistId.length}/${activeLocations.length} locaties hebben yodeckPlaylistId`,
+        details: { count: withPlaylistId.length, total: activeLocations.length },
+        fixSuggestion: withPlaylistId.length < activeLocations.length 
+          ? "Koppel locaties aan Yodeck playlists via playlist-mapping" : undefined,
+        actionUrl: "/playlist-mapping",
+        actionLabel: "Playlist Mapping",
+      });
+      
+      // Show top 5 locations missing any mapping
+      if (missingMapping.length > 0) {
+        const top5 = missingMapping.slice(0, 5).map(l => l.name || l.city || l.id);
+        results.push({
+          name: "Locaties zonder Yodeck mapping",
+          status: "WARNING",
+          message: `${missingMapping.length} locatie(s) zonder Yodeck koppeling: ${top5.join(", ")}${missingMapping.length > 5 ? "..." : ""}`,
+          details: { count: missingMapping.length, locations: top5 },
+          fixSuggestion: "Koppel deze locaties handmatig via playlist-mapping",
+          actionUrl: "/playlist-mapping",
+          actionLabel: "Playlist Mapping",
+        });
+      }
     }
     
   } catch (error: any) {
@@ -1233,6 +1277,46 @@ export async function checkAvailabilityAndWaitlist(): Promise<HealthCheckResult[
     // Get availability stats
     const { getAvailabilityStats } = await import("./availabilityService");
     const stats = await getAvailabilityStats();
+    
+    // Check for locations that are EXCLUDED from availability
+    // (active but not sellable due to missing readyForAds or city/regionCode)
+    const allLocations = await storage.getAllLocations();
+    const activeLocations = allLocations.filter(l => l.status === "active");
+    const notReadyLocations = activeLocations.filter(l => !l.readyForAds);
+    const noCityLocations = activeLocations.filter(l => l.readyForAds && !l.city && !l.regionCode);
+    
+    // Warning if active locations are excluded
+    if (notReadyLocations.length > 0) {
+      const top5 = notReadyLocations.slice(0, 5).map(l => l.name || l.id);
+      results.push({
+        name: "Actieve locaties zonder 'readyForAds'",
+        status: "WARNING",
+        message: `${notReadyLocations.length} locatie(s) actief maar niet verkoopbaar`,
+        details: { 
+          count: notReadyLocations.length,
+          locations: top5,
+        },
+        fixSuggestion: "Zet readyForAds = true voor deze locaties in de admin",
+        actionUrl: "/schermen",
+        actionLabel: "Bekijk locaties",
+      });
+    }
+    
+    if (noCityLocations.length > 0) {
+      const top5 = noCityLocations.slice(0, 5).map(l => l.name || l.id);
+      results.push({
+        name: "Locaties zonder stad/regio",
+        status: "WARNING",
+        message: `${noCityLocations.length} locatie(s) missen stad of regionCode`,
+        details: { 
+          count: noCityLocations.length,
+          locations: top5,
+        },
+        fixSuggestion: "Stel city of regionCode in voor deze locaties",
+        actionUrl: "/schermen",
+        actionLabel: "Bekijk locaties",
+      });
+    }
     
     // Total sellable screens
     results.push({
