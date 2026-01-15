@@ -1,0 +1,89 @@
+Replit — FIX: /api/regions/active returns “no active screens” in prod, but we DO have 2 screens (1 mapped). Must show Sittard = 1.
+
+Symptom
+On the “Type & Regio” step the UI shows:
+“Nog geen actieve schermen beschikbaar…”
+This means GET /api/regions/active is returning zero sellable screens in the current environment.
+But in reality we have 2 screens/locations, and at least 1 is already temporarily linked/mapped.
+Therefore Sittard MUST show at least “1 scherm met plek”.
+
+Goal
+Make /api/regions/active correctly include our existing locations and compute:
+screensWithSpace per city (MAX_ADS_PER_SCREEN=20) so Sittard shows 1.
+
+Non-negotiable rules
+- Keep unified availability: availabilityService is the single source of truth.
+- Signed = reserved capacity (counts as occupied).
+- Capacity does NOT depend on online/offline.
+- City availability must be based on INTERNAL data, not Yodeck.
+
+Root cause checklist (investigate + fix)
+This issue is almost always caused by one of these filters excluding all locations in production:
+A) Locations exist in dev DB but not in prod DB
+B) Location isActive=false in prod
+C) Location readyForAds/isSellable=false in prod
+D) Location missing city/regionCode in prod
+E) The query is joining through mappings (playlist/screen) and dropping rows when mapping is null
+F) Environment config points to wrong database/schema
+
+You must find which applies and fix it so the 2 screens are counted.
+
+Required changes
+
+1) Add a debug endpoint (temporary, admin-only) to diagnose production data
+Create GET /api/debug/availability (admin-only) that returns:
+- totalLocations
+- totalActiveLocations
+- totalSellableLocations (what the service considers sellable)
+- locationsMissingCity
+- locationsMissingReadinessFlag
+- locationsIncludedInRegionsActiveQuery (count)
+- list of up to 10 locations with fields:
+  id, name, city, regionCode, isActive, readyForAds/isSellable, yodeckScreenId, yodeckPlaylistId
+This is used to quickly see WHY Sittard is excluded.
+(If you prefer not to add a new endpoint, log the same info server-side once at startup, but endpoint is better.)
+
+2) Fix sellable screen inclusion logic (do NOT require mapping)
+In availabilityService / regions query:
+- Ensure “sellable” is defined as:
+  - location.isActive = true
+  - AND (readyForAds/isSellable = true) IF that flag exists
+  - AND city OR regionCode exists
+- IMPORTANT: Do NOT inner-join to Yodeck mapping tables in a way that removes locations without mapping.
+  - Use LEFT JOINs where needed.
+  - The capacity calculation must work even if yodeckPlaylistId is null.
+Because you said: “1 is temporarily linked” — the other may be unmapped and should still exist in totals.
+
+3) Data correction for production (one-time safety)
+If the root cause is missing readiness flag or city:
+- Add a small admin script/endpoint or migration to set:
+  - readyForAds/isSellable = true for the two known screens
+  - ensure city is set (Sittard) for those locations
+This must be safe and minimal:
+- Only update locations that already exist and are intended to be sellable.
+- Do NOT mass-update unknown locations.
+
+4) Verify /api/regions/active result
+After fixes, /api/regions/active must return something like:
+- Sittard: screensTotal >= 1
+- Sittard: screensWithSpace >= 1  (unless 20 signed contracts already exist)
+- Not the empty-state message.
+
+5) Frontend behavior
+No big UI changes. Once backend returns cities, the selector should show:
+“Sittard — 1 scherm met plek”
+Ensure pluralization:
+- 1 scherm met plek
+- n schermen met plek
+
+Acceptance criteria (must be verified)
+- In the current environment (prod/staging you’re testing):
+  - /api/regions/active includes Sittard and shows screensWithSpace >= 1
+  - The “Nog geen actieve schermen beschikbaar” empty-state does NOT show
+  - The user can select Sittard and proceed normally
+- Debug endpoint clearly shows why locations are included/excluded (and can be removed after verification).
+
+Constraints
+- Do not change the signed=reserved rule.
+- Do not make capacity depend on Yodeck online/offline.
+- Keep changes minimal and focused; no refactors.

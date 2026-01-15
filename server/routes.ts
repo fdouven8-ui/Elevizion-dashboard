@@ -7,7 +7,7 @@ import type { Express } from "express";
 import { type Server } from "http";
 import { z } from "zod";
 import crypto from "crypto";
-import { sql, desc, eq, and, isNull, isNotNull } from "drizzle-orm";
+import { sql, desc, eq, and, or, isNull, isNotNull } from "drizzle-orm";
 import { db } from "./db";
 import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens, placements } from "@shared/schema";
 import { MAX_ADS_PER_SCREEN } from "@shared/regions";
@@ -641,6 +641,144 @@ Sitemap: ${SITE_URL}/sitemap.xml
     } catch (error: any) {
       console.error("Error fetching active regions:", error);
       res.status(500).json({ message: "Fout bij ophalen van regio's" });
+    }
+  });
+  
+  // Debug endpoint for availability diagnostics (admin-only, temporary)
+  app.get("/api/debug/availability", requirePermission("manage_users"), async (_req, res) => {
+    try {
+      // Get raw location counts for diagnosis
+      const totalLocations = await db.select({ count: sql<number>`count(*)::int` })
+        .from(locations);
+      
+      const activeLocations = await db.select({ count: sql<number>`count(*)::int` })
+        .from(locations)
+        .where(eq(locations.status, "active"));
+      
+      const sellableLocations = await db.select({ count: sql<number>`count(*)::int` })
+        .from(locations)
+        .where(and(
+          eq(locations.status, "active"),
+          eq(locations.readyForAds, true),
+          isNotNull(locations.city),
+          sql`${locations.city} != ''`
+        ));
+      
+      const locationsMissingCity = await db.select({ count: sql<number>`count(*)::int` })
+        .from(locations)
+        .where(and(
+          eq(locations.status, "active"),
+          eq(locations.readyForAds, true),
+          or(isNull(locations.city), sql`${locations.city} = ''`)
+        ));
+      
+      const locationsMissingReadyForAds = await db.select({ count: sql<number>`count(*)::int` })
+        .from(locations)
+        .where(and(
+          eq(locations.status, "active"),
+          eq(locations.readyForAds, false)
+        ));
+      
+      // Sample of locations with their flags
+      const sampleLocations = await db.select({
+        id: locations.id,
+        name: locations.name,
+        city: locations.city,
+        regionCode: locations.regionCode,
+        status: locations.status,
+        readyForAds: locations.readyForAds,
+      })
+        .from(locations)
+        .limit(15);
+      
+      // Get current availability from service
+      const cityAvailability = await getCityAvailability();
+      
+      // Also count locations that would be included by the actual service query (city OR regionCode)
+      const sellableWithRegionCode = await db.select({ count: sql<number>`count(*)::int` })
+        .from(locations)
+        .where(and(
+          eq(locations.status, "active"),
+          eq(locations.readyForAds, true),
+          or(
+            and(isNotNull(locations.city), sql`${locations.city} != ''`),
+            and(isNotNull(locations.regionCode), sql`${locations.regionCode} != ''`)
+          )
+        ));
+      
+      res.json({
+        timestamp: new Date().toISOString(),
+        counts: {
+          totalLocations: totalLocations[0]?.count || 0,
+          activeLocations: activeLocations[0]?.count || 0,
+          sellableLocations: sellableLocations[0]?.count || 0,
+          sellableWithRegionCode: sellableWithRegionCode[0]?.count || 0,
+          locationsMissingCity: locationsMissingCity[0]?.count || 0,
+          locationsMissingReadyForAds: locationsMissingReadyForAds[0]?.count || 0,
+          locationsIncludedInRegionsActiveQuery: sellableWithRegionCode[0]?.count || 0,
+        },
+        cityAvailability,
+        sampleLocations,
+        filters: {
+          status: "active",
+          readyForAds: true,
+          cityOrRegionCodeNotEmpty: true,
+        },
+        maxAdsPerScreen: MAX_ADS_PER_SCREEN,
+        note: "Locations are sellable if status=active AND readyForAds=true AND (city OR regionCode exists)",
+      });
+    } catch (error: any) {
+      console.error("Error in availability debug:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  // Admin endpoint to fix location data (set readyForAds and city for specific locations)
+  app.post("/api/admin/fix-location-availability", requirePermission("manage_users"), async (req, res) => {
+    try {
+      const { locationId, city, readyForAds } = req.body;
+      
+      if (!locationId) {
+        return res.status(400).json({ error: "locationId is required" });
+      }
+      
+      const location = await storage.getLocation(locationId);
+      if (!location) {
+        return res.status(404).json({ error: "Location not found" });
+      }
+      
+      const updates: Record<string, any> = {};
+      if (city !== undefined) updates.city = city;
+      if (readyForAds !== undefined) updates.readyForAds = readyForAds;
+      
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ error: "No updates provided. Provide city and/or readyForAds" });
+      }
+      
+      await storage.updateLocation(locationId, updates);
+      
+      // Invalidate availability cache after update
+      invalidateAvailabilityCache();
+      
+      const updated = await storage.getLocation(locationId);
+      console.log(`[AdminFix] Updated location ${locationId}:`, updates);
+      
+      res.json({
+        success: true,
+        locationId,
+        updates,
+        location: {
+          id: updated?.id,
+          name: updated?.name,
+          city: updated?.city,
+          regionCode: updated?.regionCode,
+          status: updated?.status,
+          readyForAds: updated?.readyForAds,
+        },
+      });
+    } catch (error: any) {
+      console.error("Error fixing location availability:", error);
+      res.status(500).json({ error: error.message });
     }
   });
 

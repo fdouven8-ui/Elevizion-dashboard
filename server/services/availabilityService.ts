@@ -134,6 +134,7 @@ export async function getLocationPlacementCounts(): Promise<Map<string, number>>
  * SELLABLE = status='active' AND readyForAds=true
  */
 export async function getLocationsWithAvailability(): Promise<LocationAvailability[]> {
+  // Sellable = status='active' AND readyForAds=true AND (city OR regionCode exists)
   const sellableLocations = await db.select({
     id: locations.id,
     city: locations.city,
@@ -143,18 +144,25 @@ export async function getLocationsWithAvailability(): Promise<LocationAvailabili
     .where(and(
       eq(locations.status, "active"),
       eq(locations.readyForAds, true),
-      isNotNull(locations.city),
-      sql`${locations.city} != ''`,
+      // Must have either city or regionCode (not both empty)
+      or(
+        and(isNotNull(locations.city), sql`${locations.city} != ''`),
+        and(isNotNull(locations.regionCode), sql`${locations.regionCode} != ''`)
+      ),
     ));
+
+  console.log(`[AvailabilityService] Found ${sellableLocations.length} sellable locations`);
 
   const adsCountMap = await getLocationPlacementCounts();
 
   return sellableLocations.map(loc => {
     const activeAdsCount = adsCountMap.get(loc.id) || 0;
     const hasSpace = activeAdsCount < MAX_ADS_PER_SCREEN;
+    // Use city if available, otherwise use regionCode as fallback
+    const effectiveCity = (loc.city && loc.city.trim()) || (loc.regionCode && loc.regionCode.trim()) || "";
     return {
       locationId: loc.id,
-      city: loc.city || "",
+      city: effectiveCity,
       regionCode: loc.regionCode,
       activeAdsCount,
       hasSpace,
