@@ -1,0 +1,74 @@
+Replit — update replit.md with Unified Availability & Waitlist Architecture
+
+Task
+Update replit.md by adding a new section titled:
+“Unified Availability & Waitlist System (v2)”
+
+Purpose
+Document the final, approved architecture so future changes do not reintroduce
+inconsistent capacity logic, online-based checks, or duplicated calculations.
+
+Content to include (concise but explicit)
+
+1) Single Source of Truth
+- availabilityService is the ONLY place where screen capacity is calculated.
+- All UI steps and backend checks MUST use data derived from:
+  GET /api/regions/active
+- No other component may re-calculate availability independently.
+
+2) Capacity Rules
+- MAX_ADS_PER_SCREEN = 20
+- A screen has space if: activeAdsCount < 20
+- “Signed = reserved”:
+  - Capacity is consumed as soon as a contract is signed
+  - activeAdsCount includes placements where:
+    - signedAt IS NOT NULL OR status IN ('signed', 'active')
+- Draft, proposed, pending, cancelled, expired placements NEVER consume capacity.
+
+3) Sellable Screens Definition
+- Only “sellable” screens are counted:
+  - Location must be active and readyForAds (or equivalent flag)
+- Online/offline status and Yodeck playlist/screen mapping are NOT used for capacity.
+
+4) Unified Flow Behavior
+- City selector shows: “X scherm(en) met plek”
+- Package validation compares:
+  - requiredScreens (package)
+  - screensWithSpace (from availabilityService)
+- If insufficient capacity:
+  - Waitlist card is shown immediately (client-side, no extra fetch)
+- If sufficient capacity:
+  - User proceeds to billing
+
+5) Waitlist System
+- Minimal required fields: companyName, contactName, email, packageType, businessCategory
+- Address fields are optional
+- Server-side de-duplication:
+  - Existing WAITING/INVITED entries are updated instead of duplicated
+- Users are notified automatically when capacity becomes available
+
+6) System Health Monitoring
+- Group: “Beschikbaarheid & Wachtlijst”
+- Metrics:
+  - Total sellable screens
+  - Screens with space (count + %)
+  - Cities with zero available space
+  - Waitlist registrations (24h / 7d)
+  - Waitlist backlog (WAITING + INVITED)
+- Thresholds:
+  - <10% screens with space → WARNING
+  - 0% screens with space → FAIL
+  - Waitlist backlog > 20 → WARNING
+- Health checks may include actionUrl/actionLabel to guide admins to fixes
+
+7) Explicit Non-Rules (Important)
+- Availability MUST NOT depend on:
+  - Online/offline status
+  - Yodeck playlist or screen mapping
+  - Frontend-only calculations
+- Any new feature affecting capacity MUST integrate with availabilityService.
+
+Constraints
+- Only update documentation (replit.md)
+- Do NOT modify application code
+- Keep the section factual, compact, and authoritative

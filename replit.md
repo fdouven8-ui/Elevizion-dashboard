@@ -76,6 +76,59 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
   - Object Storage integration for file persistence (100MB limit)
   - Drag-and-drop UI with real-time upload progress and detailed validation feedback
 
+## Unified Availability & Waitlist System (v2)
+
+### Single Source of Truth
+- `availabilityService.ts` is the ONLY place where screen capacity is calculated.
+- All UI steps and backend checks MUST use data derived from: `GET /api/regions/active`
+- No other component may re-calculate availability independently.
+
+### Capacity Rules
+- **MAX_ADS_PER_SCREEN = 20**
+- A screen has space if: `activeAdsCount < 20`
+- **Signed = reserved**: Capacity is consumed as soon as a contract is signed
+- `activeAdsCount` includes placements where: `signedAt IS NOT NULL OR status IN ('signed', 'active')`
+- Draft, proposed, pending, cancelled, expired placements NEVER consume capacity.
+
+### Sellable Screens Definition
+- Only "sellable" screens are counted:
+  - Location must be `status='active'` AND `readyForAds=true`
+- Online/offline status and Yodeck playlist/screen mapping are NOT used for capacity.
+
+### Unified Flow Behavior
+- City selector shows: "X scherm(en) met plek"
+- Package validation compares: `requiredScreens` (package) vs `screensWithSpace` (from availabilityService)
+- If insufficient capacity: Waitlist card is shown immediately (client-side, no extra fetch)
+- If sufficient capacity: User proceeds to billing
+
+### Waitlist System
+- Minimal required fields: `companyName`, `contactName`, `email`, `packageType`, `businessCategory`
+- Address fields are optional
+- Server-side de-duplication: Existing WAITING/INVITED entries are updated instead of duplicated
+- Users are notified automatically when capacity becomes available
+
+### System Health Monitoring
+- Group: "Beschikbaarheid & Wachtlijst"
+- Metrics:
+  - Total sellable screens
+  - Screens with space (count + %)
+  - Cities with zero available space (top 5 shown with action link)
+  - Waitlist registrations (24h / 7d)
+  - Waitlist backlog (WAITING + INVITED)
+- Thresholds:
+  - <10% screens with space → WARNING
+  - 0% screens with space → FAIL
+  - Waitlist backlog > 20 → WARNING
+- Health checks include `actionUrl`/`actionLabel` to guide admins to fixes
+
+### Explicit Non-Rules
+Availability MUST NOT depend on:
+- Online/offline status
+- Yodeck playlist or screen mapping
+- Frontend-only calculations
+
+Any new feature affecting capacity MUST integrate with `availabilityService`.
+
 ## External Dependencies
 
 ### Database
