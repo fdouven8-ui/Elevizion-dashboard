@@ -619,8 +619,6 @@ Sitemap: ${SITE_URL}/sitemap.xml
   
   app.get("/api/regions/active", async (_req, res) => {
     try {
-      const today = new Date().toISOString().split("T")[0];
-      
       // Step 1: Get active locations with city
       const activeLocations = await db.select({
         locationId: locations.id,
@@ -638,7 +636,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
       }
       
       // Step 2: Count active placements per location (single aggregated query)
-      // Active placement = isActive AND (startDate IS NULL OR startDate <= today) AND (endDate IS NULL OR endDate >= today)
+      // Active placement = isActive AND (startDate IS NULL OR startDate <= current_date) AND (endDate IS NULL OR endDate >= current_date)
+      // Using SQL current_date for proper date comparison without timezone issues
       const placementCounts = await db.select({
         locationId: screens.locationId,
         activeAdsCount: sql<number>`count(${placements.id})::int`.as("activeAdsCount"),
@@ -647,8 +646,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
         .innerJoin(screens, eq(placements.screenId, screens.id))
         .where(and(
           eq(placements.isActive, true),
-          sql`(${placements.startDate} IS NULL OR ${placements.startDate} <= ${today})`,
-          sql`(${placements.endDate} IS NULL OR ${placements.endDate} >= ${today})`,
+          sql`(${placements.startDate} IS NULL OR ${placements.startDate}::date <= current_date)`,
+          sql`(${placements.endDate} IS NULL OR ${placements.endDate}::date >= current_date)`,
         ))
         .groupBy(screens.locationId);
       
