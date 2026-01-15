@@ -8,6 +8,7 @@ import {
 import { ScreenLeadModal } from "@/components/LeadModals";
 import MarketingHeader from "@/components/marketing/MarketingHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
+import Logo from "@/components/Logo";
 
 export default function SchermLocatie() {
   const [modalOpen, setModalOpen] = useState(false);
@@ -16,19 +17,23 @@ export default function SchermLocatie() {
     <div className="min-h-screen bg-white">
       <MarketingHeader />
 
-      <section className="py-20 md:py-28 bg-gradient-to-br from-slate-800 via-slate-700 to-slate-800 text-white">
-        <div className="container mx-auto px-4">
+      <section className="relative py-24 md:py-32 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-700/30 via-transparent to-transparent" />
+        <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-3xl mx-auto text-center">
-            <h1 className="text-3xl md:text-5xl font-bold mb-6 leading-tight">
+            <div className="mb-10">
+              <Logo className="h-16 md:h-20 w-auto mx-auto drop-shadow-lg brightness-0 invert" />
+            </div>
+            <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold mb-6 leading-tight text-white drop-shadow-md">
               Digitaal scherm op jouw locatie
             </h1>
-            <p className="text-lg md:text-xl text-white/90 mb-8 leading-relaxed max-w-2xl mx-auto">
+            <p className="text-lg md:text-xl text-white/85 mb-10 leading-relaxed max-w-2xl mx-auto">
               Bied je klanten een moderne ervaring en verdien mee aan lokale advertenties. 
               Wij regelen het scherm, de content en het onderhoud.
             </p>
             <Button 
               size="lg" 
-              className="gap-2 bg-emerald-500 hover:bg-emerald-600 font-semibold py-6 px-8 shadow-xl"
+              className="gap-2 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-6 px-10 shadow-xl hover:shadow-2xl transition-all w-full sm:w-auto text-base md:text-lg"
               onClick={() => setModalOpen(true)}
               data-testid="button-cta-scherm-hero"
             >
@@ -171,18 +176,18 @@ export default function SchermLocatie() {
         </div>
       </section>
 
-      <section className="py-16 md:py-24 bg-gradient-to-br from-slate-900 to-slate-800 text-white">
+      <section className="py-20 md:py-28 bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
         <div className="container mx-auto px-4">
           <div className="max-w-xl mx-auto text-center">
-            <h2 className="text-2xl md:text-3xl font-bold mb-4">
+            <h2 className="text-2xl md:text-4xl font-bold mb-6 text-white">
               Interesse in een scherm?
             </h2>
-            <p className="text-slate-300 mb-8">
+            <p className="text-white/80 text-lg mb-10 leading-relaxed">
               Laat je gegevens achter en wij nemen vrijblijvend contact op om de mogelijkheden te bespreken.
             </p>
             <Button 
               size="lg" 
-              className="gap-2 bg-emerald-500 hover:bg-emerald-600 font-semibold py-6 px-8"
+              className="gap-2 bg-emerald-500 hover:bg-emerald-400 text-white font-semibold py-6 px-10 shadow-xl hover:shadow-2xl transition-all w-full sm:w-auto text-base md:text-lg"
               onClick={() => setModalOpen(true)}
               data-testid="button-cta-scherm-bottom"
             >

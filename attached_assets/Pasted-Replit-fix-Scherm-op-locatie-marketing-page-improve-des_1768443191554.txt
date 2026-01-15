@@ -1,0 +1,49 @@
+Replit — fix “Scherm op locatie” marketing page: improve design + ensure logo is clearly visible
+
+Problem (as seen on /scherm-op-locatie)
+- The page doesn’t look premium yet (contrast/typography feels off).
+- The Elevizion logo is not clearly visible on this page (looks missing/too small/low contrast).
+- The hero headline is hard to read against the dark background (text blends in).
+
+Goal
+Make this page visually strong and consistent with the rest of the site, and ensure the Elevizion logo is ALWAYS visible and recognizable.
+
+Required changes
+
+1) Ensure logo is visible (navbar + page)
+- Use the shared Logo component (the new transparent PNG) in the navbar/header on this page.
+- Make sure the logo has enough contrast:
+  - If the header background is light, logo can be normal.
+  - If the hero/header area is dark, force a header style that keeps logo readable (e.g. white header or a semi-opaque header background).
+- Increase logo size in the navbar slightly on desktop and keep it readable on mobile.
+- Confirm the logo renders on this route (no conditional rendering that hides it on certain pages).
+
+2) Fix hero readability (big issue)
+Right now the H1 looks dark on a dark background.
+- Set hero H1 text color to high-contrast (white or near-white).
+- Ensure subtitle text is also readable (lighter white/gray).
+- If needed, add a subtle dark overlay on the hero background to guarantee readability.
+
+3) Improve page layout so it feels “mooi” (premium marketing)
+- Align hero content nicely (centered is fine, but spacing must feel intentional).
+- Increase vertical padding in hero (but avoid too tall on small screens).
+- Keep consistent max-widths (e.g. max-w-3xl for text).
+- Make CTA button stand out with consistent brand styling and hover state.
+
+4) Mobile perfect
+- On mobile: reduce hero height and font sizes slightly, keep everything centered.
+- Ensure no overflow/horizontal scroll.
+- Navbar collapses cleanly; logo remains visible and not pushed away.
+- CTA button should be full-width or near full-width on mobile.
+
+5) Do not change copy/logic
+- This is purely UI/UX and branding polish.
+- Keep existing text, routes, and CTA actions the same.
+
+Verification checklist
+- Open /scherm-op-locatie on desktop: logo is clearly visible in header.
+- H1 and subtitle are readable (no blending).
+- Open on mobile: logo still visible, hero looks clean, CTA is easy to tap.
+- No layout jumps, no horizontal scrolling.
+
+Implement by editing the page component and the shared header/navbar component used on this route.
