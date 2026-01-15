@@ -87,6 +87,8 @@ const PACKAGE_LABELS: Record<string, string> = {
 
 const REASON_TRANSLATIONS: Record<string, string> = {
   insufficient_capacity: "Te weinig beschikbare plekken",
+  capacity_full: "Alle schermen zijn vol",
+  insufficient_locations_in_region: "Niet genoeg schermen in deze regio",
   competitor_exclusivity: "Concurrentie-exclusiviteit",
   screens_offline: "Schermen offline",
   sync_pending: "Wacht op synchronisatie",
@@ -537,7 +539,7 @@ export default function Start() {
                   <AlertCircle className="h-4 w-4 text-amber-500" />
                   <span className="text-slate-600">Beschikbaar:</span>
                   <span className="font-medium text-amber-600">
-                    {noCapacityData.availableSlotCount} van {noCapacityData.requiredCount} locaties
+                    {noCapacityData.availableSlotCount} van {noCapacityData.requiredCount} {noCapacityData.requiredCount === 1 ? "scherm" : "schermen"}
                   </span>
                 </div>
               </div>
