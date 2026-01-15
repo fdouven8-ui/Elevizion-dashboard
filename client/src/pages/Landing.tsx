@@ -16,6 +16,7 @@ import { Link } from "wouter";
 import { AdvertiserLeadModal, ScreenLeadModal } from "@/components/LeadModals";
 import MarketingHeader from "@/components/marketing/MarketingHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
+import elevizionLogo from "@/assets/elevizion-logo.png";
 
 export default function Landing() {
   const [advertiserModalOpen, setAdvertiserModalOpen] = useState(false);
@@ -38,6 +39,14 @@ export default function Landing() {
         <div className="absolute inset-0 bg-gradient-to-b from-slate-900/40 via-slate-900/50 to-slate-900/60" />
         <div className="container mx-auto px-4 relative z-10">
           <div className="max-w-2xl mx-auto text-center">
+            <div className="mb-8">
+              <img 
+                src={elevizionLogo}
+                alt="Elevizion - See Your Business Grow" 
+                className="h-16 sm:h-20 md:h-24 w-auto mx-auto drop-shadow-xl brightness-0 invert"
+                loading="eager"
+              />
+            </div>
             <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-bold text-white mb-6 leading-tight drop-shadow-lg" data-testid="hero-title">
               Digital signage die écht opvalt
             </h1>

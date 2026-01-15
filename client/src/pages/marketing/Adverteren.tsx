@@ -9,6 +9,7 @@ import { Link } from "wouter";
 import { AdvertiserLeadModal } from "@/components/LeadModals";
 import MarketingHeader from "@/components/marketing/MarketingHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
+import elevizionLogo from "@/assets/elevizion-logo.png";
 
 export default function Adverteren() {
   const [modalOpen, setModalOpen] = useState(false);
@@ -17,9 +18,17 @@ export default function Adverteren() {
     <div className="min-h-screen bg-white">
       <MarketingHeader />
 
-      <section className="py-20 md:py-28 bg-gradient-to-br from-emerald-600 via-emerald-500 to-emerald-600 text-white">
+      <section className="py-16 md:py-24 bg-gradient-to-br from-emerald-600 via-emerald-500 to-emerald-600 text-white">
         <div className="container mx-auto px-4">
           <div className="max-w-3xl mx-auto text-center">
+            <div className="mb-10">
+              <img 
+                src={elevizionLogo}
+                alt="Elevizion - See Your Business Grow" 
+                className="h-20 md:h-28 w-auto mx-auto drop-shadow-lg brightness-0 invert"
+                loading="eager"
+              />
+            </div>
             <h1 className="text-3xl md:text-5xl font-bold mb-6 leading-tight">
               Adverteren op digitale schermen
             </h1>

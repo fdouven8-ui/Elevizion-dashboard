@@ -7,6 +7,7 @@ import { Link } from "wouter";
 import MarketingHeader from "@/components/marketing/MarketingHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
 import { PRICING_PACKAGES, PRICING_CONSTANTS, type PricingPackage } from "@/lib/pricing";
+import elevizionLogo from "@/assets/elevizion-logo.png";
 
 function getPackageStartParam(pkgId: string): string {
   const mapping: Record<string, string> = {
@@ -108,6 +109,14 @@ export default function Prijzen() {
       <section className="py-16 md:py-24 bg-gradient-to-b from-slate-50 to-white">
         <div className="container mx-auto px-4">
           <div className="max-w-3xl mx-auto text-center mb-12">
+            <div className="mb-10">
+              <img 
+                src={elevizionLogo}
+                alt="Elevizion - See Your Business Grow" 
+                className="h-16 md:h-20 w-auto mx-auto"
+                loading="eager"
+              />
+            </div>
             <h1 className="text-3xl md:text-5xl font-bold mb-6 text-slate-800">
               Duidelijke prijzen per scherm
             </h1>

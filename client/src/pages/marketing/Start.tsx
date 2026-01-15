@@ -23,7 +23,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import MarketingHeader from "@/components/marketing/MarketingHeader";
+import FlowHeader from "@/components/marketing/FlowHeader";
 import MarketingFooter from "@/components/marketing/MarketingFooter";
 import { PRICING_PACKAGES, PRICING_CONSTANTS, type PricingPackage } from "@/lib/pricing";
 import { BUSINESS_CATEGORIES } from "@shared/regions";
@@ -449,7 +449,7 @@ export default function Start() {
   if (prefillLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
-        <MarketingHeader />
+        <FlowHeader />
         <div className="container mx-auto px-4 py-20 max-w-lg">
           <Card className="border-2 border-slate-200">
             <CardContent className="py-12 text-center">
@@ -467,7 +467,7 @@ export default function Start() {
   if (prefillError) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
-        <MarketingHeader />
+        <FlowHeader />
         <div className="container mx-auto px-4 py-20 max-w-lg">
           <Card className="border-2 border-amber-300 bg-amber-50/50">
             <CardHeader className="pb-2">
@@ -511,7 +511,7 @@ export default function Start() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
-      <MarketingHeader />
+      <FlowHeader />
 
       <div className="container mx-auto px-4 py-12 max-w-2xl">
         <div className="flex items-center justify-center gap-2 mb-8">
