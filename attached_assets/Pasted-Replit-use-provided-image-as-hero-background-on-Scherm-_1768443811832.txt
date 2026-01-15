@@ -1,0 +1,55 @@
+Replit — use provided image as hero background on “Scherm op locatie” page
+
+Context
+The “Scherm op locatie” page has been improved visually, but the hero/header section
+must now use a specific image (already added to the project) as its background.
+
+Goal
+- Set the provided image as the background of the header/hero section.
+- Keep the logo visible.
+- Keep all text (H1, subtitle, CTA) readable and premium.
+- Work perfectly on desktop and mobile.
+
+Required changes
+
+1) Hero background image
+- Use the newly added image file as the background of the hero/header section.
+- Apply it via CSS background-image (not <img> tag).
+- Use:
+  - background-size: cover
+  - background-position: center
+  - background-repeat: no-repeat
+- Ensure the image scales correctly on different screen sizes.
+
+2) Readability overlay (important)
+- Add a subtle overlay on top of the background image to ensure text readability.
+- Recommended:
+  - dark overlay with rgba or gradient (e.g. black at 40–60% opacity)
+  - or gradient overlay (darker at top/bottom, lighter in center)
+- Do NOT flatten the image completely; it should remain visible and attractive.
+
+3) Text & logo contrast
+- Hero title (H1): high contrast (white or near-white).
+- Subtitle: slightly softer white/gray.
+- CTA button remains clearly visible and on-brand.
+- Ensure the logo in the header/navbar remains readable on top of the image:
+  - If needed, give the header a semi-transparent background
+  - Do NOT hide or shrink the logo.
+
+4) Mobile behavior
+- On mobile:
+  - Keep the same background image.
+  - Ensure text does not overlap awkwardly.
+  - Reduce hero height if needed.
+- No horizontal scrolling.
+- Background image must not crop faces/text awkwardly if visible.
+
+5) Constraints
+- Do NOT change copy or routes.
+- Do NOT change business logic.
+- Only update hero/header styling to use the provided image.
+
+Verification checklist
+- Desktop: background image visible, text readable, logo visible.
+- Mobile: same background image, good cropping, readable text.
+- CTA remains prominent.
