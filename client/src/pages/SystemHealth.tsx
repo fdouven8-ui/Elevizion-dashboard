@@ -34,6 +34,8 @@ interface HealthCheckResult {
   message: string;
   details?: Record<string, any>;
   fixSuggestion?: string;
+  actionUrl?: string;
+  actionLabel?: string;
 }
 
 interface HealthCheckGroup {
@@ -60,6 +62,7 @@ const iconMap: Record<string, React.ReactNode> = {
   "user-plus": <UserPlus className="h-5 w-5" />,
   "map-pin": <MapPin className="h-5 w-5" />,
   "chart-bar": <Monitor className="h-5 w-5" />,
+  "bar-chart": <FileBarChart className="h-5 w-5" />,
   send: <Mail className="h-5 w-5" />,
   "file-bar-chart": <FileBarChart className="h-5 w-5" />,
   "shield-check": <ShieldCheck className="h-5 w-5" />,
@@ -355,6 +358,15 @@ export default function SystemHealth() {
                                 <div className="text-xs text-yellow-600 mt-1">
                                   💡 {check.fixSuggestion}
                                 </div>
+                              )}
+                              {check.actionUrl && check.actionLabel && (
+                                <a 
+                                  href={check.actionUrl}
+                                  className="inline-flex items-center text-xs text-blue-600 hover:text-blue-800 mt-1 underline"
+                                  data-testid={`link-action-${check.name.toLowerCase().replace(/\s+/g, '-')}`}
+                                >
+                                  {check.actionLabel} →
+                                </a>
                               )}
                               {check.details && (
                                 <div className="text-xs text-muted-foreground mt-1 font-mono">

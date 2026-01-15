@@ -18,6 +18,8 @@ export interface HealthCheckResult {
   message: string;
   details?: Record<string, any>;
   fixSuggestion?: string;
+  actionUrl?: string;
+  actionLabel?: string;
 }
 
 export interface HealthCheckGroup {
@@ -1244,29 +1246,40 @@ export async function checkAvailabilityAndWaitlist(): Promise<HealthCheckResult[
       },
     });
     
-    // Screens with space
+    // Screens with space - warning if < 10%
     const spacePercent = stats.totalSellableScreens > 0 
       ? Math.round((stats.totalScreensWithSpace / stats.totalSellableScreens) * 100)
       : 0;
+    const lowCapacity = spacePercent < 10;
     results.push({
       name: "Schermen met plek",
-      status: spacePercent > 20 ? "PASS" : spacePercent > 0 ? "WARNING" : "FAIL",
+      status: spacePercent === 0 ? "FAIL" : lowCapacity ? "WARNING" : "PASS",
       message: `${stats.totalScreensWithSpace} schermen (${spacePercent}% beschikbaar)`,
       details: { 
         screensWithSpace: stats.totalScreensWithSpace,
         screensFull: stats.totalScreensFull,
         percentAvailable: spacePercent,
       },
-      fixSuggestion: spacePercent === 0 ? "Alle schermen vol - overweeg uitbreiding" : undefined,
+      fixSuggestion: spacePercent === 0 
+        ? "Alle schermen vol - uitbreiding noodzakelijk"
+        : lowCapacity 
+          ? "Minder dan 10% capaciteit beschikbaar - overweeg uitbreiding of wachtlijst-management" 
+          : undefined,
     });
     
-    // Cities with no space
+    // Cities with no space - show top 5 with actionable links
     if (stats.citiesWithZeroSpace.length > 0) {
+      const top5Cities = stats.citiesWithZeroSpace.slice(0, 5);
       results.push({
         name: "Steden zonder beschikbare plekken",
         status: "WARNING",
-        message: `${stats.citiesWithZeroSpace.length} stad(en) vol`,
-        details: { cities: stats.citiesWithZeroSpace.slice(0, 10) },
+        message: `${stats.citiesWithZeroSpace.length} stad(en) vol: ${top5Cities.join(", ")}${stats.citiesWithZeroSpace.length > 5 ? "..." : ""}`,
+        details: { 
+          cities: stats.citiesWithZeroSpace,
+          top5: top5Cities,
+        },
+        actionUrl: `/schermen?city=${encodeURIComponent(top5Cities[0] || "")}`,
+        actionLabel: "Bekijk locaties",
       });
     }
     

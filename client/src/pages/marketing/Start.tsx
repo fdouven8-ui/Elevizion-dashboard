@@ -550,7 +550,7 @@ export default function Start() {
                 We willen je advertentie niet verkopen als we 'm niet direct kunnen plaatsen. 
                 Kies een extra gebied of zet jezelf op de wachtlijst.
               </p>
-              <p className="text-sm text-emerald-700 font-medium">
+              <p className="text-sm text-slate-600 font-medium">
                 Je krijgt automatisch een e-mail zodra er weer plek is.
               </p>
 
