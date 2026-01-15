@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useLocation, useSearch } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -149,16 +149,6 @@ export default function Start() {
   const [prefillError, setPrefillError] = useState<string | null>(null);
   const [prefillId, setPrefillId] = useState<string | null>(null);
   
-  // State for availability preview
-  const [availabilityPreview, setAvailabilityPreview] = useState<{
-    isAvailable: boolean;
-    requiredCount: number;
-    availableCount: number;
-    nearFull: boolean;
-    suggestedAction: "EXPAND_REGIONS" | "WAITLIST" | "OK";
-  } | null>(null);
-  const [availabilityLoading, setAvailabilityLoading] = useState(false);
-  
   // Dynamic regions from actual screen locations
   const [regionSearch, setRegionSearch] = useState("");
   
@@ -215,34 +205,32 @@ export default function Start() {
     }
   }, []);
   
-  // Fetch availability preview when branche/regio/package changes
-  useEffect(() => {
-    if (!selectedPackage || !formData.businessCategory || formData.targetRegionCodes.length === 0) {
-      setAvailabilityPreview(null);
-      return;
+  // Compute availability preview locally using screensWithSpace data from activeRegions
+  // This ensures the indicator matches the city cards exactly (no server-side calculation needed)
+  const availabilityPreview = useMemo(() => {
+    if (!selectedPackage || formData.targetRegionCodes.length === 0) {
+      return null;
     }
     
-    const packageType = PackageTypeFromPackageId(selectedPackage.id);
-    const params = new URLSearchParams();
-    params.set("packageType", packageType);
-    params.set("businessCategory", formData.businessCategory);
-    formData.targetRegionCodes.forEach(r => params.append("regions[]", r));
+    // Sum screensWithSpace for all selected cities
+    const availableScreens = formData.targetRegionCodes.reduce((sum, code) => {
+      const region = activeRegions.find(r => r.code === code);
+      return sum + (region?.screensWithSpace || 0);
+    }, 0);
     
-    setAvailabilityLoading(true);
-    fetch(`/api/availability/preview?${params.toString()}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.isAvailable !== undefined) {
-          setAvailabilityPreview(data);
-        }
-      })
-      .catch(err => {
-        console.error("Availability preview failed:", err);
-      })
-      .finally(() => {
-        setAvailabilityLoading(false);
-      });
-  }, [selectedPackage, formData.businessCategory, formData.targetRegionCodes]);
+    // Required screens based on package
+    const requiredScreens = selectedPackage.screens || 1;
+    const isAvailable = availableScreens >= requiredScreens;
+    const nearFull = isAvailable && availableScreens <= requiredScreens * 1.5;
+    
+    return {
+      isAvailable,
+      requiredCount: requiredScreens,
+      availableCount: availableScreens,
+      nearFull,
+      suggestedAction: isAvailable ? "OK" : (formData.targetRegionCodes.length < 3 ? "EXPAND_REGIONS" : "WAITLIST"),
+    };
+  }, [selectedPackage, formData.targetRegionCodes, activeRegions]);
 
   const submitMutation = useMutation({
     mutationFn: async (data: FormData & { packageType: string }) => {
@@ -871,7 +859,7 @@ export default function Start() {
                               <span className={`text-xs ${region.screensWithSpace === 0 ? "text-red-500 font-medium" : "text-slate-500"}`}>
                                 {region.screensWithSpace === 0 
                                   ? "vol" 
-                                  : `${region.screensWithSpace} schermen met plek`}
+                                  : `${region.screensWithSpace} ${region.screensWithSpace === 1 ? "scherm" : "schermen"} met plek`}
                               </span>
                             </div>
                           </label>
@@ -893,31 +881,24 @@ export default function Start() {
                   )}
                 </div>
 
-                {/* Availability Indicator */}
-                {(availabilityLoading || availabilityPreview) && (
+                {/* Availability Indicator - computed locally from screensWithSpace data */}
+                {availabilityPreview && (
                   <div 
                     data-testid="availability-indicator"
                     className={`rounded-lg p-4 border ${
-                      availabilityLoading
-                        ? "bg-slate-50 border-slate-200"
-                        : availabilityPreview?.isAvailable
+                      availabilityPreview.isAvailable
                         ? availabilityPreview.nearFull
                           ? "bg-amber-50 border-amber-300"
                           : "bg-emerald-50 border-emerald-300"
                         : "bg-red-50 border-red-300"
                     }`}
                   >
-                    {availabilityLoading ? (
-                      <div className="flex items-center gap-2 text-slate-600">
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        <span className="text-sm">Beschikbaarheid controleren...</span>
-                      </div>
-                    ) : availabilityPreview?.isAvailable ? (
+                    {availabilityPreview.isAvailable ? (
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
                           <Check className="h-5 w-5 text-emerald-600" />
                           <span className="font-medium text-emerald-700">
-                            Beschikbaar: {availabilityPreview.availableCount} locaties voor dit pakket
+                            Voldoende plek ({availabilityPreview.availableCount}/{availabilityPreview.requiredCount})
                           </span>
                           {availabilityPreview.nearFull && (
                             <span className="bg-amber-500 text-white text-xs font-bold px-2 py-0.5 rounded">
@@ -936,11 +917,11 @@ export default function Start() {
                         <div className="flex items-center gap-2">
                           <AlertCircle className="h-5 w-5 text-red-600" />
                           <span className="font-medium text-red-700">
-                            Op dit moment onvoldoende plek ({availabilityPreview?.availableCount || 0}/{availabilityPreview?.requiredCount || 0})
+                            Op dit moment onvoldoende plek ({availabilityPreview.availableCount}/{availabilityPreview.requiredCount})
                           </span>
                         </div>
                         <p className="text-sm text-red-600">
-                          {availabilityPreview?.suggestedAction === "EXPAND_REGIONS"
+                          {availabilityPreview.suggestedAction === "EXPAND_REGIONS"
                             ? "Tip: selecteer extra regio's om meer opties te krijgen."
                             : "Je kunt je aanmelden voor de wachtlijst. We mailen je zodra er plek is."}
                         </p>
