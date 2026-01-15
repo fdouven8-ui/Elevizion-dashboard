@@ -374,7 +374,38 @@ export default function Start() {
   function handleNext() {
     if (step === 0 && validateStep0()) setStep(1);
     else if (step === 1 && validateStep1()) setStep(2);
-    else if (step === 2 && validateStep2()) setStep(3);
+    else if (step === 2 && validateStep2()) {
+      // Check capacity before advancing to billing step
+      // If insufficient capacity, show waitlist UI directly (client-side)
+      if (availabilityPreview && !availabilityPreview.isAvailable && selectedPackage) {
+        const packageType = PackageTypeFromPackageId(selectedPackage.id);
+        setNoCapacityData({
+          noCapacity: true,
+          message: "Op dit moment is er niet genoeg plek in de gekozen regio's voor dit pakket.",
+          availableSlotCount: availabilityPreview.availableCount,
+          requiredCount: availabilityPreview.requiredCount,
+          topReasons: availabilityPreview.availableCount === 0 
+            ? ["capacity_full"] 
+            : ["insufficient_locations_in_region"],
+          formData: {
+            companyName: formData.companyName,
+            contactName: formData.contactName,
+            email: formData.email.toLowerCase().trim(),
+            phone: formData.phone,
+            kvkNumber: formData.kvkNumber.replace(/\s/g, ""),
+            vatNumber: formData.vatNumber.toUpperCase().replace(/\s/g, ""),
+            packageType,
+            businessCategory: formData.businessCategory,
+            targetRegionCodes: formData.targetRegionCodes,
+            addressLine1: formData.addressLine1,
+            postalCode: formData.postalCode,
+            city: formData.city,
+          },
+        });
+      } else {
+        setStep(3);
+      }
+    }
     else if (step === 3 && validateStep3()) handleSubmit();
   }
 
