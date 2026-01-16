@@ -70,11 +70,18 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **Re-simulate Before Publish**: Single and bulk publish endpoints re-simulate plans before publishing to detect capacity/exclusivity changes since approval. Plans revert to WAITING if simulation fails.
 - **Video Upload Portal**: Self-service portal (`/upload/:token`) for advertisers to upload their own video content. Features:
   - Token-based authentication via `portal_tokens` with SHA256 hashing and usage tracking
-  - Video validation using ffprobe: MP4 format, 1920x1080 resolution, contract-specific duration (±0.5s tolerance)
+  - Video validation using ffprobe: MP4 format, 1920x1080 resolution, max 15 seconds duration (min 0.5s)
   - **Auto-rename**: Server generates canonical filename `ADV-{COMPANYSLUG}-{LINKKEY}-{TIMESTAMP}.mp4`, no user renaming required
   - Asset workflow states: none → uploaded_invalid → uploaded_valid → ready_for_yodeck → live
   - Object Storage integration for file persistence (100MB limit)
   - Drag-and-drop UI with real-time upload progress, shows stored filename after upload
+  - **Auto-transcoding**: Automatic conversion of non-H.264 or non-yuv420p videos to standard format:
+    - Detects codec/pixel format via ffprobe metadata extraction
+    - Triggers background ffmpeg transcode job for valid assets needing conversion
+    - Conversion status tracking: NONE → PENDING → CONVERTING → COMPLETED/FAILED
+    - Atomic job scheduling with WHERE clause to prevent duplicate transcode jobs
+    - Converted files stored at `converted/${assetId}-converted.mp4`
+    - Admin review UI shows conversion status badges with real-time progress
 
 ## Unified Availability & Waitlist System (v2)
 
