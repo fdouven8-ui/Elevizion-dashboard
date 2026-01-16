@@ -1,0 +1,61 @@
+Replit — Make upload portal re-usable: “Open upload portal” always available after onboarding (TEST_MODE-friendly)
+
+What we want
+We already tested the onboarding steps up to the upload step and it works.
+Now we want to repeatedly test ONLY from the upload step onward (upload → validation → store → link → publish),
+WITHOUT re-running the earlier onboarding steps every time.
+
+Goal
+After an advertiser reaches the upload step once, provide a permanent/re-usable way to open the upload portal again.
+
+Required behavior
+
+1) Store upload portal state on the advertiser
+When onboarding reaches the upload phase successfully, persist on the advertiser:
+- uploadEnabled = true
+- uploadLinkKey (stable identifier) OR store lastUploadTokenId
+- lastUploadGeneratedAt
+This makes “upload portal available” a durable state, not a one-time email link.
+
+2) Add “Open upload portal” button (admin + optionally advertiser view)
+On advertiser detail (admin):
+- Show a section “Video upload”
+- If uploadEnabled=true:
+  - Button: “Open upload portal”
+  - Secondary: “Nieuwe uploadlink” (regenerate)
+Clicking “Open upload portal” should:
+- If there is an active, unexpired token for this advertiser uploadLinkKey:
+  - reuse it (return the URL)
+- Else:
+  - generate a new token automatically (same logic as regenerate)
+  - return the URL
+Then open in new tab and copy to clipboard.
+
+3) In TEST_MODE: make tokens effectively “never block testing”
+In TEST_MODE:
+- TTL = 30 days (already)
+- Additionally, allow reusing an existing token even if it was previously used,
+  OR generate a fresh one automatically without requiring any onboarding state checks.
+The user should never be blocked by “invalid/expired” while testing upload flows.
+
+4) Upload portal must accept both:
+- token-based access (public)
+AND
+- admin-session access (optional but recommended)
+Optional improvement:
+If admin is logged in and TEST_MODE is true, allow:
+- /upload?advertiserId=... (admin-only) which internally generates/reuses a token and redirects
+This is NOT for public users, only to speed up testing.
+
+5) Do not force earlier steps again
+Once uploadEnabled=true, the upload system must NOT check:
+- SEPA step completion
+- package selection
+- OTP completion
+Those were already tested. The upload portal is now a repeatable test surface.
+
+Acceptance criteria
+- After completing onboarding once, admin can always open upload portal again from advertiser detail.
+- No “Toegang geweigerd / verlopen link” blocks testing: it auto-regenerates.
+- Upload validation + storage + linking + publish logic remains identical to real flow.
+- Public users still only get token-based access; admin-only shortcuts are protected.

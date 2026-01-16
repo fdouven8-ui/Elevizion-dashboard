@@ -10401,6 +10401,85 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     });
   });
 
+  // Get or create upload portal URL for an advertiser
+  // In TEST_MODE: reuse existing valid token or auto-generate new one
+  // Returns the upload URL without marking token as used
+  app.post("/api/advertisers/:id/open-upload-portal", isAuthenticated, async (req: any, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      if (!advertiser.linkKey) {
+        return res.status(400).json({ message: "Adverteerder heeft geen linkKey. Upload portal niet beschikbaar." });
+      }
+      
+      // Check for existing valid upload token
+      const tokens = await storage.getPortalTokensForAdvertiser(advertiser.id);
+      const now = new Date();
+      const testMode = isTestMode();
+      
+      // Find an active, unexpired token
+      // In TEST_MODE: also allow reusing tokens even if "used"
+      const validToken = tokens.find(t => {
+        const isExpired = new Date(t.expiresAt) < now;
+        const isUsed = t.usedAt !== null;
+        if (testMode) {
+          // In TEST_MODE: allow used tokens as long as not expired
+          return !isExpired;
+        }
+        return !isExpired && !isUsed;
+      });
+      
+      let rawToken: string;
+      let expiresAt: Date;
+      
+      if (validToken) {
+        // We can't recover the raw token from hash, so generate new one
+        // But we can create a fresh token that won't require new onboarding
+        const ttlDays = getTokenTtlDays();
+        rawToken = crypto.randomBytes(32).toString("hex");
+        const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+        expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+        
+        await storage.createPortalToken({
+          tokenHash,
+          advertiserId: advertiser.id,
+          expiresAt,
+        });
+      } else {
+        // No valid token, generate new one
+        const ttlDays = getTokenTtlDays();
+        rawToken = crypto.randomBytes(32).toString("hex");
+        const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+        expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+        
+        await storage.createPortalToken({
+          tokenHash,
+          advertiserId: advertiser.id,
+          expiresAt,
+        });
+      }
+      
+      const baseUrl = process.env.REPL_SLUG 
+        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+        : (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000');
+      const uploadUrl = `${baseUrl}/upload/${rawToken}`;
+      
+      console.log(`[Upload Portal] Opened for advertiser ${advertiser.id} (${advertiser.companyName}), testMode=${testMode}`);
+      
+      res.json({
+        uploadUrl,
+        expiresAt,
+        testMode,
+      });
+    } catch (error: any) {
+      console.error("[Upload Portal] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Admin-only test upload shortcut (TEST_MODE only)
   // Returns 404 if not allowed to avoid discovery
   app.get("/admin/test/upload", isAuthenticated, async (req: any, res) => {
