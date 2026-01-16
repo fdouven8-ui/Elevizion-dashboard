@@ -24,6 +24,7 @@ interface UploadResponse {
   success: boolean;
   message: string;
   assetId?: string;
+  storedFilename?: string;
   validation?: ValidationResult;
 }
 
@@ -203,13 +204,13 @@ export default function UploadPortal() {
             <div className="bg-blue-50 rounded-lg p-4 text-sm whitespace-pre-line" data-testid="video-specs">
               {portalInfo?.displaySpecs}
             </div>
-            <Alert className="mt-4" variant="default">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertTitle>Bestandsnaam (verplicht)</AlertTitle>
-              <AlertDescription>
-                Uw bestandsnaam <strong>moet beginnen met</strong>: <code className="bg-blue-100 px-1">{portalInfo?.linkKey}_</code>
+            <Alert className="mt-4 bg-green-50 border-green-200">
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <AlertTitle className="text-green-800">Automatische bestandsnaam</AlertTitle>
+              <AlertDescription className="text-green-700">
+                Je hoeft je bestand niet te hernoemen — wij doen dit automatisch.
                 <br />
-                Voorbeeld: <code className="bg-gray-100 px-1">{portalInfo?.linkKey}_Bedrijfsnaam.mp4</code>
+                <span className="mt-1 inline-block text-sm">Formaat: <code className="bg-green-100 px-1 font-mono">ADV-{(portalInfo?.companyName ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12)}-*.mp4</code></span>
               </AlertDescription>
             </Alert>
           </CardContent>
@@ -318,6 +319,11 @@ export default function UploadPortal() {
                     <AlertTitle className="text-green-800">Succes!</AlertTitle>
                     <AlertDescription className="text-green-700">
                       {uploadResult.message}
+                      {uploadResult.storedFilename && (
+                        <span className="block mt-1 text-sm">
+                          Opgeslagen als: <code className="bg-green-100 px-1 font-mono">{uploadResult.storedFilename}</code>
+                        </span>
+                      )}
                     </AlertDescription>
                   </Alert>
                 ) : (

@@ -19,6 +19,7 @@ const objectStorage = new ObjectStorageService();
 export interface UploadResult {
   success: boolean;
   assetId?: string;
+  storedFilename?: string;
   validation: VideoValidationResult;
   message: string;
 }
@@ -183,7 +184,7 @@ export async function validatePortalTokenWithDetails(token: string, recordAccess
   }
 }
 
-export function validateFilename(filename: string, linkKey: string): { valid: boolean; error?: string } {
+export function validateFilename(filename: string, _linkKey: string): { valid: boolean; error?: string } {
   if (!filename) {
     return { valid: false, error: 'Bestandsnaam ontbreekt.' };
   }
@@ -196,27 +197,36 @@ export function validateFilename(filename: string, linkKey: string): { valid: bo
     };
   }
   
-  const baseName = path.basename(filename);
-  const expectedPrefix = `${linkKey.toLowerCase()}_`;
-  const baseNameLower = baseName.toLowerCase();
-  
-  if (!baseNameLower.startsWith(expectedPrefix)) {
-    return {
-      valid: false,
-      error: `Bestandsnaam moet beginnen met: ${linkKey}_\nVoorbeeld: ${linkKey}_Bedrijfsnaam.mp4`,
-    };
-  }
-  
-  const afterPrefix = baseName.substring(linkKey.length + 1);
-  const nameWithoutExt = afterPrefix.replace(/\.mp4$/i, '');
-  if (nameWithoutExt.length < 1) {
-    return {
-      valid: false,
-      error: `Bestandsnaam moet beginnen met: ${linkKey}_ gevolgd door uw bedrijfsnaam.\nVoorbeeld: ${linkKey}_Bedrijfsnaam.mp4`,
-    };
-  }
+  // Note: We no longer require the linkKey prefix in the filename.
+  // The server generates a canonical filename automatically.
   
   return { valid: true };
+}
+
+/**
+ * Generate a canonical filename for an ad asset.
+ * Format: ADV-{COMPANYSLUG}-{LINKKEY}-{TIMESTAMP}.mp4
+ * Example: ADV-BOUWSERVICEDOUVEN-BD5A3F-202601161530.mp4
+ */
+export function generateCanonicalFilename(companyName: string, linkKey: string): string {
+  // Create company slug: uppercase, remove special chars and spaces
+  const companySlug = companyName
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 20);
+  
+  // Use linkKey (already unique identifier)
+  const linkKeyPart = linkKey.toUpperCase().slice(0, 8);
+  
+  // Add timestamp for uniqueness (YYYYMMDDHHmm format)
+  const now = new Date();
+  const timestamp = now.getFullYear().toString() +
+    (now.getMonth() + 1).toString().padStart(2, '0') +
+    now.getDate().toString().padStart(2, '0') +
+    now.getHours().toString().padStart(2, '0') +
+    now.getMinutes().toString().padStart(2, '0');
+  
+  return `ADV-${companySlug}-${linkKeyPart}-${timestamp}.mp4`;
 }
 
 export async function processAdAssetUpload(
@@ -227,6 +237,7 @@ export async function processAdAssetUpload(
 ): Promise<UploadResult> {
   const specs = getVideoSpecsForDuration(portalContext.contractDuration);
   
+  // Validate file extension (we no longer require linkKey prefix)
   const filenameValidation = validateFilename(originalFilename, portalContext.linkKey);
   if (!filenameValidation.valid) {
     return {
@@ -260,14 +271,17 @@ export async function processAdAssetUpload(
     strictResolution: portalContext.strictResolution 
   });
   
+  // Generate canonical filename for storage
+  const storedFilename = generateCanonicalFilename(portalContext.companyName, portalContext.linkKey);
+  
   const fileBuffer = fs.readFileSync(filePath);
-  const uniqueId = crypto.randomBytes(8).toString('hex');
-  const storagePath = `ad-assets/${portalContext.advertiserId}/${uniqueId}_${originalFilename}`;
+  // Use canonical filename in storage path
+  const storagePath = `ad-assets/${portalContext.advertiserId}/${storedFilename}`;
   
   let storageUrl: string | null = null;
   try {
     storageUrl = await objectStorage.uploadFile(fileBuffer, storagePath, mimeType);
-    console.log('[AdAssetUpload] File uploaded to storage:', storagePath);
+    console.log('[AdAssetUpload] File uploaded to storage:', storagePath, '(original:', originalFilename, ')');
   } catch (error) {
     console.error('[AdAssetUpload] Failed to upload to object storage:', error);
     return {
@@ -283,6 +297,7 @@ export async function processAdAssetUpload(
     advertiserId: portalContext.advertiserId,
     linkKey: portalContext.linkKey,
     originalFileName: originalFilename,
+    storedFilename: storedFilename,
     mimeType,
     sizeBytes: metadata.fileSize,
     storageUrl,
@@ -332,6 +347,7 @@ export async function processAdAssetUpload(
   return {
     success: validation.isValid,
     assetId: asset.id,
+    storedFilename,
     validation,
     message: validation.isValid
       ? 'Video succesvol geüpload en goedgekeurd!'

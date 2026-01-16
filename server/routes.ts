@@ -3317,6 +3317,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
       }
       
       const specs = getVideoSpecsForDuration(result.context.contractDuration);
+      
       res.json({
         companyName: result.context.companyName,
         linkKey: result.context.linkKey,
@@ -3390,6 +3391,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
             success: true,
             message: uploadResult.message,
             assetId: uploadResult.assetId,
+            storedFilename: uploadResult.storedFilename,
             validation: uploadResult.validation,
           });
         } catch (error: any) {

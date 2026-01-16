@@ -147,7 +147,8 @@ export const adAssets = pgTable("ad_assets", {
   advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),
   linkKey: text("link_key").notNull(), // Copy of advertiser's linkKey at upload time
   // File information
-  originalFileName: text("original_file_name").notNull(),
+  originalFileName: text("original_file_name").notNull(), // User's original filename
+  storedFilename: text("stored_filename"), // Canonical filename (e.g., ADV-BEDRIJFSNAAM-123456.mp4)
   mimeType: text("mime_type").notNull(), // video/mp4, video/quicktime, etc.
   sizeBytes: integer("size_bytes").notNull(),
   storageUrl: text("storage_url"), // URL in object storage
