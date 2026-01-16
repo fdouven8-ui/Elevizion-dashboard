@@ -1,0 +1,62 @@
+Replit — make screens auto-live when data is complete (remove need for manual “Zet live”)
+
+Problem
+The current “Zet live” button is redundant.
+In this product, a screen should automatically be live for ads once all required data is present.
+Manual activation causes confusion and empty marketing flows.
+
+Goal
+Automatically set readyForAds = true when a screen becomes valid,
+and only require manual action to PAUSE ads (not to enable them).
+
+Required changes
+
+1) Define “auto-live” conditions
+A screen is automatically ready for ads when:
+- status === "active"
+- AND (city OR regionCode is filled)
+- AND yodeckScreenId IS NOT NULL
+
+2) Automatic readyForAds logic
+Implement server-side logic so that:
+- Whenever a screen is created or updated
+- AND all conditions above are met
+→ readyForAds is automatically set to true
+
+This should happen:
+- on PATCH /api/locations/:id
+- on Yodeck mapping updates
+- on initial creation if data is already complete
+
+3) Manual override = pause only
+- Keep readyForAds as a field, but treat FALSE as an explicit pause by admin.
+- If admin manually sets readyForAds=false, do NOT auto-enable again
+  unless admin explicitly re-enables it.
+
+4) Remove “Zet live” button from UI
+- Remove the “Zet live” button from the Scherm detail page.
+- Replace it with:
+  - Toggle: “Advertenties pauzeren” (maps to readyForAds=false)
+  - Default state is ON when auto-live conditions are met.
+
+5) Add clear status indicator
+On the Scherm detail page header, show a badge:
+- “Live voor advertenties” (green) → readyForAds=true
+- “Niet live — ontbrekende gegevens” (amber) → auto-live conditions not met
+- “Gepauzeerd” (gray) → readyForAds=false manually
+
+Optionally show a small checklist:
+- Plaats ingevuld ✓/✗
+- Yodeck gekoppeld ✓/✗
+- Status actief ✓/✗
+
+6) Safety & consistency
+- Keep availabilityService logic unchanged.
+- Auto-live must invalidate availability cache when triggered.
+- Ensure backward compatibility with existing records.
+
+Acceptance criteria
+- Screens become visible in /api/regions/active automatically once data is complete.
+- No manual “Zet live” action is required.
+- Admin can still pause ads explicitly.
+- Marketing flow never shows “geen schermen” when valid screens exist.

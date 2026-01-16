@@ -37,6 +37,8 @@ import {
   Building2,
   Monitor,
   CheckCircle,
+  CheckCircle2,
+  XCircle,
   AlertCircle,
   Database,
   Settings,
@@ -235,7 +237,7 @@ export default function ScreenDetail() {
   });
 
   const locationUpdateMutation = useMutation({
-    mutationFn: async (data: { city?: string; readyForAds?: boolean; status?: string }) => {
+    mutationFn: async (data: { city?: string; pausedByAdmin?: boolean; status?: string }) => {
       if (!location) throw new Error("Geen locatie gevonden");
       const res = await apiRequest("PATCH", `/api/locations/${location.id}`, data);
       if (!res.ok) {
@@ -253,45 +255,6 @@ export default function ScreenDetail() {
       toast({ title: "Fout", description: error.message, variant: "destructive" });
     }
   });
-
-  const handleSetLive = async () => {
-    const effectiveCity = cityInput.trim() || location?.city;
-    const effectiveRegion = location?.regionCode;
-    if (!effectiveCity && !effectiveRegion) {
-      toast({ 
-        title: "Vul eerst een plaats (city) of regio (regionCode) in", 
-        variant: "destructive" 
-      });
-      return;
-    }
-    const payload: { readyForAds: boolean; status: string; city?: string } = {
-      readyForAds: true,
-      status: "active"
-    };
-    if (cityInput.trim()) {
-      payload.city = cityInput.trim();
-    }
-    locationUpdateMutation.mutate(payload);
-  };
-
-  const handleToggleReadyForAds = (checked: boolean) => {
-    if (checked) {
-      const effectiveCity = cityInput.trim() || location?.city;
-      const effectiveRegion = location?.regionCode;
-      if (!effectiveCity && !effectiveRegion) {
-        toast({ 
-          title: "Vul eerst een plaats (city) of regio (regionCode) in", 
-          variant: "destructive" 
-        });
-        return;
-      }
-    }
-    const payload: { readyForAds: boolean; city?: string } = { readyForAds: checked };
-    if (cityInput.trim()) {
-      payload.city = cityInput.trim();
-    }
-    locationUpdateMutation.mutate(payload);
-  };
 
   const handlePausePlacement = async (placementId: string) => {
     try {
@@ -403,13 +366,34 @@ export default function ScreenDetail() {
               >
                 {screen.status === "online" ? "Online" : "Offline"}
               </Badge>
-              <Badge 
-                variant={location?.readyForAds ? "default" : "secondary"}
-                className={location?.readyForAds ? "bg-green-600" : ""}
-                data-testid="screen-sellable-status"
-              >
-                {location?.readyForAds ? "Verkoopbaar" : "Niet verkoopbaar"}
-              </Badge>
+              {/* Auto-live status badge */}
+              {(() => {
+                const hasLocationData = !!(location?.city || location?.regionCode);
+                const hasYodeck = !!(screen?.yodeckPlayerId || location?.yodeckDeviceId);
+                const isStatusActive = location?.status === "active";
+                const autoLiveConditionsMet = isStatusActive && hasLocationData && hasYodeck;
+                const isPaused = location?.pausedByAdmin === true;
+                
+                if (location?.readyForAds) {
+                  return (
+                    <Badge className="bg-green-600" data-testid="screen-sellable-status">
+                      Live voor advertenties
+                    </Badge>
+                  );
+                } else if (isPaused) {
+                  return (
+                    <Badge variant="secondary" data-testid="screen-sellable-status">
+                      Gepauzeerd
+                    </Badge>
+                  );
+                } else {
+                  return (
+                    <Badge variant="outline" className="border-amber-500 text-amber-600" data-testid="screen-sellable-status">
+                      Niet live — ontbrekende gegevens
+                    </Badge>
+                  );
+                }
+              })()}
             </div>
             <p className="text-sm text-muted-foreground mt-1">
               {screen.yodeckPlayerId && (
@@ -523,46 +507,78 @@ export default function ScreenDetail() {
                   <p className="text-sm py-2">{location?.regionCode || <span className="text-muted-foreground">—</span>}</p>
                 </div>
 
-                {/* Klaar voor advertenties toggle */}
+                {/* Advertenties pauzeren toggle */}
                 <div className="space-y-2">
-                  <Label htmlFor="ready-for-ads-toggle">Klaar voor advertenties</Label>
+                  <Label htmlFor="pause-ads-toggle">Advertenties pauzeren</Label>
                   <div className="flex items-center gap-3 py-1">
                     <Switch
-                      id="ready-for-ads-toggle"
-                      data-testid="switch-ready-for-ads"
-                      checked={location?.readyForAds || false}
-                      onCheckedChange={handleToggleReadyForAds}
+                      id="pause-ads-toggle"
+                      data-testid="switch-pause-ads"
+                      checked={location?.pausedByAdmin === true}
+                      onCheckedChange={(checked) => {
+                        locationUpdateMutation.mutate({ pausedByAdmin: checked });
+                      }}
                       disabled={locationUpdateMutation.isPending}
                     />
                     <span className="text-sm">
-                      {location?.readyForAds ? "Aan" : "Uit"}
+                      {location?.pausedByAdmin ? "Gepauzeerd" : "Actief"}
                     </span>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Als dit aan staat, wordt dit scherm zichtbaar op de website en kan het advertenties aannemen.
+                    Zet dit aan om advertenties tijdelijk te stoppen voor dit scherm.
                   </p>
                 </div>
 
-                {/* Zet scherm live button */}
+                {/* Auto-live checklist */}
                 <div className="space-y-2">
-                  <Label>&nbsp;</Label>
-                  <Button
-                    data-testid="button-set-live"
-                    onClick={handleSetLive}
-                    disabled={locationUpdateMutation.isPending || location?.readyForAds}
-                    className="w-full"
-                  >
-                    <Zap className="h-4 w-4 mr-2" />
-                    {location?.readyForAds ? "Scherm is live" : "Zet scherm live"}
-                  </Button>
-                  {!location?.city && !location?.regionCode && (
-                    <p className="text-xs text-amber-600">Vul eerst een plaats in</p>
-                  )}
+                  <Label>Auto-live voorwaarden</Label>
+                  <div className="space-y-1 text-sm">
+                    {(() => {
+                      const hasLocationData = !!(location?.city || location?.regionCode);
+                      const hasYodeck = !!(screen?.yodeckPlayerId || location?.yodeckDeviceId);
+                      const isStatusActive = location?.status === "active";
+                      
+                      return (
+                        <>
+                          <div className="flex items-center gap-2" data-testid="check-city">
+                            {hasLocationData ? (
+                              <CheckCircle2 className="h-4 w-4 text-green-600" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-red-500" />
+                            )}
+                            <span className={hasLocationData ? "" : "text-muted-foreground"}>
+                              Plaats ingevuld
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2" data-testid="check-yodeck">
+                            {hasYodeck ? (
+                              <CheckCircle2 className="h-4 w-4 text-green-600" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-red-500" />
+                            )}
+                            <span className={hasYodeck ? "" : "text-muted-foreground"}>
+                              Yodeck gekoppeld
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2" data-testid="check-status">
+                            {isStatusActive ? (
+                              <CheckCircle2 className="h-4 w-4 text-green-600" />
+                            ) : (
+                              <XCircle className="h-4 w-4 text-red-500" />
+                            )}
+                            <span className={isStatusActive ? "" : "text-muted-foreground"}>
+                              Status actief
+                            </span>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
                 </div>
               </div>
 
               {/* Yodeck mapping link if missing */}
-              {(!screen?.yodeckScreenId && !screen?.yodeckPlaylistId) && (
+              {(!screen?.yodeckPlayerId && !location?.yodeckPlaylistId) && (
                 <div className="flex items-center gap-2 text-sm text-amber-600 pt-2 border-t">
                   <Link2 className="h-4 w-4" />
                   <span>Yodeck koppeling ontbreekt.</span>

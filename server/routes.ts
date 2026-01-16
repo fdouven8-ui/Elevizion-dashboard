@@ -3357,36 +3357,93 @@ Sitemap: ${SITE_URL}/sitemap.xml
 
   app.patch("/api/locations/:id", async (req, res) => {
     try {
-      const { readyForAds, city, regionCode, ...otherUpdates } = req.body;
+      const { readyForAds, pausedByAdmin, city, regionCode, yodeckDeviceId, status, ...otherUpdates } = req.body;
       
-      // If setting readyForAds=true, validate that city or regionCode exists
-      if (readyForAds === true) {
-        const existingLocation = await storage.getLocation(req.params.id);
-        if (!existingLocation) {
-          return res.status(404).json({ message: "Location not found" });
-        }
-        
-        // Check if city/region will be present after update
-        const finalCity = city !== undefined ? city : existingLocation.city;
-        const finalRegionCode = regionCode !== undefined ? regionCode : existingLocation.regionCode;
-        
-        if ((!finalCity || finalCity.trim() === "") && (!finalRegionCode || finalRegionCode.trim() === "")) {
-          return res.status(400).json({ 
-            message: "Vul eerst een plaats (city) of regio (regionCode) in voordat je readyForAds activeert." 
-          });
-        }
+      // Get existing location first
+      const existingLocation = await storage.getLocation(req.params.id);
+      if (!existingLocation) {
+        return res.status(404).json({ message: "Location not found" });
       }
       
-      const updates = { ...otherUpdates };
-      if (readyForAds !== undefined) updates.readyForAds = readyForAds;
+      // Build updates object
+      const updates: Record<string, any> = { ...otherUpdates };
       if (city !== undefined) updates.city = city;
       if (regionCode !== undefined) updates.regionCode = regionCode;
+      if (yodeckDeviceId !== undefined) updates.yodeckDeviceId = yodeckDeviceId;
+      if (status !== undefined) updates.status = status;
+      
+      // ==========================================
+      // AUTO-LIVE LOGIC
+      // ==========================================
+      // Auto-live conditions:
+      // 1. status === "active"
+      // 2. city OR regionCode is filled
+      // 3. yodeckDeviceId IS NOT NULL (Yodeck connected)
+      // 
+      // If admin explicitly pauses (pausedByAdmin=true), do NOT auto-enable.
+      // If admin explicitly unpauses (pausedByAdmin=false), allow auto-live again.
+      // ==========================================
+      
+      // Calculate final values after this update
+      const finalStatus = status !== undefined ? status : existingLocation.status;
+      const finalCity = city !== undefined ? city : existingLocation.city;
+      const finalRegionCode = regionCode !== undefined ? regionCode : existingLocation.regionCode;
+      const finalYodeckDeviceId = yodeckDeviceId !== undefined ? yodeckDeviceId : existingLocation.yodeckDeviceId;
+      const finalPausedByAdmin = pausedByAdmin !== undefined ? pausedByAdmin : (existingLocation.pausedByAdmin || false);
+      
+      // Check if auto-live conditions are met
+      const hasLocationData = (finalCity && finalCity.trim() !== "") || (finalRegionCode && finalRegionCode.trim() !== "");
+      const hasYodeck = finalYodeckDeviceId != null && String(finalYodeckDeviceId).trim() !== "";
+      const isStatusActive = finalStatus === "active";
+      const autoLiveConditionsMet = isStatusActive && hasLocationData && hasYodeck;
+      
+      // Handle pausedByAdmin logic
+      if (pausedByAdmin !== undefined) {
+        updates.pausedByAdmin = pausedByAdmin;
+        
+        if (pausedByAdmin === true) {
+          // Admin is explicitly pausing - set readyForAds to false
+          updates.readyForAds = false;
+        } else if (pausedByAdmin === false && autoLiveConditionsMet) {
+          // Admin is unpausing - re-enable if conditions are met
+          updates.readyForAds = true;
+        }
+      } else if (readyForAds !== undefined) {
+        // Manual readyForAds override (legacy support)
+        // If setting to false, treat as admin pause
+        if (readyForAds === false) {
+          updates.pausedByAdmin = true;
+          updates.readyForAds = false;
+        } else if (readyForAds === true) {
+          // Validate conditions before enabling
+          if (!hasLocationData) {
+            return res.status(400).json({ 
+              message: "Vul eerst een plaats (city) of regio (regionCode) in." 
+            });
+          }
+          updates.readyForAds = true;
+          updates.pausedByAdmin = false;
+        }
+      } else {
+        // No explicit readyForAds or pausedByAdmin in request - apply auto-live logic
+        // Only auto-enable if NOT paused by admin
+        if (!finalPausedByAdmin && autoLiveConditionsMet && !existingLocation.readyForAds) {
+          // Auto-enable: all conditions met and currently not live
+          updates.readyForAds = true;
+          console.log(`[Auto-Live] Screen ${req.params.id} auto-enabled: status=${finalStatus}, city=${finalCity}, yodeck=${finalYodeckDeviceId}`);
+        } else if (!autoLiveConditionsMet && existingLocation.readyForAds && !finalPausedByAdmin) {
+          // Auto-disable: conditions no longer met (but NOT if admin paused - keep that flag)
+          updates.readyForAds = false;
+          console.log(`[Auto-Live] Screen ${req.params.id} auto-disabled: conditions no longer met`);
+        }
+      }
       
       const location = await storage.updateLocation(req.params.id, updates);
       if (!location) return res.status(404).json({ message: "Location not found" });
       
       // Invalidate availability cache when sellable fields change
-      if (readyForAds !== undefined || city !== undefined || regionCode !== undefined || req.body.status !== undefined) {
+      if (readyForAds !== undefined || pausedByAdmin !== undefined || city !== undefined || 
+          regionCode !== undefined || status !== undefined || yodeckDeviceId !== undefined) {
         invalidateAvailabilityCache();
       }
       
