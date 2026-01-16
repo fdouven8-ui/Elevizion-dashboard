@@ -21,7 +21,8 @@ import {
   ArrowRight,
   ArrowLeft,
   Tv,
-  Send
+  Send,
+  ExternalLink
 } from "lucide-react";
 
 type OnboardingStatus = "loading" | "valid" | "expired" | "used" | "not_found" | "error" | "completed";
@@ -575,7 +576,18 @@ export default function AdvertiserOnboarding() {
                   />
                   <div>
                     <Label htmlFor="terms" className="cursor-pointer font-medium">
-                      Ik ga akkoord met de Algemene Voorwaarden
+                      Ik ga akkoord met de{" "}
+                      <a 
+                        href="/docs/algemene-voorwaarden" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline inline-flex items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                        data-testid="link-terms"
+                      >
+                        Algemene Voorwaarden
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
                     </Label>
                     <p className="text-sm text-muted-foreground mt-1">
                       De algemene voorwaarden zijn van toepassing op alle diensten van Elevizion.
@@ -592,7 +604,18 @@ export default function AdvertiserOnboarding() {
                   />
                   <div>
                     <Label htmlFor="privacy" className="cursor-pointer font-medium">
-                      Ik ga akkoord met de Privacyverklaring
+                      Ik ga akkoord met de{" "}
+                      <a 
+                        href="/docs/privacy" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline inline-flex items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                        data-testid="link-privacy"
+                      >
+                        Privacyverklaring
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
                     </Label>
                     <p className="text-sm text-muted-foreground mt-1">
                       Uw gegevens worden verwerkt conform de AVG.
@@ -609,7 +632,18 @@ export default function AdvertiserOnboarding() {
                   />
                   <div>
                     <Label htmlFor="sepa" className="cursor-pointer font-medium">
-                      Ik machtig Elevizion voor SEPA automatische incasso
+                      Ik machtig Elevizion voor{" "}
+                      <a 
+                        href="/docs/sepa" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline inline-flex items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                        data-testid="link-sepa"
+                      >
+                        SEPA automatische incasso
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
                     </Label>
                     <p className="text-sm text-muted-foreground mt-1">
                       Door deze machtiging af te geven, geeft u toestemming aan Elevizion om maandelijks het factuurbedrag af te schrijven van uw rekening.

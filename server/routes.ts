@@ -618,6 +618,175 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
   
   // ============================================================================
+  // PUBLIC DOCUMENT ROUTES (No authentication required)
+  // Serves legal documents for onboarding flows
+  // ============================================================================
+  
+  app.get("/docs/algemene-voorwaarden", async (_req, res) => {
+    try {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(`
+        <!DOCTYPE html>
+        <html lang="nl">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Algemene Voorwaarden - Elevizion</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; color: #333; }
+            h1, h2 { color: #1a1a2e; }
+            h1 { border-bottom: 2px solid #3b82f6; padding-bottom: 10px; }
+            h2 { margin-top: 30px; }
+            p, li { margin-bottom: 10px; }
+          </style>
+        </head>
+        <body>
+          <h1>Algemene Voorwaarden</h1>
+          <p><strong>Elevizion B.V.</strong></p>
+          <p>Laatste update: januari 2025</p>
+          
+          <h2>Artikel 1 - Definities</h2>
+          <p>In deze algemene voorwaarden wordt verstaan onder:</p>
+          <ul>
+            <li><strong>Elevizion:</strong> Elevizion B.V., gevestigd te Nederland.</li>
+            <li><strong>Adverteerder:</strong> De natuurlijke of rechtspersoon die een overeenkomst aangaat met Elevizion.</li>
+            <li><strong>Diensten:</strong> De door Elevizion aangeboden digitale reclame-diensten op schermen.</li>
+          </ul>
+          
+          <h2>Artikel 2 - Toepasselijkheid</h2>
+          <p>Deze algemene voorwaarden zijn van toepassing op alle aanbiedingen, offertes en overeenkomsten tussen Elevizion en Adverteerder.</p>
+          
+          <h2>Artikel 3 - Prijzen en Betaling</h2>
+          <p>Alle prijzen zijn exclusief BTW tenzij anders vermeld. Betaling geschiedt binnen 14 dagen na factuurdatum of via SEPA automatische incasso.</p>
+          
+          <h2>Artikel 4 - Contractduur</h2>
+          <p>Overeenkomsten worden aangegaan voor de overeengekomen periode. Na afloop worden contracten automatisch verlengd tenzij schriftelijk opgezegd.</p>
+          
+          <h2>Artikel 5 - Aansprakelijkheid</h2>
+          <p>Elevizion is niet aansprakelijk voor indirecte schade, gevolgschade of gederfde winst.</p>
+          
+          <h2>Artikel 6 - Toepasselijk Recht</h2>
+          <p>Op alle overeenkomsten is Nederlands recht van toepassing.</p>
+          
+          <p style="margin-top: 40px; color: #666; font-size: 14px;">Voor vragen over deze voorwaarden kunt u contact opnemen via info@elevizion.nl</p>
+        </body>
+        </html>
+      `);
+    } catch (error) {
+      console.error("Error serving algemene voorwaarden:", error);
+      res.status(500).send("Document kon niet worden geladen");
+    }
+  });
+  
+  app.get("/docs/privacy", async (_req, res) => {
+    try {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(`
+        <!DOCTYPE html>
+        <html lang="nl">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Privacyverklaring - Elevizion</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; color: #333; }
+            h1, h2 { color: #1a1a2e; }
+            h1 { border-bottom: 2px solid #3b82f6; padding-bottom: 10px; }
+            h2 { margin-top: 30px; }
+          </style>
+        </head>
+        <body>
+          <h1>Privacyverklaring</h1>
+          <p><strong>Elevizion B.V.</strong></p>
+          <p>Laatste update: januari 2025</p>
+          
+          <h2>1. Wie zijn wij?</h2>
+          <p>Elevizion B.V. is verantwoordelijk voor de verwerking van persoonsgegevens zoals weergegeven in deze privacyverklaring.</p>
+          
+          <h2>2. Welke gegevens verzamelen wij?</h2>
+          <p>Wij verwerken de volgende persoonsgegevens:</p>
+          <ul>
+            <li>Bedrijfsnaam en contactgegevens</li>
+            <li>E-mailadres en telefoonnummer</li>
+            <li>Factuur- en betalingsgegevens (IBAN)</li>
+            <li>KvK-nummer en BTW-nummer</li>
+          </ul>
+          
+          <h2>3. Waarom verwerken wij gegevens?</h2>
+          <p>Wij verwerken persoonsgegevens voor:</p>
+          <ul>
+            <li>Het uitvoeren van onze dienstverlening</li>
+            <li>Het afhandelen van betalingen</li>
+            <li>Het verzenden van facturen en communicatie</li>
+            <li>Het voldoen aan wettelijke verplichtingen</li>
+          </ul>
+          
+          <h2>4. Bewaartermijn</h2>
+          <p>Wij bewaren persoonsgegevens niet langer dan strikt noodzakelijk voor de doeleinden waarvoor ze zijn verzameld.</p>
+          
+          <h2>5. Uw rechten</h2>
+          <p>U heeft recht op inzage, correctie en verwijdering van uw gegevens. Neem contact op via privacy@elevizion.nl.</p>
+          
+          <h2>6. Contact</h2>
+          <p>Voor vragen over deze privacyverklaring kunt u contact opnemen via privacy@elevizion.nl.</p>
+        </body>
+        </html>
+      `);
+    } catch (error) {
+      console.error("Error serving privacy policy:", error);
+      res.status(500).send("Document kon niet worden geladen");
+    }
+  });
+  
+  app.get("/docs/sepa", async (_req, res) => {
+    try {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(`
+        <!DOCTYPE html>
+        <html lang="nl">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>SEPA Incassomachtiging - Elevizion</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; color: #333; }
+            h1, h2 { color: #1a1a2e; }
+            h1 { border-bottom: 2px solid #3b82f6; padding-bottom: 10px; }
+            h2 { margin-top: 30px; }
+            .info-box { background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 8px; padding: 16px; margin: 20px 0; }
+          </style>
+        </head>
+        <body>
+          <h1>SEPA Incassomachtiging</h1>
+          <p><strong>Incassant:</strong> Elevizion B.V.</p>
+          
+          <div class="info-box">
+            <p><strong>Wat is een SEPA machtiging?</strong></p>
+            <p>Door het afgeven van een SEPA machtiging geeft u toestemming aan Elevizion B.V. om maandelijks het verschuldigde factuurbedrag automatisch van uw rekening af te schrijven.</p>
+          </div>
+          
+          <h2>Voorwaarden</h2>
+          <ul>
+            <li>Het bedrag wordt rond de 1e van elke maand afgeschreven.</li>
+            <li>U ontvangt voorafgaand aan elke incasso een factuur per e-mail.</li>
+            <li>U kunt een onjuiste afschrijving binnen 8 weken terugvorderen bij uw bank.</li>
+            <li>U kunt de machtiging op elk moment intrekken door contact op te nemen met Elevizion.</li>
+          </ul>
+          
+          <h2>Uw rechten</h2>
+          <p>Als u het niet eens bent met een afschrijving, kunt u deze laten terugboeken. Neem hiervoor binnen 8 weken na afschrijving contact op met uw bank.</p>
+          
+          <p style="margin-top: 40px; color: #666;">Voor vragen over incasso's kunt u contact opnemen via administratie@elevizion.nl</p>
+        </body>
+        </html>
+      `);
+    } catch (error) {
+      console.error("Error serving SEPA info:", error);
+      res.status(500).send("Document kon niet worden geladen");
+    }
+  });
+  
+  // ============================================================================
   // DYNAMIC REGIONS API (City-based from actual screen locations)
   // Shows "screens with space" - locations that have room for more ads
   // ============================================================================
