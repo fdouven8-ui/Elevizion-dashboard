@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { db } from '../db';
 import { adAssets } from '@shared/schema';
-import { eq } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import { ObjectStorageService } from '../objectStorage';
 import { extractVideoMetadataWithDetails, VideoMetadata } from './videoMetadataService';
 
@@ -32,8 +32,19 @@ export interface TranscodeResult {
 }
 
 export function checkTranscodeRequired(metadata: VideoMetadata): TranscodeRequirement {
-  const codec = metadata.codec.toLowerCase();
-  const pixFmt = metadata.pixelFormat.toLowerCase();
+  const codec = (metadata.codec || 'unknown').toLowerCase();
+  const pixFmt = (metadata.pixelFormat || 'unknown').toLowerCase();
+  
+  if (!metadata.codec || metadata.codec === 'unknown') {
+    return {
+      needsTranscode: false,
+      reason: 'Cannot determine codec - skipping transcode',
+      originalCodec: metadata.codec || 'unknown',
+      originalPixelFormat: metadata.pixelFormat || 'unknown',
+      targetCodec: TARGET_CODEC,
+      targetPixelFormat: TARGET_PIXEL_FORMAT,
+    };
+  }
   
   const codecOk = codec === 'h264';
   const pixelFormatOk = pixFmt === 'yuv420p';
@@ -61,7 +72,7 @@ export function checkTranscodeRequired(metadata: VideoMetadata): TranscodeRequir
     needsTranscode: true,
     reason: reasons.join(', '),
     originalCodec: metadata.codec,
-    originalPixelFormat: metadata.pixelFormat,
+    originalPixelFormat: metadata.pixelFormat || 'unknown',
     targetCodec: TARGET_CODEC,
     targetPixelFormat: TARGET_PIXEL_FORMAT,
   };
@@ -164,11 +175,7 @@ export async function transcodeAndUpload(
   
   try {
     await db.update(adAssets)
-      .set({
-        conversionStatus: 'CONVERTING',
-        conversionStartedAt: new Date(),
-        conversionError: null,
-      })
+      .set({ conversionError: null })
       .where(eq(adAssets.id, assetId));
     
     console.log('[TranscodeAndUpload] Downloading original file...');
@@ -192,8 +199,8 @@ export async function transcodeAndUpload(
     
     console.log('[TranscodeAndUpload] Uploading transcoded file...');
     
-    const convertedFilename = inputStoragePath.replace('.mp4', '-converted.mp4');
     const convertedBuffer = fs.readFileSync(transcodeResult.outputPath);
+    const convertedFilename = `converted/${assetId}-converted.mp4`;
     
     const storageUrl = await objectStorage.uploadFile(
       convertedBuffer,
@@ -259,6 +266,27 @@ export async function startTranscodeJob(assetId: string): Promise<void> {
   
   if (asset.conversionStatus !== 'PENDING') {
     console.log('[TranscodeJob] Asset not pending conversion:', assetId, asset.conversionStatus);
+    return;
+  }
+  
+  if (asset.validationStatus !== 'valid') {
+    console.log('[TranscodeJob] Asset validation failed, skipping transcode:', assetId);
+    await db.update(adAssets)
+      .set({ conversionStatus: 'NONE' })
+      .where(eq(adAssets.id, assetId));
+    return;
+  }
+  
+  const [updateResult] = await db.update(adAssets)
+    .set({ conversionStatus: 'CONVERTING', conversionStartedAt: new Date() })
+    .where(and(
+      eq(adAssets.id, assetId),
+      eq(adAssets.conversionStatus, 'PENDING')
+    ))
+    .returning({ id: adAssets.id, conversionStatus: adAssets.conversionStatus });
+  
+  if (!updateResult) {
+    console.log('[TranscodeJob] Status already changed (not PENDING), skipping:', assetId);
     return;
   }
   

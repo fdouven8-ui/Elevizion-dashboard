@@ -195,25 +195,25 @@ export default function VideoReview() {
                         {item.asset.validationStatus === "valid" ? "Technisch OK" : "Technische fout"}
                       </Badge>
                       {item.asset.conversionStatus === "PENDING" && (
-                        <Badge variant="outline" className="text-yellow-600 border-yellow-600">
+                        <Badge variant="outline" className="text-yellow-600 border-yellow-600" data-testid={`conversion-status-pending-${item.asset.id}`}>
                           <RefreshCw className="h-3 w-3 mr-1" />
                           Wacht op conversie
                         </Badge>
                       )}
                       {item.asset.conversionStatus === "CONVERTING" && (
-                        <Badge variant="outline" className="text-blue-600 border-blue-600">
+                        <Badge variant="outline" className="text-blue-600 border-blue-600" data-testid={`conversion-status-converting-${item.asset.id}`}>
                           <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
                           Converteren...
                         </Badge>
                       )}
                       {item.asset.conversionStatus === "COMPLETED" && (
-                        <Badge variant="outline" className="text-green-600 border-green-600">
+                        <Badge variant="outline" className="text-green-600 border-green-600" data-testid={`conversion-status-completed-${item.asset.id}`}>
                           <CheckCircle className="h-3 w-3 mr-1" />
                           Geconverteerd
                         </Badge>
                       )}
                       {item.asset.conversionStatus === "FAILED" && (
-                        <Badge variant="destructive">
+                        <Badge variant="destructive" data-testid={`conversion-status-failed-${item.asset.id}`}>
                           <AlertTriangle className="h-3 w-3 mr-1" />
                           Conversie mislukt
                         </Badge>
@@ -302,29 +302,29 @@ export default function VideoReview() {
               </div>
               
               {previewAsset.asset.conversionStatus && previewAsset.asset.conversionStatus !== "NONE" && (
-                <div className="flex items-center gap-2 p-3 rounded-lg bg-muted">
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-muted" data-testid="conversion-status-info">
                   {previewAsset.asset.conversionStatus === "PENDING" && (
                     <>
                       <RefreshCw className="h-4 w-4 text-yellow-600" />
-                      <span className="text-sm">Wacht op conversie naar H.264...</span>
+                      <span className="text-sm" data-testid="status-text-pending">Wacht op conversie naar H.264...</span>
                     </>
                   )}
                   {previewAsset.asset.conversionStatus === "CONVERTING" && (
                     <>
                       <RefreshCw className="h-4 w-4 text-blue-600 animate-spin" />
-                      <span className="text-sm">Video wordt geconverteerd naar H.264...</span>
+                      <span className="text-sm" data-testid="status-text-converting">Video wordt geconverteerd naar H.264...</span>
                     </>
                   )}
                   {previewAsset.asset.conversionStatus === "COMPLETED" && (
                     <>
                       <CheckCircle className="h-4 w-4 text-green-600" />
-                      <span className="text-sm">Video is geconverteerd naar H.264</span>
+                      <span className="text-sm" data-testid="status-text-completed">Video is geconverteerd naar H.264</span>
                     </>
                   )}
                   {previewAsset.asset.conversionStatus === "FAILED" && (
                     <>
                       <AlertTriangle className="h-4 w-4 text-destructive" />
-                      <span className="text-sm text-destructive">Conversie mislukt: {previewAsset.asset.conversionError || "Onbekende fout"}</span>
+                      <span className="text-sm text-destructive" data-testid="status-text-failed">Conversie mislukt: {previewAsset.asset.conversionError || "Onbekende fout"}</span>
                     </>
                   )}
                 </div>

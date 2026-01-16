@@ -316,12 +316,15 @@ export async function processAdAssetUpload(
   const validationStatus = validation.isValid ? 'valid' : 'invalid';
   
   // Check if transcoding is needed (non-H.264 codec or non-yuv420p pixel format)
+  // Only transcode valid assets - invalid assets need to be rejected and re-uploaded
   const transcodeCheck = checkTranscodeRequired(metadata);
   let conversionStatus = 'NONE';
   
-  if (transcodeCheck.needsTranscode) {
+  if (validation.isValid && transcodeCheck.needsTranscode) {
     console.log('[AdAssetUpload] Transcoding required:', transcodeCheck.reason);
     conversionStatus = 'PENDING';
+  } else if (transcodeCheck.needsTranscode) {
+    console.log('[AdAssetUpload] Transcoding skipped (asset invalid):', transcodeCheck.reason);
   }
   
   const [asset] = await db.insert(adAssets).values({
@@ -347,8 +350,8 @@ export async function processAdAssetUpload(
     conversionStatus,
   }).returning();
   
-  // Start background transcoding job if needed
-  if (transcodeCheck.needsTranscode && asset.id) {
+  // Start background transcoding job if needed (only for valid assets)
+  if (validation.isValid && transcodeCheck.needsTranscode && asset.id) {
     console.log('[AdAssetUpload] Starting background transcode job for:', asset.id);
     startTranscodeJob(asset.id);
   }
