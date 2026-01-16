@@ -1,0 +1,72 @@
+Replit — FIX DB schema mismatch (verification_codes.contract_document_id) + add clickable contract links in Akkoord step
+
+Symptom
+On step 3 “Akkoord” in advertiser onboarding, the UI shows:
+column "contract_document_id" of relation "verification_codes" does not exist
+
+Root cause
+Backend code now references verification_codes.contract_document_id, but the production DB schema does not have this column.
+A migration was not applied (or schema drift between envs).
+
+Goal
+1) Make onboarding step 3 work in production (no DB errors).
+2) Ensure migrations are applied consistently across environments.
+3) Add clickable links so users can open/read the documents they are accepting (AV/Privacy/SEPA/contract).
+
+Part A — Database fix (must be done first)
+
+1) Add a migration to create missing column
+Create a migration that:
+- Adds column contract_document_id to verification_codes (type should match your contract document PK, usually UUID or TEXT).
+- Make it nullable to avoid breaking existing rows.
+- Add index if you query by it.
+Example (adjust types to your schema):
+  ALTER TABLE verification_codes ADD COLUMN IF NOT EXISTS contract_document_id uuid NULL;
+
+2) Deploy migration strategy
+- Ensure production runs migrations automatically on deploy OR provide an admin-only endpoint/command to run them.
+- Add a startup log/health check warning if migrations are pending.
+
+3) Backward compatible code path
+Until migration is guaranteed everywhere:
+- Update queries/ORM code that selects/inserts contract_document_id to be resilient:
+  - If column missing, do not crash; store null and proceed.
+(Still add the migration; this is to prevent downtime if schema drift happens again.)
+
+Part B — UI: document links on “Akkoord & Bevestiging”
+
+On the Akkoord step (the checkbox list):
+- For each checkbox item add a “Bekijk” link that opens the actual document in a new tab:
+  - Algemene Voorwaarden → URL to the terms PDF/page
+  - Privacyverklaring → URL to privacy page
+  - SEPA machtiging → URL to SEPA doc
+  - Adverteerder overeenkomst/contract → URL to the generated contract preview (or template preview if not generated yet)
+
+Implementation notes:
+- If you already have templates in the system, expose read-only public endpoints for viewing them:
+  GET /public/docs/algemene-voorwaarden
+  GET /public/docs/privacy
+  GET /public/docs/sepa
+  GET /public/docs/adverteerder-overeenkomst (template preview)
+- If a per-lead contract is generated later, then the link can point to:
+  /public/contracts/:token
+Use a token, not authentication, for the public onboarding flow.
+
+Part C — Ensure “no links yet” is fixed
+Right now user says: “Er zijn nog geen linkjes waar mensen op kunnen klikken”
+Add these links immediately in the UI, even if it’s the template preview initially.
+Make sure the checkbox label can contain an inline anchor like:
+“Ik ga akkoord met de Algemene Voorwaarden (Bekijk)”
+
+Part D — Verification checklist
+1) In production, open onboarding step 3:
+- No DB error appears.
+- Clicking “Verstuur bevestigingscode” works.
+2) Click each “Bekijk” link:
+- Opens document (PDF/page) in new tab and loads successfully.
+3) Confirm verification_codes insert still works and contract_document_id is written when available.
+
+Constraints
+- Do not redesign the onboarding UI; small additions only.
+- Prefer minimal, safe migrations.
+- Public doc endpoints must not leak admin
