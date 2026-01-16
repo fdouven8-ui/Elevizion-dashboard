@@ -71,10 +71,10 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **Video Upload Portal**: Self-service portal (`/upload/:token`) for advertisers to upload their own video content. Features:
   - Token-based authentication via `portal_tokens` with SHA256 hashing and usage tracking
   - Video validation using ffprobe: MP4 format, 1920x1080 resolution, contract-specific duration (±0.5s tolerance)
-  - Filename validation requiring advertiser's linkKey
+  - **Auto-rename**: Server generates canonical filename `ADV-{COMPANYSLUG}-{LINKKEY}-{TIMESTAMP}.mp4`, no user renaming required
   - Asset workflow states: none → uploaded_invalid → uploaded_valid → ready_for_yodeck → live
   - Object Storage integration for file persistence (100MB limit)
-  - Drag-and-drop UI with real-time upload progress and detailed validation feedback
+  - Drag-and-drop UI with real-time upload progress, shows stored filename after upload
 
 ## Unified Availability & Waitlist System (v2)
 
