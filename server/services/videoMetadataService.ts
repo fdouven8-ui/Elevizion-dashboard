@@ -206,21 +206,9 @@ export async function extractVideoMetadataWithDetails(filePath: string, allowRem
     
     console.log('[VideoMetadata] Probing file:', filePath, 'size:', stats.size);
     
-    // Use cached startup check if available, otherwise check now
-    if (!ffprobeAvailable && startupCheckDone) {
-      console.error('[VideoMetadata] ffprobe not available (startup check failed)');
-      return { metadata: null, error: 'ffprobe not available' };
-    }
-    
-    // Fallback check if startup check hasn't run yet
-    if (!startupCheckDone) {
-      try {
-        await execAsync('which ffprobe', { timeout: 5000 });
-      } catch {
-        console.error('[VideoMetadata] ffprobe binary not found in PATH');
-        return { metadata: null, error: 'ffprobe not available' };
-      }
-    }
+    // Note: We no longer block based on cached startup state.
+    // ffprobe is executed directly and errors are caught at runtime.
+    // This ensures accurate per-request checks rather than stale global state.
     
     const ffprobeCommand = `ffprobe -v error -print_format json -show_format -show_streams "${filePath}"`;
     

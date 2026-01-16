@@ -3445,15 +3445,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
     
     try {
       const multer = (await import("multer")).default;
-      const { isVideoProcessingAvailable, cleanupTempFiles } = await import("./services/videoMetadataService");
+      const { cleanupTempFiles } = await import("./services/videoMetadataService");
       
-      // Check video processing availability BEFORE accepting upload
-      if (!isVideoProcessingAvailable()) {
-        console.error("[UploadPortal] Video processing not available (ffprobe missing)");
-        return res.status(503).json({ 
-          message: "Videoverwerking tijdelijk niet beschikbaar. Probeer het later opnieuw of neem contact op met support." 
-        });
-      }
+      // Note: We no longer block uploads based on a global availability flag.
+      // ffprobe availability is checked lazily when actually processing each file.
+      // This ensures the check is accurate per-request rather than based on startup state.
       
       const upload = multer({
         dest: "/tmp/uploads",
