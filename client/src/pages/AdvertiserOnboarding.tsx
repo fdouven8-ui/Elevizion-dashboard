@@ -22,7 +22,8 @@ import {
   ArrowLeft,
   Tv,
   Send,
-  ExternalLink
+  ExternalLink,
+  AlertCircle
 } from "lucide-react";
 
 type OnboardingStatus = "loading" | "valid" | "expired" | "used" | "not_found" | "error" | "completed";
@@ -85,8 +86,17 @@ export default function AdvertiserOnboarding() {
   const [acceptedPrivacy, setAcceptedPrivacy] = useState(false);
   const [acceptedSepa, setAcceptedSepa] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [testMode, setTestMode] = useState(false);
 
   const { register, handleSubmit, setValue, formState: { errors } } = useForm<DetailsForm>();
+
+  // Check if test mode is enabled
+  useEffect(() => {
+    fetch("/api/system-config")
+      .then(res => res.json())
+      .then(data => setTestMode(data.testMode === true))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!token) {
@@ -652,10 +662,17 @@ export default function AdvertiserOnboarding() {
                 </div>
               </div>
 
+              {testMode && (
+                <div className="mb-4 p-3 bg-orange-100 border border-orange-300 rounded-lg flex items-center gap-2 text-orange-800">
+                  <AlertCircle className="h-4 w-4" />
+                  <span className="text-sm font-medium">Testmodus actief — incasso wordt overgeslagen</span>
+                </div>
+              )}
+
               {!otpSent ? (
                 <Button 
                   className="w-full" 
-                  disabled={!acceptedTerms || !acceptedPrivacy || !acceptedSepa || isSubmitting}
+                  disabled={!acceptedTerms || !acceptedPrivacy || (!acceptedSepa && !testMode) || isSubmitting}
                   onClick={sendOtp}
                   data-testid="button-send-otp"
                 >

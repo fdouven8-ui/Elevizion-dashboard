@@ -828,15 +828,27 @@ export default function AdvertiserDetail() {
                   <Button 
                     size="sm" 
                     variant="outline" 
-                    data-testid="button-copy-upload-link"
-                    onClick={() => {
-                      const uploadLink = `${window.location.origin}/upload/${advertiser.linkKey}`;
-                      navigator.clipboard.writeText(uploadLink);
-                      toast({ title: "Upload link gekopieerd" });
+                    data-testid="button-regenerate-upload-link"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`/api/advertisers/${advertiser.id}/regenerate-upload-link`, { method: "POST" });
+                        if (!res.ok) {
+                          const data = await res.json();
+                          throw new Error(data.message || "Fout bij genereren link");
+                        }
+                        const data = await res.json();
+                        navigator.clipboard.writeText(data.uploadUrl);
+                        toast({ 
+                          title: "Nieuwe upload link gegenereerd", 
+                          description: `Geldig voor ${data.ttlDays} dagen. Link is gekopieerd naar klembord.` 
+                        });
+                      } catch (e: any) {
+                        toast({ title: e.message || "Fout bij genereren", variant: "destructive" });
+                      }
                     }}
                   >
-                    <Copy className="h-4 w-4 mr-1" />
-                    Upload Link
+                    <RefreshCw className="h-4 w-4 mr-1" />
+                    Nieuwe Upload Link
                   </Button>
                 )}
                 {(advertiser.assetStatus === "uploaded_valid" || advertiser.assetStatus === "ready_for_yodeck") && (

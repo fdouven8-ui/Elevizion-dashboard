@@ -74,6 +74,17 @@ import {
 } from "./services/availabilityService";
 
 // ============================================================================
+// TEST MODE CONFIGURATION
+// ============================================================================
+export function isTestMode(): boolean {
+  return process.env.TEST_MODE === 'true';
+}
+
+export function getTokenTtlDays(): number {
+  return isTestMode() ? 30 : 14; // Extended TTL in test mode
+}
+
+// ============================================================================
 // IN-MEMORY CACHE (10 second TTL for control-room endpoints)
 // ============================================================================
 interface CacheEntry<T> {
@@ -2007,6 +2018,59 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  // Admin: Regenerate upload link for advertiser
+  app.post("/api/advertisers/:id/regenerate-upload-link", isAuthenticated, async (req, res) => {
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      // Check if advertiser has a linkKey (required for upload portal)
+      if (!advertiser.linkKey) {
+        return res.status(400).json({ message: "Adverteerder heeft geen linkKey. Upload portal niet beschikbaar." });
+      }
+      
+      // Generate new portal token with extended TTL in TEST_MODE
+      const testModeEnabled = isTestMode();
+      const ttlDays = getTokenTtlDays();
+      
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+      
+      await storage.createPortalToken({
+        advertiserId: advertiser.id,
+        tokenHash,
+        expiresAt,
+      });
+      
+      // Build upload portal URL
+      const baseUrl = process.env.PUBLIC_PORTAL_URL 
+        || (req.headers.origin ? req.headers.origin : null)
+        || (req.headers.host ? `https://${req.headers.host}` : null)
+        || (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : null)
+        || `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`;
+      const uploadUrl = `${baseUrl}/upload/${rawToken}`;
+      
+      console.log(`[Admin] Regenerated upload link for advertiser ${advertiser.id}:`, {
+        advertiserId: advertiser.id,
+        companyName: advertiser.companyName,
+        expiresAt: expiresAt.toISOString(),
+        testMode: testModeEnabled,
+      });
+      
+      res.json({
+        uploadUrl,
+        expiresAt,
+        ttlDays,
+        testMode: testModeEnabled,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ============================================================================
   // ADVERTISER ONBOARDING (New Multi-Step Flow)
   // ============================================================================
@@ -3234,21 +3298,30 @@ Sitemap: ${SITE_URL}/sitemap.xml
   // Public upload portal - get advertiser info
   app.get("/api/upload-portal/:token", async (req, res) => {
     try {
-      const { validatePortalToken } = await import("./services/adAssetUploadService");
+      const { validatePortalTokenWithDetails } = await import("./services/adAssetUploadService");
       const { getVideoSpecsForDuration, formatVideoSpecsForDisplay } = await import("./services/videoMetadataService");
       
-      const context = await validatePortalToken(req.params.token);
-      if (!context) {
-        return res.status(401).json({ message: "Ongeldige of verlopen toegangslink" });
+      const result = await validatePortalTokenWithDetails(req.params.token);
+      if (!result.success || !result.context) {
+        // Return user-friendly error messages based on reason
+        const errorMessages: Record<string, string> = {
+          'not_found': 'Ongeldige toegangslink. Neem contact op met Elevizion voor een nieuwe link.',
+          'expired': 'Deze toegangslink is verlopen. Neem contact op met Elevizion voor een nieuwe link.',
+          'no_advertiser': 'Account niet gevonden. Neem contact op met Elevizion.',
+          'no_linkkey': 'Account configuratie onvolledig. Neem contact op met Elevizion.',
+          'error': 'Er is een fout opgetreden. Probeer het later opnieuw.',
+        };
+        const message = errorMessages[result.reason || 'error'] || 'Ongeldige of verlopen toegangslink';
+        return res.status(401).json({ message, reason: result.reason });
       }
       
-      const specs = getVideoSpecsForDuration(context.contractDuration);
+      const specs = getVideoSpecsForDuration(result.context.contractDuration);
       res.json({
-        companyName: context.companyName,
-        linkKey: context.linkKey,
-        duration: context.contractDuration,
+        companyName: result.context.companyName,
+        linkKey: result.context.linkKey,
+        duration: result.context.contractDuration,
         specs,
-        displaySpecs: formatVideoSpecsForDisplay(specs, context.contractDuration),
+        displaySpecs: formatVideoSpecsForDisplay(specs, result.context.contractDuration),
       });
     } catch (error: any) {
       res.status(500).json({ message: error.message });
@@ -3276,14 +3349,25 @@ Sitemap: ${SITE_URL}/sitemap.xml
         }
         
         try {
-          const { validatePortalToken, processAdAssetUpload } = await import("./services/adAssetUploadService");
+          const { validatePortalTokenWithDetails, processAdAssetUpload } = await import("./services/adAssetUploadService");
           
-          const context = await validatePortalToken(req.params.token, true);
-          if (!context) {
-            return res.status(401).json({ message: "Ongeldige of verlopen toegangslink" });
+          const result = await validatePortalTokenWithDetails(req.params.token, true);
+          if (!result.success || !result.context) {
+            const errorMessages: Record<string, string> = {
+              'not_found': 'Ongeldige toegangslink. Neem contact op met Elevizion voor een nieuwe link.',
+              'expired': 'Deze toegangslink is verlopen. Neem contact op met Elevizion voor een nieuwe link.',
+              'no_advertiser': 'Account niet gevonden.',
+              'no_linkkey': 'Account configuratie onvolledig.',
+              'error': 'Er is een fout opgetreden.',
+            };
+            return res.status(401).json({ 
+              message: errorMessages[result.reason || 'error'] || 'Ongeldige of verlopen toegangslink',
+              reason: result.reason 
+            });
           }
+          const context = result.context;
           
-          const result = await processAdAssetUpload(
+          const uploadResult = await processAdAssetUpload(
             file.path,
             file.originalname,
             file.mimetype,
@@ -3294,18 +3378,18 @@ Sitemap: ${SITE_URL}/sitemap.xml
           const fs = await import("fs");
           fs.unlink(file.path, () => {});
           
-          if (!result.success) {
+          if (!uploadResult.success) {
             return res.status(400).json({
-              message: result.message,
-              validation: result.validation,
+              message: uploadResult.message,
+              validation: uploadResult.validation,
             });
           }
           
           res.json({
             success: true,
-            message: result.message,
-            assetId: result.assetId,
-            validation: result.validation,
+            message: uploadResult.message,
+            assetId: uploadResult.assetId,
+            validation: uploadResult.validation,
           });
         } catch (error: any) {
           console.error("[UploadPortal] Processing error:", error);
@@ -10294,6 +10378,14 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
+  });
+
+  // System config endpoint (for frontend to check TEST_MODE etc.)
+  app.get("/api/system-config", async (_req, res) => {
+    res.json({
+      testMode: isTestMode(),
+      environment: process.env.NODE_ENV || 'development',
+    });
   });
 
   // Public endpoint - only returns non-sensitive fields

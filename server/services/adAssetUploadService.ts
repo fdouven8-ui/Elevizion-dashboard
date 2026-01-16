@@ -35,7 +35,26 @@ function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+export interface TokenValidationResult {
+  success: boolean;
+  context?: PortalContext;
+  reason?: 'not_found' | 'expired' | 'already_used' | 'no_advertiser' | 'no_linkkey' | 'error';
+  details?: {
+    tokenCreatedAt?: Date | null;
+    expiresAt?: Date | null;
+    usedAt?: Date | null;
+    now: Date;
+  };
+}
+
 export async function validatePortalToken(token: string, recordAccess = false): Promise<PortalContext | null> {
+  const result = await validatePortalTokenWithDetails(token, recordAccess);
+  return result.context || null;
+}
+
+export async function validatePortalTokenWithDetails(token: string, recordAccess = false): Promise<TokenValidationResult> {
+  const now = new Date();
+  
   try {
     const tokenHash = hashToken(token);
     
@@ -44,46 +63,123 @@ export async function validatePortalToken(token: string, recordAccess = false): 
     });
     
     if (!portalToken) {
-      console.log('[AdAssetUpload] Token not found:', token.slice(0, 8) + '...');
-      return null;
+      console.log('[UploadToken] REJECTED - not_found:', {
+        tokenPrefix: token.slice(0, 8) + '...',
+        reason: 'not_found',
+        now: now.toISOString(),
+      });
+      return { 
+        success: false, 
+        reason: 'not_found',
+        details: { now }
+      };
     }
     
-    if (portalToken.expiresAt && new Date(portalToken.expiresAt) < new Date()) {
-      console.log('[AdAssetUpload] Token expired:', token.slice(0, 8) + '...');
-      return null;
+    // Check if token is expired
+    if (portalToken.expiresAt && new Date(portalToken.expiresAt) < now) {
+      console.log('[UploadToken] REJECTED - expired:', {
+        tokenPrefix: token.slice(0, 8) + '...',
+        reason: 'expired',
+        createdAt: portalToken.createdAt?.toISOString(),
+        expiresAt: portalToken.expiresAt?.toISOString(),
+        now: now.toISOString(),
+        expiredAgo: Math.round((now.getTime() - new Date(portalToken.expiresAt).getTime()) / 1000 / 60) + ' minutes',
+      });
+      return { 
+        success: false, 
+        reason: 'expired',
+        details: {
+          tokenCreatedAt: portalToken.createdAt,
+          expiresAt: portalToken.expiresAt,
+          usedAt: portalToken.usedAt,
+          now,
+        }
+      };
     }
+    
+    // Note: Upload tokens can be used multiple times (unlike one-time portal tokens)
+    // The usedAt field tracks first access for analytics, not single-use
     
     const advertiser = await db.query.advertisers.findFirst({
       where: eq(advertisers.id, portalToken.advertiserId),
     });
     
     if (!advertiser) {
-      console.log('[AdAssetUpload] Advertiser not found for token:', token.slice(0, 8) + '...');
-      return null;
+      console.log('[UploadToken] REJECTED - no_advertiser:', {
+        tokenPrefix: token.slice(0, 8) + '...',
+        reason: 'no_advertiser',
+        advertiserId: portalToken.advertiserId,
+        now: now.toISOString(),
+      });
+      return { 
+        success: false, 
+        reason: 'no_advertiser',
+        details: {
+          tokenCreatedAt: portalToken.createdAt,
+          expiresAt: portalToken.expiresAt,
+          now,
+        }
+      };
     }
     
     if (!advertiser.linkKey) {
-      console.log('[AdAssetUpload] Advertiser has no linkKey:', advertiser.id);
-      return null;
+      console.log('[UploadToken] REJECTED - no_linkkey:', {
+        tokenPrefix: token.slice(0, 8) + '...',
+        reason: 'no_linkkey',
+        advertiserId: advertiser.id,
+        companyName: advertiser.companyName,
+        now: now.toISOString(),
+      });
+      return { 
+        success: false, 
+        reason: 'no_linkkey',
+        details: {
+          tokenCreatedAt: portalToken.createdAt,
+          expiresAt: portalToken.expiresAt,
+          now,
+        }
+      };
     }
     
-    if (recordAccess) {
+    // Record first access for analytics
+    if (recordAccess && !portalToken.usedAt) {
       await db.update(portalTokens)
-        .set({ usedAt: new Date() })
+        .set({ usedAt: now })
         .where(eq(portalTokens.tokenHash, tokenHash));
-      console.log('[AdAssetUpload] Token access recorded:', token.slice(0, 8) + '...');
+      console.log('[UploadToken] First access recorded:', token.slice(0, 8) + '...');
     }
+    
+    console.log('[UploadToken] VALID:', {
+      tokenPrefix: token.slice(0, 8) + '...',
+      advertiserId: advertiser.id,
+      companyName: advertiser.companyName,
+      expiresAt: portalToken.expiresAt?.toISOString(),
+      now: now.toISOString(),
+    });
     
     return {
-      advertiserId: advertiser.id,
-      linkKey: advertiser.linkKey,
-      contractDuration: advertiser.videoDurationSeconds || DEFAULT_VIDEO_DURATION_SECONDS,
-      companyName: advertiser.companyName,
-      strictResolution: advertiser.strictResolution || false,
+      success: true,
+      context: {
+        advertiserId: advertiser.id,
+        linkKey: advertiser.linkKey,
+        contractDuration: advertiser.videoDurationSeconds || DEFAULT_VIDEO_DURATION_SECONDS,
+        companyName: advertiser.companyName,
+        strictResolution: advertiser.strictResolution || false,
+      },
+      details: {
+        tokenCreatedAt: portalToken.createdAt,
+        expiresAt: portalToken.expiresAt,
+        usedAt: portalToken.usedAt,
+        now,
+      }
     };
   } catch (error) {
-    console.error('[AdAssetUpload] Error validating token:', error);
-    return null;
+    console.error('[UploadToken] REJECTED - error:', error);
+    return { 
+      success: false, 
+      reason: 'error',
+      details: { now }
+    };
   }
 }
 

@@ -46,6 +46,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Badge } from "@/components/ui/badge";
 import Logo from "@/components/Logo";
+import { AlertTriangle } from "lucide-react";
 
 interface MenuItem {
   title: string;
@@ -95,6 +96,16 @@ export function AppSidebar() {
     enabled: isAuthenticated,
   });
   const newLeadsCount = leadsData?.leads?.filter((l: any) => l.status === "nieuw" || l.status === "new").length || 0;
+
+  // Fetch system config for TEST_MODE indicator
+  const { data: systemConfig } = useQuery<{ testMode: boolean; environment: string }>({
+    queryKey: ["/api/system-config"],
+    queryFn: async () => {
+      const res = await fetch("/api/system-config");
+      return res.json();
+    },
+    enabled: isAuthenticated,
+  });
 
   const handleLogin = () => {
     window.location.href = "/";
@@ -151,6 +162,14 @@ export function AppSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        {systemConfig?.testMode && (
+          <div className="px-2 mt-2">
+            <Badge className="bg-orange-500 text-white text-[10px] px-2 py-0.5 w-full justify-center">
+              <AlertTriangle className="h-3 w-3 mr-1" />
+              TESTMODUS
+            </Badge>
+          </div>
+        )}
       </SidebarHeader>
       
       <SidebarContent>

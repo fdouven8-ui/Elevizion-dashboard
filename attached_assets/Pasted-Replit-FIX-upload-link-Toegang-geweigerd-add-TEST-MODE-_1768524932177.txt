@@ -1,0 +1,117 @@
+Replit — FIX upload link “Toegang geweigerd” + add TEST MODE to bypass billing/incasso during development
+
+A) Fix: Upload link access denied (invalid/expired link)
+
+Symptom
+After completing onboarding, clicking the upload link shows:
+“Toegang geweigerd — Ongeldige of verlopen toegangslink”
+
+Goal
+Upload links must work reliably in the current environment (prod/staging/dev) and not randomly expire during testing.
+Add proper diagnostics so we can see WHY a token is rejected.
+
+Required changes
+
+1) Identify the upload link mechanism
+Locate the code that generates the upload URL/token and the endpoint/page that validates it.
+Typical patterns:
+- /upload/:token
+- /portal/upload?token=...
+- /public/upload/:token
+
+2) Add server-side debug logging (safe)
+When a token is rejected, log a structured reason (NO secrets):
+- reason: "not_found" | "expired" | "already_used" | "wrong_type" | "env_mismatch"
+- tokenCreatedAt, expiresAt (if exists)
+- now timestamp
+Also return a user-safe message, but keep detailed reason in logs.
+
+3) Make token TTL test-friendly
+During testing, tokens should not expire too quickly.
+Implement:
+- Default TTL for upload links: 7 days
+- In TEST MODE (see section B): TTL = 30 days
+Ensure timezone handling uses UTC consistently.
+
+4) Fix environment/base URL correctness
+Ensure the email/upload link uses the correct base URL for the CURRENT environment:
+- production uses production base URL
+- staging uses staging base URL
+- dev uses dev base URL
+Do not hardcode; use env var like APP_BASE_URL.
+Add a sanity check: if APP_BASE_URL is missing, fail loudly in System Health.
+
+5) Ensure token is persisted correctly
+Verify the token is stored in DB with:
+- token
+- type = "upload"
+- reference to advertiser/onboarding record
+- expiresAt
+- status (active/used)
+Make sure validation query matches the schema.
+
+6) Admin recovery (important for ops)
+Add an admin action on the advertiser/onboarding detail:
+- “Genereer nieuwe uploadlink”
+This creates a fresh token and shows a copyable URL.
+This avoids being blocked when a link expires.
+
+Acceptance criteria
+- Completing onboarding → clicking upload link works.
+- If a token is invalid, admin can regenerate a new one.
+- Logs show exact rejection reason.
+
+B) Add TEST MODE to bypass billing/incasso so the full flow can be tested end-to-end
+
+Goal
+During test phase, Frank must be able to complete ALL steps without:
+- SEPA/incasso setup
+- Moneybird payments
+- real billing enforcement
+But still exercise:
+- contract acceptance
+- OTP verification
+- upload portal
+- publishing simulation steps
+
+Implementation
+
+1) Introduce a server-side flag:
+TEST_MODE=true (env var), plus optional client indicator.
+In TEST_MODE:
+- Do not call Moneybird for mandates/invoices
+- Do not block progress if billing is missing
+- Still store “would-have” data in DB for later
+
+2) Add a safe way to trigger test mode per session (optional)
+Option A (preferred):
+- If TEST_MODE env var is true, it applies globally.
+Option B:
+- Allow query param `?test=1` on /start that sets a cookie “elevizion_test=1” (admin/dev only)
+
+3) Flow changes in TEST MODE
+- Step that normally requires incasso:
+  - show a banner: “Testmodus actief — incasso wordt overgeslagen”
+  - allow “Volgende” to proceed
+- Still require OTP + checkbox acceptance (unless you explicitly want that bypass too)
+
+4) Ensure TEST MODE cannot be abused in production
+- If NODE_ENV=production:
+  - TEST_MODE can only be enabled for admin IP / authenticated admin session
+  OR keep it disabled entirely in true production.
+(But allow in staging.)
+
+5) Add a clear visual indicator
+In admin header and in the marketing flow:
+- small badge “TESTMODUS”
+So you always know you’re not in real billing.
+
+Acceptance criteria
+- You can click through the entire advertiser onboarding flow end-to-end without incasso.
+- Upload link works and leads to upload page.
+- No Moneybird calls are made in TEST MODE.
+- In normal mode, current behavior remains unchanged.
+
+Constraints
+- Minimal changes, no redesign.
+- Do not weaken real production security: tokens must still be unguessable and validated.
