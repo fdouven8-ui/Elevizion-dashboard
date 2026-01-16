@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, Play, Eye, Clock, Monitor, MapPin, Package } from "lucide-react";
+import { CheckCircle, XCircle, Play, Eye, Clock, Monitor, MapPin, Package, RefreshCw, AlertTriangle } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { nl } from "date-fns/locale";
 import { Link } from "wouter";
@@ -23,9 +23,12 @@ interface ReviewQueueItem {
     width: number | null;
     height: number | null;
     codec: string | null;
+    pixelFormat: string | null;
     validationStatus: string;
     uploadedAt: string;
     sizeBytes: number;
+    conversionStatus: string | null;
+    conversionError: string | null;
   };
   advertiser: {
     id: string;
@@ -183,7 +186,7 @@ export default function VideoReview() {
                         {item.asset.width}x{item.asset.height}
                       </Badge>
                       <Badge variant="secondary">
-                        {item.asset.codec || "?"}
+                        {item.asset.codec || "?"}{item.asset.pixelFormat ? ` (${item.asset.pixelFormat})` : ""}
                       </Badge>
                       <Badge variant="secondary">
                         {formatBytes(item.asset.sizeBytes)}
@@ -191,6 +194,30 @@ export default function VideoReview() {
                       <Badge variant={item.asset.validationStatus === "valid" ? "default" : "destructive"}>
                         {item.asset.validationStatus === "valid" ? "Technisch OK" : "Technische fout"}
                       </Badge>
+                      {item.asset.conversionStatus === "PENDING" && (
+                        <Badge variant="outline" className="text-yellow-600 border-yellow-600">
+                          <RefreshCw className="h-3 w-3 mr-1" />
+                          Wacht op conversie
+                        </Badge>
+                      )}
+                      {item.asset.conversionStatus === "CONVERTING" && (
+                        <Badge variant="outline" className="text-blue-600 border-blue-600">
+                          <RefreshCw className="h-3 w-3 mr-1 animate-spin" />
+                          Converteren...
+                        </Badge>
+                      )}
+                      {item.asset.conversionStatus === "COMPLETED" && (
+                        <Badge variant="outline" className="text-green-600 border-green-600">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Geconverteerd
+                        </Badge>
+                      )}
+                      {item.asset.conversionStatus === "FAILED" && (
+                        <Badge variant="destructive">
+                          <AlertTriangle className="h-3 w-3 mr-1" />
+                          Conversie mislukt
+                        </Badge>
+                      )}
                     </div>
                   </div>
                   
@@ -265,14 +292,43 @@ export default function VideoReview() {
                   <p>{previewAsset.asset.width}x{previewAsset.asset.height}</p>
                 </div>
                 <div>
-                  <Label className="text-muted-foreground">Codec</Label>
-                  <p>{previewAsset.asset.codec || "Onbekend"}</p>
+                  <Label className="text-muted-foreground">Codec / Pixel Format</Label>
+                  <p>{previewAsset.asset.codec || "Onbekend"} / {previewAsset.asset.pixelFormat || "Onbekend"}</p>
                 </div>
                 <div>
                   <Label className="text-muted-foreground">Bestandsgrootte</Label>
                   <p>{formatBytes(previewAsset.asset.sizeBytes)}</p>
                 </div>
               </div>
+              
+              {previewAsset.asset.conversionStatus && previewAsset.asset.conversionStatus !== "NONE" && (
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-muted">
+                  {previewAsset.asset.conversionStatus === "PENDING" && (
+                    <>
+                      <RefreshCw className="h-4 w-4 text-yellow-600" />
+                      <span className="text-sm">Wacht op conversie naar H.264...</span>
+                    </>
+                  )}
+                  {previewAsset.asset.conversionStatus === "CONVERTING" && (
+                    <>
+                      <RefreshCw className="h-4 w-4 text-blue-600 animate-spin" />
+                      <span className="text-sm">Video wordt geconverteerd naar H.264...</span>
+                    </>
+                  )}
+                  {previewAsset.asset.conversionStatus === "COMPLETED" && (
+                    <>
+                      <CheckCircle className="h-4 w-4 text-green-600" />
+                      <span className="text-sm">Video is geconverteerd naar H.264</span>
+                    </>
+                  )}
+                  {previewAsset.asset.conversionStatus === "FAILED" && (
+                    <>
+                      <AlertTriangle className="h-4 w-4 text-destructive" />
+                      <span className="text-sm text-destructive">Conversie mislukt: {previewAsset.asset.conversionError || "Onbekende fout"}</span>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
           
