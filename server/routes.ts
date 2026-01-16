@@ -10508,6 +10508,126 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  // Upload portal link endpoint for admin Test Tools
+  // Admin-only: generates linkKey if missing (in TEST_MODE), sets uploadEnabled=true
+  // In TEST_MODE: auto-generates linkKey, always returns working URL
+  // Outside TEST_MODE: requires existing linkKey
+  // Returns: { url, reused, expiresAt, linkKey, uploadEnabled }
+  app.post("/api/advertisers/:id/upload-portal-link", isAuthenticated, async (req: any, res) => {
+    try {
+      const testMode = isTestMode();
+      const isAdmin = req.user?.role === "ADMIN";
+      
+      // In TEST_MODE + admin, always allow. Otherwise require admin role.
+      if (!isAdmin) {
+        return res.status(403).json({ message: "Alleen voor admins" });
+      }
+      
+      let advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      const now = new Date();
+      
+      // Generate linkKey if missing (in TEST_MODE, we can auto-generate)
+      if (!advertiser.linkKey) {
+        if (!testMode) {
+          return res.status(400).json({ message: "Adverteerder heeft geen linkKey. Upload portal niet beschikbaar." });
+        }
+        // In TEST_MODE, generate a linkKey automatically
+        const baseName = (advertiser.companyName || "test")
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, "")
+          .slice(0, 12);
+        const randomSuffix = crypto.randomBytes(3).toString("hex");
+        const newLinkKey = `${baseName}${randomSuffix}`;
+        
+        await storage.updateAdvertiser(advertiser.id, { linkKey: newLinkKey });
+        advertiser = { ...advertiser, linkKey: newLinkKey };
+        console.log(`[Upload Portal Link] Generated linkKey "${newLinkKey}" for advertiser ${advertiser.id}`);
+      }
+      
+      // Check for existing valid token that can be reused
+      const tokens = await storage.getPortalTokensForAdvertiser(advertiser.id);
+      const validToken = tokens.find(t => {
+        const isExpired = new Date(t.expiresAt) < now;
+        const isUsed = t.usedAt !== null;
+        if (testMode) {
+          return !isExpired && t.tokenCiphertext;
+        }
+        return !isExpired && !isUsed && t.tokenCiphertext;
+      });
+      
+      let rawToken: string;
+      let expiresAt: Date;
+      let reusedToken = false;
+      
+      if (validToken && validToken.tokenCiphertext) {
+        const decrypted = decryptToken(validToken.tokenCiphertext);
+        if (decrypted) {
+          rawToken = decrypted;
+          expiresAt = new Date(validToken.expiresAt);
+          reusedToken = true;
+        } else {
+          // Decryption failed - generate new
+          await storage.expireOldPortalTokensForAdvertiser(advertiser.id);
+          rawToken = crypto.randomBytes(32).toString("hex");
+          const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+          const tokenCiphertext = encryptToken(rawToken);
+          const ttlDays = getTokenTtlDays();
+          expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+          
+          await storage.createPortalToken({
+            tokenHash,
+            tokenCiphertext: tokenCiphertext || undefined,
+            advertiserId: advertiser.id,
+            expiresAt,
+          });
+        }
+      } else {
+        // No valid token - expire old and generate new
+        await storage.expireOldPortalTokensForAdvertiser(advertiser.id);
+        rawToken = crypto.randomBytes(32).toString("hex");
+        const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+        const tokenCiphertext = encryptToken(rawToken);
+        const ttlDays = getTokenTtlDays();
+        expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+        
+        await storage.createPortalToken({
+          tokenHash,
+          tokenCiphertext: tokenCiphertext || undefined,
+          advertiserId: advertiser.id,
+          expiresAt,
+        });
+      }
+      
+      // Enable upload portal access
+      await storage.updateAdvertiser(advertiser.id, {
+        uploadEnabled: true,
+        lastUploadTokenGeneratedAt: now,
+      });
+      
+      const baseUrl = process.env.REPL_SLUG 
+        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+        : (process.env.REPLIT_DEV_DOMAIN ? `https://${process.env.REPLIT_DEV_DOMAIN}` : 'http://localhost:5000');
+      const url = `${baseUrl}/upload/${rawToken}`;
+      
+      console.log(`[Upload Portal Link] ${reusedToken ? 'Reused' : 'Generated'} token for advertiser ${advertiser.id}, testMode=${testMode}`);
+      
+      res.json({
+        url,
+        reused: reusedToken,
+        expiresAt,
+        linkKey: advertiser.linkKey,
+        uploadEnabled: true,
+      });
+    } catch (error: any) {
+      console.error("[Upload Portal Link] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Reset upload status for testing (admin + TEST_MODE only)
   // Clears asset-related fields so upload can be re-tested
   app.post("/api/advertisers/:id/reset-upload-status", isAuthenticated, async (req: any, res) => {

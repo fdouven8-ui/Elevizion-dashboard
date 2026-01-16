@@ -19,6 +19,7 @@ function EmailCenterRedirect() {
   return null;
 }
 
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
 import Home from "@/pages/Home";
@@ -77,7 +78,18 @@ function DashboardRouter() {
         <Route path="/locations" component={Locations} />
         <Route path="/locations/:id" component={LocationDetail} />
         <Route path="/advertisers" component={Advertisers} />
-        <Route path="/advertisers/:id" component={AdvertiserDetail} />
+        <Route path="/advertisers/:id">
+          {() => (
+            <ErrorBoundary
+              fallbackTitle="Er ging iets mis bij het laden van deze adverteerder"
+              fallbackMessage="Probeer de pagina opnieuw te laden of ga terug naar het overzicht."
+              backUrl="/advertisers"
+              backLabel="Terug naar overzicht"
+            >
+              <AdvertiserDetail />
+            </ErrorBoundary>
+          )}
+        </Route>
         <Route path="/placements" component={Placements} />
         <Route path="/placements/:id" component={PlacementDetail} />
         <Route path="/finance" component={Finance} />

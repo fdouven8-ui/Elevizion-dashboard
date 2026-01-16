@@ -1,0 +1,75 @@
+Replit — Fix Advertiser detail white screen + ensure Test Tools and upload link work for ALL advertisers
+
+Symptoms
+1) For one advertiser, clicking “detail” results in a white screen (page crash).
+2) For another advertiser, the page loads but shows “nog geen video geupload” and no upload link/test tools visible.
+
+Goals
+- Advertiser detail page must NEVER white-screen; show a friendly error UI if something fails.
+- In TEST_MODE + admin, the orange Test Tools card must always appear on advertiser detail.
+- “Open upload portal” must always generate/reuse a valid upload token even if uploadEnabled is false.
+
+Part A — Stop the white screen (crash-proof UI)
+
+1) Add an ErrorBoundary around advertiser detail route
+- Wrap the AdvertiserDetail page with an ErrorBoundary that renders:
+  - “Er ging iets mis bij het laden van deze adverteerder.”
+  - A “Opnieuw proberen” button
+  - A “Terug naar overzicht” link
+- Log the caught error to console and to server (if you have logging).
+
+2) Fix common null/undefined crash points
+Audit advertiser detail rendering for unsafe access, e.g.:
+- advertiser.moneybirdContact.id
+- advertiser.latestUpload.token
+- advertiser.video.status.label
+Replace with safe optional chaining + fallbacks:
+- advertiser.moneybirdContact?.id ?? “Niet gekoppeld”
+- show placeholders when fields are missing
+
+3) Ensure fetch/loading states are handled
+- If advertiser fetch is loading: show skeleton/loading
+- If fetch fails: show error card (NOT empty render)
+- If advertiser is null: show “Adverteerder niet gevonden”
+
+Part B — Make Test Tools reliably visible and functional
+
+4) Ensure admin + TEST_MODE detection is correct on this page
+- The Test Tools card should show if:
+  isAdmin === true AND isTestMode === true
+- Fetch testmode from /api/debug/test-mode (already exists)
+- Fetch current user/admin status from the existing auth endpoint/state
+- Do NOT rely on client env vars for TEST_MODE
+
+5) Test Tools should NOT depend on uploadEnabled
+- Always render the card (when admin+testmode), even if no video exists.
+- “Open upload portal” button must:
+  - call a single API endpoint that returns a valid upload URL
+  - generate a new token if none exists
+  - reuse token if encryption enabled and valid
+  - set advertiser.uploadEnabled = true as part of this action (so state becomes consistent)
+- If token generation fails, show a toast with the error message.
+
+6) Add a visible “Upload link status” row (debug-friendly)
+On advertiser detail show (read-only):
+- uploadEnabled: true/false
+- lastUploadTokenCreatedAt (if available)
+- tokenReuseEnabled: true/false (derived from server)
+This prevents guessing why a link isn’t shown.
+
+Part C — Backend endpoint guarantee (single source)
+7) Create/ensure a single backend endpoint:
+POST /api/advertisers/:id/upload-portal-link
+Returns:
+{ url, reused: boolean, expiresAt }
+This endpoint:
+- requires admin OR valid advertiser access token
+- in TEST_MODE: never blocks; always returns a working URL
+- sets uploadEnabled=true
+
+Acceptance criteria
+- No advertiser detail page ever white-screens.
+- In TEST_MODE + admin, Test Tools appears for every advertiser detail page.
+- Clicking “Open upload portal” always opens a working upload portal.
+- If something fails, user sees a clear error/toast instead of blank UI.
+Minimal changes only.

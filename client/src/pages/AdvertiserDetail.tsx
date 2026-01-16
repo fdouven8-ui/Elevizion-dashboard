@@ -957,37 +957,36 @@ export default function AdvertiserDetail() {
               Test tools (alleen testmodus)
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
             <div className="flex flex-wrap gap-2">
-              {advertiser.linkKey && (
-                <Button 
-                  size="sm" 
-                  variant="outline"
-                  className="border-orange-300 hover:bg-orange-100"
-                  data-testid="button-test-open-upload"
-                  onClick={async () => {
-                    try {
-                      const res = await fetch(`/api/advertisers/${advertiser.id}/open-upload-portal`, { method: "POST" });
-                      if (!res.ok) {
-                        const data = await res.json();
-                        throw new Error(data.message || "Fout bij openen portal");
-                      }
+              <Button 
+                size="sm" 
+                variant="outline"
+                className="border-orange-300 hover:bg-orange-100"
+                data-testid="button-test-open-upload"
+                onClick={async () => {
+                  try {
+                    const res = await fetch(`/api/advertisers/${advertiser.id}/upload-portal-link`, { method: "POST" });
+                    if (!res.ok) {
                       const data = await res.json();
-                      navigator.clipboard.writeText(data.uploadUrl);
-                      toast({ 
-                        title: "Upload portal geopend", 
-                        description: "Link gekopieerd naar klembord"
-                      });
-                      window.open(data.uploadUrl, "_blank");
-                    } catch (e: any) {
-                      toast({ title: e.message || "Fout bij openen", variant: "destructive" });
+                      throw new Error(data.message || "Fout bij openen portal");
                     }
-                  }}
-                >
-                  <ExternalLink className="h-4 w-4 mr-1" />
-                  Open upload portal
-                </Button>
-              )}
+                    const data = await res.json();
+                    navigator.clipboard.writeText(data.url);
+                    toast({ 
+                      title: "Upload portal geopend", 
+                      description: data.reused ? "Bestaande link hergebruikt" : "Nieuwe link gegenereerd"
+                    });
+                    window.open(data.url, "_blank");
+                    refetchAdvertiser();
+                  } catch (e: any) {
+                    toast({ title: e.message || "Fout bij openen", variant: "destructive" });
+                  }
+                }}
+              >
+                <ExternalLink className="h-4 w-4 mr-1" />
+                Open upload portal
+              </Button>
               <Button 
                 size="sm" 
                 variant="outline"
@@ -1014,7 +1013,23 @@ export default function AdvertiserDetail() {
                 Reset upload status
               </Button>
             </div>
-            <p className="text-xs text-orange-600 mt-2">
+            <div className="text-xs space-y-1 bg-white/50 rounded p-2 border border-orange-200">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">uploadEnabled:</span>
+                <Badge variant={advertiser.uploadEnabled ? "default" : "secondary"} className="text-xs">
+                  {advertiser.uploadEnabled ? "true" : "false"}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">linkKey:</span>
+                <span className="font-mono">{advertiser.linkKey || "niet ingesteld"}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">assetStatus:</span>
+                <span className="font-mono">{advertiser.assetStatus || "none"}</span>
+              </div>
+            </div>
+            <p className="text-xs text-orange-600">
               Deze tools zijn alleen zichtbaar in testmodus. Upload status reset verwijdert bestaande video's.
             </p>
           </CardContent>
