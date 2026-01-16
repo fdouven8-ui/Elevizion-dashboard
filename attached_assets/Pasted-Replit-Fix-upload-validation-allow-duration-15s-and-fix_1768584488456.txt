@@ -1,0 +1,69 @@
+Replit — Fix upload validation: allow duration <= 15s and fix “cannot read video metadata” errors
+
+Problems
+A) Upload shows “Ongeldig videobestand” + “Kan video metadata niet uitlezen…”
+B) Duration rule is wrong: 15 seconds must be MAX, shorter videos must be accepted.
+
+Goal
+- Accept MP4 videos with duration <= 15 seconds (including e.g. 6s, 10s, 14.9s).
+- Fix metadata extraction so ffprobe reliably reads the uploaded file.
+- Show clear, actionable validation errors.
+
+Part 1 — Duration validation change (MAX not exact)
+1) Replace any “exact 15 seconds” logic with:
+- MAX_DURATION_SECONDS = 15
+- Pass if durationSeconds > 0 AND durationSeconds <= 15.0
+- Reject only if durationSeconds > 15.0
+Optionally keep a small epsilon:
+- allow <= 15.05 to avoid rounding weirdness
+
+2) Update UI copy everywhere:
+- “Duur: maximaal 15 seconden (korter mag ook)”
+- Remove “exact” wording.
+
+Part 2 — Fix ffprobe / metadata extraction failures
+These errors typically happen because ffprobe is run on:
+- a temp file path that doesn’t exist
+- a stream/buffer not supported
+- object storage URL without downloading
+- missing ffprobe binary / permissions
+
+Implement robust probe flow:
+
+1) Ensure ffprobe runs on a real local file
+- When receiving upload, write it to a temp file (e.g. /tmp/upload-<token>.mp4)
+- Verify file exists and size > 0 before probing
+- Run ffprobe against that local file path
+
+2) Capture and log ffprobe stderr (server logs)
+When probing fails, log:
+- file path
+- file size
+- ffprobe command exit code
+- stderr (truncated)
+Return a user-safe message, but keep stderr in logs for debugging.
+
+3) Make validation error messages specific
+- If ffprobe fails: “We konden je video niet uitlezen. Probeer opnieuw of exporteer als MP4 (H.264).”
+- If codec wrong: show detected codec
+- If duration > 15: show detected duration, e.g. “Je video is 18.2s; max is 15s.”
+
+4) Handle edge cases
+- Some MP4s are valid but have missing “moov atom” at end; browsers can play but ffprobe may struggle.
+If ffprobe fails, attempt a fallback:
+- Run ffmpeg fast remux to fix metadata:
+  ffmpeg -i input.mp4 -c copy -movflags +faststart fixed.mp4
+- Then run ffprobe on fixed.mp4
+- If fixed works, continue with fixed version as the stored asset.
+
+5) Keep storage naming logic
+After successful probe:
+- Store file under canonical name (already implemented)
+- Persist metadata fields: duration, width, height, codec, fileSize
+- Mark assetStatus = UPLOADED / IN_REVIEW
+
+Acceptance criteria
+- Upload of any MP4 <= 15s succeeds.
+- Upload of 16s fails with clear message.
+- The “metadata not readable” error is resolved; if it occurs, logs contain ffprobe stderr.
+- UI copy matches “max 15 sec, shorter allowed”.

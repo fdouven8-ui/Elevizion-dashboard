@@ -906,7 +906,7 @@ export default function AdvertiserDetail() {
                 )}
               </div>
               <p className="text-sm text-muted-foreground mb-3">
-                Duur: {advertiser.videoDurationSeconds || 15} seconden | Formaat: MP4 (H.264) | 1920x1080
+                Duur: max {advertiser.videoDurationSeconds || 15} sec (korter mag) | Formaat: MP4 (H.264) | 1920x1080
               </p>
               <div className="flex gap-2 flex-wrap">
                 {advertiser.linkKey && (
@@ -1000,7 +1000,7 @@ export default function AdvertiserDetail() {
               <ul className="text-sm text-muted-foreground space-y-1">
                 <li>• Bestandsformaat: MP4 (H.264 codec)</li>
                 <li>• Resolutie: 1920x1080 (Full HD)</li>
-                <li>• Duur: exact {advertiser.videoDurationSeconds || 15} seconden</li>
+                <li>• Duur: maximaal {advertiser.videoDurationSeconds || 15} seconden (korter mag ook)</li>
                 <li>• Beeldverhouding: 16:9</li>
                 <li>• Audio: niet toegestaan</li>
               </ul>

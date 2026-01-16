@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import {
-  extractVideoMetadata,
+  extractVideoMetadataWithDetails,
   validateVideoMetadata,
   getVideoSpecsForDuration,
   VideoValidationResult,
@@ -252,20 +252,41 @@ export async function processAdAssetUpload(
     };
   }
   
-  const metadata = await extractVideoMetadata(filePath);
+  const metadataResult = await extractVideoMetadataWithDetails(filePath);
   
-  if (!metadata) {
+  if (!metadataResult.metadata) {
+    // Build user-friendly error message based on the failure type
+    let errorMessage = 'We konden je video niet uitlezen. ';
+    
+    if (metadataResult.error === 'File does not exist') {
+      errorMessage += 'Het bestand kon niet worden gevonden. Probeer opnieuw te uploaden.';
+    } else if (metadataResult.error === 'File is empty') {
+      errorMessage += 'Het bestand is leeg. Controleer je video en probeer opnieuw.';
+    } else if (metadataResult.error === 'No video stream found in file') {
+      errorMessage += 'Geen video-stream gevonden. Zorg dat het een geldig MP4-bestand (H.264) is.';
+    } else if (metadataResult.error === 'ffprobe not available') {
+      errorMessage += 'Er is een technisch probleem met de videoverwerking. Neem contact op met support.';
+      console.error('[AdAssetUpload] ffprobe not available - system configuration issue');
+    } else if (metadataResult.ffprobeStderr) {
+      errorMessage += 'Probeer het bestand opnieuw te exporteren als MP4 (H.264 codec).';
+      console.error('[AdAssetUpload] ffprobe stderr:', metadataResult.ffprobeStderr);
+    } else {
+      errorMessage += 'Probeer opnieuw of exporteer als MP4 (H.264 codec).';
+    }
+    
     return {
       success: false,
       validation: {
         isValid: false,
         metadata: null,
-        errors: ['Kan video metadata niet uitlezen. Controleer of het bestand een geldig MP4 videobestand is.'],
+        errors: [errorMessage],
         warnings: [],
       },
       message: 'Ongeldig videobestand.',
     };
   }
+  
+  const metadata = metadataResult.metadata;
   
   const validation = validateVideoMetadata(metadata, specs, { 
     strictResolution: portalContext.strictResolution 

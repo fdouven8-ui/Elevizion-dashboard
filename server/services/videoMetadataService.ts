@@ -5,8 +5,8 @@ import * as fs from 'fs';
 
 const execAsync = promisify(exec);
 
-export const DURATION_TOLERANCE_SECONDS = 0.5;
 export const DEFAULT_VIDEO_DURATION_SECONDS = 15;
+export const MAX_VIDEO_DURATION_SECONDS = 15; // Strict max 15 seconds
 
 export interface VideoMetadata {
   durationSeconds: number;
@@ -40,8 +40,8 @@ export interface VideoSpecs {
 
 export const DEFAULT_VIDEO_SPECS: VideoSpecs = {
   allowedMimeTypes: ['video/mp4'],
-  minDurationSeconds: DEFAULT_VIDEO_DURATION_SECONDS - DURATION_TOLERANCE_SECONDS,
-  maxDurationSeconds: DEFAULT_VIDEO_DURATION_SECONDS + DURATION_TOLERANCE_SECONDS,
+  minDurationSeconds: 0.5, // Minimum half second to ensure valid video
+  maxDurationSeconds: MAX_VIDEO_DURATION_SECONDS, // Max 15 seconds (with epsilon)
   requiredWidth: 1920,
   requiredHeight: 1080,
   requiredAspectRatio: '16:9',
@@ -50,32 +50,101 @@ export const DEFAULT_VIDEO_SPECS: VideoSpecs = {
 };
 
 export function getVideoSpecsForDuration(contractDuration: number): VideoSpecs {
+  // Duration validation: max is contractDuration (default 15s), shorter videos are allowed
+  // No epsilon above max - strict enforcement of max duration
   return {
     ...DEFAULT_VIDEO_SPECS,
-    minDurationSeconds: contractDuration - DURATION_TOLERANCE_SECONDS,
-    maxDurationSeconds: contractDuration + DURATION_TOLERANCE_SECONDS,
+    minDurationSeconds: 0.5, // Minimum half second
+    maxDurationSeconds: contractDuration, // Strict max, no tolerance above
   };
 }
 
+export interface ExtractResult {
+  metadata: VideoMetadata | null;
+  error?: string;
+  ffprobeStderr?: string;
+}
+
 export async function extractVideoMetadata(filePath: string): Promise<VideoMetadata | null> {
+  const result = await extractVideoMetadataWithDetails(filePath);
+  return result.metadata;
+}
+
+export async function extractVideoMetadataWithDetails(filePath: string): Promise<ExtractResult> {
   try {
-    const ffprobeCommand = `ffprobe -v quiet -print_format json -show_format -show_streams "${filePath}"`;
-    const { stdout } = await execAsync(ffprobeCommand, { timeout: 30000 });
+    // Verify file exists and has content
+    if (!fs.existsSync(filePath)) {
+      console.error('[VideoMetadata] File does not exist:', filePath);
+      return { metadata: null, error: 'File does not exist' };
+    }
     
-    const probeData = JSON.parse(stdout);
+    const stats = fs.statSync(filePath);
+    if (stats.size === 0) {
+      console.error('[VideoMetadata] File is empty:', filePath);
+      return { metadata: null, error: 'File is empty' };
+    }
+    
+    console.log('[VideoMetadata] Probing file:', filePath, 'size:', stats.size);
+    
+    // Check if ffprobe is available before trying to use it
+    try {
+      await execAsync('which ffprobe', { timeout: 5000 });
+    } catch {
+      console.error('[VideoMetadata] ffprobe binary not found in PATH');
+      return { metadata: null, error: 'ffprobe not available' };
+    }
+    
+    const ffprobeCommand = `ffprobe -v error -print_format json -show_format -show_streams "${filePath}"`;
+    
+    let stdout: string;
+    let stderr: string = '';
+    
+    try {
+      const result = await execAsync(ffprobeCommand, { timeout: 30000 });
+      stdout = result.stdout;
+      stderr = result.stderr || '';
+    } catch (execError: any) {
+      // Capture stderr for debugging
+      stderr = execError.stderr || '';
+      console.error('[VideoMetadata] ffprobe failed:', {
+        filePath,
+        fileSize: stats.size,
+        exitCode: execError.code,
+        stderr: stderr.substring(0, 500),
+      });
+      return { 
+        metadata: null, 
+        error: 'ffprobe execution failed',
+        ffprobeStderr: stderr.substring(0, 500),
+      };
+    }
+    
+    if (!stdout || stdout.trim() === '') {
+      console.error('[VideoMetadata] ffprobe returned empty output:', filePath);
+      return { metadata: null, error: 'ffprobe returned empty output', ffprobeStderr: stderr };
+    }
+    
+    let probeData: any;
+    try {
+      probeData = JSON.parse(stdout);
+    } catch (parseError) {
+      console.error('[VideoMetadata] Failed to parse ffprobe JSON:', stdout.substring(0, 200));
+      return { metadata: null, error: 'Failed to parse ffprobe output' };
+    }
+    
     const videoStream = probeData.streams?.find((s: any) => s.codec_type === 'video');
     const audioStream = probeData.streams?.find((s: any) => s.codec_type === 'audio');
     const format = probeData.format;
     
     if (!videoStream || !format) {
       console.error('[VideoMetadata] No video stream found in file:', filePath);
-      return null;
+      return { metadata: null, error: 'No video stream found in file' };
     }
     
     const width = videoStream.width || 0;
     const height = videoStream.height || 0;
     const duration = parseFloat(format.duration) || 0;
-    const fileSize = parseInt(format.size) || 0;
+    const fileSize = parseInt(format.size) || stats.size;
     
     let framerate: number | undefined;
     if (videoStream.avg_frame_rate) {
@@ -96,7 +165,7 @@ export async function extractVideoMetadata(filePath: string): Promise<VideoMetad
       'av1': 'video/mp4',
     };
     
-    return {
+    const metadata: VideoMetadata = {
       durationSeconds: duration,
       width,
       height,
@@ -107,9 +176,17 @@ export async function extractVideoMetadata(filePath: string): Promise<VideoMetad
       mimeType: mimeTypeLookup[videoStream.codec_name?.toLowerCase()] || 'video/mp4',
       framerate,
     };
-  } catch (error) {
-    console.error('[VideoMetadata] Error extracting metadata:', error);
-    return null;
+    
+    console.log('[VideoMetadata] Extracted metadata:', {
+      duration: metadata.durationSeconds,
+      resolution: `${metadata.width}x${metadata.height}`,
+      codec: metadata.codec,
+    });
+    
+    return { metadata };
+  } catch (error: any) {
+    console.error('[VideoMetadata] Unexpected error extracting metadata:', error);
+    return { metadata: null, error: error.message || 'Unknown error' };
   }
 }
 
@@ -146,14 +223,16 @@ export function validateVideoMetadata(
   if (metadata.durationSeconds < specs.minDurationSeconds) {
     errors.push(
       `Video is te kort: ${metadata.durationSeconds.toFixed(1)}s. ` +
-      `Minimaal ${specs.minDurationSeconds.toFixed(0)}s vereist.`
+      `Minimaal 0.5 seconde vereist.`
     );
   }
   
   if (metadata.durationSeconds > specs.maxDurationSeconds) {
+    // Show exact detected duration and the allowed max (without the epsilon)
+    const displayMax = Math.floor(specs.maxDurationSeconds);
     errors.push(
-      `Video is te lang: ${metadata.durationSeconds.toFixed(1)}s. ` +
-      `Maximaal ${specs.maxDurationSeconds.toFixed(0)}s toegestaan.`
+      `Video is te lang: je video is ${metadata.durationSeconds.toFixed(1)} seconden. ` +
+      `Maximaal ${displayMax} seconden toegestaan.`
     );
   }
   
@@ -215,18 +294,37 @@ export async function validateVideoFile(
   filePath: string,
   specs: VideoSpecs = DEFAULT_VIDEO_SPECS
 ): Promise<VideoValidationResult> {
-  const metadata = await extractVideoMetadata(filePath);
+  const result = await extractVideoMetadataWithDetails(filePath);
   
-  if (!metadata) {
+  if (!result.metadata) {
+    // Provide more specific error messages based on the failure type
+    let errorMessage = 'We konden je video niet uitlezen. ';
+    
+    if (result.error === 'File does not exist') {
+      errorMessage += 'Het bestand kon niet worden gevonden. Probeer opnieuw te uploaden.';
+    } else if (result.error === 'File is empty') {
+      errorMessage += 'Het bestand is leeg. Controleer je video en probeer opnieuw.';
+    } else if (result.error === 'No video stream found in file') {
+      errorMessage += 'Geen video-stream gevonden. Zorg dat het een geldig MP4-bestand (H.264) is.';
+    } else if (result.error === 'ffprobe not available') {
+      errorMessage += 'Er is een technisch probleem met de videoverwerking. Neem contact op met support.';
+      console.error('[VideoValidation] ffprobe not available - system configuration issue');
+    } else if (result.ffprobeStderr) {
+      errorMessage += 'Probeer het bestand opnieuw te exporteren als MP4 (H.264 codec).';
+      console.error('[VideoValidation] ffprobe stderr:', result.ffprobeStderr);
+    } else {
+      errorMessage += 'Probeer opnieuw of exporteer als MP4 (H.264 codec).';
+    }
+    
     return {
       isValid: false,
       metadata: null,
-      errors: ['Kan video metadata niet uitlezen. Controleer of het bestand een geldig videobestand is.'],
+      errors: [errorMessage],
       warnings: [],
     };
   }
   
-  return validateVideoMetadata(metadata, specs);
+  return validateVideoMetadata(result.metadata, specs);
 }
 
 export async function isFFprobeAvailable(): Promise<boolean> {
@@ -243,7 +341,7 @@ export function formatVideoSpecsForDisplay(specs: VideoSpecs, contractDuration: 
 Videospecificaties voor uw advertentie:
 
 • Bestandsformaat: MP4 (H.264 codec) - VERPLICHT
-• Duur: exact ${contractDuration} seconden - VERPLICHT
+• Duur: maximaal ${contractDuration} seconden (korter mag ook) - VERPLICHT
 • Resolutie: ${specs.requiredWidth}x${specs.requiredHeight} pixels (Full HD) - Aanbevolen
 • Beeldverhouding: ${specs.requiredAspectRatio} liggend - Aanbevolen
 • Maximale bestandsgrootte: ${specs.maxFileSizeBytes / (1024 * 1024)}MB
