@@ -448,8 +448,8 @@ export default function AdvertiserDetail() {
 
   const openWhatsAppWithTemplate = () => {
     if (advertiser?.phone && renderedMessage) {
-      const phone = advertiser.phone.replace(/\D/g, "");
-      const encodedMessage = encodeURIComponent(renderedMessage.body);
+      const phone = (advertiser.phone ?? "").replace(/\D/g, "");
+      const encodedMessage = encodeURIComponent(renderedMessage.body ?? "");
       window.open(`https://wa.me/${phone}?text=${encodedMessage}`, "_blank");
       setShowTemplateDialog(null);
       setSelectedTemplate(null);
@@ -480,7 +480,7 @@ export default function AdvertiserDetail() {
 
   const openWhatsApp = () => {
     if (advertiser?.phone) {
-      const phone = advertiser.phone.replace(/\D/g, "");
+      const phone = (advertiser.phone ?? "").replace(/\D/g, "");
       window.open(`https://wa.me/${phone}`, "_blank");
     }
   };
@@ -1090,7 +1090,7 @@ export default function AdvertiserDetail() {
                 <p className="text-xs font-medium text-muted-foreground mb-1">Laatste mail</p>
                 <div className="flex items-center gap-2">
                   <Send className="h-3 w-3 text-muted-foreground" />
-                  <span className="text-sm">{mailHistory.lastEmail.templateKey.replace(/_/g, " ")}</span>
+                  <span className="text-sm">{(mailHistory.lastEmail.templateKey ?? "").replace(/_/g, " ")}</span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   {format(new Date(mailHistory.lastEmail.sentAt), "d MMM yyyy 'om' HH:mm", { locale: nl })}

@@ -28,7 +28,18 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error("[ErrorBoundary] Caught error:", error, errorInfo);
+    // Extract entity ID from URL for debugging (e.g., /advertisers/123 -> 123)
+    const urlPath = window.location.pathname;
+    const entityIdMatch = urlPath.match(/\/(advertisers|locations|screens|placements)\/([^/]+)/);
+    const entityType = entityIdMatch?.[1] ?? "unknown";
+    const entityId = entityIdMatch?.[2] ?? "unknown";
+    
+    console.error(`[ErrorBoundary] Crash on ${entityType}/${entityId}:`, {
+      message: error.message,
+      stack: error.stack,
+      url: window.location.href,
+    });
+    
     try {
       fetch("/api/client-error", {
         method: "POST",
@@ -38,6 +49,8 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
           stack: error.stack,
           componentStack: errorInfo.componentStack,
           url: window.location.href,
+          entityType,
+          entityId,
         }),
       }).catch(() => {});
     } catch {}

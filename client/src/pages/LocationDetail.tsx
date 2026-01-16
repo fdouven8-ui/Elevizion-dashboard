@@ -847,7 +847,7 @@ export default function LocationDetail() {
                   <div className="bg-muted/30 rounded-md p-3">
                     <div className="flex items-center gap-2">
                       <Send className="h-3 w-3 text-muted-foreground" />
-                      <span className="text-sm">{mailHistory.lastEmail.templateKey.replace(/_/g, " ")}</span>
+                      <span className="text-sm">{(mailHistory.lastEmail.templateKey ?? "").replace(/_/g, " ")}</span>
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
                       {format(new Date(mailHistory.lastEmail.sentAt), "d MMM yyyy 'om' HH:mm", { locale: nl })}

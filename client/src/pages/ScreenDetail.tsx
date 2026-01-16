@@ -278,7 +278,7 @@ export default function ScreenDetail() {
 
   const contactLocation = () => {
     if (location?.phone) {
-      window.open(`https://wa.me/${location.phone.replace(/\D/g, "")}`, "_blank");
+      window.open(`https://wa.me/${(location.phone ?? "").replace(/\D/g, "")}`, "_blank");
     } else if (location?.email) {
       window.open(`mailto:${location.email}`, "_blank");
     } else {
