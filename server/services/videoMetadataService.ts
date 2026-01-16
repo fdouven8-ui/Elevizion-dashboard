@@ -134,6 +134,7 @@ export interface VideoMetadata {
   height: number;
   aspectRatio: string;
   codec: string;
+  pixelFormat: string; // e.g., "yuv420p", "yuv422p", "yuv444p"
   hasAudio: boolean;
   fileSize: number;
   mimeType: string;
@@ -304,6 +305,7 @@ export async function extractVideoMetadataWithDetails(filePath: string, allowRem
       height,
       aspectRatio,
       codec: videoStream.codec_name || 'unknown',
+      pixelFormat: videoStream.pix_fmt || 'unknown',
       hasAudio: !!audioStream,
       fileSize,
       mimeType: mimeTypeLookup[videoStream.codec_name?.toLowerCase()] || 'video/mp4',
@@ -314,6 +316,7 @@ export async function extractVideoMetadataWithDetails(filePath: string, allowRem
       duration: metadata.durationSeconds,
       resolution: `${metadata.width}x${metadata.height}`,
       codec: metadata.codec,
+      pixelFormat: metadata.pixelFormat,
     });
     
     return { metadata };
