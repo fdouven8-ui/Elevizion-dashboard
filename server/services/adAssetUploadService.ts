@@ -311,6 +311,7 @@ export async function processAdAssetUpload(
     validationErrors: validation.errors,
     validationWarnings: validation.warnings,
     requiredDurationSeconds: portalContext.contractDuration,
+    approvalStatus: 'UPLOADED', // Always starts as UPLOADED, requires admin approval
   }).returning();
   
   if (validation.isValid) {
@@ -350,7 +351,7 @@ export async function processAdAssetUpload(
     storedFilename,
     validation,
     message: validation.isValid
-      ? 'Video succesvol geüpload en goedgekeurd!'
+      ? 'Bedankt! We controleren je video en zetten hem daarna live.'
       : 'Video geüpload maar voldoet niet aan de specificaties. Corrigeer de fouten en upload opnieuw.',
   };
 }
@@ -428,5 +429,208 @@ export async function markAssetAsReady(assetId: string, adminId?: string, notes?
   } catch (error) {
     console.error('[AdAssetUpload] Error marking asset as ready:', error);
     return false;
+  }
+}
+
+// ============================================================================
+// ADMIN REVIEW QUEUE FUNCTIONS
+// ============================================================================
+
+export interface ReviewQueueItem {
+  asset: typeof adAssets.$inferSelect;
+  advertiser: {
+    id: string;
+    companyName: string;
+    packageType: string | null;
+    targetRegionCodes: string[] | null;
+    linkKey: string | null;
+  };
+}
+
+export async function getPendingReviewAssets(): Promise<ReviewQueueItem[]> {
+  const pendingAssets = await db.query.adAssets.findMany({
+    where: and(
+      eq(adAssets.validationStatus, 'valid'),
+      eq(adAssets.approvalStatus, 'UPLOADED')
+    ),
+    orderBy: (adAssets, { desc }) => [desc(adAssets.uploadedAt)],
+  });
+  
+  const results: ReviewQueueItem[] = [];
+  for (const asset of pendingAssets) {
+    const advertiser = await db.query.advertisers.findFirst({
+      where: eq(advertisers.id, asset.advertiserId),
+    });
+    if (advertiser) {
+      results.push({
+        asset,
+        advertiser: {
+          id: advertiser.id,
+          companyName: advertiser.companyName,
+          packageType: advertiser.packageType,
+          targetRegionCodes: advertiser.targetRegionCodes,
+          linkKey: advertiser.linkKey,
+        },
+      });
+    }
+  }
+  return results;
+}
+
+export interface ApproveResult {
+  success: boolean;
+  message: string;
+  placementPlanId?: string;
+}
+
+export async function approveAsset(
+  assetId: string, 
+  adminId: string, 
+  notes?: string
+): Promise<ApproveResult> {
+  try {
+    const asset = await db.query.adAssets.findFirst({
+      where: eq(adAssets.id, assetId),
+    });
+    
+    if (!asset) {
+      return { success: false, message: 'Asset niet gevonden' };
+    }
+    
+    if (asset.validationStatus !== 'valid') {
+      return { success: false, message: 'Asset heeft technische validatiefouten' };
+    }
+    
+    if (asset.approvalStatus !== 'UPLOADED' && asset.approvalStatus !== 'IN_REVIEW') {
+      return { success: false, message: `Asset heeft status ${asset.approvalStatus}, kan niet goedkeuren` };
+    }
+    
+    // Update asset status to APPROVED
+    await db.update(adAssets)
+      .set({
+        approvalStatus: 'APPROVED',
+        approvedAt: new Date(),
+        approvedBy: adminId,
+        reviewedByAdminAt: new Date(),
+        reviewedByAdminId: adminId,
+        adminNotes: notes,
+      })
+      .where(eq(adAssets.id, assetId));
+    
+    // Update advertiser status
+    await db.update(advertisers)
+      .set({
+        assetStatus: 'ready_for_yodeck',
+        updatedAt: new Date(),
+      })
+      .where(eq(advertisers.id, asset.advertiserId));
+    
+    console.log('[AdminReview] Asset approved:', assetId, 'by admin:', adminId);
+    
+    // Trigger auto-publish workflow (create placement plan)
+    try {
+      const { PlacementEngineService } = await import('./placementEngineService');
+      const placementEngine = new PlacementEngineService();
+      const planResult = await placementEngine.createPlan(asset.advertiserId, assetId);
+      
+      if (planResult && planResult.planId) {
+        console.log('[AdminReview] Placement plan created:', planResult.planId);
+        return { 
+          success: true, 
+          message: 'Video goedgekeurd en plaatsingsplan aangemaakt',
+          placementPlanId: planResult.planId,
+        };
+      } else {
+        // Asset approved but placement plan failed - log warning but don't fail
+        console.warn('[AdminReview] Asset approved but placement plan creation failed');
+        return { 
+          success: true, 
+          message: 'Video goedgekeurd. Plaatsingsplan wordt handmatig aangemaakt.',
+        };
+      }
+    } catch (planError: any) {
+      console.warn('[AdminReview] Placement plan error:', planError.message);
+      return { 
+        success: true, 
+        message: 'Video goedgekeurd. Plaatsingsplan kon niet automatisch worden aangemaakt.',
+      };
+    }
+  } catch (error: any) {
+    console.error('[AdminReview] Error approving asset:', error);
+    return { success: false, message: 'Fout bij goedkeuren: ' + error.message };
+  }
+}
+
+export interface RejectResult {
+  success: boolean;
+  message: string;
+}
+
+export const REJECTION_REASONS = {
+  quality: 'Onleesbare tekst / slechte kwaliteit',
+  duration: 'Verkeerde duur',
+  content: 'Niet toegestane inhoud',
+  other: 'Anders',
+} as const;
+
+export async function rejectAsset(
+  assetId: string,
+  adminId: string,
+  reason: keyof typeof REJECTION_REASONS,
+  details?: string
+): Promise<RejectResult> {
+  try {
+    const asset = await db.query.adAssets.findFirst({
+      where: eq(adAssets.id, assetId),
+    });
+    
+    if (!asset) {
+      return { success: false, message: 'Asset niet gevonden' };
+    }
+    
+    if (asset.approvalStatus !== 'UPLOADED' && asset.approvalStatus !== 'IN_REVIEW') {
+      return { success: false, message: `Asset heeft status ${asset.approvalStatus}, kan niet afkeuren` };
+    }
+    
+    // Update asset status to REJECTED
+    await db.update(adAssets)
+      .set({
+        approvalStatus: 'REJECTED',
+        rejectedAt: new Date(),
+        rejectedBy: adminId,
+        rejectedReason: reason,
+        rejectedDetails: details,
+        reviewedByAdminAt: new Date(),
+        reviewedByAdminId: adminId,
+      })
+      .where(eq(adAssets.id, assetId));
+    
+    // Update advertiser status to prompt reupload
+    await db.update(advertisers)
+      .set({
+        assetStatus: 'uploaded_invalid',
+        updatedAt: new Date(),
+      })
+      .where(eq(advertisers.id, asset.advertiserId));
+    
+    console.log('[AdminReview] Asset rejected:', assetId, 'reason:', reason);
+    
+    // Send rejection email to advertiser
+    try {
+      const baseUrl = process.env.REPL_SLUG 
+        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+        : process.env.REPLIT_DEV_DOMAIN 
+          ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+          : 'https://elevizion-dashboard.replit.app';
+      await dispatchMailEvent('ADVERTISER_ASSET_REJECTED', asset.advertiserId, baseUrl);
+      console.log('[AdminReview] Rejection email dispatched for advertiser:', asset.advertiserId);
+    } catch (emailError) {
+      console.error('[AdminReview] Failed to send rejection email:', emailError);
+    }
+    
+    return { success: true, message: 'Video afgekeurd, adverteerder wordt op de hoogte gesteld' };
+  } catch (error: any) {
+    console.error('[AdminReview] Error rejecting asset:', error);
+    return { success: false, message: 'Fout bij afkeuren: ' + error.message };
   }
 }

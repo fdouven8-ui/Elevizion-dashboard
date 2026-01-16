@@ -1432,6 +1432,38 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  // Get latest asset info for an advertiser (for approval status display)
+  app.get("/api/advertisers/:id/latest-asset", async (req, res) => {
+    try {
+      const [latestAsset] = await db.select()
+        .from(adAssets)
+        .where(eq(adAssets.advertiserId, req.params.id))
+        .orderBy(desc(adAssets.createdAt))
+        .limit(1);
+      
+      if (!latestAsset) {
+        return res.json(null);
+      }
+      
+      res.json({
+        id: latestAsset.id,
+        fileName: latestAsset.storedFileName || latestAsset.originalFileName,
+        approvalStatus: latestAsset.approvalStatus,
+        validationStatus: latestAsset.validationStatus,
+        rejectedReason: latestAsset.rejectedReason,
+        rejectedDetails: latestAsset.rejectedDetails,
+        rejectedAt: latestAsset.rejectedAt,
+        approvedAt: latestAsset.approvedAt,
+        createdAt: latestAsset.createdAt,
+        durationSeconds: latestAsset.durationSeconds,
+        width: latestAsset.width,
+        height: latestAsset.height,
+      });
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   app.get("/api/advertisers/:id/placements", async (req, res) => {
     try {
       const advertiser = await storage.getAdvertiser(req.params.id);
@@ -2493,6 +2525,82 @@ Sitemap: ${SITE_URL}/sitemap.xml
     } catch (error: any) {
       res.status(500).json({ message: error.message });
     }
+  });
+
+  // ============================================================================
+  // VIDEO REVIEW QUEUE (ADMIN APPROVAL WORKFLOW)
+  // ============================================================================
+
+  // Get pending video review queue (ADMIN ONLY)
+  app.get("/api/admin/video-review", isAuthenticated, async (req: any, res) => {
+    // Security: Admin-only endpoint
+    if (req.user?.role !== "ADMIN") {
+      return res.status(403).json({ message: "Alleen voor beheerders" });
+    }
+    try {
+      const { getPendingReviewAssets } = await import("./services/adAssetUploadService");
+      const queue = await getPendingReviewAssets();
+      res.json(queue);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Approve video asset (ADMIN ONLY)
+  app.post("/api/admin/video-review/:id/approve", isAuthenticated, async (req: any, res) => {
+    // Security: Admin-only endpoint
+    if (req.user?.role !== "ADMIN") {
+      return res.status(403).json({ message: "Alleen voor beheerders" });
+    }
+    try {
+      const { approveAsset } = await import("./services/adAssetUploadService");
+      const user = req.user as any;
+      const result = await approveAsset(req.params.id, user?.id || 'admin', req.body.notes);
+      if (!result.success) {
+        return res.status(400).json({ message: result.message });
+      }
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Reject video asset (ADMIN ONLY)
+  app.post("/api/admin/video-review/:id/reject", isAuthenticated, async (req: any, res) => {
+    // Security: Admin-only endpoint
+    if (req.user?.role !== "ADMIN") {
+      return res.status(403).json({ message: "Alleen voor beheerders" });
+    }
+    try {
+      const { rejectAsset, REJECTION_REASONS } = await import("./services/adAssetUploadService");
+      const user = req.user as any;
+      const { reason, details } = req.body;
+      
+      if (!reason || !(reason in REJECTION_REASONS)) {
+        return res.status(400).json({ 
+          message: "Ongeldige afkeuringsreden",
+          validReasons: Object.keys(REJECTION_REASONS),
+        });
+      }
+      
+      const result = await rejectAsset(req.params.id, user?.id || 'admin', reason, details);
+      if (!result.success) {
+        return res.status(400).json({ message: result.message });
+      }
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get rejection reasons (for dropdown, ADMIN ONLY)
+  app.get("/api/admin/video-review/rejection-reasons", isAuthenticated, async (req: any, res) => {
+    // Security: Admin-only endpoint
+    if (req.user?.role !== "ADMIN") {
+      return res.status(403).json({ message: "Alleen voor beheerders" });
+    }
+    const { REJECTION_REASONS } = await import("./services/adAssetUploadService");
+    res.json(REJECTION_REASONS);
   });
 
   // ============================================================================

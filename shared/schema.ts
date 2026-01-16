@@ -164,10 +164,18 @@ export const adAssets = pgTable("ad_assets", {
   validationErrors: jsonb("validation_errors").$type<string[]>().default([]), // List of hard errors
   validationWarnings: jsonb("validation_warnings").$type<string[]>().default([]), // List of soft warnings
   requiredDurationSeconds: integer("required_duration_seconds").notNull().default(15), // Expected duration from contract
-  // Admin review
+  // Admin review & approval workflow
+  // Status flow: UPLOADED → IN_REVIEW → APPROVED/REJECTED → PUBLISHED
+  approvalStatus: text("approval_status").notNull().default("UPLOADED"), // UPLOADED | IN_REVIEW | APPROVED | REJECTED | PUBLISHED
   reviewedByAdminAt: timestamp("reviewed_by_admin_at"),
   reviewedByAdminId: varchar("reviewed_by_admin_id"),
   adminNotes: text("admin_notes"),
+  approvedAt: timestamp("approved_at"),
+  approvedBy: varchar("approved_by"), // Admin user ID who approved
+  rejectedAt: timestamp("rejected_at"),
+  rejectedBy: varchar("rejected_by"), // Admin user ID who rejected
+  rejectedReason: text("rejected_reason"), // Reason category: quality | duration | content | other
+  rejectedDetails: text("rejected_details"), // Optional detailed rejection notes
   // Timestamps
   uploadedAt: timestamp("uploaded_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),

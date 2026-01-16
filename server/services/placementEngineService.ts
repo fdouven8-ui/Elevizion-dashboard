@@ -108,6 +108,12 @@ export class PlacementEngineService {
       return null;
     }
     
+    // Safety check: Only APPROVED assets can create placement plans
+    if (asset.approvalStatus !== "APPROVED") {
+      console.error("[PlacementEngine] Asset not approved, cannot create plan:", adAssetId, "status:", asset.approvalStatus);
+      return null;
+    }
+    
     const packageType = advertiser.packageType || "SINGLE";
     const requiredCount = PACKAGE_COUNTS[packageType] || 1;
     

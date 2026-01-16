@@ -14,6 +14,7 @@ import { sendEmail, baseEmailTemplate, BodyBlock } from "../email";
 export type MailEventType = 
   | "ADVERTISER_CONTRACT_ACCEPTED"
   | "ADVERTISER_ASSET_UPLOADED_VALID"
+  | "ADVERTISER_ASSET_REJECTED"
   | "ADVERTISER_PUBLISHED"
   | "LOCATION_INTAKE_SUBMITTED"
   | "LOCATION_APPROVED"
@@ -184,6 +185,66 @@ async function buildAssetUploadedInternalEmail(advertiserId: string, baseUrl: st
   });
   
   return { to: INTERNAL_EMAIL, subject: `Nieuwe advertentie klaar voor plaatsing — ${advertiser.companyName}`, html, text };
+}
+
+// Map rejection reason codes to Dutch labels
+const REJECTION_REASON_LABELS: Record<string, string> = {
+  quality: "Onleesbare tekst of lage beeldkwaliteit",
+  duration: "Verkeerde video duur",
+  content: "Niet toegestane inhoud",
+  other: "Anders",
+};
+
+/**
+ * Build email content for ADVERTISER_ASSET_REJECTED
+ * Sent to advertiser when their video is rejected by admin
+ * Fetches rejection reason/details from the latest rejected asset
+ */
+async function buildAssetRejectedEmail(advertiserId: string, baseUrl: string): Promise<{ to: string; subject: string; html: string; text: string } | null> {
+  const data = await getAdvertiserForEmail(advertiserId);
+  if (!data) return null;
+  
+  const { advertiser, portal } = data;
+  if (!advertiser.email) return null;
+  
+  // Fetch the latest rejected asset for this advertiser to get rejection reason
+  const [rejectedAsset] = await db.select()
+    .from(adAssets)
+    .where(and(
+      eq(adAssets.advertiserId, advertiserId),
+      eq(adAssets.approvalStatus, "REJECTED")
+    ))
+    .orderBy(desc(adAssets.rejectedAt))
+    .limit(1);
+  
+  // Build upload URL using the portal token (portal contains the full token record)
+  const uploadUrl = portal?.token
+    ? `${baseUrl}/upload/${portal.token}`
+    : `${baseUrl}/advertisers/${advertiserId}`;
+  
+  // Get reason text from asset or use default
+  const reasonCode = rejectedAsset?.rejectedReason || "";
+  const reasonText = REJECTION_REASON_LABELS[reasonCode] || "Kwaliteit of inhoud voldoet niet aan onze richtlijnen";
+  const detailsText = rejectedAsset?.rejectedDetails || null;
+  
+  const bodyBlocks: BodyBlock[] = [
+    { type: "paragraph", content: `Helaas kunnen we uw advertentievideo niet goedkeuren.` },
+    { type: "infoCard", rows: [
+      { label: "Reden", value: reasonText },
+      ...(detailsText ? [{ label: "Toelichting", value: detailsText }] : []),
+    ]},
+    { type: "paragraph", content: `U kunt een aangepaste video uploaden via onderstaande link. Zorg ervoor dat de video voldoet aan onze specificaties (1920×1080, 15 seconden, MP4 formaat).` },
+  ];
+  
+  const { html, text } = baseEmailTemplate({
+    subject: "Video niet goedgekeurd — actie vereist",
+    preheader: "Uw advertentievideo vereist aanpassingen",
+    title: "Video niet goedgekeurd",
+    bodyBlocks,
+    cta: { label: "Nieuwe video uploaden", url: uploadUrl },
+  });
+  
+  return { to: advertiser.email, subject: "Video niet goedgekeurd — actie vereist", html, text };
 }
 
 /**
@@ -385,6 +446,11 @@ export async function dispatchMailEvent(
         entityType = "advertiser";
         break;
         
+      case "ADVERTISER_ASSET_REJECTED":
+        emailData = await buildAssetRejectedEmail(entityId, baseUrl);
+        entityType = "advertiser";
+        break;
+        
       case "ADVERTISER_PUBLISHED":
         emailData = await buildPublishedEmail(entityId, baseUrl);
         entityType = "advertiser";
@@ -533,6 +599,7 @@ export async function checkForDuplicateMailLogs(): Promise<{ hasDuplicates: bool
 export const MAIL_EVENT_LABELS: Record<MailEventType, string> = {
   ADVERTISER_CONTRACT_ACCEPTED: "Contract geaccepteerd (upload instructies)",
   ADVERTISER_ASSET_UPLOADED_VALID: "Video ontvangen (intern)",
+  ADVERTISER_ASSET_REJECTED: "Video afgekeurd",
   ADVERTISER_PUBLISHED: "Advertentie live",
   LOCATION_INTAKE_SUBMITTED: "Intake ontvangen",
   LOCATION_APPROVED: "Locatie goedgekeurd",

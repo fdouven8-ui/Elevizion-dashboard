@@ -355,6 +355,32 @@ export default function AdvertiserDetail() {
     enabled: !!id,
   });
 
+  // Fetch latest asset for approval status display
+  interface LatestAssetInfo {
+    id: string;
+    fileName: string;
+    approvalStatus: string | null;
+    validationStatus: string;
+    rejectedReason: string | null;
+    rejectedDetails: string | null;
+    rejectedAt: string | null;
+    approvedAt: string | null;
+    createdAt: string;
+    durationSeconds: string | null;
+    width: number | null;
+    height: number | null;
+  }
+  
+  const { data: latestAssetInfo } = useQuery<LatestAssetInfo | null>({
+    queryKey: ["/api/advertisers", id, "latest-asset"],
+    queryFn: async () => {
+      const res = await fetch(`/api/advertisers/${id}/latest-asset`);
+      if (!res.ok) return null;
+      return res.json();
+    },
+    enabled: !!id,
+  });
+
   const generateContractMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/contract-documents/generate", {
@@ -558,14 +584,57 @@ export default function AdvertiserDetail() {
     return <Badge className={config.className}>{config.label}</Badge>;
   };
 
-  const getAssetBadge = (status: string | null | undefined) => {
-    switch (status) {
-      case "received":
-        return <Badge className="bg-cyan-100 text-cyan-800"><Camera className="h-3 w-3 mr-1" />Ontvangen</Badge>;
-      case "live":
+  // Map rejection reason codes to Dutch labels
+  const REJECTION_REASON_LABELS: Record<string, string> = {
+    quality: "Onleesbare tekst",
+    duration: "Verkeerde duur",
+    content: "Niet toegestane inhoud",
+    other: "Anders",
+  };
+
+  const getAssetBadge = () => {
+    if (!latestAssetInfo) {
+      return <Badge variant="outline" className="text-muted-foreground">Niet geüpload</Badge>;
+    }
+    
+    const approvalStatus = latestAssetInfo.approvalStatus;
+    
+    switch (approvalStatus) {
+      case "UPLOADED":
+      case "IN_REVIEW":
+        return <Badge className="bg-yellow-100 text-yellow-800"><Clock className="h-3 w-3 mr-1" />In Review</Badge>;
+      case "REJECTED":
+        const reasonLabel = latestAssetInfo.rejectedReason 
+          ? REJECTION_REASON_LABELS[latestAssetInfo.rejectedReason] || latestAssetInfo.rejectedReason
+          : "Afgekeurd";
+        return (
+          <span className="inline-flex items-center gap-1.5">
+            <Badge className="bg-red-100 text-red-800"><XCircle className="h-3 w-3 mr-1" />Afgekeurd</Badge>
+            {latestAssetInfo.rejectedReason && (
+              <span className="text-xs text-red-600">({reasonLabel})</span>
+            )}
+          </span>
+        );
+      case "APPROVED":
+        return <Badge className="bg-blue-100 text-blue-800"><CheckCircle2 className="h-3 w-3 mr-1" />Goedgekeurd</Badge>;
+      case "PUBLISHED":
         return <Badge className="bg-green-100 text-green-800"><Play className="h-3 w-3 mr-1" />Live</Badge>;
       default:
-        return <Badge variant="outline" className="text-muted-foreground">Nog niet ontvangen</Badge>;
+        // Fallback to legacy status for backward compatibility
+        const legacyStatus = advertiser?.assetStatus;
+        if (legacyStatus === "uploaded_valid" || legacyStatus === "received") {
+          return <Badge className="bg-yellow-100 text-yellow-800"><Clock className="h-3 w-3 mr-1" />In Review</Badge>;
+        }
+        if (legacyStatus === "uploaded_invalid") {
+          return <Badge className="bg-red-100 text-red-800"><XCircle className="h-3 w-3 mr-1" />Afgekeurd</Badge>;
+        }
+        if (legacyStatus === "ready_for_yodeck") {
+          return <Badge className="bg-blue-100 text-blue-800"><CheckCircle2 className="h-3 w-3 mr-1" />Goedgekeurd</Badge>;
+        }
+        if (legacyStatus === "live") {
+          return <Badge className="bg-green-100 text-green-800"><Play className="h-3 w-3 mr-1" />Live</Badge>;
+        }
+        return null;
     }
   };
 
@@ -596,7 +665,7 @@ export default function AdvertiserDetail() {
               lastSyncAt={advertiser.moneybirdLastSyncAt}
             />
             {getOnboardingBadge(advertiser.onboardingStatus)}
-            {advertiser.assetStatus && getAssetBadge(advertiser.assetStatus)}
+            {getAssetBadge()}
             {advertiser.linkKey && (
               <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-100 rounded-md text-sm font-mono">
                 <Share2 className="h-3.5 w-3.5 text-slate-500" />

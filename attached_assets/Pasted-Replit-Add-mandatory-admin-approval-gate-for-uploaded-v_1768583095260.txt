@@ -1,0 +1,82 @@
+Replit — Add mandatory admin approval gate for uploaded videos + auto publish after approval
+
+Goal
+Every uploaded advertiser video must be manually reviewed by admin.
+Only after admin clicks “Goedkeuren” the system may publish the ad to the screens selected by the system.
+No video may auto-publish immediately after upload.
+
+Core states
+Introduce/standardize video/ad asset status:
+- UPLOADED (file received, not reviewed)
+- IN_REVIEW (optional alias of UPLOADED)
+- APPROVED (admin approved)
+- REJECTED (admin rejected, requires re-upload)
+- PUBLISHED (successfully placed on screens)
+
+Required changes
+
+1) After upload: always mark as UPLOADED (not approved)
+- When upload finishes + validations pass:
+  - persist the asset record
+  - set status = UPLOADED
+  - store metadata (duration, resolution, codec, filesize, originalFilename, storedFilename)
+- Show UI message to advertiser/admin:
+  “Bedankt! We controleren je video en zetten hem daarna live.”
+
+2) Admin review queue page
+Add a new admin page:
+- /review (or /video-review)
+It shows a table/list of assets with status UPLOADED, newest first:
+Columns:
+- Advertiser name
+- PackageType (SINGLE/TRIPLE/TEN)
+- Selected cities/targeting summary
+- Upload time
+- Technical checks summary (duration/resolution/codec OK)
+Actions per row:
+- Preview (open modal/player)
+- Goedkeuren
+- Afkeuren
+
+3) Preview for admin
+In the review page (and advertiser detail):
+- Show video player preview (stream from storage via secured signed URL or existing token access)
+- Show technical metadata (duration, resolution, codec)
+
+4) Approve action triggers auto publish
+When admin clicks “Goedkeuren”:
+- Update asset status -> APPROVED (store approvedAt, approvedBy)
+- Immediately enqueue publish workflow for this advertiser:
+  - create/refresh placement plan using the existing placement engine
+  - set publishQueue status PROPOSED (or your current state)
+  - if you already have APPROVE->PUBLISH pipeline: trigger it now
+Important: publishing must use the already chosen screens/regions from the onboarding/package selection logic.
+If capacity changed, reuse your existing resimulate-before-publish rule and show warning if it can’t be placed.
+
+5) Reject action + reason + reupload loop
+When admin clicks “Afkeuren”:
+- Require a short reason (dropdown + optional text), e.g.:
+  - Onleesbare tekst / kwaliteit
+  - Verkeerde duur
+  - Niet toegestaan (inhoud)
+  - Anders
+- Update asset status -> REJECTED (store rejectedAt, rejectedReason)
+- Send an automatic email to advertiser with the reason + upload link to reupload
+- The advertiser can upload again; the new asset becomes UPLOADED and appears in review queue.
+
+6) UI: advertiser detail status
+On advertiser detail page show a clear badge:
+- Video: Niet geüpload / In review / Goedgekeurd / Afgekeurd / Live
+Also show the last rejection reason if REJECTED.
+
+7) Safety
+- Block publish worker from publishing assets unless status is APPROVED (or PUBLISHED)
+- Even in TEST_MODE, keep the approval gate ON (unless admin explicitly chooses to bypass for testing).
+
+Acceptance criteria
+- Upload does NOT publish automatically.
+- Admin can preview and approve.
+- Approving triggers placement/publish automatically to the screens the system selects.
+- Rejecting sends reason and allows reupload.
+- Publish pipeline refuses non-approved assets.
+Minimal changes; integrate with existing placement engine + publish queue.

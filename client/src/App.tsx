@@ -55,6 +55,7 @@ import UploadPortal from "@/pages/UploadPortal";
 import PublishQueue from "@/pages/PublishQueue";
 import PlaylistMapping from "@/pages/PlaylistMapping";
 import ClaimPage from "@/pages/ClaimPage";
+import VideoReview from "@/pages/VideoReview";
 import NotFound from "@/pages/not-found";
 import Adverteren from "@/pages/marketing/Adverteren";
 import SchermLocatie from "@/pages/marketing/SchermLocatie";
@@ -108,6 +109,7 @@ function DashboardRouter() {
         <Route path="/system-health" component={SystemHealth} />
         <Route path="/publish-queue" component={PublishQueue} />
         <Route path="/playlist-mapping" component={PlaylistMapping} />
+        <Route path="/video-review" component={VideoReview} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>
