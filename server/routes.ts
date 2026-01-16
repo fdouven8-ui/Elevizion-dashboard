@@ -10,7 +10,7 @@ import crypto from "crypto";
 import { encryptToken, decryptToken, isTokenEncryptionEnabled } from "./tokenEncryption";
 import { sql, desc, eq, and, or, isNull, isNotNull } from "drizzle-orm";
 import { db } from "./db";
-import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens, placements } from "@shared/schema";
+import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens, placements, adAssets } from "@shared/schema";
 import { MAX_ADS_PER_SCREEN } from "@shared/regions";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
@@ -10504,6 +10504,42 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       });
     } catch (error: any) {
       console.error("[Upload Portal] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Reset upload status for testing (admin + TEST_MODE only)
+  // Clears asset-related fields so upload can be re-tested
+  app.post("/api/advertisers/:id/reset-upload-status", isAuthenticated, async (req: any, res) => {
+    // Security: must be admin AND in TEST_MODE
+    if (req.user?.role !== "ADMIN" || !isTestMode()) {
+      return res.status(404).json({ message: "Not found" });
+    }
+    
+    try {
+      const advertiser = await storage.getAdvertiser(req.params.id);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      // Reset only upload-related fields
+      await storage.updateAdvertiser(advertiser.id, {
+        assetStatus: "none",
+        // uploadEnabled stays true - advertiser can still access upload portal
+      });
+      
+      // Delete all ad assets for this advertiser (test cleanup)
+      await db.delete(adAssets).where(eq(adAssets.advertiserId, advertiser.id));
+      
+      console.log(`[Test Tools] Reset upload status for advertiser ${advertiser.id} (${advertiser.companyName})`);
+      
+      res.json({
+        success: true,
+        message: "Upload status gereset - klaar voor nieuwe test",
+        assetStatus: "none",
+      });
+    } catch (error: any) {
+      console.error("[Test Tools] Reset upload error:", error);
       res.status(500).json({ message: error.message });
     }
   });

@@ -948,6 +948,79 @@ export default function AdvertiserDetail() {
         <VideoPreviewCard advertiserId={advertiser.id} />
       )}
 
+      {/* Test Tools Card - only visible for admin in TEST_MODE */}
+      {showTestTools && (
+        <Card className="border-orange-300 bg-orange-50">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2 text-orange-700">
+              <AlertTriangle className="h-4 w-4" />
+              Test tools (alleen testmodus)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {advertiser.linkKey && (
+                <Button 
+                  size="sm" 
+                  variant="outline"
+                  className="border-orange-300 hover:bg-orange-100"
+                  data-testid="button-test-open-upload"
+                  onClick={async () => {
+                    try {
+                      const res = await fetch(`/api/advertisers/${advertiser.id}/open-upload-portal`, { method: "POST" });
+                      if (!res.ok) {
+                        const data = await res.json();
+                        throw new Error(data.message || "Fout bij openen portal");
+                      }
+                      const data = await res.json();
+                      navigator.clipboard.writeText(data.uploadUrl);
+                      toast({ 
+                        title: "Upload portal geopend", 
+                        description: "Link gekopieerd naar klembord"
+                      });
+                      window.open(data.uploadUrl, "_blank");
+                    } catch (e: any) {
+                      toast({ title: e.message || "Fout bij openen", variant: "destructive" });
+                    }
+                  }}
+                >
+                  <ExternalLink className="h-4 w-4 mr-1" />
+                  Open upload portal
+                </Button>
+              )}
+              <Button 
+                size="sm" 
+                variant="outline"
+                className="border-orange-300 hover:bg-orange-100"
+                data-testid="button-test-reset-upload"
+                onClick={async () => {
+                  try {
+                    const res = await fetch(`/api/advertisers/${advertiser.id}/reset-upload-status`, { method: "POST" });
+                    if (!res.ok) {
+                      const data = await res.json();
+                      throw new Error(data.message || "Fout bij resetten");
+                    }
+                    refetchAdvertiser();
+                    toast({ 
+                      title: "Upload status gereset", 
+                      description: "Klaar voor nieuwe upload test"
+                    });
+                  } catch (e: any) {
+                    toast({ title: e.message || "Fout bij resetten", variant: "destructive" });
+                  }
+                }}
+              >
+                <RefreshCw className="h-4 w-4 mr-1" />
+                Reset upload status
+              </Button>
+            </div>
+            <p className="text-xs text-orange-600 mt-2">
+              Deze tools zijn alleen zichtbaar in testmodus. Upload status reset verwijdert bestaande video's.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-1">
           <CardHeader>
