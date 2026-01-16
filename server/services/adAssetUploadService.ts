@@ -11,6 +11,7 @@ import {
   VideoValidationResult,
   DEFAULT_VIDEO_DURATION_SECONDS,
 } from './videoMetadataService';
+import { checkTranscodeRequired, startTranscodeJob } from './videoTranscodeService';
 import { ObjectStorageService } from '../objectStorage';
 import { dispatchMailEvent } from './mailEventService';
 
@@ -314,6 +315,15 @@ export async function processAdAssetUpload(
   
   const validationStatus = validation.isValid ? 'valid' : 'invalid';
   
+  // Check if transcoding is needed (non-H.264 codec or non-yuv420p pixel format)
+  const transcodeCheck = checkTranscodeRequired(metadata);
+  let conversionStatus = 'NONE';
+  
+  if (transcodeCheck.needsTranscode) {
+    console.log('[AdAssetUpload] Transcoding required:', transcodeCheck.reason);
+    conversionStatus = 'PENDING';
+  }
+  
   const [asset] = await db.insert(adAssets).values({
     advertiserId: portalContext.advertiserId,
     linkKey: portalContext.linkKey,
@@ -328,12 +338,20 @@ export async function processAdAssetUpload(
     height: metadata.height,
     aspectRatio: metadata.aspectRatio,
     codec: metadata.codec,
+    pixelFormat: metadata.pixelFormat,
     validationStatus,
     validationErrors: validation.errors,
     validationWarnings: validation.warnings,
     requiredDurationSeconds: portalContext.contractDuration,
     approvalStatus: 'UPLOADED', // Always starts as UPLOADED, requires admin approval
+    conversionStatus,
   }).returning();
+  
+  // Start background transcoding job if needed
+  if (transcodeCheck.needsTranscode && asset.id) {
+    console.log('[AdAssetUpload] Starting background transcode job for:', asset.id);
+    startTranscodeJob(asset.id);
+  }
   
   if (validation.isValid) {
     await db.update(advertisers)

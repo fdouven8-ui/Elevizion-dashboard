@@ -275,6 +275,24 @@ export class ObjectStorageService {
   }
 
   /**
+   * Download a file from object storage as a Buffer
+   */
+  async downloadFile(storagePath: string): Promise<Buffer | null> {
+    try {
+      const file = await this.getFileByPath(storagePath);
+      if (!file) {
+        console.error("[ObjectStorage] File not found:", storagePath);
+        return null;
+      }
+      const [content] = await file.download();
+      return content;
+    } catch (error) {
+      console.error("[ObjectStorage] Error downloading file:", error);
+      return null;
+    }
+  }
+
+  /**
    * Upload a file to object storage
    * Returns the public URL of the uploaded file
    */
