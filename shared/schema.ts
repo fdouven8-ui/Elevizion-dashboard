@@ -153,12 +153,27 @@ export const adAssets = pgTable("ad_assets", {
   sizeBytes: integer("size_bytes").notNull(),
   storageUrl: text("storage_url"), // URL in object storage
   storagePath: text("storage_path"), // Path in storage bucket
-  // Video metadata (from ffprobe)
+  // Video metadata (from ffprobe - original upload)
   durationSeconds: decimal("duration_seconds", { precision: 10, scale: 2 }), // Detected duration
   width: integer("width"), // Video width in pixels
   height: integer("height"), // Video height in pixels
   aspectRatio: text("aspect_ratio"), // Detected aspect ratio (e.g., "16:9")
-  codec: text("codec"), // Video codec (e.g., "h264")
+  codec: text("codec"), // Video codec (e.g., "h264", "hevc")
+  pixelFormat: text("pixel_format"), // Pixel format (e.g., "yuv420p", "yuv422p")
+  // Conversion workflow (auto-transcode to H.264 if needed)
+  // Status: NONE (no conversion needed) | PENDING | CONVERTING | COMPLETED | FAILED
+  conversionStatus: text("conversion_status").notNull().default("NONE"),
+  conversionStartedAt: timestamp("conversion_started_at"),
+  conversionCompletedAt: timestamp("conversion_completed_at"),
+  conversionError: text("conversion_error"), // Error message if conversion failed
+  // Converted file info (if conversion was needed)
+  convertedStoragePath: text("converted_storage_path"),
+  convertedStorageUrl: text("converted_storage_url"),
+  convertedCodec: text("converted_codec"), // Always "h264" after conversion
+  convertedPixelFormat: text("converted_pixel_format"), // Always "yuv420p" after conversion
+  convertedWidth: integer("converted_width"),
+  convertedHeight: integer("converted_height"),
+  convertedSizeBytes: integer("converted_size_bytes"),
   // Validation
   validationStatus: text("validation_status").notNull().default("pending"), // pending | valid | invalid
   validationErrors: jsonb("validation_errors").$type<string[]>().default([]), // List of hard errors

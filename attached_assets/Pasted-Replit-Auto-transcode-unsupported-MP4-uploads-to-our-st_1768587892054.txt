@@ -1,0 +1,70 @@
+Replit — Auto-transcode unsupported MP4 uploads to our standard (H.264) instead of rejecting
+
+Goal
+Users should be able to upload “weird” MP4s (HEVC/H.265, phone exports, AI exports).
+System must automatically convert them into our required playback format so Yodeck always works.
+
+New standard output format (always)
+- Container: MP4
+- Video codec: H.264 (libx264)
+- Pixel format: yuv420p (critical for compatibility)
+- Faststart: +faststart
+- Audio: remove or AAC (choose 1; recommended: remove)
+- Max duration: 15.0 seconds (keep existing rule)
+- Resolution: keep original if <= 1920x1080, else scale down to 1920x1080 (no upscaling)
+
+Flow changes (minimal)
+1) Upload no longer fails purely because codec is unsupported.
+2) After upload + temp file write:
+   - ffprobe to detect codec/pix_fmt/resolution/duration
+   - If duration > 15 -> still reject (hard rule)
+   - Else if codec != h264 OR pix_fmt not yuv420p OR container issues:
+       -> auto transcode to standard output
+3) Status model
+Add/standardize assetStatus:
+- UPLOADED (raw file received)
+- CONVERTING (transcode started)
+- UPLOADED_READY (converted OK, ready for admin review) OR keep UPLOADED but add flags
+- FAILED (conversion failed)
+Admin review queue should show:
+- “Conversie bezig…” badge when CONVERTING
+- Only show “Goedkeuren” when converted file is ready
+
+Implementation details
+A) Transcode execution
+Use ffmpeg:
+ffmpeg -y -i inputPath \
+  -t 15 \
+  -c:v libx264 -profile:v baseline -level 4.0 -pix_fmt yuv420p \
+  -movflags +faststart \
+  -an \
+  -vf "scale='min(1920,iw)':'min(1080,ih)':force_original_aspect_ratio=decrease" \
+  outputPath
+
+B) Sync vs async (choose safe)
+If files are small (<100MB, <15s), transcode can run inline within request.
+But better: run as background job:
+- Upload returns immediately: “Upload ontvangen — we optimaliseren je video…”
+- Job updates status to READY/FAILED
+- UI polls /api/uploads/:assetId/status every 2-3s or uses existing refresh pattern
+
+C) Storage
+Store BOTH for debugging:
+- original file (optional)
+- converted file (always the one used for review + publish)
+Persist:
+- originalCodec, originalPixFmt, originalDuration
+- convertedCodec=h264, convertedPixFmt=yuv420p, convertedDuration
+
+D) Error messaging
+If conversion fails:
+- show actionable message:
+  “We konden je video niet automatisch omzetten. Exporteer als MP4 (H.264) of neem contact op.”
+Log ffmpeg stderr server-side.
+
+Acceptance criteria
+- H.265/HEVC MP4 uploads no longer get rejected; they are converted.
+- Review queue shows the converted preview and metadata.
+- Publish pipeline always uses the converted asset so Yodeck compatibility is guaranteed.
+- Duration > 15s is still rejected immediately.
+- Works via dashboard upload and email token upload.
