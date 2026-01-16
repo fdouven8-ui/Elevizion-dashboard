@@ -867,33 +867,33 @@ export default function AdvertiserDetail() {
                     Nieuwe Upload Link
                   </Button>
                 )}
-                {showTestTools && advertiser.linkKey && (
+                {advertiser.linkKey && (
                   <Button 
                     size="sm" 
                     variant="default"
-                    className="bg-orange-500 hover:bg-orange-600"
-                    data-testid="button-test-upload-direct"
+                    className={showTestTools ? "bg-orange-500 hover:bg-orange-600" : ""}
+                    data-testid="button-open-upload-portal"
                     onClick={async () => {
                       try {
-                        const res = await fetch(`/api/advertisers/${advertiser.id}/regenerate-upload-link`, { method: "POST" });
+                        const res = await fetch(`/api/advertisers/${advertiser.id}/open-upload-portal`, { method: "POST" });
                         if (!res.ok) {
                           const data = await res.json();
-                          throw new Error(data.message || "Fout bij genereren link");
+                          throw new Error(data.message || "Fout bij openen portal");
                         }
                         const data = await res.json();
                         navigator.clipboard.writeText(data.uploadUrl);
                         toast({ 
-                          title: "Test upload link gekopieerd", 
-                          description: "Link opent in nieuw tabblad..." 
+                          title: "Upload portal geopend", 
+                          description: data.testMode ? "Testmodus actief - link gekopieerd" : "Link gekopieerd naar klembord"
                         });
                         window.open(data.uploadUrl, "_blank");
                       } catch (e: any) {
-                        toast({ title: e.message || "Fout bij genereren", variant: "destructive" });
+                        toast({ title: e.message || "Fout bij openen", variant: "destructive" });
                       }
                     }}
                   >
                     <ExternalLink className="h-4 w-4 mr-1" />
-                    Test Upload (direct)
+                    Open Upload Portal
                   </Button>
                 )}
                 {(advertiser.assetStatus === "uploaded_valid" || advertiser.assetStatus === "ready_for_yodeck") && (

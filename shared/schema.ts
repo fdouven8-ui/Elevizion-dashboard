@@ -95,6 +95,9 @@ export const advertisers = pgTable("advertisers", {
   packageNotes: text("package_notes"), // Toelichting bij CUSTOM pakket
   // Asset/video status
   assetStatus: text("asset_status").default("none"), // none | uploaded_invalid | uploaded_valid | ready_for_yodeck | live
+  // Upload portal state - enables repeated access after onboarding reaches upload step
+  uploadEnabled: boolean("upload_enabled").default(false), // true when advertiser can access upload portal
+  lastUploadTokenGeneratedAt: timestamp("last_upload_token_generated_at"), // When last upload token was created
   // Video specification (contract-driven)
   videoDurationSeconds: integer("video_duration_seconds").default(15), // Required video length (default 15s, can be custom per contract)
   strictResolution: boolean("strict_resolution").default(false), // If true, resolution/aspect ratio mismatches are errors instead of warnings
@@ -128,7 +131,8 @@ export const advertisers = pgTable("advertisers", {
 export const portalTokens = pgTable("portal_tokens", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),
-  tokenHash: text("token_hash").notNull(), // SHA256 hash of the token
+  tokenHash: text("token_hash").notNull(), // SHA256 hash of the token for validation
+  tokenCiphertext: text("token_ciphertext"), // Encrypted raw token for reuse (admin/TEST_MODE)
   expiresAt: timestamp("expires_at").notNull(),
   usedAt: timestamp("used_at"), // When the token was used (null = unused)
   createdAt: timestamp("created_at").notNull().defaultNow(),

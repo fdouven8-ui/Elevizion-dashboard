@@ -335,7 +335,14 @@ app.use((req, res, next) => {
       // Boot log for TEST_MODE visibility
       const testModeRaw = process.env.TEST_MODE;
       const testModeEnabled = testModeRaw?.toLowerCase() === 'true';
+      const tokenEncryptionKey = process.env.TOKEN_ENCRYPTION_KEY;
+      const encryptionEnabled = tokenEncryptionKey && tokenEncryptionKey.length >= 32;
       console.log(`[BOOT] NODE_ENV=${process.env.NODE_ENV} TEST_MODE="${testModeRaw}" isTestMode=${testModeEnabled}`);
+      if (!encryptionEnabled) {
+        console.log(`[BOOT] WARNING: TOKEN_ENCRYPTION_KEY not set or < 32 chars - token reuse disabled`);
+      } else {
+        console.log(`[BOOT] Token encryption enabled for upload portal reuse`);
+      }
       
       log(`serving on port ${port}`);
       

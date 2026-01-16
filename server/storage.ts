@@ -4,7 +4,7 @@
  */
 
 import { db } from "./db";
-import { eq, and, gte, lte, lt, desc, sql, isNull, notInArray, ilike, or } from "drizzle-orm";
+import { eq, and, gte, lte, lt, gt, desc, sql, isNull, notInArray, ilike, or } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import type {
   Advertiser, InsertAdvertiser,
@@ -441,6 +441,7 @@ export interface IStorage {
   getPortalTokenByHash(tokenHash: string): Promise<PortalToken | undefined>;
   markPortalTokenUsed(id: string): Promise<PortalToken | undefined>;
   getPortalTokensForAdvertiser(advertiserId: string): Promise<PortalToken[]>;
+  expireOldPortalTokensForAdvertiser(advertiserId: string): Promise<number>;
 
   // Email Logs
   createEmailLog(data: InsertEmailLog): Promise<EmailLog>;
@@ -2862,6 +2863,18 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(schema.portalTokens)
       .where(eq(schema.portalTokens.advertiserId, advertiserId))
       .orderBy(desc(schema.portalTokens.createdAt));
+  }
+
+  async expireOldPortalTokensForAdvertiser(advertiserId: string): Promise<number> {
+    const result = await db.update(schema.portalTokens)
+      .set({ expiresAt: new Date() })
+      .where(
+        and(
+          eq(schema.portalTokens.advertiserId, advertiserId),
+          gt(schema.portalTokens.expiresAt, new Date())
+        )
+      );
+    return result.rowCount ?? 0;
   }
 
   // ============================================================================
