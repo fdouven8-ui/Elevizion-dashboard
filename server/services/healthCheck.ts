@@ -440,36 +440,36 @@ export async function checkYodeck(): Promise<HealthCheckResult[]> {
       const missingMapping = activeLocations.filter(l => !l.yodeckScreenId && !l.yodeckPlaylistId);
       
       results.push({
-        name: "Locaties met Yodeck screen ID",
+        name: "Schermen met Yodeck screen ID",
         status: withScreenId.length === activeLocations.length ? "PASS" : "WARNING",
-        message: `${withScreenId.length}/${activeLocations.length} locaties hebben yodeckScreenId`,
+        message: `${withScreenId.length}/${activeLocations.length} schermen hebben yodeckScreenId`,
         details: { count: withScreenId.length, total: activeLocations.length },
         fixSuggestion: withScreenId.length < activeLocations.length 
-          ? "Koppel locaties aan Yodeck schermen via playlist-mapping" : undefined,
+          ? "Koppel schermen aan Yodeck schermen via playlist-mapping" : undefined,
         actionUrl: "/playlist-mapping",
         actionLabel: "Playlist Mapping",
       });
       
       results.push({
-        name: "Locaties met Yodeck playlist ID",
+        name: "Schermen met Yodeck playlist ID",
         status: withPlaylistId.length === activeLocations.length ? "PASS" : "WARNING",
-        message: `${withPlaylistId.length}/${activeLocations.length} locaties hebben yodeckPlaylistId`,
+        message: `${withPlaylistId.length}/${activeLocations.length} schermen hebben yodeckPlaylistId`,
         details: { count: withPlaylistId.length, total: activeLocations.length },
         fixSuggestion: withPlaylistId.length < activeLocations.length 
-          ? "Koppel locaties aan Yodeck playlists via playlist-mapping" : undefined,
+          ? "Koppel schermen aan Yodeck playlists via playlist-mapping" : undefined,
         actionUrl: "/playlist-mapping",
         actionLabel: "Playlist Mapping",
       });
       
-      // Show top 5 locations missing any mapping
+      // Show top 5 screens missing any mapping
       if (missingMapping.length > 0) {
         const top5 = missingMapping.slice(0, 5).map(l => l.name || l.city || l.id);
         results.push({
-          name: "Locaties zonder Yodeck mapping",
+          name: "Schermen zonder Yodeck mapping",
           status: "WARNING",
-          message: `${missingMapping.length} locatie(s) zonder Yodeck koppeling: ${top5.join(", ")}${missingMapping.length > 5 ? "..." : ""}`,
+          message: `${missingMapping.length} scherm(en) zonder Yodeck koppeling: ${top5.join(", ")}${missingMapping.length > 5 ? "..." : ""}`,
           details: { count: missingMapping.length, locations: top5 },
-          fixSuggestion: "Koppel deze locaties handmatig via playlist-mapping",
+          fixSuggestion: "Koppel deze schermen handmatig via playlist-mapping",
           actionUrl: "/playlist-mapping",
           actionLabel: "Playlist Mapping",
         });
@@ -924,20 +924,20 @@ export async function checkPlacementDataCompleteness(): Promise<HealthCheckResul
     const locationsWithoutRegionOrCity = await storage.getLocationsWithoutRegionOrCity();
     const missingRegionCount = locationsWithoutRegionOrCity.length;
     results.push({
-      name: "Locaties zonder plaats/regio",
+      name: "Schermen zonder plaats/regio",
       status: missingRegionCount === 0 ? "PASS" : "FAIL",
-      message: missingRegionCount === 0 ? "Alle locaties hebben een plaats of regionCode" : `${missingRegionCount} locatie(s) zonder plaats/regio - niet vindbaar voor targeting!`,
+      message: missingRegionCount === 0 ? "Alle schermen hebben een plaats of regionCode" : `${missingRegionCount} scherm(en) zonder plaats/regio - niet vindbaar voor targeting!`,
       details: missingRegionCount > 0 ? { locationIds: locationsWithoutRegionOrCity.slice(0, 10).map(l => l.id), locationNames: locationsWithoutRegionOrCity.slice(0, 5).map(l => l.name) } : undefined,
-      fixSuggestion: missingRegionCount > 0 ? "Vul plaatsnaam in voor deze locaties (of koppel aan Moneybird voor auto-sync)" : undefined,
+      fixSuggestion: missingRegionCount > 0 ? "Vul plaatsnaam in voor deze schermen (of koppel aan Moneybird voor auto-sync)" : undefined,
     });
     
     // 4. Check locations without categoriesAllowed
     const locationsWithoutCategories = await storage.getLocationsWithoutCategories();
     const missingCategoriesCount = locationsWithoutCategories.length;
     results.push({
-      name: "Locaties zonder toegestane categorieën",
+      name: "Schermen zonder toegestane categorieën",
       status: missingCategoriesCount === 0 ? "PASS" : "WARNING",
-      message: missingCategoriesCount === 0 ? "Alle locaties hebben categorieën geconfigureerd" : `${missingCategoriesCount} locatie(s) zonder categoriesAllowed`,
+      message: missingCategoriesCount === 0 ? "Alle schermen hebben categorieën geconfigureerd" : `${missingCategoriesCount} scherm(en) zonder categoriesAllowed`,
       details: missingCategoriesCount > 0 ? { locationIds: missingCategoriesCount <= 10 ? locationsWithoutCategories.map(l => l.id) : locationsWithoutCategories.slice(0, 10).map(l => l.id) } : undefined,
       fixSuggestion: missingCategoriesCount > 0 ? "Stel categoriesAllowed in voor betere targeting" : undefined,
     });
@@ -948,40 +948,40 @@ export async function checkPlacementDataCompleteness(): Promise<HealthCheckResul
     results.push({
       name: "Stale sync (online, >15 min geen sync)",
       status: staleSyncCount === 0 ? "PASS" : "WARNING",
-      message: staleSyncCount === 0 ? "Alle online locaties recent gesynchroniseerd" : `${staleSyncCount} locatie(s) met verouderde sync`,
+      message: staleSyncCount === 0 ? "Alle online schermen recent gesynchroniseerd" : `${staleSyncCount} scherm(en) met verouderde sync`,
       details: staleSyncCount > 0 ? { locationIds: staleSyncLocations.slice(0, 10).map(l => l.id) } : undefined,
-      fixSuggestion: staleSyncCount > 0 ? "Voer Yodeck sync uit om locaties bij te werken" : undefined,
+      fixSuggestion: staleSyncCount > 0 ? "Voer Yodeck sync uit om schermen bij te werken" : undefined,
     });
     
     // 6. Check missing capacity config
     const locationsWithoutCapacity = await storage.getLocationsWithoutCapacityConfig();
     const missingCapacityCount = locationsWithoutCapacity.length;
     results.push({
-      name: "Locaties zonder capacity configuratie",
+      name: "Schermen zonder capacity configuratie",
       status: missingCapacityCount === 0 ? "PASS" : "WARNING",
-      message: missingCapacityCount === 0 ? "Alle locaties hebben capacity geconfigureerd" : `${missingCapacityCount} locatie(s) zonder adSlotCapacitySecondsPerLoop`,
+      message: missingCapacityCount === 0 ? "Alle schermen hebben capacity geconfigureerd" : `${missingCapacityCount} scherm(en) zonder adSlotCapacitySecondsPerLoop`,
       details: missingCapacityCount > 0 ? { locationIds: missingCapacityCount <= 10 ? locationsWithoutCapacity.map(l => l.id) : locationsWithoutCapacity.slice(0, 10).map(l => l.id) } : undefined,
-      fixSuggestion: missingCapacityCount > 0 ? "Stel adSlotCapacitySecondsPerLoop in voor deze locaties" : undefined,
+      fixSuggestion: missingCapacityCount > 0 ? "Stel adSlotCapacitySecondsPerLoop in voor deze schermen" : undefined,
     });
     
     // 7. Check online locations without Yodeck playlist (FAIL - blocks publish)
     const onlineWithoutPlaylist = await storage.getOnlineLocationsWithoutPlaylist();
     const onlineNoPlaylistCount = onlineWithoutPlaylist.length;
     results.push({
-      name: "Online locaties zonder Yodeck playlist",
+      name: "Online schermen zonder Yodeck playlist",
       status: onlineNoPlaylistCount === 0 ? "PASS" : "FAIL",
-      message: onlineNoPlaylistCount === 0 ? "Alle online locaties hebben een playlist" : `${onlineNoPlaylistCount} online locatie(s) zonder playlist - blokkeert publicatie!`,
+      message: onlineNoPlaylistCount === 0 ? "Alle online schermen hebben een playlist" : `${onlineNoPlaylistCount} online scherm(en) zonder playlist - blokkeert publicatie!`,
       details: onlineNoPlaylistCount > 0 ? { locationIds: onlineWithoutPlaylist.slice(0, 10).map(l => l.id), locationNames: onlineWithoutPlaylist.slice(0, 5).map(l => l.name) } : undefined,
-      fixSuggestion: onlineNoPlaylistCount > 0 ? "Koppel Yodeck playlists aan deze online locaties (verplicht)" : undefined,
+      fixSuggestion: onlineNoPlaylistCount > 0 ? "Koppel Yodeck playlists aan deze online schermen (verplicht)" : undefined,
     });
     
     // 8. Check locations without exclusivityMode (informational)
     const locationsWithoutExclusivity = await storage.getLocationsWithoutExclusivityMode();
     const missingExclusivityCount = locationsWithoutExclusivity.length;
     results.push({
-      name: "Locaties zonder exclusiviteitsinstelling",
+      name: "Schermen zonder exclusiviteitsinstelling",
       status: "PASS", // Not a warning - defaults to STRICT
-      message: missingExclusivityCount === 0 ? "Alle locaties hebben een exclusiviteitsinstelling" : `${missingExclusivityCount} locatie(s) gebruiken standaard STRICT`,
+      message: missingExclusivityCount === 0 ? "Alle schermen hebben een exclusiviteitsinstelling" : `${missingExclusivityCount} scherm(en) gebruiken standaard STRICT`,
       details: missingExclusivityCount > 0 ? { locationIds: locationsWithoutExclusivity.slice(0, 5).map(l => l.id) } : undefined,
     });
     
@@ -989,11 +989,11 @@ export async function checkPlacementDataCompleteness(): Promise<HealthCheckResul
     const locationsWithoutPlaylist = await storage.getLocationsWithoutYodeckPlaylist();
     const missingPlaylistCount = locationsWithoutPlaylist.length;
     results.push({
-      name: "Locaties zonder Yodeck playlist (totaal)",
+      name: "Schermen zonder Yodeck playlist (totaal)",
       status: missingPlaylistCount === 0 ? "PASS" : "WARNING",
-      message: missingPlaylistCount === 0 ? "Alle locaties hebben een Yodeck playlist" : `${missingPlaylistCount} locatie(s) zonder playlist ID`,
+      message: missingPlaylistCount === 0 ? "Alle schermen hebben een Yodeck playlist" : `${missingPlaylistCount} scherm(en) zonder playlist ID`,
       details: missingPlaylistCount > 0 ? { locationIds: missingPlaylistCount <= 10 ? locationsWithoutPlaylist.map(l => l.id) : locationsWithoutPlaylist.slice(0, 10).map(l => l.id) } : undefined,
-      fixSuggestion: missingPlaylistCount > 0 ? "Koppel Yodeck playlists aan deze locaties" : undefined,
+      fixSuggestion: missingPlaylistCount > 0 ? "Koppel Yodeck playlists aan deze schermen" : undefined,
     });
     
     // 10. Overall placement health summary
@@ -1047,11 +1047,11 @@ export async function checkReportingDataQuality(): Promise<HealthCheckResult[]> 
     const count = suspiciousLocations.length;
     
     results.push({
-      name: "Locaties met verdachte bezoekersaantallen",
+      name: "Schermen met verdachte bezoekersaantallen",
       status: count === 0 ? "PASS" : "WARNING",
       message: count === 0 
-        ? "Geen locaties met verdachte bezoekersaantallen" 
-        : `${count} locatie${count !== 1 ? "s" : ""} met bezoekersaantal > ${maxVisitors.toLocaleString("nl-NL")}/week`,
+        ? "Geen schermen met verdachte bezoekersaantallen" 
+        : `${count} scherm${count !== 1 ? "en" : ""} met bezoekersaantal > ${maxVisitors.toLocaleString("nl-NL")}/week`,
       details: count > 0 ? { 
         count, 
         maxVisitorsPerWeek: maxVisitors,
@@ -1070,13 +1070,13 @@ export async function checkReportingDataQuality(): Promise<HealthCheckResult[]> 
     const flaggedCount = flaggedLocations.length;
     
     results.push({
-      name: "Locaties gemarkeerd voor review",
+      name: "Schermen gemarkeerd voor review",
       status: flaggedCount === 0 ? "PASS" : "WARNING",
       message: flaggedCount === 0 
-        ? "Geen locaties gemarkeerd voor review" 
-        : `${flaggedCount} locatie${flaggedCount !== 1 ? "s" : ""} gemarkeerd voor review`,
+        ? "Geen schermen gemarkeerd voor review" 
+        : `${flaggedCount} scherm${flaggedCount !== 1 ? "en" : ""} gemarkeerd voor review`,
       details: flaggedCount > 0 ? { count: flaggedCount } : undefined,
-      fixSuggestion: flaggedCount > 0 ? "Bekijk de locaties en wis de review-markering na controle" : undefined,
+      fixSuggestion: flaggedCount > 0 ? "Bekijk de schermen en wis de review-markering na controle" : undefined,
     });
     
     const reportSettings = await storage.getSystemSettingsByCategory("reporting");
@@ -1289,32 +1289,32 @@ export async function checkAvailabilityAndWaitlist(): Promise<HealthCheckResult[
     if (notReadyLocations.length > 0) {
       const top5 = notReadyLocations.slice(0, 5).map(l => l.name || l.id);
       results.push({
-        name: "Actieve locaties zonder 'readyForAds'",
+        name: "Actieve schermen zonder 'readyForAds'",
         status: "WARNING",
-        message: `${notReadyLocations.length} locatie(s) actief maar niet verkoopbaar`,
+        message: `${notReadyLocations.length} scherm(en) actief maar niet verkoopbaar`,
         details: { 
           count: notReadyLocations.length,
           locations: top5,
         },
-        fixSuggestion: "Zet readyForAds = true voor deze locaties in de admin",
+        fixSuggestion: "Zet readyForAds = true voor deze schermen in de admin",
         actionUrl: "/schermen",
-        actionLabel: "Bekijk locaties",
+        actionLabel: "Bekijk schermen",
       });
     }
     
     if (noCityLocations.length > 0) {
       const top5 = noCityLocations.slice(0, 5).map(l => l.name || l.id);
       results.push({
-        name: "Locaties zonder stad/regio",
+        name: "Schermen zonder stad/regio",
         status: "WARNING",
-        message: `${noCityLocations.length} locatie(s) missen stad of regionCode`,
+        message: `${noCityLocations.length} scherm(en) missen stad of regionCode`,
         details: { 
           count: noCityLocations.length,
           locations: top5,
         },
-        fixSuggestion: "Stel city of regionCode in voor deze locaties",
+        fixSuggestion: "Stel city of regionCode in voor deze schermen",
         actionUrl: "/schermen",
-        actionLabel: "Bekijk locaties",
+        actionLabel: "Bekijk schermen",
       });
     }
     
@@ -1363,7 +1363,7 @@ export async function checkAvailabilityAndWaitlist(): Promise<HealthCheckResult[
           top5: top5Cities,
         },
         actionUrl: `/schermen?city=${encodeURIComponent(top5Cities[0] || "")}`,
-        actionLabel: "Bekijk locaties",
+        actionLabel: "Bekijk schermen",
       });
     }
     

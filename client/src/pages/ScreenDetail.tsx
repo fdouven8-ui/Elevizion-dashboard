@@ -38,8 +38,13 @@ import {
   Monitor,
   CheckCircle,
   AlertCircle,
-  Database
+  Database,
+  Settings,
+  Zap,
+  Link2
 } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Link, useRoute } from "wouter";
 import { placementsApi } from "@/lib/api";
 import { formatDistanceToNow, format } from "date-fns";
@@ -139,6 +144,7 @@ export default function ScreenDetail() {
   const [contentSearch, setContentSearch] = useState("");
   const [contentFilter, setContentFilter] = useState<"all" | "ads" | "other">("all");
   const [placementSearch, setPlacementSearch] = useState("");
+  const [cityInput, setCityInput] = useState("");
 
   const screenId = params?.id;
   const screen = screens.find(s => s.id === screenId);
@@ -227,6 +233,65 @@ export default function ScreenDetail() {
       toast({ title: "Synchronisatie mislukt", variant: "destructive" });
     }
   });
+
+  const locationUpdateMutation = useMutation({
+    mutationFn: async (data: { city?: string; readyForAds?: boolean; status?: string }) => {
+      if (!location) throw new Error("Geen locatie gevonden");
+      const res = await apiRequest("PATCH", `/api/locations/${location.id}`, data);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message || "Fout bij opslaan");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["locations"] });
+      refetchScreen();
+      toast({ title: "Opgeslagen" });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    }
+  });
+
+  const handleSetLive = async () => {
+    const effectiveCity = cityInput.trim() || location?.city;
+    const effectiveRegion = location?.regionCode;
+    if (!effectiveCity && !effectiveRegion) {
+      toast({ 
+        title: "Vul eerst een plaats (city) of regio (regionCode) in", 
+        variant: "destructive" 
+      });
+      return;
+    }
+    const payload: { readyForAds: boolean; status: string; city?: string } = {
+      readyForAds: true,
+      status: "active"
+    };
+    if (cityInput.trim()) {
+      payload.city = cityInput.trim();
+    }
+    locationUpdateMutation.mutate(payload);
+  };
+
+  const handleToggleReadyForAds = (checked: boolean) => {
+    if (checked) {
+      const effectiveCity = cityInput.trim() || location?.city;
+      const effectiveRegion = location?.regionCode;
+      if (!effectiveCity && !effectiveRegion) {
+        toast({ 
+          title: "Vul eerst een plaats (city) of regio (regionCode) in", 
+          variant: "destructive" 
+        });
+        return;
+      }
+    }
+    const payload: { readyForAds: boolean; city?: string } = { readyForAds: checked };
+    if (cityInput.trim()) {
+      payload.city = cityInput.trim();
+    }
+    locationUpdateMutation.mutate(payload);
+  };
 
   const handlePausePlacement = async (placementId: string) => {
     try {
@@ -338,6 +403,13 @@ export default function ScreenDetail() {
               >
                 {screen.status === "online" ? "Online" : "Offline"}
               </Badge>
+              <Badge 
+                variant={location?.readyForAds ? "default" : "secondary"}
+                className={location?.readyForAds ? "bg-green-600" : ""}
+                data-testid="screen-sellable-status"
+              >
+                {location?.readyForAds ? "Verkoopbaar" : "Niet verkoopbaar"}
+              </Badge>
             </div>
             <p className="text-sm text-muted-foreground mt-1">
               {screen.yodeckPlayerId && (
@@ -413,8 +485,95 @@ export default function ScreenDetail() {
           </TabsTrigger>
         </TabsList>
 
-        {/* TAB: Overzicht - 2 secties: Scherm (Yodeck) + Bedrijf (Moneybird) */}
+        {/* TAB: Overzicht - 3 secties: Advertentie-instellingen + Scherm (Yodeck) + Bedrijf (Moneybird) */}
         <TabsContent value="overzicht" className="space-y-6 mt-6">
+          {/* Advertentie-instellingen card - full width at top */}
+          <Card data-testid="card-advertentie-instellingen">
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Settings className="h-5 w-5" />
+                Advertentie-instellingen
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Plaats (city) input */}
+                <div className="space-y-2">
+                  <Label htmlFor="city-input">Plaats</Label>
+                  <Input
+                    id="city-input"
+                    data-testid="input-city"
+                    placeholder={location?.city || "bijv. Sittard"}
+                    value={cityInput}
+                    onChange={(e) => setCityInput(e.target.value)}
+                    onBlur={() => {
+                      if (cityInput.trim() && cityInput.trim() !== location?.city) {
+                        locationUpdateMutation.mutate({ city: cityInput.trim() });
+                      }
+                    }}
+                  />
+                  {location?.city && !cityInput && (
+                    <p className="text-xs text-muted-foreground">Huidige waarde: {location.city}</p>
+                  )}
+                </div>
+
+                {/* Regio code (read-only display) */}
+                <div className="space-y-2">
+                  <Label>Regio code</Label>
+                  <p className="text-sm py-2">{location?.regionCode || <span className="text-muted-foreground">—</span>}</p>
+                </div>
+
+                {/* Klaar voor advertenties toggle */}
+                <div className="space-y-2">
+                  <Label htmlFor="ready-for-ads-toggle">Klaar voor advertenties</Label>
+                  <div className="flex items-center gap-3 py-1">
+                    <Switch
+                      id="ready-for-ads-toggle"
+                      data-testid="switch-ready-for-ads"
+                      checked={location?.readyForAds || false}
+                      onCheckedChange={handleToggleReadyForAds}
+                      disabled={locationUpdateMutation.isPending}
+                    />
+                    <span className="text-sm">
+                      {location?.readyForAds ? "Aan" : "Uit"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Als dit aan staat, wordt dit scherm zichtbaar op de website en kan het advertenties aannemen.
+                  </p>
+                </div>
+
+                {/* Zet scherm live button */}
+                <div className="space-y-2">
+                  <Label>&nbsp;</Label>
+                  <Button
+                    data-testid="button-set-live"
+                    onClick={handleSetLive}
+                    disabled={locationUpdateMutation.isPending || location?.readyForAds}
+                    className="w-full"
+                  >
+                    <Zap className="h-4 w-4 mr-2" />
+                    {location?.readyForAds ? "Scherm is live" : "Zet scherm live"}
+                  </Button>
+                  {!location?.city && !location?.regionCode && (
+                    <p className="text-xs text-amber-600">Vul eerst een plaats in</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Yodeck mapping link if missing */}
+              {(!screen?.yodeckScreenId && !screen?.yodeckPlaylistId) && (
+                <div className="flex items-center gap-2 text-sm text-amber-600 pt-2 border-t">
+                  <Link2 className="h-4 w-4" />
+                  <span>Yodeck koppeling ontbreekt.</span>
+                  <Link href="/playlist-mapping" className="underline font-medium">
+                    Yodeck koppelen →
+                  </Link>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* SECTIE A: Scherm (Yodeck) */}
             <Card>

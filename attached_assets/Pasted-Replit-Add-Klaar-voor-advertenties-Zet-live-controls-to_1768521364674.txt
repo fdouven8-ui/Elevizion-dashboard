@@ -1,0 +1,71 @@
+Replit — Add “Klaar voor advertenties” + “Zet live” controls to the existing Scherm detail page + rename “locaties” to “schermen”
+
+Context
+User is on the Schermen detail page (see screenshot: Bouwservice Douven with Yodeck + Moneybird cards).
+This is the main operational UI, but it currently has NO controls to set:
+- readyForAds (sellable)
+- go-live action
+Marketing flow depends on readyForAds, so it shows “Nog geen actieve schermen”.
+
+Goal
+1) Add clear “Advertentie-instellingen” controls on THIS Scherm detail page (the one the user is using).
+2) Make it possible to mark the screen sellable (readyForAds=true) and validate city/region.
+3) Replace user-facing wording “locatie(s)” with “scherm(en)” in the UI, especially System Health + messages.
+
+A) Add “Advertentie-instellingen” card on Scherm detail page
+On the existing Schermen detail view (the page shown in screenshot), add a new card near the top (next to Yodeck/Moneybird or below the tabs) called:
+“Advertentie-instellingen”
+
+Card contents:
+1) Plaats (city) input (text) and/or Regio code (regionCode) input (optional)
+2) Toggle switch:
+   Label: “Klaar voor advertenties”
+   Helper text: “Als dit aan staat, wordt dit scherm zichtbaar op de website en kan het advertenties aannemen.”
+   This toggles location.readyForAds
+
+3) Button: “Zet scherm live”
+   - One-click action that sets:
+     - readyForAds = true
+     - status = active (if your model uses status)
+   - Validation (both client + server):
+     - If enabling readyForAds and city AND regionCode are both empty:
+       show error: “Vul eerst een plaats (city) of regio (regionCode) in”
+       do not apply
+
+4) Show current state clearly in the header area
+Near the screen title (Bouwservice Douven), show a badge:
+- “Verkoopbaar” (green) if readyForAds=true
+- “Niet verkoopbaar” (gray/amber) if readyForAds=false
+This removes confusion why marketing is empty.
+
+B) Wire it to the correct API + show errors (no silent failures)
+Use PATCH /api/locations/:id (or existing update endpoint) with payloads:
+- { readyForAds: true/false }
+- { readyForAds: true, status: "active" } (if applicable)
+If PATCH fails (401/403/400/500), show a toast + inline error.
+On success, show toast “Opgeslagen”.
+
+After successful update:
+- refetch the screen detail data
+- ensure availability cache invalidation is triggered (already implemented server-side)
+
+C) “Scherm(en)” wording everywhere (UI only)
+Replace user-facing text “locatie(s)” with “scherm(en)” in:
+- System Health check messages (e.g., “locaties zonder Moneybird” -> “schermen zonder Moneybird-koppeling”)
+- Marketing flow messages where relevant
+Keep internal DB/entity name Location if needed, but never show “locatie” to the user in the UI.
+
+D) Add direct navigation to mapping (optional but helpful)
+On this Scherm detail page, if yodeckScreenId or yodeckPlaylistId is missing, show a small link:
+“Yodeck koppelen” -> /playlist-mapping
+(Do not block readyForAds on mapping; mapping is separate.)
+
+Acceptance criteria
+1) On the Schermen detail page, user can:
+- set city to Sittard
+- toggle “Klaar voor advertenties” ON
+- click “Zet scherm live”
+2) After saving, /api/regions/active should return Sittard with screensTotal>=1.
+3) Marketing flow /start no longer shows “Nog geen actieve schermen”.
+4) UI no longer shows “locaties” in user-facing text; it uses “schermen”.
+No business logic changes beyond exposing existing fields/actions in the UI.
