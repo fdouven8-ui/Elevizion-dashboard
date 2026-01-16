@@ -2,11 +2,131 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 
 const execAsync = promisify(exec);
 
 export const DEFAULT_VIDEO_DURATION_SECONDS = 15;
 export const MAX_VIDEO_DURATION_SECONDS = 15; // Strict max 15 seconds
+
+// Global state for binary availability (checked at startup)
+let ffprobeAvailable = false;
+let ffmpegAvailable = false;
+let startupCheckDone = false;
+
+/**
+ * Check and log availability of ffprobe and ffmpeg binaries.
+ * Called at server startup.
+ */
+export async function checkVideoProcessingDependencies(): Promise<{
+  ffprobe: boolean;
+  ffmpeg: boolean;
+}> {
+  try {
+    await execAsync('ffprobe -version', { timeout: 10000 });
+    ffprobeAvailable = true;
+    console.log('[VideoProcessing] ffprobe: AVAILABLE');
+  } catch {
+    ffprobeAvailable = false;
+    console.error('[VideoProcessing] ffprobe: NOT AVAILABLE - video uploads will fail');
+  }
+  
+  try {
+    await execAsync('ffmpeg -version', { timeout: 10000 });
+    ffmpegAvailable = true;
+    console.log('[VideoProcessing] ffmpeg: AVAILABLE');
+  } catch {
+    ffmpegAvailable = false;
+    console.warn('[VideoProcessing] ffmpeg: NOT AVAILABLE - remux fallback disabled');
+  }
+  
+  startupCheckDone = true;
+  return { ffprobe: ffprobeAvailable, ffmpeg: ffmpegAvailable };
+}
+
+/**
+ * Check if video processing is currently available.
+ */
+export function isVideoProcessingAvailable(): boolean {
+  return ffprobeAvailable;
+}
+
+/**
+ * Generate a unique temp file path for video processing.
+ */
+export function generateTempPath(prefix = 'elevizion-upload'): string {
+  const uuid = crypto.randomUUID();
+  return `/tmp/${prefix}-${uuid}.mp4`;
+}
+
+/**
+ * Verify a temp file exists and has content.
+ * Returns file size if valid, throws if not.
+ */
+export async function verifyTempFile(filePath: string): Promise<number> {
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Temp file does not exist: ${filePath}`);
+  }
+  
+  const stats = fs.statSync(filePath);
+  if (stats.size === 0) {
+    throw new Error(`Temp file is empty: ${filePath}`);
+  }
+  
+  return stats.size;
+}
+
+/**
+ * Try to remux a video file with ffmpeg to fix moov atom issues.
+ * Returns the path to the fixed file, or null if remux failed.
+ */
+export async function remuxWithFfmpeg(inputPath: string): Promise<string | null> {
+  if (!ffmpegAvailable) {
+    console.log('[VideoProcessing] ffmpeg not available, skipping remux');
+    return null;
+  }
+  
+  const outputPath = generateTempPath('elevizion-remux');
+  
+  try {
+    console.log('[VideoProcessing] Attempting ffmpeg remux:', inputPath, '->', outputPath);
+    
+    // Fast remux with faststart for web compatibility
+    const cmd = `ffmpeg -y -i "${inputPath}" -c copy -movflags +faststart "${outputPath}"`;
+    await execAsync(cmd, { timeout: 60000 });
+    
+    // Verify output file
+    const size = await verifyTempFile(outputPath);
+    console.log('[VideoProcessing] Remux successful, output size:', size);
+    
+    return outputPath;
+  } catch (error: any) {
+    console.error('[VideoProcessing] Remux failed:', error.message);
+    // Clean up failed output
+    try {
+      if (fs.existsSync(outputPath)) {
+        fs.unlinkSync(outputPath);
+      }
+    } catch {}
+    return null;
+  }
+}
+
+/**
+ * Clean up temp files after processing is complete.
+ */
+export function cleanupTempFiles(...paths: (string | null | undefined)[]) {
+  for (const filePath of paths) {
+    if (filePath && fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+        console.log('[VideoProcessing] Cleaned up temp file:', filePath);
+      } catch (error: any) {
+        console.warn('[VideoProcessing] Failed to clean up temp file:', filePath, error.message);
+      }
+    }
+  }
+}
 
 export interface VideoMetadata {
   durationSeconds: number;
@@ -70,7 +190,7 @@ export async function extractVideoMetadata(filePath: string): Promise<VideoMetad
   return result.metadata;
 }
 
-export async function extractVideoMetadataWithDetails(filePath: string): Promise<ExtractResult> {
+export async function extractVideoMetadataWithDetails(filePath: string, allowRemux = true): Promise<ExtractResult> {
   try {
     // Verify file exists and has content
     if (!fs.existsSync(filePath)) {
@@ -86,12 +206,20 @@ export async function extractVideoMetadataWithDetails(filePath: string): Promise
     
     console.log('[VideoMetadata] Probing file:', filePath, 'size:', stats.size);
     
-    // Check if ffprobe is available before trying to use it
-    try {
-      await execAsync('which ffprobe', { timeout: 5000 });
-    } catch {
-      console.error('[VideoMetadata] ffprobe binary not found in PATH');
+    // Use cached startup check if available, otherwise check now
+    if (!ffprobeAvailable && startupCheckDone) {
+      console.error('[VideoMetadata] ffprobe not available (startup check failed)');
       return { metadata: null, error: 'ffprobe not available' };
+    }
+    
+    // Fallback check if startup check hasn't run yet
+    if (!startupCheckDone) {
+      try {
+        await execAsync('which ffprobe', { timeout: 5000 });
+      } catch {
+        console.error('[VideoMetadata] ffprobe binary not found in PATH');
+        return { metadata: null, error: 'ffprobe not available' };
+      }
     }
     
     const ffprobeCommand = `ffprobe -v error -print_format json -show_format -show_streams "${filePath}"`;
@@ -112,6 +240,23 @@ export async function extractVideoMetadataWithDetails(filePath: string): Promise
         exitCode: execError.code,
         stderr: stderr.substring(0, 500),
       });
+      
+      // Try remux fallback if allowed (might fix moov atom issues)
+      if (allowRemux) {
+        console.log('[VideoMetadata] Attempting remux fallback...');
+        const remuxedPath = await remuxWithFfmpeg(filePath);
+        if (remuxedPath) {
+          // Recursively try to extract from remuxed file (but don't allow another remux)
+          const remuxResult = await extractVideoMetadataWithDetails(remuxedPath, false);
+          // Clean up remuxed file
+          cleanupTempFiles(remuxedPath);
+          if (remuxResult.metadata) {
+            console.log('[VideoMetadata] Remux fallback successful');
+            return remuxResult;
+          }
+        }
+      }
+      
       return { 
         metadata: null, 
         error: 'ffprobe execution failed',

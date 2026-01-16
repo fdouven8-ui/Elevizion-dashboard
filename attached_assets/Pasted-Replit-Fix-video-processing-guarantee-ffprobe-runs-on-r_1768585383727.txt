@@ -1,0 +1,65 @@
+Replit — Fix video processing: guarantee ffprobe runs on real local file (root cause fix)
+
+Problem
+Uploads fail with:
+“We konden je video niet uitlezen. Er is een technisch probleem met de videoverwerking.”
+Even for valid MP4 files.
+
+Root cause (must fix)
+ffprobe is not always run on a guaranteed local file path.
+Sometimes it receives:
+- a stream
+- a buffer
+- a non-existing temp path
+- or a file that was already cleaned up
+
+Required changes (mandatory)
+
+1) Always write upload to a verified temp file
+When receiving the uploaded file:
+- Generate tempPath = `/tmp/elevizion-upload-${uuid}.mp4`
+- Write the full file buffer to tempPath
+- fs.stat(tempPath) → verify:
+  - exists
+  - size > 0
+If not: throw explicit error “Uploadbestand kon niet worden opgeslagen”.
+
+2) Run ffprobe ONLY on that tempPath
+Never:
+- run ffprobe on buffers
+- run ffprobe on object storage URLs
+- run ffprobe before fs.stat confirms file exists
+
+Command example:
+ffprobe -v error -show_entries format=duration -show_streams -of json <tempPath>
+
+3) Explicitly check ffprobe binary availability
+At server startup:
+- run `ffprobe -version`
+- if missing → log ERROR and disable upload with message:
+  “Videoverwerking tijdelijk niet beschikbaar”
+
+4) Fix fallback logic (important)
+If ffprobe fails:
+- run ffmpeg fast remux:
+  ffmpeg -y -i tempPath -c copy -movflags +faststart fixedPath
+- verify fixedPath exists + size > 0
+- run ffprobe on fixedPath
+If ffmpeg binary missing → log that clearly
+
+5) Cleanup AFTER processing
+Only delete temp files AFTER:
+- metadata extracted
+- file uploaded to object storage
+Never delete before probe completes.
+
+6) Improve error distinction (UI)
+If ffprobe missing → system error
+If file unreadable → user export error
+Do NOT show generic “ongeldig bestand” for system failures.
+
+Acceptance criteria
+- Your uploaded 1.85MB MP4 is successfully probed.
+- Upload status becomes UPLOADED.
+- Video appears in /video-review.
+- No “technisch probleem” for valid MP4s anymore.

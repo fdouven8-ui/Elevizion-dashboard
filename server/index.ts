@@ -7,6 +7,7 @@ import { syncAllScreensContent } from "./services/yodeckContent";
 import { startOutboxWorker, stopOutboxWorker } from "./services/outboxWorker";
 import { startCapacityWatcher, stopCapacityWatcher } from "./services/capacityWatcherWorker";
 import { startMonthlyReportWorker, stopMonthlyReportWorker } from "./services/monthlyReportWorker";
+import { checkVideoProcessingDependencies } from "./services/videoMetadataService";
 import { db } from "./db";
 import { storage } from "./storage";
 
@@ -300,6 +301,10 @@ app.use((req, res, next) => {
 
 (async () => {
   await initializeAdminUser();
+  
+  // Check video processing dependencies (ffprobe/ffmpeg)
+  await checkVideoProcessingDependencies();
+  
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

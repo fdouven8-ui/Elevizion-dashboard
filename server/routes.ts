@@ -3440,8 +3440,21 @@ Sitemap: ${SITE_URL}/sitemap.xml
 
   // Public upload portal - upload video file
   app.post("/api/upload-portal/:token/upload", async (req, res) => {
+    const fs = await import("fs");
+    let tempFilePath: string | null = null;
+    
     try {
       const multer = (await import("multer")).default;
+      const { isVideoProcessingAvailable, cleanupTempFiles } = await import("./services/videoMetadataService");
+      
+      // Check video processing availability BEFORE accepting upload
+      if (!isVideoProcessingAvailable()) {
+        console.error("[UploadPortal] Video processing not available (ffprobe missing)");
+        return res.status(503).json({ 
+          message: "Videoverwerking tijdelijk niet beschikbaar. Probeer het later opnieuw of neem contact op met support." 
+        });
+      }
+      
       const upload = multer({
         dest: "/tmp/uploads",
         limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
@@ -3458,11 +3471,33 @@ Sitemap: ${SITE_URL}/sitemap.xml
           return res.status(400).json({ message: "Geen bestand geüpload" });
         }
         
+        tempFilePath = file.path;
+        
         try {
+          // Verify the uploaded file exists and has content BEFORE processing
+          if (!fs.existsSync(file.path)) {
+            console.error("[UploadPortal] Multer temp file does not exist:", file.path);
+            return res.status(500).json({ 
+              message: "Uploadbestand kon niet worden opgeslagen. Probeer opnieuw." 
+            });
+          }
+          
+          const fileStats = fs.statSync(file.path);
+          if (fileStats.size === 0) {
+            console.error("[UploadPortal] Multer temp file is empty:", file.path, "expected:", file.size);
+            cleanupTempFiles(tempFilePath);
+            return res.status(400).json({ 
+              message: "Het geüploade bestand is leeg. Controleer je video en probeer opnieuw." 
+            });
+          }
+          
+          console.log("[UploadPortal] Temp file verified:", file.path, "size:", fileStats.size);
+          
           const { validatePortalTokenWithDetails, processAdAssetUpload } = await import("./services/adAssetUploadService");
           
           const result = await validatePortalTokenWithDetails(req.params.token, true);
           if (!result.success || !result.context) {
+            cleanupTempFiles(tempFilePath);
             const errorMessages: Record<string, string> = {
               'not_found': 'Ongeldige toegangslink. Neem contact op met Elevizion voor een nieuwe link.',
               'expired': 'Deze toegangslink is verlopen. Neem contact op met Elevizion voor een nieuwe link.',
@@ -3484,9 +3519,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
             context
           );
           
-          // Clean up temp file
-          const fs = await import("fs");
-          fs.unlink(file.path, () => {});
+          // Clean up temp file AFTER processing is complete
+          cleanupTempFiles(tempFilePath);
+          tempFilePath = null;
           
           if (!uploadResult.success) {
             return res.status(400).json({
@@ -3504,10 +3539,18 @@ Sitemap: ${SITE_URL}/sitemap.xml
           });
         } catch (error: any) {
           console.error("[UploadPortal] Processing error:", error);
+          // Clean up on error
+          if (tempFilePath) {
+            cleanupTempFiles(tempFilePath);
+          }
           res.status(500).json({ message: "Fout bij verwerken: " + error.message });
         }
       });
     } catch (error: any) {
+      // Clean up on outer error
+      if (tempFilePath) {
+        try { fs.unlinkSync(tempFilePath); } catch {}
+      }
       res.status(500).json({ message: error.message });
     }
   });
