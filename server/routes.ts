@@ -10401,6 +10401,54 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     });
   });
 
+  // Admin-only test upload shortcut (TEST_MODE only)
+  // Returns 404 if not allowed to avoid discovery
+  app.get("/admin/test/upload", isAuthenticated, async (req: any, res) => {
+    // Security: must be admin AND in TEST_MODE
+    if (req.user?.role !== "ADMIN" || !isTestMode()) {
+      console.log(`[Admin Test] Unauthorized access attempt by user ${req.user?.id || 'unknown'} (role: ${req.user?.role || 'none'})`);
+      return res.status(404).send("Not found");
+    }
+    
+    try {
+      // Find the most recent advertiser with a linkKey (sorted by createdAt desc)
+      const advertisers = await storage.getAdvertisers();
+      const sortedAdvertisers = advertisers
+        .filter(a => a.linkKey)
+        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+      const advertiser = sortedAdvertisers[0] || advertisers[0];
+      
+      if (!advertiser) {
+        return res.status(404).send("Geen adverteerders gevonden. Maak eerst een adverteerder aan.");
+      }
+      
+      if (!advertiser.linkKey) {
+        return res.status(404).send("Adverteerder heeft geen linkKey. Configureer eerst een linkKey.");
+      }
+      
+      // Generate new upload token
+      const ttlDays = getTokenTtlDays();
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const expiresAt = new Date(Date.now() + ttlDays * 24 * 60 * 60 * 1000);
+      
+      await storage.createPortalToken({
+        tokenHash,
+        type: "upload",
+        advertiserId: advertiser.id,
+        expiresAt,
+      });
+      
+      console.log(`[Admin Test] Quick upload redirect for advertiser ${advertiser.id} (${advertiser.companyName})`);
+      
+      // Redirect to upload portal
+      res.redirect(`/upload/${rawToken}`);
+    } catch (error: any) {
+      console.error("[Admin Test] Upload shortcut error:", error);
+      res.status(500).send("Fout bij genereren test upload link");
+    }
+  });
+
   // Public endpoint - only returns non-sensitive fields
   app.get("/api/public/company-profile", async (req, res) => {
     try {

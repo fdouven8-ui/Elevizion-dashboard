@@ -1,0 +1,55 @@
+Replit — Add admin-only “Test upload” shortcut to jump directly to video upload (TEST_MODE only)
+
+Problem
+In TEST_MODE the flow works, but testing is slow because you must complete all onboarding steps.
+We need a fast way to start testing from the upload video step.
+
+Goal
+Allow Frank (admin) to jump directly to the upload video portal in TEST_MODE, without completing prior steps each time.
+This must be admin-only and disabled in real production mode.
+
+Requirements
+
+1) Add admin action: “Test upload” (button)
+Add a button in the admin UI:
+- On Advertiser detail page AND/OR in a new “Test tools” section.
+Label: “Test upload (direct)”
+Visible only when:
+- isAdmin === true AND isTestMode() === true
+
+2) What the button does
+When clicked:
+- Create (or reuse) an upload token for that advertiser:
+  - type: "upload"
+  - advertiserId: <selected advertiser>
+  - TTL = getTokenTtlDays() (30 days in test mode)
+  - mark active/not used
+- Return the full upload URL and copy to clipboard
+- Also provide a “Open upload” link/button that opens it in a new tab immediately.
+
+3) Optional: No advertiser selected? Provide default
+If you add it as a global test tool (not tied to an advertiser):
+- Create a “Test advertiser” record if none exists
+  name: “TEST — Upload”
+  email: “test@elevizion.local”
+- Then generate token for that advertiser and redirect to upload page.
+
+4) Provide a direct route for admins (optional convenience)
+Add an admin-only route:
+- GET /admin/test/upload
+Behavior:
+- Requires admin session AND isTestMode()
+- Generates a token for the most recent advertiser (or the test advertiser)
+- Redirects (302) directly to /upload/<token>
+This gives one-click testing from the browser.
+
+5) Security constraints (must)
+- These shortcuts must be blocked unless:
+  - admin authenticated AND isTestMode() === true
+- If not allowed, return 404 (not 403) to avoid discovery.
+- Do not expose the shortcut on public marketing pages.
+
+Acceptance criteria
+- In TEST_MODE, admin can click “Test upload (direct)” and immediately land on the upload portal.
+- Upload portal behaves exactly the same as in real onboarding (same validation, storage, linking).
+- In production with TEST_MODE off, the shortcut is unavailable and routes are not accessible.

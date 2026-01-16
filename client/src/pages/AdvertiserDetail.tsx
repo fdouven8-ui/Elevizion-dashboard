@@ -51,8 +51,9 @@ import {
   AlertTriangle,
   XCircle
 } from "lucide-react";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { format, subDays } from "date-fns";
+import { useAuth } from "@/hooks/use-auth";
 import { nl } from "date-fns/locale";
 import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import type { Advertiser } from "@shared/schema";
@@ -269,10 +270,25 @@ function VideoPreviewCard({ advertiserId }: { advertiserId: string }) {
 export default function AdvertiserDetail() {
   const { id } = useParams<{ id: string }>();
   const { toast } = useToast();
+  const { user } = useAuth();
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showTemplateDialog, setShowTemplateDialog] = useState<"whatsapp" | "email" | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
   const [renderedMessage, setRenderedMessage] = useState<{ subject: string; body: string } | null>(null);
+  
+  // TEST_MODE indicator for admin test tools
+  const [testModeActive, setTestModeActive] = useState(false);
+  useEffect(() => {
+    if (user?.role === "ADMIN") {
+      fetch("/api/debug/test-mode")
+        .then(res => res.ok ? res.json() : null)
+        .then(data => setTestModeActive(data?.isTestMode === true))
+        .catch(() => {});
+    }
+  }, [user?.role]);
+  
+  const isAdmin = user?.role === "ADMIN";
+  const showTestTools = isAdmin && testModeActive;
 
   const { data: advertiser, isLoading: advLoading, refetch: refetchAdvertiser } = useQuery<Advertiser>({
     queryKey: ["/api/advertisers", id],
@@ -849,6 +865,35 @@ export default function AdvertiserDetail() {
                   >
                     <RefreshCw className="h-4 w-4 mr-1" />
                     Nieuwe Upload Link
+                  </Button>
+                )}
+                {showTestTools && advertiser.linkKey && (
+                  <Button 
+                    size="sm" 
+                    variant="default"
+                    className="bg-orange-500 hover:bg-orange-600"
+                    data-testid="button-test-upload-direct"
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(`/api/advertisers/${advertiser.id}/regenerate-upload-link`, { method: "POST" });
+                        if (!res.ok) {
+                          const data = await res.json();
+                          throw new Error(data.message || "Fout bij genereren link");
+                        }
+                        const data = await res.json();
+                        navigator.clipboard.writeText(data.uploadUrl);
+                        toast({ 
+                          title: "Test upload link gekopieerd", 
+                          description: "Link opent in nieuw tabblad..." 
+                        });
+                        window.open(data.uploadUrl, "_blank");
+                      } catch (e: any) {
+                        toast({ title: e.message || "Fout bij genereren", variant: "destructive" });
+                      }
+                    }}
+                  >
+                    <ExternalLink className="h-4 w-4 mr-1" />
+                    Test Upload (direct)
                   </Button>
                 )}
                 {(advertiser.assetStatus === "uploaded_valid" || advertiser.assetStatus === "ready_for_yodeck") && (
