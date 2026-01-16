@@ -332,6 +332,11 @@ app.use((req, res, next) => {
       reusePort: true,
     },
     () => {
+      // Boot log for TEST_MODE visibility
+      const testModeRaw = process.env.TEST_MODE;
+      const testModeEnabled = testModeRaw?.toLowerCase() === 'true';
+      console.log(`[BOOT] NODE_ENV=${process.env.NODE_ENV} TEST_MODE="${testModeRaw}" isTestMode=${testModeEnabled}`);
+      
       log(`serving on port ${port}`);
       
       // Start scheduled Yodeck sync (15 minute interval)

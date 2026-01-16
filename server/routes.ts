@@ -77,7 +77,7 @@ import {
 // TEST MODE CONFIGURATION
 // ============================================================================
 export function isTestMode(): boolean {
-  return process.env.TEST_MODE === 'true';
+  return process.env.TEST_MODE?.toLowerCase() === 'true';
 }
 
 export function getTokenTtlDays(): number {
@@ -10385,6 +10385,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     res.json({
       testMode: isTestMode(),
       environment: process.env.NODE_ENV || 'development',
+    });
+  });
+
+  // Debug endpoint for TEST_MODE visibility (admin-only)
+  app.get("/api/debug/test-mode", isAuthenticated, async (req: any, res) => {
+    // Only allow admin users
+    if (req.user?.role !== "ADMIN") {
+      return res.status(403).json({ message: "Alleen voor admins" });
+    }
+    res.json({
+      nodeEnv: process.env.NODE_ENV ?? null,
+      testModeRaw: process.env.TEST_MODE ?? null,
+      isTestMode: isTestMode(),
     });
   });
 

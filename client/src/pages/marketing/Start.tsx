@@ -164,6 +164,15 @@ export default function Start() {
   
   // Debug mode for diagnosing production issues
   const isDebugMode = urlParams.get("debug") === "1";
+  
+  // TEST_MODE indicator for public pages
+  const [testModeActive, setTestModeActive] = useState(false);
+  useEffect(() => {
+    fetch("/api/system-config")
+      .then(res => res.json())
+      .then(data => setTestModeActive(data?.testMode === true))
+      .catch(() => {}); // Silently fail
+  }, []);
   const [debugInfo, setDebugInfo] = useState<{
     httpStatus: number | null;
     error: string | null;
@@ -557,6 +566,13 @@ export default function Start() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
       <FlowHeader />
+
+      {testModeActive && (
+        <div className="bg-orange-500 text-white text-center py-2 text-sm font-medium">
+          <AlertCircle className="inline h-4 w-4 mr-2" />
+          TESTMODUS ACTIEF — incasso wordt overgeslagen
+        </div>
+      )}
 
       <div className="container mx-auto px-4 py-12 max-w-2xl">
         <div className="flex items-center justify-center gap-2 mb-8">
