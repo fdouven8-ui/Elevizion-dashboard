@@ -20,12 +20,58 @@ interface ValidationResult {
   warnings: string[];
 }
 
+interface ErrorDetails {
+  detectedCodec?: string;
+  expectedCodec?: string;
+  detectedDuration?: number;
+  maxDuration?: number;
+  minDuration?: number;
+  validationErrors?: string[];
+}
+
 interface UploadResponse {
   success: boolean;
   message: string;
   assetId?: string;
   storedFilename?: string;
   validation?: ValidationResult;
+  ok?: boolean;
+  code?: string;
+  details?: ErrorDetails;
+}
+
+function getErrorMessageForCode(code: string, details?: ErrorDetails): string {
+  switch (code) {
+    case 'UNSUPPORTED_CODEC':
+      const codec = details?.detectedCodec?.toUpperCase() || 'onbekende codec';
+      return `Je video is een MP4, maar gebruikt ${codec}. Exporteer opnieuw als MP4 (H.264/AVC).`;
+    
+    case 'INVALID_MEDIA_READ':
+      return 'We kunnen dit bestand niet uitlezen. Exporteer de video opnieuw als MP4 (H.264 codec).';
+    
+    case 'NO_VIDEO_STREAM':
+      return 'Dit bestand bevat geen videobeeld. Zorg dat het bestand een geldige video bevat.';
+    
+    case 'UNSUPPORTED_DURATION':
+      if (details?.detectedDuration !== undefined && details?.maxDuration !== undefined) {
+        if (details.detectedDuration > details.maxDuration) {
+          return `Video is te lang: ${details.detectedDuration.toFixed(1)}s (max ${details.maxDuration}s toegestaan).`;
+        }
+        if (details.minDuration !== undefined && details.detectedDuration < details.minDuration) {
+          return `Video is te kort: ${details.detectedDuration.toFixed(1)}s (min ${details.minDuration}s vereist).`;
+        }
+      }
+      return 'De videoduur voldoet niet aan de specificaties.';
+    
+    case 'TRANSCODE_FAILED':
+      return 'Automatische conversie is mislukt. Exporteer de video opnieuw als MP4 (H.264 codec, yuv420p).';
+    
+    case 'SERVER_BUSY':
+      return 'Server is even bezig. Probeer het over 60 seconden opnieuw.';
+    
+    default:
+      return '';
+  }
 }
 
 export default function UploadPortal() {
@@ -117,9 +163,17 @@ export default function UploadPortal() {
         setUploading(false);
         try {
           const response = JSON.parse(xhr.responseText);
-          if (xhr.status >= 400) {
-            setError(response.message || `Serverfout (${xhr.status})`);
-            if (response.validation) {
+          if (xhr.status === 503) {
+            setError('Server is even bezig. Probeer het over 60 seconden opnieuw.');
+          } else if (xhr.status >= 400) {
+            // Use structured error code if available
+            if (response.code) {
+              const friendlyMessage = getErrorMessageForCode(response.code, response.details);
+              setError(friendlyMessage || response.message || `Serverfout (${xhr.status})`);
+            } else {
+              setError(response.message || `Serverfout (${xhr.status})`);
+            }
+            if (response.validation || response.code) {
               setUploadResult(response);
             }
           } else {
@@ -331,11 +385,17 @@ export default function UploadPortal() {
                     <XCircle className="h-4 w-4" />
                     <AlertTitle>Validatiefout</AlertTitle>
                     <AlertDescription>
-                      <ul className="list-disc list-inside mt-2 space-y-1">
-                        {uploadResult.validation?.errors.map((err, i) => (
-                          <li key={i}>{err}</li>
-                        ))}
-                      </ul>
+                      {uploadResult.code && getErrorMessageForCode(uploadResult.code, uploadResult.details) ? (
+                        <p className="mt-1">{getErrorMessageForCode(uploadResult.code, uploadResult.details)}</p>
+                      ) : uploadResult.validation?.errors && uploadResult.validation.errors.length > 0 ? (
+                        <ul className="list-disc list-inside mt-2 space-y-1">
+                          {uploadResult.validation.errors.map((err, i) => (
+                            <li key={i}>{err}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-1">{uploadResult.message}</p>
+                      )}
                     </AlertDescription>
                   </Alert>
                 )}

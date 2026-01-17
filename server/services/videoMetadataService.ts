@@ -180,9 +180,33 @@ export function getVideoSpecsForDuration(contractDuration: number): VideoSpecs {
   };
 }
 
+// Structured error codes for video upload validation
+export type VideoErrorCode = 
+  | 'INVALID_MEDIA_READ'     // ffprobe failed / corrupt file
+  | 'NO_VIDEO_STREAM'        // No video track found
+  | 'UNSUPPORTED_CODEC'      // Codec is not H.264
+  | 'UNSUPPORTED_DURATION'   // Video too long or too short
+  | 'UNSUPPORTED_RESOLUTION' // Resolution issues
+  | 'FILE_TOO_LARGE'         // File exceeds size limit
+  | 'TRANSCODE_FAILED';      // Auto-transcode failed
+
+export interface VideoErrorDetails {
+  detectedCodec?: string;
+  expectedCodec?: string;
+  detectedDuration?: number;
+  maxDuration?: number;
+  minDuration?: number;
+  detectedResolution?: { width: number; height: number };
+  expectedResolution?: { width: number; height: number };
+  codecTagString?: string;
+  ffprobeError?: string;
+}
+
 export interface ExtractResult {
   metadata: VideoMetadata | null;
   error?: string;
+  errorCode?: VideoErrorCode;
+  errorDetails?: VideoErrorDetails;
   ffprobeStderr?: string;
 }
 
@@ -196,13 +220,23 @@ export async function extractVideoMetadataWithDetails(filePath: string, allowRem
     // Verify file exists and has content
     if (!fs.existsSync(filePath)) {
       console.error('[VideoMetadata] File does not exist:', filePath);
-      return { metadata: null, error: 'File does not exist' };
+      return { 
+        metadata: null, 
+        error: 'File does not exist',
+        errorCode: 'INVALID_MEDIA_READ',
+        errorDetails: { ffprobeError: 'File does not exist' },
+      };
     }
     
     const stats = fs.statSync(filePath);
     if (stats.size === 0) {
       console.error('[VideoMetadata] File is empty:', filePath);
-      return { metadata: null, error: 'File is empty' };
+      return { 
+        metadata: null, 
+        error: 'File is empty',
+        errorCode: 'INVALID_MEDIA_READ',
+        errorDetails: { ffprobeError: 'File is empty' },
+      };
     }
     
     console.log('[VideoMetadata] Probing file:', filePath, 'size:', stats.size);
@@ -249,13 +283,21 @@ export async function extractVideoMetadataWithDetails(filePath: string, allowRem
       return { 
         metadata: null, 
         error: 'ffprobe execution failed',
+        errorCode: 'INVALID_MEDIA_READ',
+        errorDetails: { ffprobeError: stderr.substring(0, 500) },
         ffprobeStderr: stderr.substring(0, 500),
       };
     }
     
     if (!stdout || stdout.trim() === '') {
       console.error('[VideoMetadata] ffprobe returned empty output:', filePath);
-      return { metadata: null, error: 'ffprobe returned empty output', ffprobeStderr: stderr };
+      return { 
+        metadata: null, 
+        error: 'ffprobe returned empty output', 
+        errorCode: 'INVALID_MEDIA_READ',
+        errorDetails: { ffprobeError: 'ffprobe returned empty output' },
+        ffprobeStderr: stderr,
+      };
     }
     
     let probeData: any;
@@ -272,7 +314,11 @@ export async function extractVideoMetadataWithDetails(filePath: string, allowRem
     
     if (!videoStream || !format) {
       console.error('[VideoMetadata] No video stream found in file:', filePath);
-      return { metadata: null, error: 'No video stream found in file' };
+      return { 
+        metadata: null, 
+        error: 'No video stream found in file',
+        errorCode: 'NO_VIDEO_STREAM',
+      };
     }
     
     const width = videoStream.width || 0;

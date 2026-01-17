@@ -9,6 +9,8 @@ import {
   validateVideoMetadata,
   getVideoSpecsForDuration,
   VideoValidationResult,
+  VideoErrorCode,
+  VideoErrorDetails,
   DEFAULT_VIDEO_DURATION_SECONDS,
 } from './videoMetadataService';
 import { checkTranscodeRequired, startTranscodeJob } from './videoTranscodeService';
@@ -29,6 +31,8 @@ export interface UploadResult {
   storedFilename?: string;
   validation: VideoValidationResult;
   message: string;
+  errorCode?: VideoErrorCode;
+  errorDetails?: VideoErrorDetails;
 }
 
 export interface PortalContext {
@@ -256,6 +260,10 @@ export async function processAdAssetUpload(
         warnings: [],
       },
       message: filenameValidation.error!,
+      errorCode: 'INVALID_MEDIA_READ' as VideoErrorCode,
+      errorDetails: {
+        ffprobeError: filenameValidation.error,
+      },
     };
   }
   
@@ -264,34 +272,29 @@ export async function processAdAssetUpload(
   logMemory('after-ffprobe');
   
   if (!metadataResult.metadata) {
-    // Build user-friendly error message based on the failure type
-    let errorMessage = 'We konden je video niet uitlezen. ';
+    // Return structured error code based on the failure type
+    const errorCode = metadataResult.errorCode || 'INVALID_MEDIA_READ';
+    const errorDetails = metadataResult.errorDetails || { 
+      ffprobeError: metadataResult.ffprobeStderr 
+    };
     
-    if (metadataResult.error === 'File does not exist') {
-      errorMessage += 'Het bestand kon niet worden gevonden. Probeer opnieuw te uploaden.';
-    } else if (metadataResult.error === 'File is empty') {
-      errorMessage += 'Het bestand is leeg. Controleer je video en probeer opnieuw.';
-    } else if (metadataResult.error === 'No video stream found in file') {
-      errorMessage += 'Geen video-stream gevonden. Zorg dat het een geldig MP4-bestand (H.264) is.';
-    } else if (metadataResult.error === 'ffprobe not available') {
-      errorMessage += 'Er is een technisch probleem met de videoverwerking. Neem contact op met support.';
-      console.error('[AdAssetUpload] ffprobe not available - system configuration issue');
-    } else if (metadataResult.ffprobeStderr) {
-      errorMessage += 'Probeer het bestand opnieuw te exporteren als MP4 (H.264 codec).';
-      console.error('[AdAssetUpload] ffprobe stderr:', metadataResult.ffprobeStderr);
-    } else {
-      errorMessage += 'Probeer opnieuw of exporteer als MP4 (H.264 codec).';
-    }
+    console.error('[AdAssetUpload] Metadata extraction failed:', {
+      errorCode,
+      error: metadataResult.error,
+      ffprobeStderr: metadataResult.ffprobeStderr?.substring(0, 200),
+    });
     
     return {
       success: false,
       validation: {
         isValid: false,
         metadata: null,
-        errors: [errorMessage],
+        errors: [],
         warnings: [],
       },
-      message: 'Ongeldig videobestand.',
+      message: metadataResult.error || 'Ongeldig videobestand.',
+      errorCode,
+      errorDetails,
     };
   }
   
@@ -300,6 +303,36 @@ export async function processAdAssetUpload(
   const validation = validateVideoMetadata(metadata, specs, { 
     strictResolution: portalContext.strictResolution 
   });
+  
+  // Check if codec is not H.264 - this is auto-transcodable if other validations pass
+  const isH264 = metadata.codec.toLowerCase() === 'h264';
+  const codecNeedsTranscode = !isH264;
+  
+  // Check duration errors (these cannot be auto-fixed)
+  const durationTooShort = metadata.durationSeconds < specs.minDurationSeconds;
+  const durationTooLong = metadata.durationSeconds > specs.maxDurationSeconds;
+  
+  // If duration is invalid, reject immediately with structured error
+  if (durationTooShort || durationTooLong) {
+    const errorCode: VideoErrorCode = 'UNSUPPORTED_DURATION';
+    const errorDetails: VideoErrorDetails = {
+      detectedDuration: metadata.durationSeconds,
+      maxDuration: specs.maxDurationSeconds,
+      minDuration: specs.minDurationSeconds,
+    };
+    
+    console.log('[AdAssetUpload] Duration validation failed:', errorDetails);
+    
+    return {
+      success: false,
+      validation,
+      message: durationTooShort 
+        ? `Video te kort: ${metadata.durationSeconds.toFixed(1)}s (min ${specs.minDurationSeconds}s)`
+        : `Video te lang: ${metadata.durationSeconds.toFixed(1)}s (max ${specs.maxDurationSeconds}s)`,
+      errorCode,
+      errorDetails,
+    };
+  }
   
   // Generate canonical filename for storage
   const storedFilename = generateCanonicalFilename(portalContext.companyName, portalContext.linkKey);
@@ -397,14 +430,40 @@ export async function processAdAssetUpload(
     console.log('[AdAssetUpload] Invalid asset uploaded:', portalContext.advertiserId);
   }
   
+  // Return appropriate error code for invalid assets
+  if (!validation.isValid) {
+    // If codec needs transcode but asset is invalid for other reasons, inform user about codec
+    if (codecNeedsTranscode) {
+      return {
+        success: false,
+        assetId: asset.id,
+        storedFilename,
+        validation,
+        message: 'Video geüpload maar voldoet niet aan de specificaties.',
+        errorCode: 'UNSUPPORTED_CODEC' as VideoErrorCode,
+        errorDetails: {
+          detectedCodec: metadata.codec,
+          expectedCodec: 'h264',
+          detectedDuration: metadata.durationSeconds,
+        },
+      };
+    }
+    
+    return {
+      success: false,
+      assetId: asset.id,
+      storedFilename,
+      validation,
+      message: 'Video geüpload maar voldoet niet aan de specificaties. Corrigeer de fouten en upload opnieuw.',
+    };
+  }
+  
   return {
-    success: validation.isValid,
+    success: true,
     assetId: asset.id,
     storedFilename,
     validation,
-    message: validation.isValid
-      ? 'Bedankt! We controleren je video en zetten hem daarna live.'
-      : 'Video geüpload maar voldoet niet aan de specificaties. Corrigeer de fouten en upload opnieuw.',
+    message: 'Bedankt! We controleren je video en zetten hem daarna live.',
   };
 }
 

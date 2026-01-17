@@ -3534,7 +3534,13 @@ Sitemap: ${SITE_URL}/sitemap.xml
           
           if (!uploadResult.success) {
             return res.status(400).json({
+              success: false,
+              ok: false,
+              code: uploadResult.errorCode || 'VALIDATION_ERROR',
               message: uploadResult.message,
+              details: uploadResult.errorDetails || {
+                validationErrors: uploadResult.validation?.errors || [],
+              },
               validation: uploadResult.validation,
             });
           }
