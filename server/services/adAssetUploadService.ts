@@ -17,6 +17,12 @@ import { dispatchMailEvent } from './mailEventService';
 
 const objectStorage = new ObjectStorageService();
 
+function logMemory(label: string) {
+  const mem = process.memoryUsage();
+  const formatMB = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
+  console.log(`[Memory:${label}] Heap: ${formatMB(mem.heapUsed)}/${formatMB(mem.heapTotal)}MB | RSS: ${formatMB(mem.rss)}MB`);
+}
+
 export interface UploadResult {
   success: boolean;
   assetId?: string;
@@ -253,7 +259,9 @@ export async function processAdAssetUpload(
     };
   }
   
+  logMemory('before-ffprobe');
   const metadataResult = await extractVideoMetadataWithDetails(filePath);
+  logMemory('after-ffprobe');
   
   if (!metadataResult.metadata) {
     // Build user-friendly error message based on the failure type
@@ -296,14 +304,16 @@ export async function processAdAssetUpload(
   // Generate canonical filename for storage
   const storedFilename = generateCanonicalFilename(portalContext.companyName, portalContext.linkKey);
   
-  const fileBuffer = fs.readFileSync(filePath);
-  // Use canonical filename in storage path
+  // Use streaming upload to avoid loading entire video into memory
   const storagePath = `ad-assets/${portalContext.advertiserId}/${storedFilename}`;
   
   let storageUrl: string | null = null;
   try {
-    storageUrl = await objectStorage.uploadFile(fileBuffer, storagePath, mimeType);
-    console.log('[AdAssetUpload] File uploaded to storage:', storagePath, '(original:', originalFilename, ')');
+    // Stream directly from disk to object storage - no memory buffering
+    logMemory('before-upload');
+    storageUrl = await objectStorage.uploadFileFromPath(filePath, storagePath, mimeType);
+    logMemory('after-upload');
+    console.log('[AdAssetUpload] File streamed to storage:', storagePath, '(original:', originalFilename, ')');
   } catch (error) {
     console.error('[AdAssetUpload] Failed to upload to object storage:', error);
     return {

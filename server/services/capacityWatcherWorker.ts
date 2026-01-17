@@ -166,19 +166,34 @@ async function runWorkerCycle(): Promise<void> {
   }
 }
 
+// Singleton guard to prevent duplicate startups across hot reloads
+declare global {
+  var __capacityWatcherStarted: boolean | undefined;
+}
+
 /**
  * Start the capacity watcher worker
  */
 export function startCapacityWatcher(): void {
+  // Singleton guard - prevent multiple startups per process
+  if (globalThis.__capacityWatcherStarted) {
+    console.log("[CapacityWatcher] Worker already started (singleton guard)");
+    return;
+  }
+  
   if (intervalId) {
     console.log("[CapacityWatcher] Worker already started");
     return;
   }
   
+  globalThis.__capacityWatcherStarted = true;
+  
   console.log(`[CapacityWatcher] Starting worker (interval: ${CHECK_INTERVAL_MS / 1000 / 60} minutes)`);
   
-  // Run immediately on start
-  setTimeout(() => runWorkerCycle(), 5000);
+  // Delay initial run by 2 minutes to avoid memory pressure at boot
+  const INITIAL_DELAY_MS = 2 * 60 * 1000;
+  console.log(`[CapacityWatcher] First run scheduled in ${INITIAL_DELAY_MS / 1000 / 60} minutes`);
+  setTimeout(() => runWorkerCycle(), INITIAL_DELAY_MS);
   
   // Then run periodically
   intervalId = setInterval(() => runWorkerCycle(), CHECK_INTERVAL_MS);

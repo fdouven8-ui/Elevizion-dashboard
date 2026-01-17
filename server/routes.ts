@@ -3444,6 +3444,19 @@ Sitemap: ${SITE_URL}/sitemap.xml
     let tempFilePath: string | null = null;
     
     try {
+      // Memory safety check - reject uploads if RSS exceeds threshold (platform enforces RSS)
+      const mem = process.memoryUsage();
+      const RSS_LIMIT_MB = 180; // Platform limit is ~200MB, leave buffer
+      const rssMB = mem.rss / 1024 / 1024;
+      if (rssMB > RSS_LIMIT_MB) {
+        console.warn(`[UploadPortal] RSS memory high (${rssMB.toFixed(1)}MB > ${RSS_LIMIT_MB}MB), rejecting upload`);
+        logMemoryUsage();
+        return res.status(503).json({ 
+          message: "Server druk, probeer het over een minuut opnieuw.",
+          retryAfter: 60
+        });
+      }
+      
       const multer = (await import("multer")).default;
       const { cleanupTempFiles } = await import("./services/videoMetadataService");
       

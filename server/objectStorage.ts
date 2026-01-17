@@ -321,6 +321,74 @@ export class ObjectStorageService {
       throw error;
     }
   }
+
+  /**
+   * Stream a file directly from disk to object storage without loading into memory.
+   * Use this for large files (videos) to prevent memory pressure.
+   */
+  async uploadFileFromPath(filePath: string, fileName: string, contentType: string): Promise<string> {
+    const fs = await import('fs');
+    const { pipeline } = await import('stream/promises');
+    
+    try {
+      const privateObjectDir = this.getPrivateObjectDir();
+      const fullPath = `${privateObjectDir}/${fileName}`;
+      const { bucketName, objectName } = parseObjectPath(fullPath);
+      
+      const bucket = objectStorageClient.bucket(bucketName);
+      const file = bucket.file(objectName);
+      
+      const readStream = fs.createReadStream(filePath);
+      const writeStream = file.createWriteStream({
+        metadata: {
+          contentType,
+        },
+        resumable: false,
+      });
+      
+      await pipeline(readStream, writeStream);
+      
+      await file.makePublic();
+      
+      return `https://storage.googleapis.com/${bucketName}/${objectName}`;
+    } catch (error) {
+      console.error("[ObjectStorage] Error streaming file upload:", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Stream a file from object storage directly to disk without loading into memory.
+   * Use this for large files (videos) to prevent memory pressure.
+   */
+  async downloadFileToPath(storagePath: string, destPath: string): Promise<void> {
+    const fs = await import('fs');
+    const { pipeline } = await import('stream/promises');
+    
+    try {
+      const privateObjectDir = this.getPrivateObjectDir();
+      const fullPath = `${privateObjectDir}/${storagePath}`;
+      const { bucketName, objectName } = parseObjectPath(fullPath);
+      
+      const bucket = objectStorageClient.bucket(bucketName);
+      const file = bucket.file(objectName);
+      
+      const [exists] = await file.exists();
+      if (!exists) {
+        throw new ObjectNotFoundError();
+      }
+      
+      const readStream = file.createReadStream();
+      const writeStream = fs.createWriteStream(destPath);
+      
+      await pipeline(readStream, writeStream);
+      
+      console.log('[ObjectStorage] Streamed download to:', destPath);
+    } catch (error) {
+      console.error("[ObjectStorage] Error streaming file download:", error);
+      throw error;
+    }
+  }
 }
 
 function parseObjectPath(path: string): {

@@ -348,11 +348,24 @@ export async function runMonthlyReportWorker(options?: {
 
 let workerInterval: NodeJS.Timeout | null = null;
 
+// Singleton guard to prevent duplicate startups across hot reloads
+declare global {
+  var __monthlyReportWorkerStarted: boolean | undefined;
+}
+
 export function startMonthlyReportWorker(): void {
+  // Singleton guard - prevent multiple startups per process
+  if (globalThis.__monthlyReportWorkerStarted) {
+    console.log("[MonthlyReport] Worker already started (singleton guard)");
+    return;
+  }
+
   if (workerInterval) {
     console.log("[MonthlyReport] Worker already running");
     return;
   }
+  
+  globalThis.__monthlyReportWorkerStarted = true;
   
   console.log("[MonthlyReport] Starting worker (daily check at 09:00)");
   
@@ -367,13 +380,16 @@ export function startMonthlyReportWorker(): void {
   
   workerInterval = setInterval(checkAndRun, 5 * 60 * 1000);
   
+  // Delay initial check by 3 minutes to stagger with other workers
+  const INITIAL_DELAY_MS = 3 * 60 * 1000;
+  console.log(`[MonthlyReport] First check scheduled in ${INITIAL_DELAY_MS / 1000 / 60} minutes`);
   setTimeout(() => {
     if (new Date().getDate() === 1 && new Date().getHours() >= 9) {
       runMonthlyReportWorker().catch(err => {
         console.error("[MonthlyReport] Initial run error:", err);
       });
     }
-  }, 10000);
+  }, INITIAL_DELAY_MS);
 }
 
 export function stopMonthlyReportWorker(): void {

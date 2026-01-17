@@ -11,6 +11,12 @@ import { extractVideoMetadataWithDetails, VideoMetadata } from './videoMetadataS
 const execAsync = promisify(exec);
 const objectStorage = new ObjectStorageService();
 
+function logMemory(label: string) {
+  const mem = process.memoryUsage();
+  const formatMB = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
+  console.log(`[Memory:${label}] Heap: ${formatMB(mem.heapUsed)}/${formatMB(mem.heapTotal)}MB | RSS: ${formatMB(mem.rss)}MB`);
+}
+
 const TARGET_CODEC = 'h264';
 const TARGET_PIXEL_FORMAT = 'yuv420p';
 
@@ -167,29 +173,91 @@ export interface ProcessAndUploadResult {
   error?: string;
 }
 
+// Transcode queue with concurrency=1 to prevent memory pressure
+interface TranscodeQueueItem {
+  assetId: string;
+  inputStoragePath: string;
+  resolve: (result: ProcessAndUploadResult) => void;
+  reject: (error: Error) => void;
+}
+
+const transcodeQueue: TranscodeQueueItem[] = [];
+let isTranscoding = false;
+
+const RSS_LIMIT_MB = 180; // Platform limit is ~200MB, leave buffer
+
+function isMemoryPressureHigh(): boolean {
+  const mem = process.memoryUsage();
+  const rssMB = mem.rss / 1024 / 1024;
+  return rssMB > RSS_LIMIT_MB;
+}
+
+async function processTranscodeQueue(): Promise<void> {
+  if (isTranscoding || transcodeQueue.length === 0) {
+    return;
+  }
+  
+  // Check RSS memory before starting ffmpeg - defer if too high
+  if (isMemoryPressureHigh()) {
+    logMemory('transcode-queue-deferred');
+    console.warn('[TranscodeQueue] RSS memory pressure high, deferring job for 60s');
+    setTimeout(() => processTranscodeQueue(), 60 * 1000);
+    return;
+  }
+  
+  isTranscoding = true;
+  const item = transcodeQueue.shift()!;
+  
+  try {
+    const result = await executeTranscodeAndUpload(item.assetId, item.inputStoragePath);
+    item.resolve(result);
+  } catch (error: any) {
+    item.reject(error);
+  } finally {
+    isTranscoding = false;
+    // Process next item in queue
+    if (transcodeQueue.length > 0) {
+      setImmediate(() => processTranscodeQueue());
+    }
+  }
+}
+
 export async function transcodeAndUpload(
   assetId: string,
   inputStoragePath: string
 ): Promise<ProcessAndUploadResult> {
+  return new Promise((resolve, reject) => {
+    transcodeQueue.push({ assetId, inputStoragePath, resolve, reject });
+    console.log('[TranscodeQueue] Added to queue:', assetId, 'Queue length:', transcodeQueue.length);
+    processTranscodeQueue();
+  });
+}
+
+async function executeTranscodeAndUpload(
+  assetId: string,
+  inputStoragePath: string
+): Promise<ProcessAndUploadResult> {
   console.log('[TranscodeAndUpload] Starting for asset:', assetId);
+  logMemory('transcode-start');
   
   try {
     await db.update(adAssets)
       .set({ conversionError: null })
       .where(eq(adAssets.id, assetId));
     
-    console.log('[TranscodeAndUpload] Downloading original file...');
+    // Stream download to temp file - no memory buffering
+    console.log('[TranscodeAndUpload] Streaming download of original file...');
     const tempInputPath = generateTempPath('elevizion-input');
     
-    const fileBuffer = await objectStorage.downloadFile(inputStoragePath);
-    if (!fileBuffer) {
-      throw new Error('Could not download original file from storage');
-    }
+    logMemory('before-download');
+    await objectStorage.downloadFileToPath(inputStoragePath, tempInputPath);
+    logMemory('after-download');
+    const stats = fs.statSync(tempInputPath);
+    console.log('[TranscodeAndUpload] Downloaded to:', tempInputPath, 'size:', stats.size);
     
-    fs.writeFileSync(tempInputPath, fileBuffer);
-    console.log('[TranscodeAndUpload] Downloaded to:', tempInputPath, 'size:', fileBuffer.length);
-    
+    logMemory('before-ffmpeg');
     const transcodeResult = await transcodeVideo(tempInputPath);
+    logMemory('after-ffmpeg');
     
     fs.unlinkSync(tempInputPath);
     
@@ -197,16 +265,18 @@ export async function transcodeAndUpload(
       throw new Error(transcodeResult.error || 'Transcode failed');
     }
     
-    console.log('[TranscodeAndUpload] Uploading transcoded file...');
+    // Stream upload of transcoded file - no memory buffering
+    console.log('[TranscodeAndUpload] Streaming upload of transcoded file...');
     
-    const convertedBuffer = fs.readFileSync(transcodeResult.outputPath);
     const convertedFilename = `converted/${assetId}-converted.mp4`;
     
-    const storageUrl = await objectStorage.uploadFile(
-      convertedBuffer,
+    logMemory('before-converted-upload');
+    const storageUrl = await objectStorage.uploadFileFromPath(
+      transcodeResult.outputPath,
       convertedFilename,
       'video/mp4'
     );
+    logMemory('after-converted-upload');
     
     fs.unlinkSync(transcodeResult.outputPath);
     

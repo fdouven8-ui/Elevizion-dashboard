@@ -317,18 +317,34 @@ export async function processOutboxBatch(limit: number = BATCH_SIZE): Promise<{ 
   return { processed, succeeded, failed };
 }
 
+// Singleton guard to prevent duplicate startups across hot reloads
+declare global {
+  var __outboxWorkerStarted: boolean | undefined;
+}
+
 /**
  * Start the background worker
  */
 export function startOutboxWorker(): void {
+  // Singleton guard - prevent multiple startups per process
+  if (globalThis.__outboxWorkerStarted) {
+    console.log("[OutboxWorker] Worker already started (singleton guard)");
+    return;
+  }
+
   if (workerInterval) {
     console.log("[OutboxWorker] Worker already running");
     return;
   }
 
+  globalThis.__outboxWorkerStarted = true;
+
   console.log(`[OutboxWorker] Starting worker (interval: ${WORKER_INTERVAL_MS / 1000}s)`);
   
-  processOutboxBatch().catch(console.error);
+  // Delay initial run by 30 seconds to avoid memory pressure at boot
+  const INITIAL_DELAY_MS = 30 * 1000;
+  console.log(`[OutboxWorker] First run scheduled in ${INITIAL_DELAY_MS / 1000} seconds`);
+  setTimeout(() => processOutboxBatch().catch(console.error), INITIAL_DELAY_MS);
 
   workerInterval = setInterval(() => {
     processOutboxBatch().catch(console.error);

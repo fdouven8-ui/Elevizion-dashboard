@@ -1,0 +1,45 @@
+Replit — Fix random 500 by preventing server restarts (memory pressure). Make upload/transcode safe.
+
+Problem
+Production process receives SIGTERM shortly after portal use and during upload attempts.
+Logs show heap near limit (e.g. 39.1/41.7MB) then terminated. This causes 500s.
+
+Goals
+- Prevent memory spikes during uploads/transcoding.
+- Ensure workers don’t start multiple times and don’t run heavy jobs during uploads.
+- Stream uploads instead of buffering in memory.
+- Ensure transcode runs with concurrency=1.
+
+Required changes
+
+1) Stop buffering full video in RAM
+If upload handler uses memoryStorage / reads whole file into Buffer:
+- Replace with streaming to disk (temp file) using multer.diskStorage or busboy.
+- Never keep full file in process memory.
+- After upload stream ends, run ffprobe/ffmpeg on the temp file path.
+
+2) Limit ffmpeg concurrency
+- Add a global transcode queue with concurrency 1.
+- If another transcode is running, set asset.conversionStatus=PENDING and enqueue.
+- Worker processes queue sequentially.
+
+3) Prevent duplicate worker startups
+Your logs show workers starting multiple times.
+- Ensure each worker uses a singleton guard (globalThis) so it starts only once per process:
+  if (globalThis.__capacityWatcherStarted) return;
+  globalThis.__capacityWatcherStarted = true;
+- Apply to MonthlyReport, CapacityWatcher, OutboxWorker, Moneybird Sync, Yodeck Sync.
+
+4) Reduce background work frequency in production
+- Moneybird sync / Yodeck sync should not run immediately at boot; add initialDelay (e.g. 2–5 min).
+- Stagger schedules so they don’t start together.
+
+5) Add runtime memory safety logs around upload/transcode
+- Log RSS/heap before and after upload save, before and after ffprobe, before and after ffmpeg.
+- If heap exceeds threshold (e.g. 80%), pause queue and return 503 “Server druk, probeer later”.
+
+Acceptance
+- Upload endpoint no longer triggers SIGTERM/restarts.
+- POST /api/upload logs appear and complete.
+- Conversion completes and /video-review shows COMPLETED.
+- Background workers start only once per process.
