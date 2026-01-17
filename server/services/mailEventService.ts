@@ -14,6 +14,7 @@ import { sendEmail, baseEmailTemplate, BodyBlock } from "../email";
 export type MailEventType = 
   | "ADVERTISER_CONTRACT_ACCEPTED"
   | "ADVERTISER_ASSET_UPLOADED_VALID"
+  | "ADVERTISER_ASSET_APPROVED"
   | "ADVERTISER_ASSET_REJECTED"
   | "ADVERTISER_PUBLISHED"
   | "LOCATION_INTAKE_SUBMITTED"
@@ -217,10 +218,8 @@ async function buildAssetRejectedEmail(advertiserId: string, baseUrl: string): P
     .orderBy(desc(adAssets.rejectedAt))
     .limit(1);
   
-  // Build upload URL using the portal token (portal contains the full token record)
-  const uploadUrl = portal?.token
-    ? `${baseUrl}/upload/${portal.token}`
-    : `${baseUrl}/advertisers/${advertiserId}`;
+  // Build upload URL - just link to advertisers page since we don't have raw token
+  const uploadUrl = `${baseUrl}/advertisers/${advertiserId}`;
   
   // Get reason text from asset or use default
   const reasonCode = rejectedAsset?.rejectedReason || "";
@@ -245,6 +244,35 @@ async function buildAssetRejectedEmail(advertiserId: string, baseUrl: string): P
   });
   
   return { to: advertiser.email, subject: "Video niet goedgekeurd — actie vereist", html, text };
+}
+
+/**
+ * Build email content for ADVERTISER_ASSET_APPROVED
+ * Sent to advertiser when their video is approved by admin
+ * Informs them that a placement plan is ready
+ */
+async function buildAssetApprovedEmail(advertiserId: string, baseUrl: string): Promise<{ to: string; subject: string; html: string; text: string } | null> {
+  const data = await getAdvertiserForEmail(advertiserId);
+  if (!data) return null;
+  
+  const { advertiser } = data;
+  if (!advertiser.email) return null;
+  
+  const bodyBlocks: BodyBlock[] = [
+    { type: "paragraph", content: `Goed nieuws! Uw advertentievideo is goedgekeurd. 🎉` },
+    { type: "paragraph", content: `We hebben een plaatsingsvoorstel klaarstaan en plannen de advertentie zo spoedig mogelijk in op de schermen in uw gekozen regio.` },
+    { type: "paragraph", content: `U hoeft nu verder niets te doen. Zodra uw advertentie live staat, ontvangt u een bevestiging.` },
+    { type: "paragraph", content: `Heeft u vragen? Neem gerust contact met ons op via <a href="mailto:info@elevizion.nl">info@elevizion.nl</a>.` },
+  ];
+  
+  const { html, text } = baseEmailTemplate({
+    subject: "Je advertentie is goedgekeurd",
+    preheader: "Uw video is goedgekeurd en wordt binnenkort ingepland",
+    title: "Video goedgekeurd!",
+    bodyBlocks,
+  });
+  
+  return { to: advertiser.email, subject: "Je advertentie is goedgekeurd", html, text };
 }
 
 /**
@@ -451,6 +479,11 @@ export async function dispatchMailEvent(
         entityType = "advertiser";
         break;
         
+      case "ADVERTISER_ASSET_APPROVED":
+        emailData = await buildAssetApprovedEmail(entityId, baseUrl);
+        entityType = "advertiser";
+        break;
+        
       case "ADVERTISER_PUBLISHED":
         emailData = await buildPublishedEmail(entityId, baseUrl);
         entityType = "advertiser";
@@ -599,6 +632,7 @@ export async function checkForDuplicateMailLogs(): Promise<{ hasDuplicates: bool
 export const MAIL_EVENT_LABELS: Record<MailEventType, string> = {
   ADVERTISER_CONTRACT_ACCEPTED: "Contract geaccepteerd (upload instructies)",
   ADVERTISER_ASSET_UPLOADED_VALID: "Video ontvangen (intern)",
+  ADVERTISER_ASSET_APPROVED: "Video goedgekeurd",
   ADVERTISER_ASSET_REJECTED: "Video afgekeurd",
   ADVERTISER_PUBLISHED: "Advertentie live",
   LOCATION_INTAKE_SUBMITTED: "Intake ontvangen",

@@ -647,6 +647,7 @@ export async function approveAsset(
     console.log('[AdminReview] Asset approved:', assetId, 'by admin:', adminId);
     
     // Trigger auto-publish workflow (create placement plan)
+    let planId: string | undefined;
     try {
       const { PlacementEngineService } = await import('./placementEngineService');
       const placementEngine = new PlacementEngineService();
@@ -654,24 +655,37 @@ export async function approveAsset(
       
       if (planResult && planResult.planId) {
         console.log('[AdminReview] Placement plan created:', planResult.planId);
-        return { 
-          success: true, 
-          message: 'Video goedgekeurd en plaatsingsplan aangemaakt',
-          placementPlanId: planResult.planId,
-        };
+        planId = planResult.planId;
       } else {
-        // Asset approved but placement plan failed - log warning but don't fail
         console.warn('[AdminReview] Asset approved but placement plan creation failed');
-        return { 
-          success: true, 
-          message: 'Video goedgekeurd. Plaatsingsplan wordt handmatig aangemaakt.',
-        };
       }
     } catch (planError: any) {
       console.warn('[AdminReview] Placement plan error:', planError.message);
+    }
+    
+    // Send approval email to advertiser
+    try {
+      const baseUrl = process.env.REPL_SLUG 
+        ? `https://${process.env.REPL_SLUG}.${process.env.REPL_OWNER}.repl.co`
+        : process.env.REPLIT_DEV_DOMAIN 
+          ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+          : 'https://elevizion-dashboard.replit.app';
+      await dispatchMailEvent('ADVERTISER_ASSET_APPROVED', asset.advertiserId, baseUrl);
+      console.log('[AdminReview] Approval email dispatched for advertiser:', asset.advertiserId);
+    } catch (emailError) {
+      console.error('[AdminReview] Failed to send approval email:', emailError);
+    }
+    
+    if (planId) {
       return { 
         success: true, 
-        message: 'Video goedgekeurd. Plaatsingsplan kon niet automatisch worden aangemaakt.',
+        message: 'Video goedgekeurd en plaatsingsplan aangemaakt',
+        placementPlanId: planId,
+      };
+    } else {
+      return { 
+        success: true, 
+        message: 'Video goedgekeurd. Plaatsingsplan wordt handmatig aangemaakt.',
       };
     }
   } catch (error: any) {

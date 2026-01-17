@@ -1,0 +1,160 @@
+**Replit prompt – “Goedkeuren” maakt automatisch plaatsingsvoorstel + klaar voor Akkoord→Yodeck + mails (zonder grote refactor)**
+
+We hebben nu assets + Video Beoordelen + werkende “Bekijk in dashboard” links. Volgende stap: zodra een admin een video **Goedkeurt**, moet het systeem automatisch een **plaatsingsvoorstel** genereren en klaarzetten voor **Akkoord → automatisch publishen naar Yodeck**. Ook moeten de juiste e-mails eruit.
+
+**Doel (workflow)**
+UPLOAD (asset.status=UPLOADED) →
+ADMIN REVIEW →
+
+* Reject: asset.status=REJECTED + reden + mail
+* Approve: asset.status=APPROVED → automatisch PlacementPlan aanmaken (PROPOSED) → admin kan Akkoord klikken → publish naar Yodeck → asset/plan status LIVE/PUBLISHED + mail.
+
+---
+
+## A) Datamodel (minimaal toevoegen / hergebruiken)
+
+1. Zorg dat er een `ad_assets` record is met:
+
+* `id`, `advertiserId`, `storageKey`, `durationSeconds`, `width`, `height`, `videoCodec`, `hasAudio`
+* `status`: UPLOADED | APPROVED | REJECTED | PUBLISHED
+* `reviewedAt`, `reviewedBy`, `rejectionReason` (optioneel)
+* `yodeckMediaId` (nullable)
+
+2. Maak/gebruik een `placement_plans` (of bestaande placements) met:
+
+* `id`, `advertiserId`, `assetId`
+* `package` (SINGLE/TRIPLE/TEN of uit advertiser contract)
+* `targetRegions` / `cities` (uit advertiser)
+* `status`: PROPOSED | APPROVED | PUBLISHING | PUBLISHED | FAILED
+* `planJson` (de output van placement engine: screens/playlists + rationale)
+* `approvedAt`, `approvedBy`
+* `publishedAt`
+* `error` (nullable)
+
+**Belangrijk:** 1 asset kan 1 actieve plan hebben. Forceer dit met unique constraint of code: “if existing active plan, reuse”.
+
+---
+
+## B) API: Approve/Reject endpoints (idempotent)
+
+### 1) Approve
+
+Endpoint: `POST /api/admin/assets/:assetId/approve`
+
+**Server doet:**
+
+1. Load asset + advertiser
+2. Validate asset metadata (codec=h264, duration within bounds, etc.) – als niet ok → return 400 met duidelijke code.
+3. Update asset:
+
+   * `status=APPROVED`, `reviewedAt=now`, `reviewedBy=adminId`, `rejectionReason=null`
+4. **Idempotency:** check of er al een placement_plan bestaat met (`assetId` en status in PROPOSED/APPROVED/PUBLISHING). Als ja → return die plan.
+5. Als geen plan: run placement engine:
+
+   * `propose → simulate` met bestaande targeting rules (competitor exclusion etc.)
+   * output = lijst van screenIds + playlistIds + estimated impressions
+6. Create `placement_plan`:
+
+   * `status=PROPOSED`
+   * `planJson=...`
+7. Trigger mail naar adverteerder: “Goedgekeurd – we hebben een voorstel klaarstaan” (geen ‘live’ claim)
+8. Return `{ success:true, assetStatus:"APPROVED", planId, planStatus:"PROPOSED" }`
+
+### 2) Reject
+
+Endpoint: `POST /api/admin/assets/:assetId/reject` body `{ reason: string }`
+
+**Server doet:**
+
+* asset.status=REJECTED + reason + reviewedAt/by
+* cancel/deactiveer eventuele open plans voor deze asset (status=CANCELLED/FAILED)
+* mail adverteerder: afkeur + reden + korte exportinstructie (H.264/CFR/1080p)
+
+---
+
+## C) UI: Admin “Video Beoordelen” pagina
+
+1. In de lijst “Te beoordelen”:
+
+* knop **Goedkeuren**
+* knop **Afkeuren** (modal met verplichte reden)
+
+2. Na **Goedkeuren**:
+
+* toon direct “Plaatsingsvoorstel aangemaakt” met knop:
+
+  * “Bekijk voorstel” → route naar plan detail
+  * “Akkoord & publiceer” → approve plan (zie D)
+
+3. In Advertiser detail:
+
+* Toon bij asset: status badge + link naar plan (als bestaat)
+
+---
+
+## D) Akkoord → Publish naar Yodeck (outbox + rollback, idempotent)
+
+Endpoint: `POST /api/admin/placement-plans/:planId/approve-and-publish`
+
+**Server doet:**
+
+1. Load plan + asset + advertiser
+2. Set plan.status = `APPROVED` then `PUBLISHING`
+3. **Ensure media in Yodeck**:
+
+   * if `asset.yodeckMediaId` null:
+
+     * stream from object storage → upload to Yodeck → save `yodeckMediaId`
+4. For each target playlist in planJson:
+
+   * add media to playlist (idempotent: check if already exists or store join table `playlist_media` with unique)
+5. On success:
+
+   * plan.status=`PUBLISHED`, plan.publishedAt=now
+   * asset.status=`PUBLISHED`
+   * mail adverteerder: “Je advertentie is live” + op welke regio’s/schermen (globaal)
+6. On failure:
+
+   * plan.status=`FAILED`, plan.error=err message
+   * rollback where possible (verwijder toegevoegde items als jouw outbox dat al ondersteunt)
+   * admin ziet duidelijke fout + “Retry publish” knop (idempotent retry)
+
+---
+
+## E) E-mail templates (NL, kort)
+
+1. Approved (na review):
+
+* onderwerp: “Je advertentie is goedgekeurd”
+* tekst: “We hebben een plaatsingsvoorstel klaarstaan en plannen hem z.s.m. in.”
+
+2. Rejected:
+
+* onderwerp: “Je advertentie is afgekeurd”
+* tekst: reden + “Export als MP4 (H.264/AVC) met constante framesnelheid (CFR), max 15s, 1920×1080.”
+
+3. Live:
+
+* onderwerp: “Je advertentie is live op Elevizion”
+* tekst: “Je advertentie draait nu in jouw gekozen regio’s. Je ontvangt maandelijks een rapport.”
+
+---
+
+## F) Acceptance tests
+
+1. Upload asset → status UPLOADED zichtbaar
+2. Admin klikt Goedkeuren:
+
+   * asset.status=APPROVED
+   * placement_plan.status=PROPOSED aangemaakt
+   * mail “goedgekeurd” verstuurd
+3. Admin klikt Akkoord & publiceer:
+
+   * Yodeck upload + playlist insert
+   * plan.status=PUBLISHED + asset.status=PUBLISHED
+   * mail “live” verstuurd
+4. Retry veiligheid:
+
+   * dubbel klikken veroorzaakt geen dubbele Yodeck uploads/playlist items
+
+Voer dit uit met minimale wijzigingen, hergebruik bestaande placement engine / yodeck mapping / outbox patterns die al in het project zitten.

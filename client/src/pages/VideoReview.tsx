@@ -8,10 +8,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, Play, Eye, Clock, Monitor, MapPin, Package, RefreshCw, AlertTriangle } from "lucide-react";
+import { CheckCircle, XCircle, Play, Eye, Clock, Monitor, MapPin, Package, RefreshCw, AlertTriangle, Send, Rocket } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { nl } from "date-fns/locale";
 import { Link } from "wouter";
+
+interface ApprovalResult {
+  success: boolean;
+  message: string;
+  placementPlanId?: string;
+}
 
 interface ReviewQueueItem {
   asset: {
@@ -53,13 +59,14 @@ export default function VideoReview() {
   const [rejectAsset, setRejectAsset] = useState<ReviewQueueItem | null>(null);
   const [rejectReason, setRejectReason] = useState<string>("");
   const [rejectDetails, setRejectDetails] = useState<string>("");
+  const [approvedPlan, setApprovedPlan] = useState<{ planId: string; companyName: string } | null>(null);
 
   const { data: queue = [], isLoading } = useQuery<ReviewQueueItem[]>({
     queryKey: ["/api/admin/video-review"],
   });
 
   const approveMutation = useMutation({
-    mutationFn: async (assetId: string) => {
+    mutationFn: async ({ assetId, companyName }: { assetId: string; companyName: string }): Promise<ApprovalResult & { companyName: string }> => {
       const res = await fetch(`/api/admin/video-review/${assetId}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -69,12 +76,48 @@ export default function VideoReview() {
         const data = await res.json();
         throw new Error(data.message || "Fout bij goedkeuren");
       }
-      return res.json();
+      const result = await res.json();
+      return { ...result, companyName };
     },
     onSuccess: (data) => {
       toast({ title: "Goedgekeurd", description: data.message });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/video-review"] });
       setPreviewAsset(null);
+      if (data.placementPlanId) {
+        setApprovedPlan({ planId: data.placementPlanId, companyName: data.companyName });
+      }
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const publishMutation = useMutation({
+    mutationFn: async (planId: string) => {
+      const res = await fetch(`/api/placement-plans/${planId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Fout bij goedkeuren plan");
+      }
+      const approveRes = await fetch(`/api/placement-plans/${planId}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (!approveRes.ok) {
+        const data = await approveRes.json();
+        throw new Error(data.message || "Fout bij publiceren");
+      }
+      return approveRes.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Gepubliceerd", description: "Advertentie is live op de schermen" });
+      setApprovedPlan(null);
+      queryClient.invalidateQueries({ queryKey: ["/api/placement-plans"] });
     },
     onError: (error: Error) => {
       toast({ title: "Fout", description: error.message, variant: "destructive" });
@@ -113,7 +156,12 @@ export default function VideoReview() {
   };
 
   const handleApprove = (item: ReviewQueueItem) => {
-    approveMutation.mutate(item.asset.id);
+    approveMutation.mutate({ assetId: item.asset.id, companyName: item.advertiser.companyName });
+  };
+
+  const handlePublish = () => {
+    if (!approvedPlan) return;
+    publishMutation.mutate(approvedPlan.planId);
   };
 
   const handleReject = () => {
@@ -406,6 +454,59 @@ export default function VideoReview() {
             >
               <XCircle className="h-4 w-4 mr-1" />
               Afkeuren
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!approvedPlan} onOpenChange={() => setApprovedPlan(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Rocket className="h-5 w-5 text-green-600" />
+              Plaatsingsvoorstel aangemaakt
+            </DialogTitle>
+            <DialogDescription>
+              Video van {approvedPlan?.companyName} is goedgekeurd. Er is automatisch een plaatsingsvoorstel aangemaakt.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="p-4 rounded-lg bg-green-50 border border-green-200">
+              <p className="text-sm text-green-800">
+                De adverteerder ontvangt een e-mail dat de video is goedgekeurd. 
+                Klik op "Akkoord & publiceer" om de advertentie direct live te zetten.
+              </p>
+            </div>
+          </div>
+          
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setApprovedPlan(null)}>
+              Later
+            </Button>
+            <Link href={`/publish-queue`}>
+              <Button variant="outline">
+                <Eye className="h-4 w-4 mr-1" />
+                Bekijk voorstel
+              </Button>
+            </Link>
+            <Button
+              className="bg-green-600 hover:bg-green-700"
+              onClick={handlePublish}
+              disabled={publishMutation.isPending}
+              data-testid="publish-btn"
+            >
+              {publishMutation.isPending ? (
+                <>
+                  <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
+                  Publiceren...
+                </>
+              ) : (
+                <>
+                  <Send className="h-4 w-4 mr-1" />
+                  Akkoord & publiceer
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
