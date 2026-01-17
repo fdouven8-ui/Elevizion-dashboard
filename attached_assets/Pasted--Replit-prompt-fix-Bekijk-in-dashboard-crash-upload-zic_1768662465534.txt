@@ -1,0 +1,93 @@
+**Replit prompt – fix “Bekijk in dashboard” crash + upload zichtbaar maken in dashboard**
+
+We hebben nu een succesvolle upload (portal toont “Succes!” en file wordt opgeslagen). Daarna:
+
+1. De email met “Bekijk in dashboard” link crasht wanneer je erop klikt.
+2. In het dashboard verschijnt de upload nergens (niet bij plaatsingen / ads / assets).
+
+**Doel**
+
+* Elke succesvolle upload maakt/updated een database record (AdAsset) gekoppeld aan de juiste advertiser.
+* Dashboard krijgt een duidelijke plek waar “Uploaded assets” zichtbaar zijn (ook als placement nog niet live is).
+* De link in de mail opent altijd een stabiele pagina (geen crash), met een nette status.
+
+---
+
+## A) Backend: maak upload transactioneel en koppelbaar
+
+1. Controleer upload endpoint `/api/upload-portal/:token/upload`:
+
+   * Na storage upload + metadata extract: **UPSERT** een record `ad_assets` (of bestaande tabel) met:
+
+     * `id`
+     * `advertiserId` (uit upload token)
+     * `originalFilename`
+     * `storedFilename`
+     * `storageKey` / `bucketPath`
+     * `fileSize`
+     * `durationSeconds`
+     * `width`, `height`
+     * `videoCodec`
+     * `hasAudio`
+     * `status`: `"UPLOADED"` (later `"APPROVED"`, `"PUBLISHED"`)
+     * `createdAt`
+2. Zorg dat cleanup (tmp file delete) pas na succesvolle DB write gebeurt.
+3. Return response met `assetId` + `status` zodat frontend meteen weet wat er is aangemaakt.
+
+**Acceptance:** na upload staat er altijd 1 asset record gekoppeld aan advertiser.
+
+---
+
+## B) Fix de “Bekijk in dashboard” link (crash-proof)
+
+1. Inspecteer de URL die in de mail wordt gestuurd.
+
+   * Als hij naar een pagina gaat die een `placementId` verwacht, maar we hebben nog geen placement, dan crasht het.
+2. Maak een dedicated route die altijd werkt:
+
+   * `/dashboard/assets/:assetId` (of `/dashboard/advertisers/:id/assets`)
+3. Zet de maillink om naar deze route.
+4. In frontend: handle empty/missing data netjes:
+
+   * toon “Video ontvangen” + metadata + status
+   * als er nog geen placement is: “Wacht op goedkeuring” / “Nog niet ingepland”
+
+**Acceptance:** maillink opent altijd zonder crash, ook als asset nog niet geplaatst is.
+
+---
+
+## C) Dashboard: toon uploads op de juiste plek
+
+1. Voeg in dashboard een overzicht toe (liefst bestaande menu’s hergebruiken):
+
+   * **Ads / Media / Uploads** (kies 1 plek)
+2. API endpoint:
+
+   * `GET /api/advertisers/:advertiserId/assets` of `GET /api/assets?advertiserId=...`
+3. Toon per asset:
+
+   * filename, datum, duur, resolutie, codec, status
+   * knop “Goedkeuren” (als jij dat proces hebt)
+   * knop “Plaatsingen voorstellen” of “Naar plaatsingsvoorstel” (als approve → placement engine)
+4. Zorg dat “Plaatsingen” alleen placements toont (live/pending), maar dat assets zichtbaar zijn los daarvan.
+
+**Acceptance:** na upload zie je de video direct terug onder Assets/Uploads, ook vóór plaatsing.
+
+---
+
+## D) Crash debugging (snel)
+
+1. Voeg error boundary / try-catch rondom de dashboard page die crasht.
+2. Log client-side route + params + API error response.
+3. Zorg dat de page fallback toont i.p.v. white-screen/crash.
+
+---
+
+## Test scenario
+
+* Upload video via portal → success
+* Email link → opent asset detail pagina zonder crash
+* Dashboard → asset staat zichtbaar in lijst met status UPLOADED en metadata
+* (Later) Approve → placement engine kan hierop verder bouwen
+
+Voer dit uit met minimale wijzigingen en hergebruik bestaande patterns (db helpers, auth, routing, UI components).

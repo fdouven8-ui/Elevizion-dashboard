@@ -38,6 +38,7 @@ import {
   Activity,
   Send,
   Clock,
+  PlaySquare,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -335,6 +336,18 @@ export function AppSidebar() {
                       <Link href="/publish-queue" data-testid="nav-publish-queue">
                         <Send className="h-4 w-4" />
                         <span className="text-[13px]">Publicatie Wachtrij</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton 
+                      asChild 
+                      tooltip="Video Beoordelen"
+                      className={`h-9 rounded-lg transition-colors ${isActive("/video-review") ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
+                    >
+                      <Link href="/video-review" data-testid="nav-video-review">
+                        <PlaySquare className="h-4 w-4" />
+                        <span className="text-[13px]">Video Beoordelen</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

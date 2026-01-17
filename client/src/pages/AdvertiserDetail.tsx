@@ -101,6 +101,12 @@ interface AdAsset {
   validationWarnings: string[];
   uploadedAt: string;
   reviewedByAdminAt: string | null;
+  approvalStatus: string | null;
+  approvedAt: string | null;
+  rejectedAt: string | null;
+  rejectedReason: string | null;
+  rejectedDetails: string | null;
+  conversionStatus: string | null;
 }
 
 function VideoPreviewCard({ advertiserId }: { advertiserId: string }) {
@@ -156,15 +162,44 @@ function VideoPreviewCard({ advertiserId }: { advertiserId: string }) {
           Video Preview
         </CardTitle>
         <div className="flex items-center gap-2">
-          {latestAsset.validationStatus === "valid" ? (
+          {/* Approval Status Badge */}
+          {latestAsset.approvalStatus === "APPROVED" && (
             <Badge className="bg-green-100 text-green-800">
               <CheckCircle2 className="h-3 w-3 mr-1" />
+              Goedgekeurd
+            </Badge>
+          )}
+          {latestAsset.approvalStatus === "REJECTED" && (
+            <Badge className="bg-red-100 text-red-800">
+              <XCircle className="h-3 w-3 mr-1" />
+              Afgekeurd
+            </Badge>
+          )}
+          {(latestAsset.approvalStatus === "UPLOADED" || !latestAsset.approvalStatus) && (
+            <Badge className="bg-amber-100 text-amber-800">
+              <Clock className="h-3 w-3 mr-1" />
+              In afwachting
+            </Badge>
+          )}
+          {/* Validation Status Badge */}
+          {latestAsset.validationStatus === "valid" ? (
+            <Badge variant="outline" className="text-green-700 border-green-300">
               Geldig
             </Badge>
           ) : (
-            <Badge className="bg-red-100 text-red-800">
-              <XCircle className="h-3 w-3 mr-1" />
+            <Badge variant="outline" className="text-red-700 border-red-300">
               Ongeldig
+            </Badge>
+          )}
+          {/* Conversion Status Badge */}
+          {latestAsset.conversionStatus === "CONVERTING" && (
+            <Badge variant="outline" className="text-blue-700 border-blue-300">
+              Converteren...
+            </Badge>
+          )}
+          {latestAsset.conversionStatus === "PENDING" && (
+            <Badge variant="outline" className="text-amber-700 border-amber-300">
+              Wacht op conversie
             </Badge>
           )}
         </div>
@@ -233,6 +268,43 @@ function VideoPreviewCard({ advertiserId }: { advertiserId: string }) {
                 <li key={i}>{warn}</li>
               ))}
             </ul>
+          </div>
+        )}
+        
+        {/* Rejection Info */}
+        {latestAsset.approvalStatus === "REJECTED" && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+            <p className="font-medium text-red-800 mb-1 flex items-center gap-1">
+              <XCircle className="h-4 w-4" />
+              Afwijzing
+            </p>
+            <div className="text-sm text-red-700 space-y-1">
+              {latestAsset.rejectedReason && (
+                <p><strong>Reden:</strong> {latestAsset.rejectedReason === "quality" ? "Onleesbare tekst / slechte kwaliteit" : 
+                  latestAsset.rejectedReason === "duration" ? "Verkeerde duur" : 
+                  latestAsset.rejectedReason === "content" ? "Niet toegestane inhoud" : 
+                  latestAsset.rejectedReason}</p>
+              )}
+              {latestAsset.rejectedDetails && (
+                <p><strong>Toelichting:</strong> {latestAsset.rejectedDetails}</p>
+              )}
+              {latestAsset.rejectedAt && (
+                <p className="text-xs text-red-600 mt-1">
+                  Afgekeurd op {format(new Date(latestAsset.rejectedAt), "d MMMM yyyy 'om' HH:mm", { locale: nl })}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+        
+        {/* Pending Approval Info */}
+        {(latestAsset.approvalStatus === "UPLOADED" || !latestAsset.approvalStatus) && 
+         latestAsset.validationStatus === "valid" && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <p className="text-sm text-blue-700 flex items-center gap-1">
+              <Clock className="h-4 w-4" />
+              Video wordt beoordeeld door Elevizion. U ontvangt bericht zodra deze goedgekeurd is.
+            </p>
           </div>
         )}
         
@@ -1009,13 +1081,8 @@ export default function AdvertiserDetail() {
         </CardContent>
       </Card>
 
-      {/* Video Preview Card */}
-      {(advertiser.assetStatus === "uploaded_valid" || 
-        advertiser.assetStatus === "ready_for_yodeck" || 
-        advertiser.assetStatus === "live" ||
-        advertiser.assetStatus === "uploaded_invalid") && (
-        <VideoPreviewCard advertiserId={advertiser.id} />
-      )}
+      {/* Video Preview Card - always show, component handles empty state */}
+      <VideoPreviewCard advertiserId={advertiser.id} />
 
       {/* Test Tools Card - only visible for admin in TEST_MODE */}
       {showTestTools && (
