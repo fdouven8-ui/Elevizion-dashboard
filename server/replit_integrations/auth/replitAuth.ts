@@ -263,3 +263,52 @@ export const requireAnyPermission = (...requiredPermissions: Permission[]): Requ
     next();
   };
 };
+
+/**
+ * Check if user has admin-level access.
+ * Returns true if:
+ * - rolePreset is 'eigenaar' (owner has all access)
+ * - permissions includes manage_users, edit_system_settings, or manage_integrations
+ * - role is 'ADMIN' (legacy support)
+ */
+export function hasAdminAccess(user: any): boolean {
+  if (!user) return false;
+  
+  // Owner rolePreset always has admin access
+  if (user.rolePreset === 'eigenaar') return true;
+  
+  // Legacy role check
+  if (user.role === 'ADMIN') return true;
+  
+  // Check for admin-level permissions
+  const adminPermissions = ['manage_users', 'edit_system_settings', 'manage_integrations'];
+  const userPermissions = user.permissions || [];
+  return adminPermissions.some(p => userPermissions.includes(p));
+}
+
+/**
+ * Middleware that requires admin-level access.
+ * Allows eigenaar, ADMIN role, or users with manage_* permissions.
+ */
+export const requireAdminAccess: RequestHandler = async (req, res, next) => {
+  const userId = (req.session as any)?.userId;
+  if (!userId) {
+    return res.status(401).json({ message: "Niet ingelogd" });
+  }
+
+  const user = await authStorage.getUser(userId);
+  if (!user) {
+    return res.status(401).json({ message: "Gebruiker niet gevonden" });
+  }
+
+  if (!user.isActive) {
+    return res.status(403).json({ message: "Account is gedeactiveerd" });
+  }
+
+  if (!hasAdminAccess(user)) {
+    return res.status(403).json({ message: "Alleen voor beheerders" });
+  }
+
+  (req as any).currentUser = user;
+  next();
+};

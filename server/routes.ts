@@ -63,7 +63,7 @@ import {
   calculateExpirationDate,
   formatClientInfo,
 } from "./contract-signing";
-import { setupAuth, registerAuthRoutes, isAuthenticated, requirePermission } from "./replit_integrations/auth";
+import { setupAuth, registerAuthRoutes, isAuthenticated, requirePermission, requireAdminAccess, hasAdminAccess } from "./replit_integrations/auth";
 import { getScreenStats, getAdvertiserStats, clearStatsCache, checkYodeckScreenHasContent } from "./yodeckStats";
 import { classifyMediaItems } from "./services/mediaClassifier";
 import * as advertiserOnboarding from "./services/advertiserOnboarding";
@@ -2532,11 +2532,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
   // ============================================================================
 
   // Get pending video review queue (ADMIN ONLY)
-  app.get("/api/admin/video-review", isAuthenticated, async (req: any, res) => {
-    // Security: Admin-only endpoint
-    if (req.user?.role !== "ADMIN") {
-      return res.status(403).json({ message: "Alleen voor beheerders" });
-    }
+  app.get("/api/admin/video-review", requireAdminAccess, async (req: any, res) => {
     try {
       const { getPendingReviewAssets } = await import("./services/adAssetUploadService");
       const queue = await getPendingReviewAssets();
@@ -2547,14 +2543,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // Approve video asset (ADMIN ONLY)
-  app.post("/api/admin/video-review/:id/approve", isAuthenticated, async (req: any, res) => {
-    // Security: Admin-only endpoint
-    if (req.user?.role !== "ADMIN") {
-      return res.status(403).json({ message: "Alleen voor beheerders" });
-    }
+  app.post("/api/admin/video-review/:id/approve", requireAdminAccess, async (req: any, res) => {
     try {
       const { approveAsset } = await import("./services/adAssetUploadService");
-      const user = req.user as any;
+      const user = req.currentUser as any;
       const result = await approveAsset(req.params.id, user?.id || 'admin', req.body.notes);
       if (!result.success) {
         return res.status(400).json({ message: result.message });
@@ -2566,14 +2558,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // Reject video asset (ADMIN ONLY)
-  app.post("/api/admin/video-review/:id/reject", isAuthenticated, async (req: any, res) => {
-    // Security: Admin-only endpoint
-    if (req.user?.role !== "ADMIN") {
-      return res.status(403).json({ message: "Alleen voor beheerders" });
-    }
+  app.post("/api/admin/video-review/:id/reject", requireAdminAccess, async (req: any, res) => {
     try {
       const { rejectAsset, REJECTION_REASONS } = await import("./services/adAssetUploadService");
-      const user = req.user as any;
+      const user = req.currentUser as any;
       const { reason, details } = req.body;
       
       if (!reason || !(reason in REJECTION_REASONS)) {
@@ -2594,11 +2582,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // Get rejection reasons (for dropdown, ADMIN ONLY)
-  app.get("/api/admin/video-review/rejection-reasons", isAuthenticated, async (req: any, res) => {
-    // Security: Admin-only endpoint
-    if (req.user?.role !== "ADMIN") {
-      return res.status(403).json({ message: "Alleen voor beheerders" });
-    }
+  app.get("/api/admin/video-review/rejection-reasons", requireAdminAccess, async (_req: any, res) => {
     const { REJECTION_REASONS } = await import("./services/adAssetUploadService");
     res.json(REJECTION_REASONS);
   });
