@@ -293,8 +293,8 @@ export class ObjectStorageService {
   }
 
   /**
-   * Upload a file to object storage
-   * Returns the public URL of the uploaded file
+   * Upload a file to object storage (private, no public ACL)
+   * Returns the storage path for later access via signed URLs
    */
   async uploadFile(content: Buffer, fileName: string, contentType: string): Promise<string> {
     try {
@@ -311,13 +311,14 @@ export class ObjectStorageService {
         },
       });
 
-      // Make the file publicly accessible
-      await file.makePublic();
-      
-      // Return the public URL
-      return `https://storage.googleapis.com/${bucketName}/${objectName}`;
-    } catch (error) {
-      console.error("[ObjectStorage] Error uploading file:", error);
+      // Return the storage path (not public URL - use signed URLs for access)
+      return fullPath;
+    } catch (error: any) {
+      console.error("[ObjectStorage] Error uploading file:", {
+        message: error.message,
+        code: error.code,
+        errors: error.errors,
+      });
       throw error;
     }
   }
@@ -325,6 +326,7 @@ export class ObjectStorageService {
   /**
    * Stream a file directly from disk to object storage without loading into memory.
    * Use this for large files (videos) to prevent memory pressure.
+   * Files are private - use signed URLs for access.
    */
   async uploadFileFromPath(filePath: string, fileName: string, contentType: string): Promise<string> {
     const fs = await import('fs');
@@ -348,11 +350,36 @@ export class ObjectStorageService {
       
       await pipeline(readStream, writeStream);
       
-      await file.makePublic();
-      
-      return `https://storage.googleapis.com/${bucketName}/${objectName}`;
-    } catch (error) {
-      console.error("[ObjectStorage] Error streaming file upload:", error);
+      // Return the storage path (not public URL - use signed URLs for access)
+      return fullPath;
+    } catch (error: any) {
+      console.error("[ObjectStorage] Error streaming file upload:", {
+        message: error.message,
+        code: error.code,
+        errors: error.errors,
+      });
+      throw error;
+    }
+  }
+
+  /**
+   * Generate a signed download URL for private objects.
+   * Use this for preview/download access instead of public URLs.
+   */
+  async getSignedDownloadUrl(storagePath: string, ttlSeconds: number = 900): Promise<string> {
+    try {
+      const { bucketName, objectName } = parseObjectPath(storagePath);
+      return signObjectURL({
+        bucketName,
+        objectName,
+        method: "GET",
+        ttlSec: ttlSeconds,
+      });
+    } catch (error: any) {
+      console.error("[ObjectStorage] Error generating signed URL:", {
+        message: error.message,
+        code: error.code,
+      });
       throw error;
     }
   }

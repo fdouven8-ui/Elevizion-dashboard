@@ -347,12 +347,20 @@ export async function processAdAssetUpload(
     storageUrl = await objectStorage.uploadFileFromPath(filePath, storagePath, mimeType);
     logMemory('after-upload');
     console.log('[AdAssetUpload] File streamed to storage:', storagePath, '(original:', originalFilename, ')');
-  } catch (error) {
-    console.error('[AdAssetUpload] Failed to upload to object storage:', error);
+  } catch (error: any) {
+    console.error('[AdAssetUpload] Failed to upload to object storage:', {
+      message: error.message,
+      code: error.code,
+      errors: error.errors,
+    });
     return {
       success: false,
       validation,
       message: 'Upload naar opslag mislukt. Probeer het later opnieuw.',
+      errorCode: 'STORAGE_UPLOAD_FAILED' as VideoErrorCode,
+      errorDetails: {
+        ffprobeError: error.message || 'Storage upload failed',
+      },
     };
   }
   

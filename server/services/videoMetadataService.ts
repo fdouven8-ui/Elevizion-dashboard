@@ -188,7 +188,9 @@ export type VideoErrorCode =
   | 'UNSUPPORTED_DURATION'   // Video too long or too short
   | 'UNSUPPORTED_RESOLUTION' // Resolution issues
   | 'FILE_TOO_LARGE'         // File exceeds size limit
-  | 'TRANSCODE_FAILED';      // Auto-transcode failed
+  | 'TRANSCODE_FAILED'       // Auto-transcode failed
+  | 'STORAGE_UPLOAD_FAILED'  // Object storage upload failed
+  | 'SERVER_MISSING_FFMPEG'; // ffmpeg/ffprobe not installed
 
 export interface VideoErrorDetails {
   detectedCodec?: string;

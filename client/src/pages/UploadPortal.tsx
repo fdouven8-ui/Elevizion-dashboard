@@ -69,6 +69,12 @@ function getErrorMessageForCode(code: string, details?: ErrorDetails): string {
     case 'SERVER_BUSY':
       return 'Server is even bezig. Probeer het over 60 seconden opnieuw.';
     
+    case 'STORAGE_UPLOAD_FAILED':
+      return 'Upload naar opslag mislukt. Probeer het later opnieuw.';
+    
+    case 'SERVER_MISSING_FFMPEG':
+      return 'Technische storing. Probeer later opnieuw.';
+    
     default:
       return '';
   }

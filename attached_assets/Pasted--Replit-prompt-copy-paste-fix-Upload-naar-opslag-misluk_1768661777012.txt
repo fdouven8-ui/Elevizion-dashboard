@@ -1,0 +1,90 @@
+**Replit prompt (copy/paste) – fix “Upload naar opslag mislukt” + allUsers/allAuthenticatedUsers error**
+
+We krijgen bij video upload een storage error en de UI toont “Upload naar opslag mislukt”. In logs staat o.a.:
+
+* `@google-cloud/storage/...`
+* Error: **“The member bindings allUsers and allAuthenticatedUsers are not allowed since public access prevention is enforced.”**
+* Code 412 / conditionNotMet
+* Header mention: `If-Match`
+
+Dit betekent dat onze upload/opslaag code (na succesvolle ffprobe) probeert een object/bucket **public te maken** via ACL/IAM (`allUsers` / `allAuthenticatedUsers`), maar de bucket heeft **Public Access Prevention** aan. Daardoor faalt de opslag stap.
+
+**Doel**
+
+1. Upload naar storage moet altijd slagen (private object), zonder public ACL/IAM wijzigingen.
+2. Voor toegang (preview/download/yodeck) gebruiken we **signed URLs** of server-side streaming, niet “public”.
+3. UI moet niet 2x dezelfde fout tonen.
+
+---
+
+## 1) Verwijder/disable alle “public maken” code
+
+Zoek en verwijder of zet uit alle calls die (direct of indirect) publieke toegang instellen, zoals:
+
+* `file.makePublic()`
+* `file.acl.add(...)` met `allUsers` of `allAuthenticatedUsers`
+* `bucket.iam.setPolicy(...)` / `setIamPolicy(...)` met publieke members
+* `setMetadata({ acl: ... })` of `predefinedAcl: "publicRead"` (of equivalent)
+
+**Belangrijk:** laat de upload zelf staan, maar **nooit** ACL/IAM aanpassen.
+
+---
+
+## 2) Upload private + zet alleen nuttige metadata
+
+Bij upload:
+
+* upload/stream naar bucket
+* zet contentType correct (`video/mp4`)
+* (optioneel) cacheControl
+
+Geen ACL. Geen IAM.
+
+---
+
+## 3) Voeg signed URL helper toe (V4)
+
+Maak helper `getSignedDownloadUrl(filePath, ttlSeconds)` die een tijdelijke download-URL maakt (bijv. 15 of 60 minuten).
+Gebruik dit voor:
+
+* preview in admin
+* download link indien nodig
+* (optioneel) tijdelijke link voor externe partijen
+
+---
+
+## 4) Yodeck publish: server-side stream (aanrader)
+
+Bij “Akkoord” / publish:
+
+* lees video vanuit storage als stream (`createReadStream`)
+* upload die stream naar Yodeck API
+* sla `yodeckMediaId` op zodat retries geen dubbele upload doen
+
+Dus: we hoeven niets public te maken.
+
+---
+
+## 5) Fix de dubbele foutmelding in de UI
+
+Nu verschijnt dezelfde fout 2x (“Upload naar opslag mislukt” + “Validatiefout”). Pas frontend aan:
+
+* toon 1 error block
+* als server code `STORAGE_UPLOAD_FAILED`, toon alleen die
+
+---
+
+## 6) Betere server foutcode + logging
+
+Wanneer storage upload faalt:
+
+* return `STORAGE_UPLOAD_FAILED` (500/502)
+* log intern `err.message`, `err.code`, `err.errors` (van GCS lib)
+* toon user: “Upload naar opslag mislukt. Probeer het later opnieuw.”
+
+**Acceptatiecriteria**
+
+* Upload werkt met dezelfde bucket-instellingen (Public Access Prevention aan)
+* Geen `allUsers/allAuthenticatedUsers` errors meer
+* Video metadata blijft zichtbaar (duur/resolutie/codec)
+* Publish naar Yodeck werkt via server-side upload (zonder public links)
