@@ -82,6 +82,12 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
     - Atomic job scheduling with WHERE clause to prevent duplicate transcode jobs
     - Converted files stored at `converted/${assetId}-converted.mp4`
     - Admin review UI shows conversion status badges with real-time progress
+  - **Admin Video Review Workflow**: Mandatory admin approval for uploaded videos at `/video-review`:
+    - Approve action: Sets asset to APPROVED, auto-creates placement plan (PROPOSED), sends ADVERTISER_ASSET_APPROVED email
+    - Reject action: Sets asset to REJECTED with reason/details, sends ADVERTISER_ASSET_REJECTED email
+    - Success dialog offers: "Later", "Bekijk voorstel", or "Akkoord & publiceer" (one-click approve+publish)
+    - Publishing triggers ADVERTISER_PUBLISHED email when plan goes live on Yodeck
+    - Sidebar menu "Video Beoordelen" under Admin section with pending count badge
 
 ## Unified Availability & Waitlist System (v2)
 
