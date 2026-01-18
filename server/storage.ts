@@ -4,7 +4,7 @@
  */
 
 import { db } from "./db";
-import { eq, and, gte, lte, lt, gt, desc, sql, isNull, notInArray, ilike, or } from "drizzle-orm";
+import { eq, and, gte, lte, lt, gt, desc, sql, isNull, notInArray, inArray, ilike, or } from "drizzle-orm";
 import * as schema from "@shared/schema";
 import type {
   Advertiser, InsertAdvertiser,
@@ -111,6 +111,7 @@ export interface IStorage {
   // Locations
   getLocations(): Promise<Location[]>;
   getLocation(id: string): Promise<Location | undefined>;
+  getLocationsByIds(ids: string[]): Promise<Location[]>;
   getLocationByCode(locationCode: string): Promise<Location | undefined>;
   createLocation(data: InsertLocation): Promise<Location>;
   updateLocation(id: string, data: Partial<InsertLocation>): Promise<Location | undefined>;
@@ -536,6 +537,11 @@ export class DatabaseStorage implements IStorage {
   async getLocation(id: string): Promise<Location | undefined> {
     const [location] = await db.select().from(schema.locations).where(eq(schema.locations.id, id));
     return location;
+  }
+
+  async getLocationsByIds(ids: string[]): Promise<Location[]> {
+    if (ids.length === 0) return [];
+    return await db.select().from(schema.locations).where(inArray(schema.locations.id, ids));
   }
 
   async createLocation(data: InsertLocation): Promise<Location> {

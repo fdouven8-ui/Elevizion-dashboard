@@ -1,0 +1,166 @@
+**Replit prompt – complete upgrade: voorgestelde schermen vóór goedkeuren + video preview fix (Range streaming) + juiste flow naar live**
+
+Ik wil in de Video Review flow 2 verbeteringen tegelijk:
+
+1. **Voorgestelde schermen vóór “Goedkeuren”**
+   Ik wil eerst zien op welke TV’s/schermen de advertentie wordt geplaatst.
+   Daarna pas “Goedkeuren” (inhoudelijk ok + voorstel vastzetten).
+   Pas bij “Akkoord & publiceer” gaat het echt live op Yodeck.
+
+2. **Video preview werkt altijd**
+   In de review modal zie ik nu soms een zwart vlak / 0:00. Dit moet altijd afspelen (range requests + juiste headers).
+
+---
+
+## A) Fix video preview (betrouwbaar afspelen)
+
+### A1) Maak een stream endpoint met Range support
+
+Voeg endpoint toe:
+
+* `GET /api/assets/:assetId/stream`
+
+Dit endpoint moet:
+
+* asset ophalen uit DB (storageKey/bucketPath)
+* object storage file streamen
+* **HTTP Range requests ondersteunen**:
+
+  * Als `Range` header aanwezig: return `206 Partial Content`
+  * Zet headers: `Content-Type: video/mp4`, `Accept-Ranges: bytes`, `Content-Length`, `Content-Range`
+  * Stream alleen het gevraagde byte-range
+* Als geen `Range`: return `200` en stream het hele bestand met `Content-Type: video/mp4`
+
+**Acceptatie:** HTML5 video player kan laden, afspelen en scrubben zonder zwart beeld.
+
+### A2) Frontend gebruikt altijd deze stream URL
+
+In Video Review modal zet video `src` naar:
+
+* `/api/assets/${assetId}/stream`
+
+Geen directe signed URLs meer in de browser. (Storage blijft private)
+
+---
+
+## B) Voorgestelde schermen tonen vóór “Goedkeuren” (dry-run proposal)
+
+### B1) Nieuwe API: proposal ophalen zonder DB status te wijzigen
+
+Voeg endpoint toe:
+
+* `GET /api/admin/assets/:assetId/proposal`
+
+Dit endpoint doet:
+
+1. Load asset + advertiser (packageType, screensIncluded, targetRegionCodes/cities, businessCategory/competitorGroup, exclusivityMode)
+2. Run placement engine **propose + simulate** zonder iets te publiceren of status te wijzigen
+3. Return:
+
+```json
+{
+  "success": true,
+  "proposal": {
+    "requestedScreens": 1,
+    "matches": [
+      {
+        "screenId": "...",
+        "screenName": "...",
+        "locationName": "...",
+        "city": "...",
+        "playlistId": "...",
+        "playlistName": "...",
+        "score": 0.92,
+        "estimatedImpressionsPerMonth": 5300,
+        "reasons": ["target regio match", "capaciteit vrij", "competitor regels ok"]
+      }
+    ],
+    "summary": {
+      "totalMatches": 1,
+      "estimatedImpressionsPerMonth": 5300
+    },
+    "noCapacityReason": null
+  }
+}
+```
+
+Als `matches.length === 0`, return alsnog success maar met:
+
+* `matches: []`
+* `noCapacityReason` + `nextSteps` (bijv. “geen readyForAds schermen in target regio”, “geen playlists gekoppeld”, “exclusivity blokkeert”, “capaciteit vol”)
+
+---
+
+## C) UI: review modal uitbreiden met voorstel-sectie (voor goedkeuren)
+
+Wanneer admin op **Bekijk** klikt en modal opent:
+
+1. Render video preview via `/api/assets/:assetId/stream`
+2. Call `GET /api/admin/assets/:assetId/proposal`
+3. Toon onder de video een sectie:
+
+**Voorgestelde schermen (X/Y)**
+
+* cards/rows: screenName, locatie/plaats, playlistName, impressions, (optioneel) redenen
+
+Als `noCapacityReason`:
+
+* toon duidelijke melding + “Wat te doen” bullets uit `nextSteps`
+* Disable “Goedkeuren” of toon confirm (“Toch goedkeuren zonder voorstel?”) – voorkeur: **disable**
+
+---
+
+## D) Goedkeuren = video ok + plan vastzetten (maar nog NIET live)
+
+Pas endpoint aan (of behoud) :
+
+* `POST /api/admin/assets/:assetId/approve`
+
+Nieuwe behavior:
+
+1. Zet asset status: `APPROVED`
+2. Maak of update placement plan:
+
+   * status: `PROPOSED`
+   * link: `assetId`, `advertiserId`
+   * sla `planJson.matches` op (dezelfde matches als proposal)
+3. Stuur mail: `ADVERTISER_ASSET_APPROVED` (“goedgekeurd, voorstel staat klaar”)
+4. Return: `{ success:true, planId, planStatus:"PROPOSED" }`
+
+**Belangrijk:** Goedkeuren mag niet automatisch publiceren.
+
+---
+
+## E) Akkoord & publiceer = echt live naar Yodeck
+
+Behoud endpoint:
+
+* `POST /api/admin/placement-plans/:planId/approve-and-publish`
+
+Maar zorg dat hij:
+
+* alleen werkt als plan `PROPOSED` of `APPROVED`
+* idempotent is (geen dubbele uploads/playlist inserts)
+* status transitions: `APPROVED → PUBLISHING → PUBLISHED` (of FAILED)
+* mail: `ADVERTISER_PUBLISHED` bij succes
+
+---
+
+## F) UX copy (super duidelijk)
+
+In modal:
+
+* Bij **Goedkeuren**: “Je keurt de video goed en zet dit voorstel klaar. Hij gaat nog niet live.”
+* Bij **Akkoord & publiceer**: “Publiceert nu naar Yodeck en zet hem live op X schermen.”
+
+---
+
+## G) Acceptance tests
+
+1. Upload asset → verschijnt in Video Review “wachtend”
+2. Klik “Bekijk” → video speelt af + voorstel met schermen verschijnt
+3. Klik “Goedkeuren” → plan PROPOSED wordt opgeslagen + approved mail
+4. Klik “Akkoord & publiceer” → video naar Yodeck + playlists + published mail
+5. Als geen matches → duidelijke reden + knop Goedkeuren disabled
+
+Voer dit uit met minimale wijzigingen en hergebruik bestaande placement engine + yodeck mapping/outbox code.

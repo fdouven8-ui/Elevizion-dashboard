@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, Play, Eye, Clock, Monitor, MapPin, Package, RefreshCw, AlertTriangle, Send, Rocket } from "lucide-react";
+import { CheckCircle, XCircle, Play, Eye, Clock, Monitor, MapPin, Package, RefreshCw, AlertTriangle, Send, Rocket, Tv, Loader2, Info } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { nl } from "date-fns/locale";
 import { Link } from "wouter";
@@ -17,6 +17,31 @@ interface ApprovalResult {
   success: boolean;
   message: string;
   placementPlanId?: string;
+}
+
+interface ProposalMatch {
+  locationId: string;
+  locationName: string;
+  city: string | null;
+  playlistId: string | null;
+  playlistName: string | null;
+  score: number;
+  estimatedImpressionsPerMonth: number;
+  reasons: string[];
+}
+
+interface ProposalResponse {
+  success: boolean;
+  proposal: {
+    requestedScreens: number;
+    matches: ProposalMatch[];
+    summary: {
+      totalMatches: number;
+      estimatedImpressionsPerMonth: number;
+    };
+    noCapacityReason: string | null;
+    nextSteps: string[] | null;
+  };
 }
 
 interface ReviewQueueItem {
@@ -60,6 +85,40 @@ export default function VideoReview() {
   const [rejectReason, setRejectReason] = useState<string>("");
   const [rejectDetails, setRejectDetails] = useState<string>("");
   const [approvedPlan, setApprovedPlan] = useState<{ planId: string; companyName: string } | null>(null);
+  const [proposal, setProposal] = useState<ProposalResponse | null>(null);
+  const [proposalLoading, setProposalLoading] = useState(false);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+
+  // Fetch proposal when preview modal opens
+  useEffect(() => {
+    if (previewAsset) {
+      setProposalLoading(true);
+      setProposal(null);
+      setProposalError(null);
+      fetch(`/api/admin/assets/${previewAsset.asset.id}/proposal`)
+        .then(res => {
+          if (!res.ok) throw new Error("Kon voorstel niet ophalen");
+          return res.json();
+        })
+        .then(data => {
+          setProposal(data);
+          setProposalLoading(false);
+        })
+        .catch((err) => {
+          setProposalError(err.message || "Onbekende fout");
+          setProposalLoading(false);
+        });
+    } else {
+      setProposal(null);
+      setProposalError(null);
+    }
+  }, [previewAsset]);
+
+  // Determine if approval is allowed
+  // Block only when proposal loaded successfully but has 0 matches
+  // Allow approval when proposal errors (transient issue) or when matches exist
+  const hasMatches = proposal?.proposal?.matches && proposal.proposal.matches.length > 0;
+  const canApprove = !proposalLoading && (proposalError || hasMatches);
 
   const { data: queue = [], isLoading } = useQuery<ReviewQueueItem[]>({
     queryKey: ["/api/admin/video-review"],
@@ -377,6 +436,91 @@ export default function VideoReview() {
                   )}
                 </div>
               )}
+
+              {/* Proposal Section - Shows screens where ad will be placed */}
+              <div className="border rounded-lg p-4 space-y-3" data-testid="proposal-section">
+                <div className="flex items-center gap-2">
+                  <Tv className="h-4 w-4 text-muted-foreground" />
+                  <span className="font-medium">Voorgestelde schermen</span>
+                  {proposalLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                </div>
+                
+                {proposalLoading ? (
+                  <div className="text-sm text-muted-foreground">Schermen worden gezocht...</div>
+                ) : proposalError ? (
+                  <div className="p-3 rounded-lg bg-red-50 border border-red-200">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5" />
+                      <div>
+                        <p className="text-sm text-red-800">{proposalError}</p>
+                        <p className="text-xs text-red-600 mt-1">Je kunt de video nog steeds goedkeuren. Het voorstel wordt dan opnieuw berekend.</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : proposal?.proposal?.noCapacityReason ? (
+                  <div className="space-y-2">
+                    <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-amber-800">{proposal.proposal.noCapacityReason}</p>
+                          {proposal.proposal.nextSteps && proposal.proposal.nextSteps.length > 0 && (
+                            <ul className="mt-2 text-xs text-amber-700 list-disc list-inside">
+                              {proposal.proposal.nextSteps.map((step, i) => (
+                                <li key={i}>{step}</li>
+                              ))}
+                            </ul>
+                          )}
+                          <p className="mt-2 text-xs text-amber-700 italic">
+                            Goedkeuren is niet mogelijk zonder beschikbare schermen.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : proposal?.proposal?.matches && proposal.proposal.matches.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="text-sm text-muted-foreground">
+                      {proposal.proposal.matches.length} van {proposal.proposal.requestedScreens} scherm(en) gevonden
+                    </div>
+                    <div className="grid gap-2 max-h-40 overflow-y-auto">
+                      {proposal.proposal.matches.map((match) => (
+                        <div key={match.locationId} className="p-2 rounded bg-muted/50 text-sm">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Monitor className="h-4 w-4 text-muted-foreground" />
+                              <span>{match.locationName}</span>
+                              {match.city && <Badge variant="outline" className="text-xs">{match.city}</Badge>}
+                            </div>
+                            <span className="text-xs text-muted-foreground">
+                              ~{Math.round(match.estimatedImpressionsPerMonth).toLocaleString()} views/mnd
+                            </span>
+                          </div>
+                          {match.playlistName && (
+                            <div className="text-xs text-muted-foreground mt-1 pl-6">
+                              Playlist: {match.playlistName}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="text-xs text-muted-foreground pt-1">
+                      Totaal: ~{Math.round(proposal.proposal.summary.estimatedImpressionsPerMonth).toLocaleString()} views/maand
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">Geen schermen gevonden</div>
+                )}
+              </div>
+
+              {/* Info box explaining the workflow */}
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-blue-50 border border-blue-200">
+                <Info className="h-4 w-4 text-blue-600 mt-0.5" />
+                <p className="text-xs text-blue-800">
+                  Bij "Goedkeuren" wordt de video inhoudelijk goedgekeurd en het voorstel vastgezet. 
+                  De advertentie gaat pas live na "Akkoord & publiceer".
+                </p>
+              </div>
             </div>
           )}
           
@@ -397,10 +541,16 @@ export default function VideoReview() {
             <Button
               className="bg-green-600 hover:bg-green-700"
               onClick={() => previewAsset && handleApprove(previewAsset)}
-              disabled={approveMutation.isPending}
+              disabled={approveMutation.isPending || !canApprove}
+              title={
+                proposalLoading ? "Schermen worden geladen..." :
+                !canApprove ? "Kan niet goedkeuren: geen schermen beschikbaar" : 
+                proposalError ? "Goedkeuren ondanks fout bij ophalen voorstel" :
+                "Keur video goed en zet voorstel klaar"
+              }
             >
               <CheckCircle className="h-4 w-4 mr-1" />
-              Goedkeuren
+              {approveMutation.isPending ? "Goedkeuren..." : "Goedkeuren"}
             </Button>
           </DialogFooter>
         </DialogContent>

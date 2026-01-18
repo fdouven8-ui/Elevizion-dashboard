@@ -2587,6 +2587,110 @@ Sitemap: ${SITE_URL}/sitemap.xml
     res.json(REJECTION_REASONS);
   });
 
+  // Get proposal/preview of screens before approval (dry-run, no DB changes)
+  app.get("/api/admin/assets/:assetId/proposal", requireAdminAccess, async (req: any, res) => {
+    try {
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const { placementEngine } = await import("./services/placementEngineService");
+      
+      const asset = await getAdAssetById(req.params.assetId);
+      if (!asset) {
+        return res.status(404).json({ message: "Asset niet gevonden" });
+      }
+      
+      const advertiser = await storage.getAdvertiser(asset.advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ message: "Adverteerder niet gevonden" });
+      }
+      
+      // Use actual asset duration for accurate capacity calculation
+      const assetDuration = asset.durationSeconds 
+        ? parseFloat(String(asset.durationSeconds)) 
+        : (advertiser.videoDurationSeconds || 15);
+      
+      // Run dry-run simulation without modifying anything
+      const simulation = await placementEngine.dryRunSimulate({
+        packageType: advertiser.packageType || "STARTER",
+        businessCategory: advertiser.businessCategory || advertiser.category || "algemeen",
+        competitorGroup: advertiser.competitorGroup || undefined,
+        targetRegionCodes: advertiser.targetRegionCodes || [],
+        videoDurationSeconds: assetDuration,
+      });
+      
+      // Build playlist name lookup from locations
+      const locationIds = simulation.selectedLocations.map(l => l.id);
+      const locationsData = await storage.getLocationsByIds(locationIds);
+      const playlistNameMap = new Map<string, string>();
+      for (const loc of locationsData) {
+        if (loc.yodeckPlaylistId && loc.yodeckPlaylistName) {
+          playlistNameMap.set(loc.id, loc.yodeckPlaylistName);
+        }
+      }
+      
+      // Transform to proposal response format
+      // Note: locationName = screen name in this context (each location has one screen)
+      const matches = simulation.selectedLocations.map(loc => ({
+        locationId: loc.id,
+        locationName: loc.name,
+        city: loc.city || null,
+        playlistId: loc.yodeckPlaylistId || null,
+        playlistName: playlistNameMap.get(loc.id) || null,
+        score: loc.score,
+        estimatedImpressionsPerMonth: Math.round((loc.expectedImpressionsPerWeek || 0) * 4.33),
+        reasons: [
+          loc.city ? `Stad: ${loc.city}` : null,
+          `Capaciteit vrij`,
+        ].filter(Boolean),
+      }));
+      
+      // Determine failure reason if no matches
+      let noCapacityReason: string | null = null;
+      let nextSteps: string[] = [];
+      
+      if (!simulation.success || matches.length === 0) {
+        const rejectionReasons = simulation.rejectedLocations.map(r => r.reason);
+        const reasonCounts = rejectionReasons.reduce((acc, r) => {
+          acc[r] = (acc[r] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>);
+        
+        if (reasonCounts.NO_PLAYLIST > 0) {
+          noCapacityReason = "Geen schermen met gekoppelde playlist";
+          nextSteps.push("Koppel playlists aan locaties in Yodeck");
+        } else if (reasonCounts.REGION_MISMATCH > 0) {
+          noCapacityReason = "Geen schermen in geselecteerde regio's";
+          nextSteps.push("Voeg locaties toe in de doelregio's");
+        } else if (reasonCounts.NO_CAPACITY > 0) {
+          noCapacityReason = "Alle schermen zitten vol";
+          nextSteps.push("Wacht tot er capaciteit vrijkomt");
+        } else if (reasonCounts.COMPETITOR_CONFLICT > 0) {
+          noCapacityReason = "Exclusiviteitsconflict met concurrent";
+          nextSteps.push("Pas exclusiviteitsregels aan of kies andere regio's");
+        } else {
+          noCapacityReason = simulation.message || "Geen geschikte schermen gevonden";
+          nextSteps.push("Controleer locatie-instellingen");
+        }
+      }
+      
+      res.json({
+        success: simulation.success,
+        proposal: {
+          requestedScreens: advertiser.screensIncluded || 1,
+          matches,
+          summary: {
+            totalMatches: matches.length,
+            estimatedImpressionsPerMonth: Math.round(simulation.totalExpectedImpressions * 4.33),
+          },
+          noCapacityReason,
+          nextSteps: nextSteps.length > 0 ? nextSteps : null,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Proposal] Error:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // ============================================================================
   // PLACEMENT PLANS API (AUTO-PUBLISH)
   // ============================================================================

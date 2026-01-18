@@ -83,11 +83,18 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
     - Converted files stored at `converted/${assetId}-converted.mp4`
     - Admin review UI shows conversion status badges with real-time progress
   - **Admin Video Review Workflow**: Mandatory admin approval for uploaded videos at `/video-review`:
+    - **Proposal Preview**: Before approval, shows dry-run simulation of screen matching via `/api/admin/assets/:assetId/proposal`
+      - Uses actual asset duration (not advertiser defaults) for accurate capacity calculation
+      - Displays matched locations with city, playlist name, and estimated monthly impressions
+      - Shows actionable next steps when no matches found (e.g., "Koppel playlists aan locaties")
+      - Approval blocked only when proposal succeeds with 0 matches (prevents orphan placement plans)
+      - Approval allowed on proposal fetch errors (transient issues) with warning message
     - Approve action: Sets asset to APPROVED, auto-creates placement plan (PROPOSED), sends ADVERTISER_ASSET_APPROVED email
     - Reject action: Sets asset to REJECTED with reason/details, sends ADVERTISER_ASSET_REJECTED email
     - Success dialog offers: "Later", "Bekijk voorstel", or "Akkoord & publiceer" (one-click approve+publish)
     - Publishing triggers ADVERTISER_PUBLISHED email when plan goes live on Yodeck
     - Sidebar menu "Video Beoordelen" under Admin section with pending count badge
+    - **Entity Model**: Placement engine operates on LOCATIONS as the unit of ad placement (one screen per location for capacity purposes)
 
 ## Unified Availability & Waitlist System (v2)
 
