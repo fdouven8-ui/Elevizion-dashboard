@@ -21,7 +21,8 @@ export type AuditEventType =
   | "ASSET_REJECTED"
   | "PLAN_APPROVED"
   | "PLAN_PUBLISHED"
-  | "PLAN_FAILED";
+  | "PLAN_FAILED"
+  | "PLAYLIST_AUTO_CREATED";
 
 export interface AuditContext {
   actorUserId?: string;

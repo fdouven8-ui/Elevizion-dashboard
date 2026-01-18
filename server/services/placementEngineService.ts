@@ -7,12 +7,21 @@
  * Hard Constraints:
  * 1. Region match: location.regionCode must match advertiser.targetRegionCodes
  * 2. Category match: advertiser.category must match location.categoriesAllowed
- * 3. Online + linked: location must have yodeckPlaylistId
+ * 3. Online + linked: location must have yodeckPlaylistId (or auto-provisioned)
  * 4. Capacity: currentAdLoadSeconds + videoDuration <= adSlotCapacitySecondsPerLoop
  * 
  * Soft Ranking:
  * - Expected impressions (avgVisitorsPerWeek * viewFactor)
  * - Spread across different cities
+ * 
+ * Auto-Playlist Provisioning:
+ * When a location has yodeckDeviceId but no yodeckPlaylistId, the engine
+ * automatically provisions a new playlist via autoPlaylistService. This ensures
+ * proposals never fail due to missing playlists for coupled screens.
+ * 
+ * Note: Playlist sellability is enforced during onboarding/sync, not simulation.
+ * Auto-provisioned playlists are inherently sellable (contain 'auto-playlist' in name).
+ * Per system design, availability MUST NOT depend on Yodeck mapping for capacity.
  */
 
 import { db } from "../db";
@@ -28,6 +37,7 @@ import {
 import { eq, and, inArray, or, isNull, gte, lte, sql } from "drizzle-orm";
 import * as crypto from "crypto";
 import { logAudit } from "./auditService";
+import { provisionPlaylistForLocation } from "./autoPlaylistService";
 
 const STALE_SYNC_THRESHOLD_MINUTES = 15;
 const VIEW_FACTOR = 0.3; // 30% of visitors see the ad per week
@@ -244,9 +254,22 @@ export class PlacementEngineService {
         continue;
       }
       
-      if (!loc.yodeckPlaylistId) {
-        rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "NO_PLAYLIST" });
-        continue;
+      let playlistId = loc.yodeckPlaylistId;
+      if (!playlistId) {
+        if (loc.yodeckDeviceId) {
+          console.log(`[PlacementEngine] Location ${loc.id} has no playlist, attempting auto-provision...`);
+          const provisionResult = await provisionPlaylistForLocation(loc.id);
+          if (provisionResult.success && provisionResult.playlistId) {
+            playlistId = provisionResult.playlistId;
+            console.log(`[PlacementEngine] Auto-provisioned playlist ${playlistId} for ${loc.name}`);
+          } else {
+            rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "NO_PLAYLIST" });
+            continue;
+          }
+        } else {
+          rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "NO_PLAYLIST" });
+          continue;
+        }
       }
       
       // Region matching: use regionCode if set, otherwise fall back to lowercase city
@@ -296,7 +319,7 @@ export class PlacementEngineService {
         name: loc.name,
         city: loc.city,
         regionCode: loc.regionCode,
-        yodeckPlaylistId: loc.yodeckPlaylistId,
+        yodeckPlaylistId: playlistId!,
         avgVisitorsPerWeek: avgVisitors,
         currentAdLoadSeconds: currentLoad,
         adSlotCapacitySecondsPerLoop: capacity,
@@ -583,9 +606,22 @@ export class PlacementEngineService {
         continue;
       }
       
-      if (!loc.yodeckPlaylistId) {
-        rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "NO_PLAYLIST" });
-        continue;
+      let playlistId = loc.yodeckPlaylistId;
+      if (!playlistId) {
+        if (loc.yodeckDeviceId) {
+          console.log(`[PlacementEngine] Location ${loc.id} has no playlist, attempting auto-provision...`);
+          const provisionResult = await provisionPlaylistForLocation(loc.id);
+          if (provisionResult.success && provisionResult.playlistId) {
+            playlistId = provisionResult.playlistId;
+            console.log(`[PlacementEngine] Auto-provisioned playlist ${playlistId} for ${loc.name}`);
+          } else {
+            rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "NO_PLAYLIST" });
+            continue;
+          }
+        } else {
+          rejectedLocations.push({ locationId: loc.id, locationName: loc.name, reason: "NO_PLAYLIST" });
+          continue;
+        }
       }
       
       // Region matching: use regionCode if set, otherwise fall back to lowercase city
@@ -634,7 +670,7 @@ export class PlacementEngineService {
         name: loc.name,
         city: loc.city,
         regionCode: loc.regionCode,
-        yodeckPlaylistId: loc.yodeckPlaylistId,
+        yodeckPlaylistId: playlistId!,
         avgVisitorsPerWeek: avgVisitors,
         currentAdLoadSeconds: currentLoad,
         adSlotCapacitySecondsPerLoop: capacity,

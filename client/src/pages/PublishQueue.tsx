@@ -43,7 +43,7 @@ function translateRejectionReason(reason: string): string {
     CATEGORY_MISMATCH: "Categorie uitgesloten",
     NO_CAPACITY: "Geen capaciteit",
     OFFLINE: "Offline",
-    NO_PLAYLIST: "Geen playlist",
+    NO_PLAYLIST: "Geen Yodeck-koppeling",
     STALE_SYNC: "Sync verouderd",
     NOT_ACTIVE: "Niet actief",
     COMPETITOR_CONFLICT: "Concurrent op locatie",

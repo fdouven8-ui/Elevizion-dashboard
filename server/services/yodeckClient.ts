@@ -431,6 +431,117 @@ export class YodeckClient {
     const index = await this.getMediaIndex();
     return index.get(id) || null;
   }
+
+  /**
+   * Create a new playlist in Yodeck
+   */
+  async createPlaylist(name: string, workspaceId?: number): Promise<{ ok: boolean; data?: YodeckPlaylist; error?: string }> {
+    await semaphore.acquire();
+    
+    try {
+      const body: Record<string, any> = { name };
+      if (workspaceId) {
+        body.workspace = workspaceId;
+      }
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/playlists/`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          const text = await response.text();
+          console.error(`[YodeckClient] Failed to create playlist: HTTP ${response.status}`, text);
+          return { ok: false, error: `HTTP ${response.status}: ${text}` };
+        }
+
+        const data = await response.json() as YodeckPlaylist;
+        console.log(`[YodeckClient] Created playlist "${name}" with ID ${data.id}`);
+        return { ok: true, data };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        if (err.name === "AbortError") {
+          return { ok: false, error: "timeout" };
+        }
+        throw err;
+      }
+    } catch (err: any) {
+      console.error(`[YodeckClient] Error creating playlist:`, err);
+      return { ok: false, error: err.message || "unknown_error" };
+    } finally {
+      semaphore.release();
+    }
+  }
+
+  /**
+   * Assign content to a screen (playlist, layout, or schedule)
+   */
+  async assignContentToScreen(
+    screenId: number,
+    contentType: "playlist" | "layout" | "schedule" | "tagbased-playlist",
+    contentId: number
+  ): Promise<{ ok: boolean; error?: string }> {
+    await semaphore.acquire();
+    
+    try {
+      const body = {
+        screen_content: {
+          source_type: contentType,
+          source_id: contentId,
+        },
+      };
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/screens/${screenId}/`, {
+          method: "PATCH",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          const text = await response.text();
+          console.error(`[YodeckClient] Failed to assign content to screen ${screenId}: HTTP ${response.status}`, text);
+          return { ok: false, error: `HTTP ${response.status}: ${text}` };
+        }
+
+        console.log(`[YodeckClient] Assigned ${contentType} ${contentId} to screen ${screenId}`);
+        return { ok: true };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        if (err.name === "AbortError") {
+          return { ok: false, error: "timeout" };
+        }
+        throw err;
+      }
+    } catch (err: any) {
+      console.error(`[YodeckClient] Error assigning content to screen:`, err);
+      return { ok: false, error: err.message || "unknown_error" };
+    } finally {
+      semaphore.release();
+    }
+  }
 }
 
 let clientInstance: YodeckClient | null = null;

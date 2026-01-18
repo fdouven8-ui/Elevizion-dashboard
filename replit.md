@@ -95,6 +95,12 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
     - Publishing triggers ADVERTISER_PUBLISHED email when plan goes live on Yodeck
     - Sidebar menu "Video Beoordelen" under Admin section with pending count badge
     - **Entity Model**: Placement engine operates on LOCATIONS as the unit of ad placement (one screen per location for capacity purposes)
+- **Auto-Playlist Provisioning**: When a location has `yodeckDeviceId` but no `yodeckPlaylistId`, the placement engine automatically provisions a new playlist via `autoPlaylistService.ts`. Features:
+  - Creates playlist via Yodeck API with naming convention: `{locationName} (auto-playlist-{8-char-id})`
+  - Assigns playlist to screen and updates location record
+  - Logs `PLAYLIST_AUTO_CREATED` audit event
+  - `isSellablePlaylist()` helper identifies ad-suitable playlists (excludes 'no-ad', 'intern', 'content-only', 'staff', 'test', 'template')
+  - **Design decision**: Playlist sellability is enforced during onboarding/sync, not simulation (per system design: availability MUST NOT depend on Yodeck mapping)
 
 ## Unified Availability & Waitlist System (v2)
 

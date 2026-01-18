@@ -2655,8 +2655,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
         }, {} as Record<string, number>);
         
         if (reasonCounts.NO_PLAYLIST > 0) {
-          noCapacityReason = "Geen schermen met gekoppelde playlist";
-          nextSteps.push("Koppel playlists aan locaties in Yodeck");
+          noCapacityReason = "Schermen zonder Yodeck-koppeling of playlist";
+          nextSteps.push("Koppel locaties aan Yodeck-schermen (playlist wordt automatisch aangemaakt)");
         } else if (reasonCounts.REGION_MISMATCH > 0) {
           noCapacityReason = "Geen schermen in geselecteerde regio's";
           nextSteps.push("Voeg locaties toe in de doelregio's");
