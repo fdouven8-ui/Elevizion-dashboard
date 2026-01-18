@@ -2455,23 +2455,31 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       const asset = await getAdAssetById(req.params.id);
       if (!asset) {
+        console.log(`[AssetStream] Asset not found: ${req.params.id}`);
         return res.status(404).json({ message: "Asset niet gevonden" });
       }
       
       if (!asset.storagePath) {
+        console.log(`[AssetStream] No storagePath for asset ${req.params.id}`);
         return res.status(404).json({ message: "Bestand niet gevonden in storage" });
       }
+      
+      console.log(`[AssetStream] assetId=${req.params.id} storagePath=${asset.storagePath} range=${req.headers.range || 'none'}`);
       
       const objectStorage = new ObjectStorageService();
       const file = await objectStorage.getFileByPath(asset.storagePath);
       
       if (!file) {
+        console.log(`[AssetStream] File not found in storage: ${asset.storagePath}`);
         return res.status(404).json({ message: "Bestand niet gevonden" });
       }
       
+      const [metadata] = await file.getMetadata();
+      console.log(`[AssetStream] Streaming: size=${metadata.size} type=${metadata.contentType}`);
+      
       await objectStorage.streamVideoWithRange(file, req, res);
     } catch (error: any) {
-      console.error("[AdAsset] Stream error:", error);
+      console.error("[AssetStream] Error:", error);
       res.status(500).json({ message: error.message });
     }
   });

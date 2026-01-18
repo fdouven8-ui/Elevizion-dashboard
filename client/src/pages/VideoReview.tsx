@@ -386,9 +386,12 @@ export default function VideoReview() {
                 <video
                   controls
                   autoPlay
+                  preload="metadata"
+                  playsInline
                   className="w-full h-full"
                   src={`/api/ad-assets/${previewAsset.asset.id}/stream`}
                   data-testid="video-preview"
+                  onError={(e) => console.error('[VideoPreview] Error:', e)}
                 >
                   Je browser ondersteunt geen video playback
                 </video>

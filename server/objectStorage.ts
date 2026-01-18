@@ -257,14 +257,38 @@ export class ObjectStorageService {
 
   /**
    * Get a file by its storage path (for ad assets)
+   * Handles:
+   * - Full paths with bucket prefix: /bucket/path/to/file
+   * - Full storage URLs: https://storage.googleapis.com/bucket/path/to/file
+   * - Relative paths without prefix: ad-assets/uuid/filename.mp4
    */
   async getFileByPath(storagePath: string): Promise<File | null> {
     try {
-      const { bucketName, objectName } = parseObjectPath(storagePath);
+      let fullPath = storagePath;
+      
+      // Handle full storage URLs (https://storage.googleapis.com/bucket/path)
+      if (storagePath.startsWith('https://storage.googleapis.com/')) {
+        try {
+          const url = new URL(storagePath);
+          fullPath = url.pathname; // Already includes /bucket/object format
+        } catch {
+          // Invalid URL, try as path
+        }
+      }
+      // Handle relative paths (without leading /) - prepend PRIVATE_OBJECT_DIR
+      else if (!storagePath.startsWith('/')) {
+        const privateObjectDir = this.getPrivateObjectDir();
+        fullPath = `${privateObjectDir}/${storagePath}`;
+      }
+      
+      console.log(`[ObjectStorage] getFileByPath: input=${storagePath} resolved=${fullPath}`);
+      
+      const { bucketName, objectName } = parseObjectPath(fullPath);
       const bucket = objectStorageClient.bucket(bucketName);
       const file = bucket.file(objectName);
       const [exists] = await file.exists();
       if (!exists) {
+        console.log(`[ObjectStorage] File not found: bucket=${bucketName} object=${objectName}`);
         return null;
       }
       return file;
