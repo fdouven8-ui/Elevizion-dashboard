@@ -1,0 +1,88 @@
+**Replit prompt – voeg de laatste “production polish” toe: voorstel-samenvatting, audit log, en 1-klik happy-path checks**
+
+We hebben proposal preview + approve/publish workflow werkend. Ik wil nu de laatste extra’s toevoegen (geen grote refactor, alleen polish + zekerheid):
+
+## 1) Voorstel-samenvatting boven de matches (snelle beslissing)
+
+In de Video Review preview dialog (proposal view), toon boven de lijst met voorgestelde schermen een compacte summary card:
+
+* **Voorstel:** X van Y schermen (gevonden vs pakket)
+* **Regio:** targetRegionCodes / cities (menselijk leesbaar)
+* **Geschatte maandelijkse vertoningen:** totaal van matches (som)
+* **Video duur:** bijv. 10.1s (uit asset metadata)
+* **Status:** “Voorstel ok” / “Geen matches” / “Fout bij ophalen (goedkeuren kan alsnog)”
+
+Zorg dat deze summary altijd zichtbaar is, ook bij “geen matches” of “fetch error”.
+
+## 2) Audit trail (bewijs + terugkijken)
+
+Voeg een simpele audit log toe voor belangrijke acties, minimaal:
+
+Events:
+
+* `ASSET_UPLOADED`
+* `PROPOSAL_GENERATED`
+* `ASSET_APPROVED`
+* `ASSET_REJECTED`
+* `PLAN_APPROVED`
+* `PLAN_PUBLISHED`
+* `PLAN_FAILED`
+
+Per event opslaan:
+
+* `id`
+* `eventType`
+* `actorUserId` (admin)
+* `advertiserId`
+* `assetId` (optional)
+* `planId` (optional)
+* `createdAt`
+* `metadata` JSON (bijv. geselecteerde screenIds, playlistIds, impressionsTotal, noCapacityReason, error message)
+
+Implementatie:
+
+* Maak tabel `audit_events` (of hergebruik bestaande logs tabel als die er is)
+* Schrijf helper `logAudit(eventType, context)` die overal hergebruikt wordt
+* Log bij:
+
+  * upload success
+  * proposal preview fetch success (optioneel alleen bij approve)
+  * approve/reject
+  * approve-and-publish success/fail
+
+UI:
+
+* Voeg in plan detail pagina een sectie “Audit” (laatste 10 events)
+* En in advertiser detail een tab “Geschiedenis” (laatste events voor die advertiser)
+
+## 3) Happy-path smoke test knop (admin only)
+
+Voeg in Systemcheck (admin) een sectie “Workflow test” met 1 knop:
+
+* “Test publish pipeline (dry)” of “Test proposal + yodeck connectivity”
+
+Deze knop:
+
+1. Checkt dat ffprobe/ffmpeg beschikbaar is (version command)
+2. Checkt storage read/write (klein testobject) of alleen read access als write al gevoelig is
+3. Checkt Yodeck API credentials door:
+
+   * playlists op te vragen of een simpele “me/workspaces” call
+4. Geeft een duidelijke groen/rood lijst met resultaten + foutmelding.
+
+Let op:
+
+* Dit mag geen echte content live zetten.
+* Alleen connectivity checks.
+
+## 4) UX details
+
+* Toon tooltips bij disabled knoppen met exacte reden (bijv. “0 matches: koppel playlists aan locaties”)
+* Bij “Geen matches” toon een compacte “Wat te doen” lijst (bestaat al) maar zet hem direct onder de summary card.
+
+## Acceptatiecriteria
+
+* In proposal preview zie ik bovenaan een summary card met X/Y + impressions + regio + duur
+* Audit events worden weggeschreven en zijn zichtbaar in advertiser/plan detail
+* Systemcheck heeft een workflow test knop die duidelijk groen/rood teruggeeft zonder live publish
+* Geen bestaande flow breekt; alleen extra zekerheid en snellere beslissingen

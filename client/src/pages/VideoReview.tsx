@@ -38,6 +38,10 @@ interface ProposalResponse {
     summary: {
       totalMatches: number;
       estimatedImpressionsPerMonth: number;
+      videoDurationSeconds: number;
+      packageType: string;
+      targetRegionCodes: string[];
+      matchedCities: string[];
     };
     noCapacityReason: string | null;
     nextSteps: string[] | null;
@@ -444,9 +448,84 @@ export default function VideoReview() {
                   <span className="font-medium">Voorgestelde schermen</span>
                   {proposalLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </div>
+
+                {/* Summary Card - Always visible */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 rounded-lg bg-muted/30 border" data-testid="proposal-summary">
+                  <div>
+                    <div className="text-xs text-muted-foreground">Voorstel</div>
+                    <div className="font-medium">
+                      {proposalLoading ? (
+                        <span className="text-muted-foreground">...</span>
+                      ) : proposalError ? (
+                        <span className="text-red-600">Fout</span>
+                      ) : (
+                        <span className={proposal?.proposal?.matches?.length === 0 ? "text-amber-600" : "text-green-600"}>
+                          {proposal?.proposal?.summary?.totalMatches || 0} van {proposal?.proposal?.requestedScreens || 0} schermen
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Regio</div>
+                    <div className="font-medium text-sm truncate" title={proposal?.proposal?.summary?.targetRegionCodes?.join(", ") || "-"}>
+                      {proposalLoading ? "..." : 
+                        proposal?.proposal?.summary?.matchedCities?.length 
+                          ? proposal.proposal.summary.matchedCities.slice(0, 3).join(", ") + (proposal.proposal.summary.matchedCities.length > 3 ? ` +${proposal.proposal.summary.matchedCities.length - 3}` : "")
+                          : proposal?.proposal?.summary?.targetRegionCodes?.slice(0, 2).join(", ") || "-"
+                      }
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Views/maand</div>
+                    <div className="font-medium">
+                      {proposalLoading ? "..." : 
+                        proposal?.proposal?.summary?.estimatedImpressionsPerMonth 
+                          ? `~${Math.round(proposal.proposal.summary.estimatedImpressionsPerMonth).toLocaleString()}`
+                          : "-"
+                      }
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground">Video duur</div>
+                    <div className="font-medium">
+                      {proposalLoading ? "..." : 
+                        proposal?.proposal?.summary?.videoDurationSeconds 
+                          ? `${proposal.proposal.summary.videoDurationSeconds.toFixed(1)}s`
+                          : previewAsset.asset.durationSeconds 
+                            ? `${parseFloat(previewAsset.asset.durationSeconds).toFixed(1)}s`
+                            : "-"
+                      }
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status indicator row */}
+                <div className="flex items-center gap-2 text-sm">
+                  {proposalLoading ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                      <span className="text-muted-foreground">Voorstel wordt berekend...</span>
+                    </>
+                  ) : proposalError ? (
+                    <>
+                      <AlertTriangle className="h-3 w-3 text-red-600" />
+                      <span className="text-red-600">Fout bij ophalen (goedkeuren kan alsnog)</span>
+                    </>
+                  ) : proposal?.proposal?.matches?.length === 0 ? (
+                    <>
+                      <AlertTriangle className="h-3 w-3 text-amber-600" />
+                      <span className="text-amber-600">Geen matches</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="h-3 w-3 text-green-600" />
+                      <span className="text-green-600">Voorstel ok</span>
+                    </>
+                  )}
+                </div>
                 
                 {proposalLoading ? (
-                  <div className="text-sm text-muted-foreground">Schermen worden gezocht...</div>
+                  null
                 ) : proposalError ? (
                   <div className="p-3 rounded-lg bg-red-50 border border-red-200">
                     <div className="flex items-start gap-2">

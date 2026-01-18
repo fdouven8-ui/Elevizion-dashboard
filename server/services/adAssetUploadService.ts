@@ -16,6 +16,7 @@ import {
 import { checkTranscodeRequired, startTranscodeJob } from './videoTranscodeService';
 import { ObjectStorageService } from '../objectStorage';
 import { dispatchMailEvent } from './mailEventService';
+import { logAudit } from './auditService';
 
 const objectStorage = new ObjectStorageService();
 

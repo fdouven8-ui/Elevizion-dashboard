@@ -2672,6 +2672,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
         }
       }
       
+      // Derive unique cities from matches for region display
+      const matchedCities = [...new Set(matches.map(m => m.city).filter(Boolean))];
+      
       res.json({
         success: simulation.success,
         proposal: {
@@ -2680,6 +2683,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
           summary: {
             totalMatches: matches.length,
             estimatedImpressionsPerMonth: Math.round(simulation.totalExpectedImpressions * 4.33),
+            videoDurationSeconds: assetDuration,
+            packageType: advertiser.packageType || "STARTER",
+            targetRegionCodes: advertiser.targetRegionCodes || [],
+            matchedCities,
           },
           noCapacityReason,
           nextSteps: nextSteps.length > 0 ? nextSteps : null,
