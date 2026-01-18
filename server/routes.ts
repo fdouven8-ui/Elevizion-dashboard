@@ -11199,6 +11199,146 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.status(500).json({ message: error.message });
     }
   });
+
+  // Workflow smoke test (ffprobe, storage, Yodeck connectivity)
+  app.post("/api/system-health/test/workflow", requireAdminAccess, async (req: any, res) => {
+    try {
+      const results: { check: string; status: "ok" | "error"; message: string }[] = [];
+      
+      // 1. Check ffprobe/ffmpeg availability
+      try {
+        const { promisify } = await import("util");
+        const { exec } = await import("child_process");
+        const execAsync = promisify(exec);
+        
+        const ffprobeResult = await execAsync("ffprobe -version 2>&1 | head -1");
+        results.push({ 
+          check: "ffprobe", 
+          status: "ok", 
+          message: ffprobeResult.stdout.trim().split("\n")[0] || "Beschikbaar"
+        });
+      } catch (e: any) {
+        results.push({ check: "ffprobe", status: "error", message: e.message });
+      }
+      
+      try {
+        const { promisify } = await import("util");
+        const { exec } = await import("child_process");
+        const execAsync = promisify(exec);
+        
+        const ffmpegResult = await execAsync("ffmpeg -version 2>&1 | head -1");
+        results.push({ 
+          check: "ffmpeg", 
+          status: "ok", 
+          message: ffmpegResult.stdout.trim().split("\n")[0] || "Beschikbaar"
+        });
+      } catch (e: any) {
+        results.push({ check: "ffmpeg", status: "error", message: e.message });
+      }
+      
+      // 2. Check object storage read access
+      try {
+        const { ObjectStorageService } = await import("./objectStorage");
+        const storage = new ObjectStorageService();
+        const files = await storage.listFiles("public/");
+        results.push({ 
+          check: "object_storage", 
+          status: "ok", 
+          message: `${files?.length || 0} bestanden in public/`
+        });
+      } catch (e: any) {
+        results.push({ check: "object_storage", status: "error", message: e.message });
+      }
+      
+      // 3. Check Yodeck API connectivity
+      try {
+        const token = process.env.YODECK_AUTH_TOKEN;
+        if (!token) {
+          results.push({ check: "yodeck_api", status: "error", message: "YODECK_AUTH_TOKEN niet geconfigureerd" });
+        } else {
+          const response = await fetch("https://app.yodeck.com/api/v2/playlists/", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (response.ok) {
+            const data = await response.json() as any;
+            results.push({ 
+              check: "yodeck_api", 
+              status: "ok", 
+              message: `${data.results?.length || 0} playlists gevonden`
+            });
+          } else {
+            results.push({ check: "yodeck_api", status: "error", message: `HTTP ${response.status}` });
+          }
+        }
+      } catch (e: any) {
+        results.push({ check: "yodeck_api", status: "error", message: e.message });
+      }
+      
+      // 4. Check database connectivity
+      try {
+        const { db } = await import("./db");
+        const { sql } = await import("drizzle-orm");
+        const result = await db.execute(sql`SELECT COUNT(*) as count FROM advertisers`);
+        const count = result.rows?.[0]?.count ?? 0;
+        results.push({ 
+          check: "database", 
+          status: "ok", 
+          message: `${count} adverteerders in database`
+        });
+      } catch (e: any) {
+        results.push({ check: "database", status: "error", message: e.message });
+      }
+      
+      const allOk = results.every(r => r.status === "ok");
+      res.json({ 
+        success: allOk, 
+        message: allOk ? "Alle checks geslaagd" : "Sommige checks gefaald",
+        results 
+      });
+    } catch (error: any) {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  });
+
+  // ============================================================================
+  // AUDIT EVENTS API
+  // ============================================================================
+  
+  // Get audit events for an advertiser
+  app.get("/api/admin/audit/advertiser/:advertiserId", requireAdminAccess, async (req: any, res) => {
+    try {
+      const { getAuditEventsForAdvertiser } = await import("./services/auditService");
+      const limit = parseInt(req.query.limit as string) || 50;
+      const events = await getAuditEventsForAdvertiser(req.params.advertiserId, limit);
+      res.json(events);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get audit events for a placement plan
+  app.get("/api/admin/audit/plan/:planId", requireAdminAccess, async (req: any, res) => {
+    try {
+      const { getAuditEventsForPlan } = await import("./services/auditService");
+      const limit = parseInt(req.query.limit as string) || 50;
+      const events = await getAuditEventsForPlan(req.params.planId, limit);
+      res.json(events);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Get recent audit events (for admin dashboard)
+  app.get("/api/admin/audit/recent", requireAdminAccess, async (req: any, res) => {
+    try {
+      const { getRecentAuditEvents } = await import("./services/auditService");
+      const limit = parseInt(req.query.limit as string) || 100;
+      const events = await getRecentAuditEvents(limit);
+      res.json(events);
+    } catch (error: any) {
+      res.status(500).json({ message: error.message });
+    }
+  });
   
   // Admin: Manual trigger monthly report worker
   app.post("/api/admin/reports/run", requirePermission("manage_users"), async (req, res) => {

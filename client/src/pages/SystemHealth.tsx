@@ -103,6 +103,8 @@ export default function SystemHealth() {
   const [testingMoneybird, setTestingMoneybird] = useState(false);
   const [testingYodeck, setTestingYodeck] = useState(false);
   const [testingLead, setTestingLead] = useState(false);
+  const [testingWorkflow, setTestingWorkflow] = useState(false);
+  const [workflowResults, setWorkflowResults] = useState<{ check: string; status: "ok" | "error"; message: string }[] | null>(null);
 
   const { data, isLoading, refetch, isFetching } = useQuery<HealthCheckResponse>({
     queryKey: ["/api/system-health"],
@@ -191,6 +193,29 @@ export default function SystemHealth() {
     onError: (error: Error) => {
       toast.error(error.message);
       setTestingLead(false);
+    },
+  });
+
+  const testWorkflowMutation = useMutation({
+    mutationFn: async () => {
+      setTestingWorkflow(true);
+      setWorkflowResults(null);
+      const res = await fetch("/api/system-health/test/workflow", { method: "POST" });
+      if (!res.ok) throw new Error((await res.json()).message);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setWorkflowResults(data.results || []);
+      if (data.success) {
+        toast.success("Alle workflow checks geslaagd");
+      } else {
+        toast.warning("Sommige workflow checks gefaald");
+      }
+      setTestingWorkflow(false);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+      setTestingWorkflow(false);
     },
   });
 
@@ -478,6 +503,62 @@ export default function SystemHealth() {
               );
             })}
           </Accordion>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Monitor className="h-5 w-5" />
+                Video Upload Workflow Test
+              </CardTitle>
+              <CardDescription>
+                Test of ffprobe, ffmpeg, object storage en Yodeck API correct werken
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <Button
+                  onClick={() => testWorkflowMutation.mutate()}
+                  disabled={testingWorkflow}
+                  data-testid="button-test-workflow"
+                >
+                  {testingWorkflow ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Play className="h-4 w-4 mr-2" />
+                  )}
+                  Start Test
+                </Button>
+
+                {workflowResults && (
+                  <div className="mt-4 space-y-2">
+                    {workflowResults.map((result, idx) => (
+                      <div
+                        key={idx}
+                        className={`flex items-center justify-between p-3 rounded-lg border ${
+                          result.status === "ok"
+                            ? "bg-green-50 border-green-200"
+                            : "bg-red-50 border-red-200"
+                        }`}
+                        data-testid={`workflow-result-${result.check}`}
+                      >
+                        <div className="flex items-center gap-2">
+                          {result.status === "ok" ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-600" />
+                          ) : (
+                            <XCircle className="h-4 w-4 text-red-600" />
+                          )}
+                          <span className="font-medium capitalize">{result.check.replace("_", " ")}</span>
+                        </div>
+                        <span className="text-sm text-muted-foreground truncate max-w-[300px]">
+                          {result.message}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         </>
       )}
     </div>

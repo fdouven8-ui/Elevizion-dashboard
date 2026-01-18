@@ -14,6 +14,7 @@ import { eq, and } from "drizzle-orm";
 import crypto from "crypto";
 import { ObjectStorageService } from "../objectStorage";
 import { dispatchMailEvent } from "./mailEventService";
+import { logAudit } from "./auditService";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const REQUEST_TIMEOUT = 60000; // 60 seconds for uploads
@@ -529,6 +530,19 @@ class YodeckPublishService {
 
       console.log(`[YodeckPublish] Plan ${planId} ${finalStatus}: ${report.successCount}/${report.totalTargets} successful`);
       
+      // Log audit event
+      await logAudit('PLAN_PUBLISHED', {
+        advertiserId: plan.advertiserId,
+        assetId: plan.adAssetId,
+        planId: planId,
+        metadata: {
+          status: finalStatus,
+          successCount: report.successCount,
+          totalTargets: report.totalTargets,
+          yodeckMediaId: report.yodeckMediaId,
+        },
+      });
+      
       if (finalStatus === "PUBLISHED" && report.successCount > 0) {
         const baseUrl = process.env.REPLIT_DEV_DOMAIN 
           ? `https://${process.env.REPLIT_DEV_DOMAIN}` 
@@ -553,6 +567,16 @@ class YodeckPublishService {
           publishReport: { ...report, error: err.message } as any,
         })
         .where(eq(placementPlans.id, planId));
+
+      // Log audit event for failure
+      await logAudit('PLAN_FAILED', {
+        planId: planId,
+        metadata: {
+          error: err.message,
+          failedCount: report.failedCount,
+          totalTargets: report.totalTargets,
+        },
+      });
 
       throw err;
     }

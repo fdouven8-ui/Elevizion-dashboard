@@ -647,6 +647,14 @@ export async function approveAsset(
     
     console.log('[AdminReview] Asset approved:', assetId, 'by admin:', adminId);
     
+    // Log audit event
+    await logAudit('ASSET_APPROVED', {
+      actorUserId: adminId,
+      advertiserId: asset.advertiserId,
+      assetId: assetId,
+      metadata: { notes },
+    });
+    
     // Trigger auto-publish workflow (create placement plan)
     let planId: string | undefined;
     try {
@@ -748,6 +756,14 @@ export async function rejectAsset(
       .where(eq(advertisers.id, asset.advertiserId));
     
     console.log('[AdminReview] Asset rejected:', assetId, 'reason:', reason);
+    
+    // Log audit event
+    await logAudit('ASSET_REJECTED', {
+      actorUserId: adminId,
+      advertiserId: asset.advertiserId,
+      assetId: assetId,
+      metadata: { reason, details, rejectionLabel: REJECTION_REASONS[reason] },
+    });
     
     // Send rejection email to advertiser
     try {

@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
 import { CheckCircle, XCircle, Play, Eye, Clock, Monitor, MapPin, Package, RefreshCw, AlertTriangle, Send, Rocket, Tv, Loader2, Info } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
@@ -449,55 +450,91 @@ export default function VideoReview() {
                   {proposalLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </div>
 
-                {/* Summary Card - Always visible */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 rounded-lg bg-muted/30 border" data-testid="proposal-summary">
-                  <div>
-                    <div className="text-xs text-muted-foreground">Voorstel</div>
-                    <div className="font-medium">
-                      {proposalLoading ? (
-                        <span className="text-muted-foreground">...</span>
-                      ) : proposalError ? (
-                        <span className="text-red-600">Fout</span>
-                      ) : (
-                        <span className={proposal?.proposal?.matches?.length === 0 ? "text-amber-600" : "text-green-600"}>
-                          {proposal?.proposal?.summary?.totalMatches || 0} van {proposal?.proposal?.requestedScreens || 0} schermen
-                        </span>
-                      )}
-                    </div>
+                {/* Summary Card - Always visible with tooltips */}
+                <TooltipProvider>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 p-3 rounded-lg bg-muted/30 border" data-testid="proposal-summary">
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="cursor-help">
+                          <div className="text-xs text-muted-foreground">Voorstel</div>
+                          <div className="font-medium">
+                            {proposalLoading ? (
+                              <span className="text-muted-foreground">...</span>
+                            ) : proposalError ? (
+                              <span className="text-red-600">Fout</span>
+                            ) : (
+                              <span className={proposal?.proposal?.matches?.length === 0 ? "text-amber-600" : "text-green-600"}>
+                                {proposal?.proposal?.summary?.totalMatches || 0} van {proposal?.proposal?.requestedScreens || 0} schermen
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Aantal schermen dat bij adverteerder past, gebaseerd op pakket ({proposal?.proposal?.summary?.packageType || "onbekend"}) en capaciteit</p>
+                      </TooltipContent>
+                    </Tooltip>
+
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="cursor-help">
+                          <div className="text-xs text-muted-foreground">Regio</div>
+                          <div className="font-medium text-sm truncate">
+                            {proposalLoading ? "..." : 
+                              proposal?.proposal?.summary?.matchedCities?.length 
+                                ? proposal.proposal.summary.matchedCities.slice(0, 3).join(", ") + (proposal.proposal.summary.matchedCities.length > 3 ? ` +${proposal.proposal.summary.matchedCities.length - 3}` : "")
+                                : proposal?.proposal?.summary?.targetRegionCodes?.slice(0, 2).join(", ") || "-"
+                            }
+                          </div>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Steden: {proposal?.proposal?.summary?.matchedCities?.join(", ") || "geen"}</p>
+                        {proposal?.proposal?.summary?.targetRegionCodes?.length ? (
+                          <p className="text-muted-foreground text-xs">Regio's: {proposal.proposal.summary.targetRegionCodes.join(", ")}</p>
+                        ) : null}
+                      </TooltipContent>
+                    </Tooltip>
+
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="cursor-help">
+                          <div className="text-xs text-muted-foreground">Views/maand</div>
+                          <div className="font-medium">
+                            {proposalLoading ? "..." : 
+                              proposal?.proposal?.summary?.estimatedImpressionsPerMonth 
+                                ? `~${Math.round(proposal.proposal.summary.estimatedImpressionsPerMonth).toLocaleString()}`
+                                : "-"
+                            }
+                          </div>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Geschatte views per maand, gebaseerd op schermlocatie-statistieken</p>
+                      </TooltipContent>
+                    </Tooltip>
+
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="cursor-help">
+                          <div className="text-xs text-muted-foreground">Video duur</div>
+                          <div className="font-medium">
+                            {proposalLoading ? "..." : 
+                              proposal?.proposal?.summary?.videoDurationSeconds 
+                                ? `${proposal.proposal.summary.videoDurationSeconds.toFixed(1)}s`
+                                : previewAsset.asset.durationSeconds 
+                                  ? `${parseFloat(previewAsset.asset.durationSeconds).toFixed(1)}s`
+                                  : "-"
+                            }
+                          </div>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>Werkelijke duur uit ffprobe (max 15 seconden toegestaan)</p>
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground">Regio</div>
-                    <div className="font-medium text-sm truncate" title={proposal?.proposal?.summary?.targetRegionCodes?.join(", ") || "-"}>
-                      {proposalLoading ? "..." : 
-                        proposal?.proposal?.summary?.matchedCities?.length 
-                          ? proposal.proposal.summary.matchedCities.slice(0, 3).join(", ") + (proposal.proposal.summary.matchedCities.length > 3 ? ` +${proposal.proposal.summary.matchedCities.length - 3}` : "")
-                          : proposal?.proposal?.summary?.targetRegionCodes?.slice(0, 2).join(", ") || "-"
-                      }
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground">Views/maand</div>
-                    <div className="font-medium">
-                      {proposalLoading ? "..." : 
-                        proposal?.proposal?.summary?.estimatedImpressionsPerMonth 
-                          ? `~${Math.round(proposal.proposal.summary.estimatedImpressionsPerMonth).toLocaleString()}`
-                          : "-"
-                      }
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-xs text-muted-foreground">Video duur</div>
-                    <div className="font-medium">
-                      {proposalLoading ? "..." : 
-                        proposal?.proposal?.summary?.videoDurationSeconds 
-                          ? `${proposal.proposal.summary.videoDurationSeconds.toFixed(1)}s`
-                          : previewAsset.asset.durationSeconds 
-                            ? `${parseFloat(previewAsset.asset.durationSeconds).toFixed(1)}s`
-                            : "-"
-                      }
-                    </div>
-                  </div>
-                </div>
+                </TooltipProvider>
 
                 {/* Status indicator row */}
                 <div className="flex items-center gap-2 text-sm">

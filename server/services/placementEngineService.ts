@@ -27,6 +27,7 @@ import {
 } from "@shared/schema";
 import { eq, and, inArray, or, isNull, gte, lte, sql } from "drizzle-orm";
 import * as crypto from "crypto";
+import { logAudit } from "./auditService";
 
 const STALE_SYNC_THRESHOLD_MINUTES = 15;
 const VIEW_FACTOR = 0.3; // 30% of visitors see the ad per week
