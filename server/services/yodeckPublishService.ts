@@ -402,10 +402,54 @@ class YodeckPublishService {
         throw new Error(`Could not update playlist: ${patchResult.error}`);
       }
 
+      // VERIFICATION: Re-fetch playlist to confirm media was added (hard requirement)
+      await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for Yodeck to process
+      
+      const verifyResult = await this.makeRequest<{ items: YodeckPlaylistItem[] }>(
+        "GET",
+        `/playlists/${playlistId}`
+      );
+
+      if (!verifyResult.ok) {
+        // Verification GET failed - cannot confirm media is in playlist, so we must fail
+        console.error(`[YodeckPublish] VERIFICATION FAILED: Could not re-fetch playlist ${playlistId}: ${verifyResult.error}`);
+        
+        await db.update(integrationOutbox)
+          .set({
+            status: "failed",
+            lastError: "UPLOAD_OK_BUT_NOT_IN_PLAYLIST",
+            processedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+        
+        return { ok: false, error: "UPLOAD_OK_BUT_NOT_IN_PLAYLIST: Could not verify playlist" };
+      }
+      
+      const verifiedItems = verifyResult.data?.items || [];
+      const mediaFound = verifiedItems.some(item => item.id === mediaId && item.type === "media");
+      
+      if (!mediaFound) {
+        console.error(`[YodeckPublish] VERIFICATION FAILED: Media ${mediaId} not found in playlist ${playlistId}`);
+        
+        await db.update(integrationOutbox)
+          .set({
+            status: "failed",
+            lastError: "UPLOAD_OK_BUT_NOT_IN_PLAYLIST",
+            processedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+        
+        return { ok: false, error: "UPLOAD_OK_BUT_NOT_IN_PLAYLIST" };
+      }
+      
+      console.log(`[YodeckPublish] VERIFIED: Media ${mediaId} confirmed in playlist ${playlistId}`);
+
       await db.update(integrationOutbox)
         .set({
           status: "succeeded",
-          responseJson: { success: true },
+          responseJson: { success: true, verified: true },
           processedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -602,15 +646,42 @@ class YodeckPublishService {
           ? "PUBLISHED" // Partial success still counts as published
           : "FAILED";
 
+      // Get current plan to check retry count
+      const currentPlan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+      const wasRetry = (currentPlan as any)?.retryCount > 0;
+
+      // Update plan status and clear error fields if this was a successful retry
       await db.update(placementPlans)
         .set({
           status: finalStatus,
           publishedAt: new Date(),
           publishReport: report,
+          // Clear error fields after successful publish (cleanup after retry)
+          ...(finalStatus === "PUBLISHED" && wasRetry ? {
+            lastErrorCode: null,
+            lastErrorMessage: null,
+            lastErrorDetails: null,
+            failedAt: null,
+          } : {}),
         })
         .where(eq(placementPlans.id, planId));
 
-      console.log(`[YodeckPublish] Plan ${planId} ${finalStatus}: ${report.successCount}/${report.totalTargets} successful`);
+      console.log(`[YodeckPublish] Plan ${planId} ${finalStatus}: ${report.successCount}/${report.totalTargets} successful${wasRetry ? ` (retry #${(currentPlan as any)?.retryCount})` : ""}`);
+      
+      // Log audit event for successful retry resolution
+      if (finalStatus === "PUBLISHED" && wasRetry) {
+        await logAudit('PLAN_RETRY_RESOLVED', {
+          planId: planId,
+          advertiserId: plan.advertiserId,
+          assetId: plan.adAssetId,
+          metadata: {
+            retryCount: (currentPlan as any)?.retryCount,
+            previousErrorCode: (currentPlan as any)?.lastErrorCode,
+          },
+        });
+      }
       
       // Log audit event
       await logAudit('PLAN_PUBLISHED', {
@@ -645,8 +716,13 @@ class YodeckPublishService {
 
       // Determine error code from message
       let errorCode = "PUBLISH_FAILED";
+      let auditEventType: "PLAN_PUBLISH_FAILED" | "PLAN_PUBLISH_VERIFY_FAILED" = "PLAN_PUBLISH_FAILED";
+      
       if (err.message?.includes("Upload failed")) {
         errorCode = "YODECK_UPLOAD_FAILED";
+      } else if (err.message?.includes("UPLOAD_OK_BUT_NOT_IN_PLAYLIST")) {
+        errorCode = "UPLOAD_OK_BUT_NOT_IN_PLAYLIST";
+        auditEventType = "PLAN_PUBLISH_VERIFY_FAILED";
       } else if (err.message?.includes("playlist")) {
         errorCode = "PLAYLIST_ADD_FAILED";
       } else if (err.message?.includes("Asset not found")) {
@@ -676,7 +752,7 @@ class YodeckPublishService {
         .where(eq(placementPlans.id, planId));
 
       // Log audit event for failure
-      await logAudit('PLAN_PUBLISH_FAILED', {
+      await logAudit(auditEventType, {
         planId: planId,
         metadata: {
           errorCode,

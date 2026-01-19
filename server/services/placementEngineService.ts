@@ -34,7 +34,7 @@ import {
   type PlacementPlan,
   type InsertPlacementPlan,
 } from "@shared/schema";
-import { eq, and, inArray, or, isNull, gte, lte, sql } from "drizzle-orm";
+import { eq, and, inArray, or, isNull, gte, lte, sql, not } from "drizzle-orm";
 import * as crypto from "crypto";
 import { logAudit } from "./auditService";
 import { provisionPlaylistForLocation } from "./autoPlaylistService";
@@ -479,7 +479,13 @@ export class PlacementEngineService {
         orderBy: (plans, { desc }) => [desc(plans.createdAt)],
       });
     }
+    // By default, filter out PUBLISHED and CANCELED plans (cleanup requirement)
+    // Only show actionable plans in the queue
     return await db.query.placementPlans.findMany({
+      where: and(
+        not(eq(placementPlans.status, "PUBLISHED")),
+        not(eq(placementPlans.status, "CANCELED")),
+      ),
       orderBy: (plans, { desc }) => [desc(plans.createdAt)],
     });
   }
