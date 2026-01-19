@@ -3106,7 +3106,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const { placementEngine } = await import("./services/placementEngineService");
       const planId = req.params.id;
       
-      // Get current plan
+      // Normalize first to ensure error fields are populated from legacy data
+      await placementEngine.normalizePublishState(planId);
+      
+      // Get current plan (after normalize)
       const plan = await placementEngine.getPlan(planId);
       if (!plan) {
         return res.status(404).json({ message: "Plan niet gevonden" });
@@ -3115,7 +3118,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(400).json({ message: "Alleen FAILED plans kunnen opnieuw worden geprobeerd" });
       }
       
-      // Reset status to APPROVED for retry
+      // Reset status to APPROVED for retry (publishPlan will increment retryCount on failure)
       const { db } = await import("./db");
       const { placementPlans } = await import("@shared/schema");
       const { eq } = await import("drizzle-orm");
@@ -3127,11 +3130,30 @@ Sitemap: ${SITE_URL}/sitemap.xml
         })
         .where(eq(placementPlans.id, planId));
       
-      // Publish (the service already tracks retry count)
+      // Publish (the service will update status to PUBLISHING -> PUBLISHED/FAILED and increment retryCount on failure)
       const report = await yodeckPublishService.publishPlan(planId);
-      res.json({ success: true, report });
+      
+      // Get updated plan to return current retryCount
+      const updatedPlan = await placementEngine.getPlan(planId);
+      res.json({ success: true, report, retryCount: updatedPlan?.retryCount || 0 });
     } catch (error: any) {
       console.error("[PlacementPlans] Error retrying plan:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+  
+  // Normalize all FAILED plans - admin endpoint for data consistency fix
+  app.post("/api/admin/publish-queue/normalize", isAuthenticated, requirePermission("manage_system"), async (req, res) => {
+    try {
+      const { placementEngine } = await import("./services/placementEngineService");
+      const result = await placementEngine.normalizeAllFailedPlans();
+      res.json({ 
+        success: true, 
+        message: `${result.updatedCount} van ${result.processedCount} plannen genormaliseerd`,
+        ...result
+      });
+    } catch (error: any) {
+      console.error("[PublishQueue] Error normalizing plans:", error);
       res.status(500).json({ message: error.message });
     }
   });

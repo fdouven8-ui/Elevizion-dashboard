@@ -12,6 +12,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { ChevronDown } from "lucide-react";
+import {
   Table,
   TableBody,
   TableCell,
@@ -74,12 +80,14 @@ interface PlacementPlan {
   simulatedAt: string | null;
   approvedAt: string | null;
   publishedAt: string | null;
+  failedAt?: string | null;
   advertiserName?: string;
   assetFileName?: string;
   retryCount?: number;
   lastAttemptAt?: string;
   lastErrorCode?: string;
   lastErrorMessage?: string;
+  lastErrorDetails?: any;
 }
 
 interface PlanDetailData extends PlacementPlan {
@@ -750,7 +758,87 @@ export default function PublishQueue() {
                 </Card>
               )}
 
+              {planDetail.status === "FAILED" && (
+                <Card className="border-red-200 bg-red-50">
+                  <CardHeader>
+                    <CardTitle className="text-base text-red-800 flex items-center gap-2">
+                      <XCircle className="h-5 w-5" />
+                      Foutdetails
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground">Foutcode</p>
+                        <p className="font-mono font-medium text-red-700">{planDetail.lastErrorCode || "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Retry pogingen</p>
+                        <p className="font-medium">{planDetail.retryCount || 0}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Mislukt op</p>
+                        <p className="font-medium">
+                          {planDetail.failedAt 
+                            ? format(new Date(planDetail.failedAt), "d MMM yyyy HH:mm", { locale: nl })
+                            : "-"
+                          }
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Laatste poging</p>
+                        <p className="font-medium">
+                          {planDetail.lastAttemptAt 
+                            ? format(new Date(planDetail.lastAttemptAt), "d MMM yyyy HH:mm", { locale: nl })
+                            : "-"
+                          }
+                        </p>
+                      </div>
+                    </div>
+                    
+                    {planDetail.lastErrorMessage && (
+                      <div>
+                        <p className="text-sm text-muted-foreground mb-1">Foutmelding</p>
+                        <p className="p-2 bg-white rounded border text-sm">{planDetail.lastErrorMessage}</p>
+                      </div>
+                    )}
+                    
+                    {(planDetail.lastErrorDetails || planDetail.publishReport) && (
+                      <Collapsible>
+                        <CollapsibleTrigger className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
+                          <ChevronDown className="h-4 w-4" />
+                          Technische details
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-2">
+                          <pre className="p-2 bg-white rounded border text-xs overflow-auto max-h-48">
+                            {JSON.stringify(planDetail.lastErrorDetails || planDetail.publishReport, null, 2)}
+                          </pre>
+                        </CollapsibleContent>
+                      </Collapsible>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+
               <div className="flex justify-end gap-2">
+                {planDetail.status === "FAILED" && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      retryMutation.mutate(planDetail.id);
+                      setSelectedPlanId(null);
+                    }}
+                    disabled={retryMutation.isPending}
+                    data-testid={`button-retry-modal-${planDetail.id}`}
+                  >
+                    {retryMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                    )}
+                    Opnieuw proberen
+                  </Button>
+                )}
                 {planDetail.status === "SIMULATED_OK" && (
                   <Button
                     onClick={() => {

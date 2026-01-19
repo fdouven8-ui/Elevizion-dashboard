@@ -1,0 +1,108 @@
+Replit, fix en harden de publish flow + data consistency voor bestaande FAILED plannen.
+
+CONTEXT
+We hebben placementPlans die op status=FAILED staan met een publishReport.error van de oude Yodeck upload (“Unsupported media type text/plain…”). De nieuwe axios multipart fix bestaat, maar bestaande plannen blijven FAILED en de nieuwe errorvelden blijven null:
+
+* lastAttemptAt=null
+* lastErrorCode=null
+* lastErrorMessage=null
+* lastErrorDetails=null
+* failedAt=null
+* retryCount=0
+  Terwijl publishReport.error wél gevuld is. Dit maakt Publicatie Wachtrij onbetrouwbaar en retry’s lijken niet te werken / niet zichtbaar.
+
+DOELEN
+
+1. Bestaande FAILED plannen worden “genormaliseerd”: status + errorvelden consistent, zodat de queue alles correct toont.
+2. Retry van een FAILED plan zet hem opnieuw in de outbox en gebruikt gegarandeerd de NIEUWE Yodeck axios multipart upload.
+3. Na succesvolle retry: cleanup (clear errorvelden) + status=PUBLISHED + publishedAt gezet (zoals al deels is gebouwd).
+4. Publicatie Wachtrij is “operational”: 1 klik retry werkt altijd en laat ook direct nieuwe lastAttemptAt/retryCount zien.
+
+BACKEND FIXES
+
+A) Normalize/Backfill publish error fields
+
+* Voeg een server-side functie toe: placementPlanService.normalizePublishState(planId) die:
+
+  * Als plan.status=FAILED en (lastError* null) maar publishReport.error bestaat:
+
+    * lastErrorCode = "YODECK_UPLOAD_FAILED" (of parsing op basis van error string)
+    * lastErrorMessage = een korte string (max 200 chars) uit publishReport.error
+    * lastErrorDetails = publishReport (hele object) + evt. parsed httpStatus/body
+    * failedAt = publishReport.completedAt || updatedAt || now()
+    * lastAttemptAt = publishReport.completedAt || now()
+  * Als plan.status=FAILED en publishReport ontbreekt: laat errorvelden zoals ze zijn, maar zet failedAt=updatedAt indien null.
+  * Zorg dat dit idempotent is (meerdere keren aanroepen verandert niets verkeerd).
+
+* Run deze normalize automatisch:
+
+  1. In GET /api/placement-plans (of specifiek in GET /api/admin/publish-queue) vóór response: normalize alle plannen die returned worden (alleen waar nodig).
+  2. In de outbox worker wanneer een publish job faalt: ALWAYS set lastErrorCode/message/details + failedAt + lastAttemptAt + retryCount++.
+
+B) Retry endpoint en state transitions
+
+* POST /api/admin/publish-queue/:planId/retry:
+
+  * Validate admin.
+  * Call normalizePublishState(planId) eerst.
+  * Set:
+
+    * status = QUEUED
+    * retryCount = (retryCount || 0) + 1
+    * lastAttemptAt = now()
+    * clear publishReport? (optioneel) of append attempt in publishReport.attempts[]
+  * Enqueue outbox job met idempotency key: planId + assetId + yodeckPlaylistId.
+  * Return updated plan.
+
+* In outbox publish processor:
+
+  * Set status=PROCESSING bij start (en audit PLAN_PUBLISH_STARTED)
+  * Gebruik altijd de nieuwe Yodeck upload met axios + form-data (multipart boundary, Content-Length etc.)
+  * Update publishReport met startedAt/completedAt + yodeckMediaId + target results.
+  * Bij succes:
+
+    * status=PUBLISHED
+    * publishedAt=now()
+    * clear lastError* en failedAt (auto-cleanup)
+    * audit PLAN_PUBLISHED + PLAN_RETRY_RESOLVED indien retryCount>0
+  * Bij fail:
+
+    * status=FAILED
+    * failedAt=now()
+    * lastErrorCode (bv YODECK_UPLOAD_FAILED / PLAYLIST_ADD_FAILED / VERIFY_FAILED)
+    * lastErrorMessage korte uitleg
+    * lastErrorDetails volledige error incl response status/body
+    * audit PLAN_PUBLISH_FAILED
+
+C) Publicatie Wachtrij data source
+
+* Zorg dat Publicatie Wachtrij NIET alleen afgaat op publishReport.error, maar op:
+
+  * status, retryCount, lastErrorCode, lastErrorMessage, failedAt, lastAttemptAt
+* Toon publishReport.error alleen in “technische details”.
+
+D) Migration/One-time fix (zonder handmatig werk)
+
+* Voeg een admin endpoint toe: POST /api/admin/publish-queue/normalize (admin-only)
+
+  * normalize alle plannen met status=FAILED of PROCESSING ouder dan 30 min (stuck)
+  * Return counts updated.
+* Voeg op Systemcheck een knop “Normalize publish state” die dit endpoint triggert (alleen admins).
+
+UI FIXES (Publicatie Wachtrij)
+
+* In de tabel: bij status=Mislukt toon “Mislukt (retryCount x)” en onder badge lastErrorCode of lastErrorMessage (kort).
+* Retry knop roept /retry aan en refreshes lijst.
+* Details modal toont:
+
+  * status, retryCount, failedAt, lastAttemptAt
+  * lastErrorMessage + lastErrorCode
+  * uitklapbaar: lastErrorDetails + publishReport (json pretty)
+  * knop: Opnieuw proberen
+
+ACCEPTATIE
+
+* Het bestaande plan b6411a04… laat in de queue direct een duidelijke fout zien (lastErrorMessage gevuld) i.p.v. lege velden.
+* Klik “Opnieuw proberen” → status wordt QUEUED/PROCESSING en gebruikt de nieuwe axios multipart upload.
+* Bij succes → status=PUBLISHED, publishedAt gevuld, errorvelden leeg, en video staat in de juiste Yodeck playlist.
+* Als het opnieuw faalt → lastError* + failedAt + retryCount zijn correct zichtbaar en niet null.

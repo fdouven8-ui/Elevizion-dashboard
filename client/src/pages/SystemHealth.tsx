@@ -219,6 +219,25 @@ export default function SystemHealth() {
     },
   });
 
+  const [normalizingPlans, setNormalizingPlans] = useState(false);
+  
+  const normalizePlansMutation = useMutation({
+    mutationFn: async () => {
+      setNormalizingPlans(true);
+      const res = await fetch("/api/admin/publish-queue/normalize", { method: "POST" });
+      if (!res.ok) throw new Error((await res.json()).message);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast.success(data.message || `${data.updatedCount} plannen genormaliseerd`);
+      setNormalizingPlans(false);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+      setNormalizingPlans(false);
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -342,6 +361,43 @@ export default function SystemHealth() {
                   </div>
                 </div>
               )}
+            </CardContent>
+          </Card>
+
+          {/* Data Maintenance */}
+          <Card className="border-blue-200 bg-blue-50/30">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-blue-700">
+                <RefreshCw className="h-5 w-5" />
+                Data Onderhoud
+              </CardTitle>
+              <CardDescription>
+                Hulpmiddelen voor data-consistentie en migratie
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center justify-between p-3 rounded-lg bg-white/60 border">
+                <div>
+                  <div className="font-medium text-sm">Normalize Publish State</div>
+                  <div className="text-sm text-muted-foreground">
+                    Vult ontbrekende error velden aan voor bestaande FAILED plannen uit publishReport data
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => normalizePlansMutation.mutate()}
+                  disabled={normalizingPlans}
+                  data-testid="button-normalize-plans"
+                >
+                  {normalizingPlans ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                  )}
+                  Normaliseren
+                </Button>
+              </div>
             </CardContent>
           </Card>
 

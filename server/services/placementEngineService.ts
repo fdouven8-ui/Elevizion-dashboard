@@ -534,6 +534,106 @@ export class PlacementEngineService {
   }
   
   /**
+   * Normalize/backfill publish error fields from publishReport
+   * For plans that have status=FAILED with publishReport.error but empty lastError* fields
+   * This ensures data consistency for legacy failed plans
+   */
+  async normalizePublishState(planId: string): Promise<{ updated: boolean; plan: PlacementPlan | null }> {
+    const plan = await db.query.placementPlans.findFirst({
+      where: eq(placementPlans.id, planId),
+    });
+    
+    if (!plan) {
+      return { updated: false, plan: null };
+    }
+    
+    // Only normalize FAILED plans that have incomplete error fields
+    if (plan.status !== "FAILED") {
+      return { updated: false, plan };
+    }
+    
+    const publishReport = plan.publishReport as any;
+    const hasLegacyError = publishReport?.error && !plan.lastErrorCode;
+    const needsFailedAt = !plan.failedAt;
+    const needsLastAttemptAt = !plan.lastAttemptAt;
+    
+    if (!hasLegacyError && !needsFailedAt && !needsLastAttemptAt) {
+      // Already normalized
+      return { updated: false, plan };
+    }
+    
+    // Parse error code from publishReport.error
+    let errorCode = "YODECK_UPLOAD_FAILED";
+    const errorMessage = publishReport?.error || "Unknown error";
+    
+    if (errorMessage.includes("UPLOAD_OK_BUT_NOT_IN_PLAYLIST")) {
+      errorCode = "UPLOAD_OK_BUT_NOT_IN_PLAYLIST";
+    } else if (errorMessage.includes("playlist")) {
+      errorCode = "PLAYLIST_ADD_FAILED";
+    } else if (errorMessage.includes("Asset not found")) {
+      errorCode = "ASSET_NOT_FOUND";
+    } else if (errorMessage.includes("Unsupported media type")) {
+      errorCode = "YODECK_UPLOAD_FAILED";
+    }
+    
+    // Determine timestamps
+    const completedAt = publishReport?.completedAt 
+      ? new Date(publishReport.completedAt) 
+      : plan.updatedAt || new Date();
+    
+    const updateData: Record<string, any> = {};
+    
+    if (hasLegacyError) {
+      updateData.lastErrorCode = errorCode;
+      updateData.lastErrorMessage = errorMessage.substring(0, 500);
+      updateData.lastErrorDetails = publishReport;
+    }
+    
+    if (needsFailedAt) {
+      updateData.failedAt = completedAt;
+    }
+    
+    if (needsLastAttemptAt) {
+      updateData.lastAttemptAt = completedAt;
+    }
+    
+    if (Object.keys(updateData).length === 0) {
+      return { updated: false, plan };
+    }
+    
+    const [updated] = await db.update(placementPlans)
+      .set(updateData)
+      .where(eq(placementPlans.id, planId))
+      .returning();
+    
+    console.log(`[PlacementEngine] Normalized plan ${planId}: ${JSON.stringify(updateData)}`);
+    return { updated: true, plan: updated };
+  }
+  
+  /**
+   * Normalize all FAILED plans that have incomplete error fields
+   * Returns count of updated plans
+   */
+  async normalizeAllFailedPlans(): Promise<{ updatedCount: number; processedCount: number }> {
+    // Find all FAILED plans
+    const failedPlans = await db.query.placementPlans.findMany({
+      where: eq(placementPlans.status, "FAILED"),
+    });
+    
+    let updatedCount = 0;
+    
+    for (const plan of failedPlans) {
+      const result = await this.normalizePublishState(plan.id);
+      if (result.updated) {
+        updatedCount++;
+      }
+    }
+    
+    console.log(`[PlacementEngine] Normalized ${updatedCount}/${failedPlans.length} failed plans`);
+    return { updatedCount, processedCount: failedPlans.length };
+  }
+  
+  /**
    * Dry-run simulation for capacity gating
    * Same logic as simulate() but without creating or updating records
    */
