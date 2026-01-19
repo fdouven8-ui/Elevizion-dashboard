@@ -15,6 +15,8 @@ import crypto from "crypto";
 import { ObjectStorageService } from "../objectStorage";
 import { dispatchMailEvent } from "./mailEventService";
 import { logAudit } from "./auditService";
+import axios from "axios";
+import FormData from "form-data";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const REQUEST_TIMEOUT = 60000; // 60 seconds for uploads
@@ -140,6 +142,7 @@ class YodeckPublishService {
 
   /**
    * Upload a video file from Object Storage to Yodeck
+   * Uses axios with multipart/form-data for proper binary video upload
    */
   async uploadMediaFromStorage(
     storagePath: string,
@@ -184,50 +187,100 @@ class YodeckPublishService {
         throw new Error("Could not get file from Object Storage");
       }
       
-      // Download file content as buffer
-      const [fileBuffer] = await file.download();
-
-      // Create form data for upload
-      const FormData = (await import("form-data")).default;
+      // Create form data for upload with proper contentType
       const formData = new FormData();
       formData.append("name", mediaName);
-      formData.append("file", fileBuffer, { filename: `${mediaName}.mp4` });
 
-      // Upload to Yodeck
-      const result = await this.makeRequest<YodeckMediaUploadResponse>(
-        "POST",
-        "/media",
-        formData,
-        true
-      );
+      // Always use buffer for Yodeck uploads to guarantee Content-Length
+      // Streaming is unreliable with form-data Content-Length calculation
+      const [fileBuffer] = await file.download();
+      const fileSize = fileBuffer.length;
+      console.log(`[YodeckPublish] Downloaded file buffer: ${fileSize} bytes`);
+      
+      formData.append("file", fileBuffer, { 
+        filename: `${mediaName}.mp4`,
+        contentType: "video/mp4",  // CRITICAL: must specify video/mp4
+        knownLength: fileSize      // Guarantees form-data can calculate Content-Length
+      });
 
-      if (!result.ok || !result.data?.id) {
+      // Upload to Yodeck using axios for proper multipart handling
+      const apiKey = await this.getApiKey();
+      const url = `${YODECK_BASE_URL}/media`;
+      
+      console.log(`[YodeckPublish] Uploading to Yodeck API: ${url}`);
+      
+      // Get Content-Length for the multipart request (REQUIRED for Yodeck)
+      let contentLength: number;
+      try {
+        contentLength = await new Promise<number>((resolve, reject) => {
+          formData.getLength((err: Error | null, length: number) => {
+            if (err) reject(err);
+            else resolve(length);
+          });
+        });
+        console.log(`[YodeckPublish] Multipart Content-Length: ${contentLength} bytes`);
+      } catch (lengthErr) {
+        // Content-Length is required for Yodeck - this should not happen with buffer fallback
+        throw new Error("Could not calculate Content-Length for upload. Please try again.");
+      }
+      
+      // Build headers with required Content-Length
+      const headers: Record<string, string> = {
+        "Authorization": `Token ${apiKey}`,
+        "Content-Length": String(contentLength),  // REQUIRED for Yodeck
+        ...formData.getHeaders()  // CRITICAL: includes Content-Type with boundary
+      };
+      
+      try {
+        const response = await axios.post<YodeckMediaUploadResponse>(url, formData, {
+          headers,
+          timeout: REQUEST_TIMEOUT * 2,  // 2 minute timeout for uploads
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity,
+        });
+        
+        const data = response.data;
+        
+        if (!data?.id) {
+          throw new Error("Upload response missing media ID");
+        }
+
+        // Update outbox with success
         await db.update(integrationOutbox)
-          .set({ 
-            status: "failed",
-            lastError: result.error,
+          .set({
+            status: "succeeded",
+            externalId: String(data.id),
+            responseJson: data,
             processedAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
 
-        return { ok: false, error: result.error || "Upload failed" };
+        console.log(`[YodeckPublish] Upload successful, mediaId=${data.id}`);
+        return { ok: true, mediaId: data.id };
+      } catch (axiosError: any) {
+        const errorMessage = axiosError.response?.data 
+          ? (typeof axiosError.response.data === 'string' 
+            ? axiosError.response.data 
+            : JSON.stringify(axiosError.response.data))
+          : axiosError.message;
+        const statusCode = axiosError.response?.status || 'N/A';
+        
+        console.error(`[YodeckPublish] Upload failed: HTTP ${statusCode}`, errorMessage);
+        
+        await db.update(integrationOutbox)
+          .set({ 
+            status: "failed",
+            lastError: `HTTP ${statusCode}: ${errorMessage}`,
+            processedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+
+        return { ok: false, error: `HTTP ${statusCode}: ${errorMessage}` };
       }
-
-      // Update outbox with success
-      await db.update(integrationOutbox)
-        .set({
-          status: "succeeded",
-          externalId: String(result.data.id),
-          responseJson: result.data,
-          processedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
-
-      console.log(`[YodeckPublish] Upload successful, mediaId=${result.data.id}`);
-      return { ok: true, mediaId: result.data.id };
     } catch (err: any) {
+      console.error(`[YodeckPublish] Upload error:`, err.message);
       await db.update(integrationOutbox)
         .set({
           status: "failed",

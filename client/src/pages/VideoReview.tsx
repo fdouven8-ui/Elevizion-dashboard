@@ -890,10 +890,13 @@ export default function VideoReview() {
             {publishStep === "error" && publishError && (
               <div className="p-4 rounded-lg bg-red-50 border border-red-200">
                 <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5" />
-                  <div>
-                    <p className="text-sm font-medium text-red-800">Publiceren mislukt</p>
-                    <p className="text-xs text-red-700 mt-1">{publishError}</p>
+                  <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium text-red-800">Upload naar Yodeck mislukt</p>
+                    <p className="text-xs text-red-700">{publishError}</p>
+                    <p className="text-xs text-red-600 mt-2">
+                      Dit is een technische fout — je kunt veilig opnieuw proberen.
+                    </p>
                   </div>
                 </div>
               </div>

@@ -1,0 +1,147 @@
+**Context**
+Bij “Akkoord & publiceer” faalt de upload naar Yodeck met:
+HTTP 400 – Unsupported media type `text/plain; charset=UTF-8`.
+
+Dit betekent dat de backend momenteel géén correcte binary video upload verstuurt (waarschijnlijk wordt een string, JSON of verkeerde stream doorgegeven i.p.v. een multipart/form-data of raw video stream).
+
+---
+
+## DOEL
+
+1. Video upload naar Yodeck moet altijd als **binary video/mp4** gebeuren
+2. Correcte **Content-Type + boundary** gebruiken
+3. Upload moet **idempotent** zijn (retry veilig)
+4. Duidelijke foutmelding + retry mogelijkheid in UI
+
+---
+
+## 1️⃣ FIX: Yodeck media upload (CRITISCH)
+
+Zoek de Yodeck upload code (bv. `yodeckPublishService.ts`).
+
+### ❌ Huidig probleem (waarschijnlijk)
+
+* `fetch()` of `axios.post()` stuurt:
+
+  * string
+  * JSON
+  * of verkeerde body zonder multipart boundary
+
+### ✅ Oplossing (verplicht)
+
+Gebruik **multipart/form-data** met een **read stream**:
+
+**Node.js voorbeeld (axios):**
+
+```ts
+import FormData from "form-data";
+import fs from "fs";
+
+const form = new FormData();
+form.append("file", fs.createReadStream(localVideoPath), {
+  filename: storedFilename,
+  contentType: "video/mp4"
+});
+
+await axios.post(
+  "https://app.yodeck.com/api/v2/media",
+  form,
+  {
+    headers: {
+      Authorization: `Token ${process.env.YODECK_AUTH_TOKEN}`,
+      ...form.getHeaders()
+    },
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity
+  }
+);
+```
+
+**BELANGRIJK**
+
+* ❌ NOOIT JSON sturen
+* ❌ NOOIT `text/plain`
+* ✅ ALTIJD `multipart/form-data`
+* ✅ ALTIJD `fs.createReadStream`
+* ✅ `maxBodyLength: Infinity`
+
+---
+
+## 2️⃣ Stream direct uit Object Storage (beter)
+
+Indien mogelijk:
+
+* Stream **direct** vanuit object storage
+* Niet eerst in memory laden
+
+```ts
+const videoStream = await objectStorage.createReadStream(storagePath);
+
+form.append("file", videoStream, {
+  filename: storedFilename,
+  contentType: "video/mp4"
+});
+```
+
+---
+
+## 3️⃣ Playlist publish flow (na upload)
+
+Na succesvolle media upload:
+
+1. Ontvang `mediaId` van Yodeck
+2. Voeg toe aan juiste playlist:
+
+```ts
+POST /api/v2/playlists/{playlistId}/items
+{
+  "mediaId": mediaId
+}
+```
+
+➡️ Check of media al bestaat in playlist (idempotent)
+➡️ Zo ja: skip toevoegen
+
+---
+
+## 4️⃣ Retry-veiligheid (ZEER BELANGRIJK)
+
+* Als upload faalt:
+
+  * markeer plan = `FAILED`
+  * sla `lastError` op
+* Bij “Opnieuw proberen”:
+
+  * hergebruik bestaande media indien al geüpload
+  * upload niet dubbel
+
+---
+
+## 5️⃣ UI feedback (modal)
+
+Wanneer upload faalt:
+
+* Toon:
+
+  > “Upload naar Yodeck mislukt (ongeldig media type).
+  > Dit is een technische fout — je kunt veilig opnieuw proberen.”
+
+Knoppen:
+
+* ✅ Opnieuw proberen
+* 👁 Bekijk voorstel
+* ⏸ Later
+
+---
+
+## ACCEPTATIECRITERIA
+
+* Yodeck upload gebeurt als `video/mp4`
+* Geen `text/plain` errors meer
+* Retry werkt zonder duplicaten
+* Na succes staat video zichtbaar in Yodeck playlist
+* Plan → LIVE
+
+---
+
+**Dit is een blocker-fix. Deze wijziging heeft prioriteit boven alle UX-polish.**
