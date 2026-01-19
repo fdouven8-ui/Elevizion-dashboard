@@ -203,11 +203,15 @@ export default function PublishQueue() {
   const retryMutation = useMutation({
     mutationFn: async (planId: string) => {
       const res = await fetch(`/api/placement-plans/${planId}/retry`, { method: "POST" });
+      const data = await res.json();
       if (!res.ok) {
-        const data = await res.json();
+        // Check for 409 Conflict (already processing)
+        if (res.status === 409 && data.alreadyProcessing) {
+          throw new Error("ALREADY_PROCESSING:" + (data.message || "Publicatie is al bezig"));
+        }
         throw new Error(data.message || "Retry mislukt");
       }
-      return res.json();
+      return data;
     },
     onSuccess: () => {
       toast({ title: "Plan opnieuw gepubliceerd" });
@@ -215,7 +219,20 @@ export default function PublishQueue() {
       queryClient.invalidateQueries({ queryKey: ["/api/placement-plans", selectedPlanId] });
     },
     onError: (err: any) => {
-      toast({ title: "Retry mislukt", description: err.message, variant: "destructive" });
+      // Handle "already processing" as a warning, not an error
+      if (err.message?.startsWith("ALREADY_PROCESSING:")) {
+        toast({ 
+          title: "Al bezig met publiceren", 
+          description: "Ververs de pagina over 10 seconden",
+        });
+        // Auto-refresh after 10 seconds
+        setTimeout(() => {
+          refetch();
+          queryClient.invalidateQueries({ queryKey: ["/api/placement-plans", selectedPlanId] });
+        }, 10000);
+      } else {
+        toast({ title: "Retry mislukt", description: err.message, variant: "destructive" });
+      }
     },
   });
 

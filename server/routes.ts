@@ -3114,8 +3114,16 @@ Sitemap: ${SITE_URL}/sitemap.xml
       if (!plan) {
         return res.status(404).json({ message: "Plan niet gevonden" });
       }
-      if (plan.status !== "FAILED") {
-        return res.status(400).json({ message: "Alleen FAILED plans kunnen opnieuw worden geprobeerd" });
+      if (plan.status !== "FAILED" && plan.status !== "APPROVED") {
+        return res.status(400).json({ message: "Alleen FAILED of APPROVED plans kunnen opnieuw worden geprobeerd" });
+      }
+      
+      // Check if already being processed (PUBLISHING status)
+      if (plan.status === "PUBLISHING") {
+        return res.status(409).json({ 
+          message: "Publicatie is al bezig, ververs de pagina over 10 seconden",
+          alreadyProcessing: true
+        });
       }
       
       // Reset status to APPROVED for retry (publishPlan will increment retryCount on failure)
@@ -3131,13 +3139,33 @@ Sitemap: ${SITE_URL}/sitemap.xml
         .where(eq(placementPlans.id, planId));
       
       // Publish (the service will update status to PUBLISHING -> PUBLISHED/FAILED and increment retryCount on failure)
+      // Service uses upsert for outbox records, so duplicate key errors are handled gracefully
       const report = await yodeckPublishService.publishPlan(planId);
+      
+      // Check if any upload/add returned ALREADY_PROCESSING
+      const hasAlreadyProcessing = report.targets?.some((t: any) => t.error?.includes("ALREADY_PROCESSING"));
+      if (hasAlreadyProcessing) {
+        return res.status(409).json({ 
+          message: "Een of meer publicatie jobs zijn al bezig, ververs de pagina over 10 seconden",
+          alreadyProcessing: true,
+          report
+        });
+      }
       
       // Get updated plan to return current retryCount
       const updatedPlan = await placementEngine.getPlan(planId);
       res.json({ success: true, report, retryCount: updatedPlan?.retryCount || 0 });
     } catch (error: any) {
       console.error("[PlacementPlans] Error retrying plan:", error);
+      
+      // Check if error is ALREADY_PROCESSING
+      if (error.message?.includes("ALREADY_PROCESSING")) {
+        return res.status(409).json({ 
+          message: "Publicatie is al bezig, ververs de pagina over 10 seconden",
+          alreadyProcessing: true
+        });
+      }
+      
       res.status(500).json({ message: error.message });
     }
   });

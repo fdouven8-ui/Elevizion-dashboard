@@ -1,0 +1,73 @@
+Replit, fix de retry/outbox idempotency bug. Retry faalt nu met Postgres 23505: duplicate key value on integration_outbox(idempotency_key).
+
+CONTEXT
+Bij POST /api/placement-plans/:id/retry (en/of publish flow) wordt een outbox record aangemaakt met een idempotency_key die al bestaat.
+Daardoor crasht retry met:
+"duplicate key value violates unique constraint integration_outbox_idempotency_key_key"
+Key already exists.
+
+DOEL
+
+1. Retry moet altijd werken: geen 23505 meer.
+2. Idempotency moet blijven: nooit dubbel publiceren, maar wél opnieuw uitvoeren als vorige poging faalde.
+3. Outbox moet “at-least-once” zijn met veilige re-queue.
+
+OPLOSSING (verplicht)
+
+A) Maak outbox enqueue idempotent met UPSERT
+In de outbox repository/service (waar INSERT gebeurt):
+
+* Vervang “insert only” door:
+
+  * INSERT ... ON CONFLICT (idempotency_key) DO UPDATE
+
+Bij conflict moet je NIET falen, maar de bestaande row resetten naar opnieuw uitvoeren:
+
+* status = 'QUEUED' (of jouw queued status)
+* available_at / run_after = NOW()
+* locked_at = NULL
+* locked_by = NULL
+* last_error = NULL (of bewaren in history)
+* attempts = attempts + 1
+* payload = EXCLUDED.payload (zodat de nieuwste payload gebruikt wordt)
+* updated_at = NOW()
+
+Return altijd de row (INSERT of UPDATE).
+
+B) Retry endpoint mag niet “direct publishen” als outbox gebruikt wordt
+In /api/placement-plans/:id/retry (of /api/admin/publish-queue/:id/retry):
+
+* Doe ALLEEN:
+
+  1. plan status naar QUEUED zetten + retryCount++ + lastAttemptAt=now()
+  2. outbox enqueue via de UPSERT methode (A)
+  3. return 200 met updated plan
+* NIET in dezelfde request publishPlan() uitvoeren.
+  Publicatie hoort door de OutboxWorker gedaan te worden.
+
+C) Scheid idempotency keys per job-type (optioneel maar sterk aanbevolen)
+Ik zie in logs dat plan.idempotencyKey ≠ outbox key (andere hash).
+Maak dit consistent:
+
+* publish job outbox key: `publish:<planId>`
+* upload job outbox key (als die apart bestaat): `upload:<assetId>` of `upload:<planId>:<assetId>`
+* playlist-add job outbox key: `playlistAdd:<planId>:<playlistId>:<mediaId>`
+  Zo voorkom je “verkeerde” collisions.
+
+D) Als outbox record al PROCESSING/LOCKED is
+Bij conflict + bestaande row is locked (locked_at != null) en niet expired:
+
+* Geef 409 terug: “Al bezig met publiceren”
+  OF
+* Als locked ouder is dan bv. 10 minuten: beschouw als STUCK en reset (locked_at=null, status=QUEUED).
+
+E) UI feedback
+Als retry 409 krijgt: toon “Publicatie is al bezig, refresh over 10 sec”.
+Als retry 200: toon “Opnieuw ingepland”.
+
+ACCEPTATIE
+
+* Klik “Opnieuw proberen” veroorzaakt nooit Postgres 23505.
+* Outbox row wordt hergebruikt en opnieuw uitgevoerd.
+* Geen dubbele uploads/playlist entries (idempotency blijft).
+* Publish gebeurt via OutboxWorker, niet in de API request thread.

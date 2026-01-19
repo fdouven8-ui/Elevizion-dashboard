@@ -467,6 +467,7 @@ export interface IStorage {
 
   // Integration Outbox (SSOT Pattern)
   createOutboxJob(data: InsertIntegrationOutbox): Promise<IntegrationOutbox>;
+  upsertOutboxJob(data: InsertIntegrationOutbox): Promise<{ job: IntegrationOutbox; wasConflict: boolean; isLocked: boolean }>;
   getOutboxJob(id: string): Promise<IntegrationOutbox | undefined>;
   getOutboxJobByIdempotencyKey(key: string): Promise<IntegrationOutbox | undefined>;
   getQueuedOutboxJobs(limit?: number): Promise<IntegrationOutbox[]>;
@@ -3049,6 +3050,70 @@ export class DatabaseStorage implements IStorage {
   async createOutboxJob(data: InsertIntegrationOutbox): Promise<IntegrationOutbox> {
     const [job] = await db.insert(schema.integrationOutbox).values(data).returning();
     return job;
+  }
+
+  /**
+   * Upsert an outbox job with true atomic ON CONFLICT DO UPDATE
+   * If job exists and is locked (processing < 10 min), returns isLocked=true
+   * If job exists and is failed/succeeded/expired, resets to queued atomically
+   * If job is new, creates it
+   * 
+   * Uses Drizzle's onConflictDoUpdate for atomic upsert to prevent race conditions
+   */
+  async upsertOutboxJob(data: InsertIntegrationOutbox): Promise<{ job: IntegrationOutbox; wasConflict: boolean; isLocked: boolean }> {
+    const LOCK_TIMEOUT_MINUTES = 10;
+    
+    // Use atomic upsert: INSERT ... ON CONFLICT (idempotency_key) DO UPDATE
+    // This prevents race conditions where two concurrent requests both try to insert
+    const [job] = await db.insert(schema.integrationOutbox)
+      .values({
+        ...data,
+        attempts: 0,
+        status: "queued",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .onConflictDoUpdate({
+        target: schema.integrationOutbox.idempotencyKey,
+        set: {
+          // Reset for re-execution (preserve status if locked = processing within 10 min)
+          status: sql`CASE 
+            WHEN ${schema.integrationOutbox.status} = 'processing' 
+              AND ${schema.integrationOutbox.updatedAt} > NOW() - INTERVAL '10 minutes'
+            THEN ${schema.integrationOutbox.status}
+            ELSE 'queued' 
+          END`,
+          attempts: sql`${schema.integrationOutbox.attempts} + 1`,
+          lastError: sql`CASE 
+            WHEN ${schema.integrationOutbox.status} = 'processing' 
+              AND ${schema.integrationOutbox.updatedAt} > NOW() - INTERVAL '10 minutes'
+            THEN ${schema.integrationOutbox.lastError}
+            ELSE NULL 
+          END`,
+          nextRetryAt: null,
+          payloadJson: data.payloadJson ? sql`${JSON.stringify(data.payloadJson)}::jsonb` : sql`${schema.integrationOutbox.payloadJson}`,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    
+    // Check if the job was already processing (locked)
+    // We need to re-fetch to see the actual state since CASE expression might have preserved it
+    const actualJob = await this.getOutboxJobByIdempotencyKey(data.idempotencyKey);
+    
+    if (actualJob && actualJob.status === "processing") {
+      const lockedAt = actualJob.updatedAt;
+      const lockAge = lockedAt ? (Date.now() - new Date(lockedAt).getTime()) / 1000 / 60 : 0;
+      
+      if (lockAge < LOCK_TIMEOUT_MINUTES) {
+        return { job: actualJob, wasConflict: true, isLocked: true };
+      }
+    }
+    
+    // Determine if this was a conflict (attempts > 0 means it was updated, not inserted)
+    const wasConflict = (actualJob?.attempts || 0) > 0;
+    
+    return { job: actualJob || job, wasConflict, isLocked: false };
   }
 
   async getOutboxJob(id: string): Promise<IntegrationOutbox | undefined> {

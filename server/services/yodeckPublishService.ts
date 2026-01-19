@@ -153,7 +153,7 @@ class YodeckPublishService {
   ): Promise<{ ok: boolean; mediaId?: number; error?: string }> {
     console.log(`[YodeckPublish] Uploading media: ${mediaName} from ${storagePath}`);
 
-    // Check if already uploaded via outbox
+    // Check if already uploaded via outbox (succeeded = skip re-upload)
     const existing = await db.query.integrationOutbox.findFirst({
       where: and(
         eq(integrationOutbox.idempotencyKey, idempotencyKey),
@@ -166,8 +166,9 @@ class YodeckPublishService {
       return { ok: true, mediaId: parseInt(existing.externalId) };
     }
 
-    // Create outbox record for tracking
-    await db.insert(integrationOutbox).values({
+    // Upsert outbox record for tracking (handles conflicts gracefully)
+    const { storage: storageService } = await import("../storage");
+    const upsertResult = await storageService.upsertOutboxJob({
       provider: "yodeck",
       actionType: "upload_media",
       entityType: "ad_asset",
@@ -175,14 +176,22 @@ class YodeckPublishService {
       payloadJson: { storagePath, mediaName },
       idempotencyKey,
       status: "processing",
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
+    
+    if (upsertResult.isLocked) {
+      console.log(`[YodeckPublish] Upload job is already being processed`);
+      return { ok: false, error: "ALREADY_PROCESSING" };
+    }
+    
+    // Update to processing status
+    await db.update(integrationOutbox)
+      .set({ status: "processing", updatedAt: new Date() })
+      .where(eq(integrationOutbox.id, upsertResult.job.id));
 
     try {
       // Get file from Object Storage
-      const storage = new ObjectStorageService();
-      const file = await storage.getFileByPath(storagePath);
+      const objectStorage = new ObjectStorageService();
+      const file = await objectStorage.getFileByPath(storagePath);
       
       if (!file) {
         throw new Error("Could not get file from Object Storage");
@@ -335,7 +344,7 @@ class YodeckPublishService {
   ): Promise<{ ok: boolean; error?: string }> {
     console.log(`[YodeckPublish] Adding media ${mediaId} to playlist ${playlistId}`);
 
-    // Check if already added via outbox
+    // Check if already added via outbox (succeeded = skip)
     const existing = await db.query.integrationOutbox.findFirst({
       where: and(
         eq(integrationOutbox.idempotencyKey, idempotencyKey),
@@ -348,8 +357,9 @@ class YodeckPublishService {
       return { ok: true };
     }
 
-    // Create outbox record
-    await db.insert(integrationOutbox).values({
+    // Upsert outbox record (handles conflicts gracefully)
+    const { storage: storageService } = await import("../storage");
+    const upsertResult = await storageService.upsertOutboxJob({
       provider: "yodeck",
       actionType: "add_to_playlist",
       entityType: "location",
@@ -357,9 +367,17 @@ class YodeckPublishService {
       payloadJson: { playlistId, mediaId, durationSeconds },
       idempotencyKey,
       status: "processing",
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
+    
+    if (upsertResult.isLocked) {
+      console.log(`[YodeckPublish] Playlist add job is already being processed`);
+      return { ok: false, error: "ALREADY_PROCESSING" };
+    }
+    
+    // Update to processing status
+    await db.update(integrationOutbox)
+      .set({ status: "processing", updatedAt: new Date() })
+      .where(eq(integrationOutbox.id, upsertResult.job.id));
 
     try {
       // First get current playlist items
