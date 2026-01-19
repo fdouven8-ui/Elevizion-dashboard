@@ -26,6 +26,7 @@ interface ProposalMatch {
   city: string | null;
   playlistId: string | null;
   playlistName: string | null;
+  effectivePlaylistName: string | null;
   score: number;
   estimatedImpressionsPerMonth: number;
   reasons: string[];
@@ -129,6 +130,8 @@ export default function VideoReview() {
   const [proposal, setProposal] = useState<ProposalResponse | null>(null);
   const [proposalLoading, setProposalLoading] = useState(false);
   const [proposalError, setProposalError] = useState<string | null>(null);
+  const [publishStep, setPublishStep] = useState<"idle" | "approving" | "uploading" | "done" | "error">("idle");
+  const [publishError, setPublishError] = useState<string | null>(null);
 
   // Fetch proposal when preview modal opens
   useEffect(() => {
@@ -194,6 +197,10 @@ export default function VideoReview() {
 
   const publishMutation = useMutation({
     mutationFn: async (planId: string) => {
+      setPublishStep("approving");
+      setPublishError(null);
+      
+      // Step 1: Approve the plan
       const res = await fetch(`/api/placement-plans/${planId}/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -203,6 +210,9 @@ export default function VideoReview() {
         const data = await res.json();
         throw new Error(data.message || "Fout bij goedkeuren plan");
       }
+      
+      // Step 2: Publish to Yodeck (upload + add to playlists)
+      setPublishStep("uploading");
       const approveRes = await fetch(`/api/placement-plans/${planId}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -212,14 +222,17 @@ export default function VideoReview() {
         const data = await approveRes.json();
         throw new Error(data.message || "Fout bij publiceren");
       }
+      
+      setPublishStep("done");
       return approveRes.json();
     },
     onSuccess: () => {
       toast({ title: "Gepubliceerd", description: "Advertentie is live op de schermen" });
-      setApprovedPlan(null);
       queryClient.invalidateQueries({ queryKey: ["/api/placement-plans"] });
     },
     onError: (error: Error) => {
+      setPublishStep("error");
+      setPublishError(error.message);
       toast({ title: "Fout", description: error.message, variant: "destructive" });
     },
   });
@@ -408,8 +421,8 @@ export default function VideoReview() {
       )}
 
       <Dialog open={!!previewAsset} onOpenChange={() => setPreviewAsset(null)}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
+        <DialogContent className="max-w-4xl flex flex-col max-h-[min(90vh,900px)] p-0">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b flex-shrink-0">
             <DialogTitle>{previewAsset?.advertiser.companyName}</DialogTitle>
             <DialogDescription>
               {previewAsset?.asset.storedFilename || previewAsset?.asset.originalFileName}
@@ -417,14 +430,15 @@ export default function VideoReview() {
           </DialogHeader>
           
           {previewAsset && (
-            <div className="space-y-4">
-              <div className="aspect-video bg-black rounded overflow-hidden">
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              <div className="bg-black rounded overflow-hidden" style={{ maxHeight: '45vh', minHeight: '260px' }}>
                 <video
                   controls
                   autoPlay
                   preload="metadata"
                   playsInline
-                  className="w-full h-full"
+                  className="w-full h-full object-contain"
+                  style={{ maxHeight: '45vh' }}
                   src={`/api/ad-assets/${previewAsset.asset.id}/stream`}
                   data-testid="video-preview"
                   onError={(e) => console.error('[VideoPreview] Error:', e)}
@@ -677,8 +691,11 @@ export default function VideoReview() {
                         </div>
                       </div>
                     )}
-                    <div className="text-sm text-muted-foreground">
-                      {proposal.proposal.matches.length} van {proposal.proposal.requestedScreens} scherm(en) gevonden
+                    <div className="flex items-center gap-2 text-sm">
+                      <CheckCircle className="h-4 w-4 text-green-600" />
+                      <span className="text-green-700 font-medium">
+                        {proposal.proposal.matches.length} van {proposal.proposal.requestedScreens} scherm(en) gevonden
+                      </span>
                     </div>
                     <div className="grid gap-2 max-h-40 overflow-y-auto">
                       {proposal.proposal.matches.map((match) => (
@@ -693,9 +710,9 @@ export default function VideoReview() {
                               ~{Math.round(match.estimatedImpressionsPerMonth).toLocaleString()} views/mnd
                             </span>
                           </div>
-                          {match.playlistName && (
+                          {(match.effectivePlaylistName || match.playlistName) && (
                             <div className="text-xs text-muted-foreground mt-1 pl-6">
-                              Playlist: {match.playlistName}
+                              Wordt geplaatst in: <span className="font-medium">{match.effectivePlaylistName || match.playlistName}</span>
                             </div>
                           )}
                         </div>
@@ -721,7 +738,7 @@ export default function VideoReview() {
             </div>
           )}
           
-          <DialogFooter className="gap-2">
+          <DialogFooter className="gap-2 px-6 py-4 border-t bg-background flex-shrink-0">
             <Button variant="outline" onClick={() => setPreviewAsset(null)}>
               Sluiten
             </Button>
@@ -806,55 +823,147 @@ export default function VideoReview() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!approvedPlan} onOpenChange={() => setApprovedPlan(null)}>
+      <Dialog open={!!approvedPlan} onOpenChange={() => { 
+        if (publishStep !== "approving" && publishStep !== "uploading") {
+          setApprovedPlan(null); 
+          setPublishStep("idle");
+          setPublishError(null);
+        }
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Rocket className="h-5 w-5 text-green-600" />
-              Plaatsingsvoorstel aangemaakt
+              {publishStep === "done" ? "Gepubliceerd!" : "Plaatsingsvoorstel aangemaakt"}
             </DialogTitle>
             <DialogDescription>
-              Video van {approvedPlan?.companyName} is goedgekeurd. Er is automatisch een plaatsingsvoorstel aangemaakt.
+              {publishStep === "done" 
+                ? `Advertentie van ${approvedPlan?.companyName} is live op de schermen.`
+                : `Video van ${approvedPlan?.companyName} is goedgekeurd. Er is automatisch een plaatsingsvoorstel aangemaakt.`
+              }
             </DialogDescription>
           </DialogHeader>
           
           <div className="space-y-4 py-4">
-            <div className="p-4 rounded-lg bg-green-50 border border-green-200">
-              <p className="text-sm text-green-800">
-                De adverteerder ontvangt een e-mail dat de video is goedgekeurd. 
-                Klik op "Akkoord & publiceer" om de advertentie direct live te zetten.
-              </p>
-            </div>
+            {/* Publishing progress steps */}
+            {publishStep !== "idle" && publishStep !== "error" && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-3">
+                  {publishStep === "approving" ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  ) : (
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                  )}
+                  <span className={publishStep === "approving" ? "text-blue-800" : "text-green-800"}>
+                    Voorstel bevestigen...
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  {publishStep === "uploading" ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+                  ) : publishStep === "done" ? (
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                  ) : (
+                    <div className="h-4 w-4 rounded-full border-2 border-muted" />
+                  )}
+                  <span className={
+                    publishStep === "uploading" ? "text-blue-800" : 
+                    publishStep === "done" ? "text-green-800" : "text-muted-foreground"
+                  }>
+                    Uploaden naar Yodeck & toevoegen aan playlist...
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  {publishStep === "done" ? (
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                  ) : (
+                    <div className="h-4 w-4 rounded-full border-2 border-muted" />
+                  )}
+                  <span className={publishStep === "done" ? "text-green-800 font-medium" : "text-muted-foreground"}>
+                    Live gezet
+                  </span>
+                </div>
+              </div>
+            )}
+            
+            {/* Error state */}
+            {publishStep === "error" && publishError && (
+              <div className="p-4 rounded-lg bg-red-50 border border-red-200">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium text-red-800">Publiceren mislukt</p>
+                    <p className="text-xs text-red-700 mt-1">{publishError}</p>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Default state */}
+            {publishStep === "idle" && (
+              <div className="p-4 rounded-lg bg-green-50 border border-green-200">
+                <p className="text-sm text-green-800">
+                  De adverteerder ontvangt een e-mail dat de video is goedgekeurd. 
+                  Klik op "Akkoord & publiceer" om de advertentie direct live te zetten.
+                </p>
+              </div>
+            )}
+            
+            {/* Success state */}
+            {publishStep === "done" && (
+              <div className="p-4 rounded-lg bg-green-50 border border-green-200">
+                <p className="text-sm text-green-800">
+                  De advertentie is nu zichtbaar in de Yodeck playlists. De adverteerder ontvangt een bevestiging.
+                </p>
+              </div>
+            )}
           </div>
           
           <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setApprovedPlan(null)}>
-              Later
-            </Button>
-            <Link href={`/publish-queue`}>
-              <Button variant="outline">
-                <Eye className="h-4 w-4 mr-1" />
-                Bekijk voorstel
-              </Button>
-            </Link>
-            <Button
-              className="bg-green-600 hover:bg-green-700"
-              onClick={handlePublish}
-              disabled={publishMutation.isPending}
-              data-testid="publish-btn"
+            <Button 
+              variant="outline" 
+              onClick={() => { 
+                setApprovedPlan(null); 
+                setPublishStep("idle"); 
+                setPublishError(null); 
+              }}
+              disabled={publishStep === "approving" || publishStep === "uploading"}
             >
-              {publishMutation.isPending ? (
-                <>
-                  <RefreshCw className="h-4 w-4 mr-1 animate-spin" />
-                  Publiceren...
-                </>
-              ) : (
-                <>
-                  <Send className="h-4 w-4 mr-1" />
-                  Akkoord & publiceer
-                </>
-              )}
+              {publishStep === "done" ? "Sluiten" : "Later"}
             </Button>
+            {publishStep !== "done" && (
+              <Link href={`/publish-queue`}>
+                <Button variant="outline" disabled={publishStep === "approving" || publishStep === "uploading"}>
+                  <Eye className="h-4 w-4 mr-1" />
+                  Bekijk voorstel
+                </Button>
+              </Link>
+            )}
+            {publishStep !== "done" && (
+              <Button
+                className="bg-green-600 hover:bg-green-700"
+                onClick={handlePublish}
+                disabled={publishMutation.isPending || publishStep === "approving" || publishStep === "uploading"}
+                data-testid="publish-btn"
+              >
+                {publishStep === "approving" || publishStep === "uploading" ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                    {publishStep === "approving" ? "Bevestigen..." : "Publiceren..."}
+                  </>
+                ) : publishStep === "error" ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-1" />
+                    Opnieuw proberen
+                  </>
+                ) : (
+                  <>
+                    <Send className="h-4 w-4 mr-1" />
+                    Akkoord & publiceer
+                  </>
+                )}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

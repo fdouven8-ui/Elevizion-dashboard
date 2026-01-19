@@ -2785,21 +2785,56 @@ Sitemap: ${SITE_URL}/sitemap.xml
         await Promise.all(playlistPromises);
       }
       
-      const matches = simulation.selectedLocations.map(loc => ({
-        locationId: loc.id,
-        locationName: loc.name,
-        city: loc.city || null,
-        playlistId: loc.yodeckPlaylistId || null,
-        playlistName: loc.yodeckPlaylistId 
-          ? (playlistNameMap.get(loc.yodeckPlaylistId) || `Playlist ${loc.yodeckPlaylistId}`) 
-          : null,
-        score: loc.score,
-        estimatedImpressionsPerMonth: Math.round((loc.expectedImpressionsPerWeek || 0) * 4.33),
-        reasons: [
-          loc.city ? `Stad: ${loc.city}` : null,
-          `Capaciteit vrij`,
-        ].filter(Boolean),
-      }));
+      // Helper: compute effective playlist name with auto-playlist convention
+      const getEffectivePlaylistName = (loc: typeof simulation.selectedLocations[0], actualName: string | null): string | null => {
+        if (!loc.yodeckPlaylistId) return null;
+        
+        // If we have an actual name from Yodeck
+        if (actualName) {
+          // Check if it's a generic name that should be replaced with convention
+          const lowerName = actualName.toLowerCase().trim();
+          const genericPatterns = ['test', 'playlist', 'default', 'new playlist', 'untitled', 'demo'];
+          const isGeneric = genericPatterns.some(g => 
+            lowerName === g || 
+            lowerName.startsWith(g + ' ') || 
+            lowerName.endsWith(' ' + g) ||
+            /^playlist\s*\d*$/i.test(lowerName) ||  // "Playlist 123"
+            /^test\s*\d*$/i.test(lowerName)         // "Test 1"
+          );
+          
+          if (isGeneric) {
+            // Use auto-playlist convention
+            const deviceId = (loc as any).yodeckDeviceId || loc.yodeckPlaylistId;
+            return `${loc.name} (auto-playlist-${deviceId}-fit)`;
+          }
+          return actualName;
+        }
+        
+        // Fallback: use auto-playlist naming convention
+        const deviceId = (loc as any).yodeckDeviceId || loc.yodeckPlaylistId;
+        return `${loc.name} (auto-playlist-${deviceId}-fit)`;
+      };
+      
+      const matches = simulation.selectedLocations.map(loc => {
+        const actualPlaylistName = loc.yodeckPlaylistId 
+          ? (playlistNameMap.get(loc.yodeckPlaylistId) || null) 
+          : null;
+        
+        return {
+          locationId: loc.id,
+          locationName: loc.name,
+          city: loc.city || null,
+          playlistId: loc.yodeckPlaylistId || null,
+          playlistName: actualPlaylistName,
+          effectivePlaylistName: getEffectivePlaylistName(loc, actualPlaylistName),
+          score: loc.score,
+          estimatedImpressionsPerMonth: Math.round((loc.expectedImpressionsPerWeek || 0) * 4.33),
+          reasons: [
+            loc.city ? `Stad: ${loc.city}` : null,
+            `Capaciteit vrij`,
+          ].filter(Boolean),
+        };
+      });
       
       // Determine failure reason if no matches - use provisioningReport for specific diagnostics
       let noCapacityReason: string | null = null;

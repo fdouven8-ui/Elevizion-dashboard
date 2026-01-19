@@ -1,0 +1,90 @@
+**Replit prompt – Fix modal scroll + sticky action buttons + publish-to-playlist flow + proposal finetune**
+
+Context:
+In Video Review (modal/dialog) kan ik niet scrollen zodra de video + proposal lijst lang genoeg is. Daardoor zie ik de knoppen onderaan niet. Daarnaast wil ik dat “Akkoord & publiceer” de media echt in de juiste Yodeck playlist zet (upsert) en dat de proposal lijst nette playlistnamen toont.
+
+Doel:
+
+1. Modal body moet scrollbaar blijven (ook met video).
+2. Knoppen moeten altijd zichtbaar blijven via sticky footer.
+3. Proposal tonen met nette playlistnaam (auto-playlist naming) en publish flow moet de video toevoegen aan de juiste playlist op Yodeck met duidelijke status/toast.
+
+---
+
+## 1) UI FIX: modal scroll + sticky footer (React)
+
+Zoek de VideoReview preview modal component (bijv. `VideoReviewModal.tsx` of `VideoReviewPage.tsx`).
+Pas de layout aan naar flex kolom met vaste max hoogte.
+
+**Eisen:**
+
+* Modal container: `display:flex; flex-direction:column; max-height: min(90vh, 900px);`
+* Content gebied: `flex:1; overflow:auto;` zodat alles binnen de modal scrollt
+* Footer met knoppen: `position: sticky; bottom: 0; background: white; border-top` zodat hij altijd in beeld blijft
+* Zorg dat de video player niet “groeit” voorbij het scherm:
+
+  * Zet video wrapper op `max-height: 45vh;` en `min-height` (bijv. 260px)
+  * Gebruik `object-fit: contain`
+
+**Let op:**
+
+* Als er nu body scroll lock is (bijv. `document.body.style.overflow='hidden'`) moet het alleen de page body locken, niet de modal content. De modal content moet altijd kunnen scrollen.
+* Als de modal in shadcn/ui Dialog zit: zet de scroll op de `DialogContent` binnencontainer en maak een inner wrapper.
+
+---
+
+## 2) Proposal finetune: playlist naam en “waar wordt dit geplaatst”
+
+In de proposal response tonen we per match:
+
+* screenName + city
+* **playlistName** (als bekend) anders fallback op conventie:
+
+  * `{locationName} (auto-playlist-{yodeckPlayerId}-fit)`
+* Toon “Wordt geplaatst in: <playlistName>” onder de match.
+
+Als playlistName nu “Test” is maar het is eigenlijk een auto playlist:
+
+* Voeg server-side een field toe `effectivePlaylistName` die de conventie toepast als de bestaande naam generiek is (bv. "Test", "Playlist", "Default").
+* UI toont altijd `effectivePlaylistName`.
+
+---
+
+## 3) Publish: voeg asset toe aan Yodeck playlist (upsert), met progress feedback
+
+Implementatie-eis:
+
+* “Goedkeuren” = alleen asset approval + plan PROPOSED (geen Yodeck)
+* “Akkoord & publiceer” = publish job:
+
+  1. Upload asset naar Yodeck media library (als nog niet bestaat) of hergebruik bestaande mediaId (dedupe op checksum/storagePath)
+  2. Voeg mediaId toe aan de juiste playlist voor elk matched screen (playlistId uit mapping)
+  3. Zet plan status LIVE bij succes, FAILED bij error
+  4. Schrijf audit logs: PLAN_PUBLISHED / PLAN_FAILED
+
+UI-eis:
+
+* Wanneer “Akkoord & publiceer” klikt:
+
+  * knop wordt disabled + spinner (“Publiceren…”)
+  * toon stapjes in UI/toast: “Uploaden naar Yodeck…”, “Toevoegen aan playlist…”, “Live gezet”
+  * bij error: toon foutmelding + plan blijft zichtbaar met retry mogelijkheid
+
+Edge cases:
+
+* Als playlist mapping ontbreekt: block publish en toon “Geen playlist gevonden”
+* Als playlist bestaat maar bevat al dezelfde media: skip add (idempotent)
+* Als 1 van meerdere screens faalt: markeer FAILED en toon welke screen faalde
+
+---
+
+## 4) Kleine UX extra’s
+
+* In proposal card: toon “1 van 1 schermen” groen + views + regio
+* Toon onderaan: “Na Goedkeuren wordt een voorstel vastgezet. Pas na Akkoord & publiceer gaat het live.”
+
+Acceptatie:
+
+* Ik kan altijd scrollen binnen de modal en zie de knoppen.
+* “Akkoord & publiceer” zet de video daadwerkelijk in de juiste Yodeck playlist (zichtbaar in Yodeck).
+* Proposal toont duidelijke playlistnaam en waar het geplaatst wordt.
