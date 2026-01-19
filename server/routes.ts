@@ -3099,6 +3099,72 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  // Retry a failed plan
+  app.post("/api/placement-plans/:id/retry", isAuthenticated, async (req, res) => {
+    try {
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const { placementEngine } = await import("./services/placementEngineService");
+      const planId = req.params.id;
+      
+      // Get current plan
+      const plan = await placementEngine.getPlan(planId);
+      if (!plan) {
+        return res.status(404).json({ message: "Plan niet gevonden" });
+      }
+      if (plan.status !== "FAILED") {
+        return res.status(400).json({ message: "Alleen FAILED plans kunnen opnieuw worden geprobeerd" });
+      }
+      
+      // Reset status to APPROVED for retry
+      const { db } = await import("./db");
+      const { placementPlans } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+      
+      await db.update(placementPlans)
+        .set({ 
+          status: "APPROVED",
+          lastAttemptAt: new Date(),
+        })
+        .where(eq(placementPlans.id, planId));
+      
+      // Publish (the service already tracks retry count)
+      const report = await yodeckPublishService.publishPlan(planId);
+      res.json({ success: true, report });
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error retrying plan:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
+  // Cancel a failed/pending plan
+  app.post("/api/placement-plans/:id/cancel", isAuthenticated, async (req, res) => {
+    try {
+      const { placementEngine } = await import("./services/placementEngineService");
+      const planId = req.params.id;
+      
+      const plan = await placementEngine.getPlan(planId);
+      if (!plan) {
+        return res.status(404).json({ message: "Plan niet gevonden" });
+      }
+      if (!["FAILED", "PROPOSED", "SIMULATED_OK", "SIMULATED_FAIL", "APPROVED"].includes(plan.status)) {
+        return res.status(400).json({ message: "Dit plan kan niet worden geannuleerd" });
+      }
+      
+      const { db } = await import("./db");
+      const { placementPlans } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+      
+      await db.update(placementPlans)
+        .set({ status: "CANCELED" })
+        .where(eq(placementPlans.id, planId));
+      
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[PlacementPlans] Error canceling plan:", error);
+      res.status(500).json({ message: error.message });
+    }
+  });
+
   // Bulk simulate multiple placement plans
   app.post("/api/placement-plans/bulk-simulate", isAuthenticated, async (req, res) => {
     try {

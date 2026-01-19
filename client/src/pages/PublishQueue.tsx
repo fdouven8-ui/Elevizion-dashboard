@@ -76,6 +76,10 @@ interface PlacementPlan {
   publishedAt: string | null;
   advertiserName?: string;
   assetFileName?: string;
+  retryCount?: number;
+  lastAttemptAt?: string;
+  lastErrorCode?: string;
+  lastErrorMessage?: string;
 }
 
 interface PlanDetailData extends PlacementPlan {
@@ -188,6 +192,44 @@ export default function PublishQueue() {
     },
   });
 
+  const retryMutation = useMutation({
+    mutationFn: async (planId: string) => {
+      const res = await fetch(`/api/placement-plans/${planId}/retry`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Retry mislukt");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Plan opnieuw gepubliceerd" });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/placement-plans", selectedPlanId] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Retry mislukt", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: async (planId: string) => {
+      const res = await fetch(`/api/placement-plans/${planId}/cancel`, { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Annuleren mislukt");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Plan geannuleerd" });
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["/api/placement-plans", selectedPlanId] });
+    },
+    onError: (err: any) => {
+      toast({ title: "Annuleren mislukt", description: err.message, variant: "destructive" });
+    },
+  });
+
   const bulkSimulateMutation = useMutation({
     mutationFn: async (planIds: string[]) => {
       const res = await fetch("/api/placement-plans/bulk-simulate", { 
@@ -272,7 +314,7 @@ export default function PublishQueue() {
   const getSelectedByStatus = (status: string) => 
     plans.filter(p => selectedPlanIds.has(p.id) && p.status === status);
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string, plan?: PlacementPlan) => {
     switch (status) {
       case "PROPOSED":
         return <Badge variant="outline"><Clock className="h-3 w-3 mr-1" />Voorstel</Badge>;
@@ -287,7 +329,20 @@ export default function PublishQueue() {
       case "PUBLISHED":
         return <Badge className="bg-green-100 text-green-800"><Send className="h-3 w-3 mr-1" />Gepubliceerd</Badge>;
       case "FAILED":
-        return <Badge className="bg-red-100 text-red-800"><XCircle className="h-3 w-3 mr-1" />Mislukt</Badge>;
+        const retryCount = plan?.retryCount || 0;
+        return (
+          <div className="flex flex-col gap-1">
+            <Badge className="bg-red-100 text-red-800" title={plan?.lastErrorMessage}>
+              <XCircle className="h-3 w-3 mr-1" />
+              Mislukt{retryCount > 0 ? ` (${retryCount}x)` : ""}
+            </Badge>
+            {plan?.lastErrorCode && (
+              <span className="text-xs text-muted-foreground">{plan.lastErrorCode}</span>
+            )}
+          </div>
+        );
+      case "CANCELED":
+        return <Badge className="bg-gray-100 text-gray-600"><XCircle className="h-3 w-3 mr-1" />Geannuleerd</Badge>;
       case "ROLLED_BACK":
         return <Badge className="bg-orange-100 text-orange-800"><AlertTriangle className="h-3 w-3 mr-1" />Teruggedraaid</Badge>;
       default:
@@ -431,7 +486,7 @@ export default function PublishQueue() {
                     <TableCell>
                       <Badge variant="secondary">{plan.packageType} ({plan.requiredTargetCount})</Badge>
                     </TableCell>
-                    <TableCell>{getStatusBadge(plan.status)}</TableCell>
+                    <TableCell>{getStatusBadge(plan.status, plan)}</TableCell>
                     <TableCell>
                       {plan.simulationReport ? (
                         <span className="flex items-center gap-1">
@@ -510,6 +565,33 @@ export default function PublishQueue() {
                             <Loader2 className="h-4 w-4 animate-spin" />
                           </Button>
                         )}
+                        {plan.status === "FAILED" && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => retryMutation.mutate(plan.id)}
+                              disabled={retryMutation.isPending}
+                              data-testid={`button-retry-${plan.id}`}
+                              title={plan.lastErrorMessage || "Opnieuw proberen"}
+                            >
+                              {retryMutation.isPending ? (
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-4 w-4" />
+                              )}
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => cancelMutation.mutate(plan.id)}
+                              disabled={cancelMutation.isPending}
+                              data-testid={`button-cancel-${plan.id}`}
+                            >
+                              <XCircle className="h-4 w-4" />
+                            </Button>
+                          </>
+                        )}
                         {plan.status === "PUBLISHED" && (
                           <Button
                             size="sm"
@@ -552,7 +634,7 @@ export default function PublishQueue() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Status</p>
-                  {getStatusBadge(planDetail.status)}
+                  {getStatusBadge(planDetail.status, planDetail)}
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Pakket</p>

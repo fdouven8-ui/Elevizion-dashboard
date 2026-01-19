@@ -1,0 +1,152 @@
+Replit, fix in 1 keer de volledige flow rondom **Publicatie Wachtrij** + de mislukte Yodeck upload, en maak het scherm zoals op de screenshot echt bruikbaar.
+
+## Probleem (huidig)
+
+* In **Publicatie Wachtrij** staat een plan op **“Mislukt”** (Bouwservice Douven) en dit blijft hangen.
+* De publish faalt door Yodeck upload errors (o.a. “Unsupported media type text/plain…” eerder).
+* UI laat te weinig info zien om snel te fixen + retry’s moeten betrouwbaar/idempotent zijn.
+
+## Doelen (wat ik wil)
+
+1. **Publish moet echt werken** (correct multipart upload naar Yodeck + juiste playlist plaatsing).
+2. **Publicatie Wachtrij** moet een echte “operational” pagina worden:
+
+   * duidelijke foutreden per plan
+   * 1-klik “Opnieuw proberen”
+   * “Bekijk details” (oog-icoon) met technische details + logs
+   * status transitions: QUEUED → PROCESSING → PUBLISHED of FAILED (+ retryCount + lastErrorAt)
+3. Alles blijft **memory-safe** (geen grote buffers) en **idempotent** (geen dubbele uploads/media).
+
+---
+
+## Backend wijzigingen
+
+### A) Yodeck upload: multipart correct + memory safe
+
+* Implementeer upload naar Yodeck met **stream-based multipart/form-data** (geen volledige Buffer in RAM).
+* Gebruik `form-data` + `axios`.
+* Zet `contentType: "video/mp4"` op file-part.
+* Voeg **Content-Length** toe via `await form.getLength()` en `...form.getHeaders()`.
+* Axios:
+
+  * `maxBodyLength: Infinity`
+  * `maxContentLength: Infinity`
+  * `timeout: 120000`
+* Alleen fallback naar Buffer als stream faalt én bestand <= `YODECK_BUFFER_FALLBACK_MAX_MB` (default 20MB). Groter = fail met nette foutmelding.
+
+### B) Playlist plaatsing (na upload)
+
+* Zorg dat publish flow na succesvolle upload:
+
+  * media in Yodeck aanmaakt/zoekt (dedupe op storagePath/hash/filename)
+  * media **toevoegt aan de juiste playlist** van het doel-scherm (auto-playlist provisioning bestaat al)
+  * plan status naar PUBLISHED zet + timestamps
+* Als playlist ontbreekt: run provisioning repair en retry publish stap.
+
+### C) Outbox / idempotency
+
+* Publicatie moet via `integration_outbox` blijven lopen:
+
+  * idempotency key = `planId + assetId + yodeckPlaylistId`
+  * retries mogen nooit duplicate media/playlist items creëren
+* Voeg velden toe aan publish plan:
+
+  * `status`, `retryCount`, `lastErrorCode`, `lastErrorMessage`, `lastErrorDetails`, `lastAttemptAt`, `publishedAt`
+
+### D) Logging + audit
+
+* Log publish stappen:
+
+  * DOWNLOAD/STREAM ASSET
+  * UPLOAD TO YODECK
+  * ADD TO PLAYLIST
+  * VERIFY PLAYLIST CONTENT (optioneel)
+* Audit events:
+
+  * PLAN_PUBLISH_STARTED
+  * PLAN_PUBLISHED
+  * PLAN_PUBLISH_FAILED (met errorCode + korte reden)
+
+---
+
+## API endpoints (voor de UI)
+
+1. `GET /api/admin/publish-queue`
+
+* Return lijst zoals de tabel op screenshot nodig heeft:
+
+  * advertiserName, assetOriginalName, packageType, status, locationsCount, impressionsPerWeek, createdAt
+  * lastErrorMessage (korte), retryCount
+
+2. `GET /api/admin/publish-queue/:planId`
+
+* Return volledige details:
+
+  * volledige error details (stack/response), target screens/playlists, outbox status, audit trail
+
+3. `POST /api/admin/publish-queue/:planId/retry`
+
+* Zet plan terug naar QUEUED en enqueue outbox job
+* Mag altijd veilig herhaald worden
+
+4. `POST /api/admin/publish-queue/:planId/cancel` (optioneel)
+
+* Markeer als CANCELED zodat het niet blijft hangen
+
+Alle endpoints admin-protected (rol eigenaar/beheerder).
+
+---
+
+## UI wijzigingen (Publicatie Wachtrij pagina)
+
+Maak de pagina zoals screenshot maar functioneel:
+
+### Tabelkolommen (zoals nu)
+
+* Adverteerder (naam + bestandsnaam)
+* Pakket
+* Status badge (Queued/Bezig/Gepubliceerd/Mislukt)
+* Locaties (bijv. 1/1)
+* Impressies (bijv. 30/week)
+* Aangemaakt (datum/tijd)
+* Acties:
+
+  * **Oog-icoon** = open details modal
+  * Voeg daarnaast een **“Opnieuw proberen”** knop/icoon als status=Mislukt
+
+### Details modal (bij oog-icoon)
+
+* Toon:
+
+  * status, retryCount, laatste poging
+  * target screens + playlist namen
+  * asset info (codec, duur, grootte)
+  * **Foutreden** menselijk + “Technische details” uitklapbaar (HTTP status, response body)
+  * knoppen: “Opnieuw proberen”, “Sluiten”
+* Als error komt van Yodeck upload:
+
+  * toon “Upload naar Yodeck mislukt – dit is technisch, je kunt veilig opnieuw proberen”
+
+### Vernieuwen knop
+
+* Refresh doet refetch + toont loading state.
+
+---
+
+## Extra: fixes uit de screenshot-context
+
+* De status “Mislukt” moet verdwijnen zodra retry slaagt → “Gepubliceerd”
+* Als publish faalt, moet de rij in de wachtrij blijven met duidelijke reden.
+
+---
+
+## Acceptatiecriteria
+
+* Een plan dat nu op “Mislukt” staat kan ik via Publicatie Wachtrij:
+
+  1. openen (oog)
+  2. fout zien
+  3. “Opnieuw proberen”
+  4. en daarna gaat hij naar “Gepubliceerd” én staat de video in de juiste Yodeck playlist.
+* Geen RAM spikes door buffering (default = streaming).
+* Retry is idempotent (geen dubbele media of dubbele playlist entries).

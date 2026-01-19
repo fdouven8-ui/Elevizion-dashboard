@@ -19,8 +19,9 @@ import axios from "axios";
 import FormData from "form-data";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
-const REQUEST_TIMEOUT = 60000; // 60 seconds for uploads
+const REQUEST_TIMEOUT = 120000; // 120 seconds for uploads
 const MAX_RETRIES = 3;
+const BUFFER_FALLBACK_MAX_BYTES = 20 * 1024 * 1024; // 20MB max for buffer fallback
 
 interface YodeckMediaUploadResponse {
   id: number;
@@ -187,17 +188,45 @@ class YodeckPublishService {
         throw new Error("Could not get file from Object Storage");
       }
       
+      // Get file metadata for size-based decision
+      let fileSize: number | undefined;
+      try {
+        const [metadata] = await file.getMetadata();
+        fileSize = metadata?.size ? parseInt(String(metadata.size)) : undefined;
+      } catch (metaErr) {
+        console.log(`[YodeckPublish] Could not get file metadata, will download to buffer`);
+      }
+      
       // Create form data for upload with proper contentType
       const formData = new FormData();
       formData.append("name", mediaName);
 
-      // Always use buffer for Yodeck uploads to guarantee Content-Length
-      // Streaming is unreliable with form-data Content-Length calculation
-      const [fileBuffer] = await file.download();
-      const fileSize = fileBuffer.length;
-      console.log(`[YodeckPublish] Downloaded file buffer: ${fileSize} bytes`);
+      // Decision: use streaming if file size is known and > BUFFER_FALLBACK_MAX_BYTES
+      // Otherwise use buffer for reliability
+      let fileContent: any;
       
-      formData.append("file", fileBuffer, { 
+      if (fileSize && fileSize <= BUFFER_FALLBACK_MAX_BYTES) {
+        // Small file: use buffer (reliable)
+        console.log(`[YodeckPublish] Small file (${fileSize} bytes), using buffer mode`);
+        const [fileBuffer] = await file.download();
+        fileContent = fileBuffer;
+        fileSize = fileBuffer.length;
+      } else if (fileSize && fileSize > BUFFER_FALLBACK_MAX_BYTES) {
+        // Large file: use streaming to avoid memory spikes
+        console.log(`[YodeckPublish] Large file (${fileSize} bytes), using stream mode`);
+        fileContent = file.createReadStream();
+      } else {
+        // Unknown size: download and check
+        const [fileBuffer] = await file.download();
+        fileSize = fileBuffer.length;
+        if (fileSize > BUFFER_FALLBACK_MAX_BYTES) {
+          throw new Error(`File too large for buffer upload (${(fileSize / 1024 / 1024).toFixed(1)}MB > ${BUFFER_FALLBACK_MAX_BYTES / 1024 / 1024}MB). Please try again.`);
+        }
+        console.log(`[YodeckPublish] Downloaded file buffer: ${fileSize} bytes`);
+        fileContent = fileBuffer;
+      }
+      
+      formData.append("file", fileContent, { 
         filename: `${mediaName}.mp4`,
         contentType: "video/mp4",  // CRITICAL: must specify video/mp4
         knownLength: fileSize      // Guarantees form-data can calculate Content-Length
@@ -220,7 +249,7 @@ class YodeckPublishService {
         });
         console.log(`[YodeckPublish] Multipart Content-Length: ${contentLength} bytes`);
       } catch (lengthErr) {
-        // Content-Length is required for Yodeck - this should not happen with buffer fallback
+        // Content-Length calculation failed - this means streaming without size
         throw new Error("Could not calculate Content-Length for upload. Please try again.");
       }
       
@@ -234,7 +263,7 @@ class YodeckPublishService {
       try {
         const response = await axios.post<YodeckMediaUploadResponse>(url, formData, {
           headers,
-          timeout: REQUEST_TIMEOUT * 2,  // 2 minute timeout for uploads
+          timeout: REQUEST_TIMEOUT,  // 2 minute timeout for uploads
           maxBodyLength: Infinity,
           maxContentLength: Infinity,
         });
@@ -467,8 +496,8 @@ class YodeckPublishService {
         throw new Error("Plan not found");
       }
 
-      if (plan.status !== "APPROVED") {
-        throw new Error(`Plan status must be APPROVED, got ${plan.status}`);
+      if (plan.status !== "APPROVED" && plan.status !== "FAILED") {
+        throw new Error(`Plan status must be APPROVED or FAILED, got ${plan.status}`);
       }
 
       // Get the ad asset
@@ -614,20 +643,47 @@ class YodeckPublishService {
       report.completedAt = new Date().toISOString();
       console.error(`[YodeckPublish] Plan ${planId} failed:`, err.message);
 
+      // Determine error code from message
+      let errorCode = "PUBLISH_FAILED";
+      if (err.message?.includes("Upload failed")) {
+        errorCode = "YODECK_UPLOAD_FAILED";
+      } else if (err.message?.includes("playlist")) {
+        errorCode = "PLAYLIST_ADD_FAILED";
+      } else if (err.message?.includes("Asset not found")) {
+        errorCode = "ASSET_NOT_FOUND";
+      }
+
+      // Get current retry count
+      const currentPlan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+      const currentRetryCount = (currentPlan as any)?.retryCount || 0;
+
       await db.update(placementPlans)
         .set({
           status: "FAILED",
+          failedAt: new Date(),
+          retryCount: currentRetryCount + 1,
+          lastAttemptAt: new Date(),
+          lastErrorCode: errorCode,
+          lastErrorMessage: err.message?.substring(0, 500) || "Unknown error",
+          lastErrorDetails: { 
+            stack: err.stack?.substring(0, 2000),
+            report: { ...report, error: err.message }
+          },
           publishReport: { ...report, error: err.message } as any,
         })
         .where(eq(placementPlans.id, planId));
 
       // Log audit event for failure
-      await logAudit('PLAN_FAILED', {
+      await logAudit('PLAN_PUBLISH_FAILED', {
         planId: planId,
         metadata: {
+          errorCode,
           error: err.message,
           failedCount: report.failedCount,
           totalTargets: report.totalTargets,
+          retryCount: currentRetryCount + 1,
         },
       });
 

@@ -2471,6 +2471,12 @@ export const placementPlans = pgTable("placement_plans", {
   }>(),
   // Idempotency
   idempotencyKey: text("idempotency_key").unique(), // hash(advertiserId + adAssetId + approvedTargets)
+  // Retry tracking
+  retryCount: integer("retry_count").notNull().default(0),
+  lastAttemptAt: timestamp("last_attempt_at"),
+  lastErrorCode: text("last_error_code"),         // e.g., "YODECK_UPLOAD_FAILED", "PLAYLIST_ADD_FAILED"
+  lastErrorMessage: text("last_error_message"),   // Human-readable summary
+  lastErrorDetails: jsonb("last_error_details"),  // Full error object/stack
   // Timestamps
   simulatedAt: timestamp("simulated_at"),
   approvedAt: timestamp("approved_at"),
