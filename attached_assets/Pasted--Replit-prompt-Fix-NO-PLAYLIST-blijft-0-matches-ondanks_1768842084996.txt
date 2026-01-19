@@ -1,0 +1,128 @@
+**Replit prompt – Fix “NO_PLAYLIST blijft 0 matches” ondanks auto-provisioning + betere logging/diagnose**
+
+Context:
+
+* Video preview/streaming werkt ✅
+* Proposal endpoint logt: `[Proposal] Found 1 locations with NO_PLAYLIST, attempting auto-provisioning...`
+* Maar response blijft:
+
+  * `matches: []`
+  * `provisioningReport: null`
+  * `noCapacityReason: "Schermen zonder Yodeck-koppeling of playlist"`
+* Er zijn wél 2 Yodeck screens beschikbaar (`Yodeck API returned 2 screens`), en in DB bestaat de screen/location relatie al.
+
+Doel:
+
+1. Auto-provisioning moet **daadwerkelijk** een sellable playlist kunnen maken/koppelen op basis van bestaande `screens` records (locationId/yodeckPlayerId) en daarna de proposal opnieuw simuleren.
+2. Als provisioning niet kan, moet `provisioningReport` **altijd gevuld** zijn met duidelijke reden(en) (niet null).
+3. UI moet niet meer suggereren “koppel locaties aan yodeck-schermen” als ze al gekoppeld zijn; toon de echte blocker (bijv. “geen screen record voor location”, “location.readyForAds=false”, “yodeckPlayerId ontbreekt”, “playlist create failed”, etc.)
+
+---
+
+## A) Fix: voorstel/provisioning gebruikt verkeerde bron voor “gekoppelde screens”
+
+In `playlistProvisioningService.ts` en proposal endpoint:
+
+### A1) Bepaal candidate screens per location via DB (leidend)
+
+Voor elke candidate location in targetRegionCodes:
+
+* Query `screens` table op `locationId = location.id` AND `isActive=true`
+* Filter op screens met een bruikbare Yodeck identifier:
+
+  * `yodeckPlayerId` (of `yodeckUuid`) moet aanwezig zijn
+* Als er 0 screens gevonden:
+
+  * provisioningReport reason: `NO_SCREEN_FOR_LOCATION`
+  * next step: “Koppel in Locaties-beheer een scherm aan deze locatie” (alleen dan)
+* Als screens gevonden maar geen yodeckPlayerId:
+
+  * reason: `SCREEN_MISSING_YODECK_ID`
+* **Gebruik niet** een andere mappingbron als die niet 100% betrouwbaar is.
+
+### A2) Maak/ensure playlist per screen (niet per location)
+
+Voor elk gevonden screen:
+
+* Run `ensureSellablePlaylistForScreen(screen.id)` (bestaande service)
+* Zorg dat deze service:
+
+  * een playlist in Yodeck **maakt of vindt**
+  * en de playlist **aan de juiste player koppelt**
+  * en **DB mapping** opslaat op screen-niveau (bijv. `screens.yodeckPlaylistId` of aparte mapping table – maar consistent)
+* Als je een aparte mapping table hebt: zorg dat proposal engine daar ook naar kijkt.
+* Als `screens` al een `yodeckPlaylistId` veld heeft: schrijf daarheen en gebruik dat overal als bron.
+
+### A3) Na provisioning altijd resimulate
+
+In `/api/admin/assets/:assetId/proposal`:
+
+* Als je provisioning aanroept (ongeacht succes):
+
+  * voer daarna altijd `simulateProposal()` opnieuw uit
+  * gebruik de nieuwste mapping uit DB (geen stale cache)
+
+---
+
+## B) provisioningReport mag nooit null zijn
+
+Maak een type zoals:
+
+```
+provisioningReport: {
+  attempted: boolean,
+  locationsChecked: number,
+  screensChecked: number,
+  actions: Array<{screenId, locationId, action, playlistId?, playlistName?, status:'ok'|'skipped'|'failed', reason?}>,
+  summary: {created:number, renamed:number, fixed:number, failed:number, skipped:number}
+}
+```
+
+* Als er geen attempt nodig was: `attempted=false` en actions leeg, maar NIET null.
+* Als attempt faalt: zet status=failed + reason.
+
+---
+
+## C) UI copy fix (Video Review modal)
+
+* Als provisioningReport.attempted=true en failed>0:
+
+  * Toon exact: “Playlist provisioning mislukt: <reason>”
+* Alleen toon “koppel locaties aan yodeck-schermen” als reason `NO_SCREEN_FOR_LOCATION`
+* Als reason `SCREEN_MISSING_YODECK_ID`: “Dit scherm mist yodeckPlayerId in het dashboard. Sync/mapping repareren.”
+
+---
+
+## D) Extra debug (admin-only) op no matches (minimale toevoeging)
+
+Wanneer matches=0, voeg in response toe:
+
+```
+debug: {
+  targetRegionCodes,
+  candidateLocations: <n>,
+  candidateScreens: <n>,
+  readyForAdsLocations: <n>,
+  screensWithYodeckId: <n>,
+  screensWithPlaylistMapping: <n>
+}
+```
+
+UI: collapsible “Debug details”.
+
+---
+
+## E) Acceptatie
+
+1. Bij een locatie in Sittard met minstens 1 screen record met yodeckPlayerId:
+
+   * proposal endpoint maakt/fixed playlist mapping
+   * resimulate geeft `matches.length >= 1`
+   * UI toont “1 van 1 schermen” + playlistnaam (auto-playlist-…-fit)
+2. Als er écht geen screen gekoppeld is:
+
+   * provisioningReport toont `NO_SCREEN_FOR_LOCATION`
+   * UI toont correct next step
+3. provisioningReport is nooit null.
+
+Voer dit uit met minimale wijzigingen en hergebruik bestaande provisioning service; focus op: “proposal gebruikt screens-table mapping als source of truth”.

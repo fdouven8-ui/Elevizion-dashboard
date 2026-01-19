@@ -2632,46 +2632,127 @@ Sitemap: ${SITE_URL}/sitemap.xml
       // Check if we have NO_PLAYLIST rejections that might be fixable
       // Run auto-provisioning whenever there are ANY NO_PLAYLIST rejections (not just when simulation fails)
       // This ensures all screens get proper playlists even when some matches already exist
-      let provisioningReport: { totalCreated: number; totalFixed: number; actions: string[] } | null = null;
+      
+      // provisioningReport is NEVER null - always provide diagnostic info
+      interface ProvisioningAction {
+        locationId: string;
+        locationName: string;
+        action: string;
+        playlistId?: string;
+        playlistName?: string;
+        status: 'ok' | 'skipped' | 'failed';
+        reason?: string;
+      }
+      
+      const provisioningReport = {
+        attempted: false,
+        locationsChecked: 0,
+        screensChecked: 0,
+        actions: [] as ProvisioningAction[],
+        summary: { created: 0, renamed: 0, fixed: 0, failed: 0, skipped: 0 },
+      };
+      
       const noPlaylistRejects = simulation.rejectedLocations.filter(r => r.reason === 'NO_PLAYLIST');
       
+      // Get all active locations for diagnostics
+      const allActiveLocations = await storage.getActiveLocations();
+      const targetRegions = advertiser.targetRegionCodes || [];
+      const anyRegion = targetRegions.length === 0;
+      
+      // Also get screens to check yodeckPlayerId availability
+      const allScreens = await storage.getScreens();
+      const screensWithYodeckId = allScreens.filter(s => s.yodeckPlayerId && s.isActive);
+      
+      provisioningReport.locationsChecked = allActiveLocations.length;
+      provisioningReport.screensChecked = screensWithYodeckId.length;
+      
       if (noPlaylistRejects.length > 0) {
+        provisioningReport.attempted = true;
         console.log(`[Proposal] Found ${noPlaylistRejects.length} locations with NO_PLAYLIST, attempting auto-provisioning...`);
         
-        // Get all candidate locations in target regions that might need provisioning
-        const allActiveLocations = await storage.getActiveLocations();
-        const targetRegions = advertiser.targetRegionCodes || [];
-        const anyRegion = targetRegions.length === 0;
+        // Check for locations that might need yodeckDeviceId synced from screens
+        for (const loc of allActiveLocations) {
+          if (!loc.yodeckDeviceId && loc.readyForAds) {
+            // Try to find a screen linked to this location
+            const linkedScreens = allScreens.filter(s => s.locationId === loc.id && s.yodeckPlayerId);
+            if (linkedScreens.length > 0) {
+              // Sync yodeckDeviceId from screen
+              const screen = linkedScreens[0];
+              console.log(`[Proposal] Syncing yodeckDeviceId from screen ${screen.screenId} to location ${loc.name}`);
+              await storage.updateLocation(loc.id, { 
+                yodeckDeviceId: screen.yodeckPlayerId,
+                yodeckStatus: 'linked'
+              });
+              // Update local reference
+              loc.yodeckDeviceId = screen.yodeckPlayerId;
+              
+              provisioningReport.actions.push({
+                locationId: loc.id,
+                locationName: loc.name,
+                action: 'SYNCED_DEVICE_ID',
+                status: 'ok',
+                reason: `Synced from screen ${screen.screenId}`,
+              });
+              provisioningReport.summary.fixed++;
+            } else {
+              provisioningReport.actions.push({
+                locationId: loc.id,
+                locationName: loc.name,
+                action: 'NO_SCREEN_FOR_LOCATION',
+                status: 'skipped',
+                reason: 'Geen gekoppeld scherm met Yodeck ID gevonden',
+              });
+              provisioningReport.summary.skipped++;
+            }
+          }
+        }
         
+        // Now find candidate locations that need playlist provisioning
         const candidateLocationIds = allActiveLocations
           .filter(loc => {
-            if (!loc.yodeckDeviceId) return false; // Must have screen coupled
+            if (!loc.yodeckDeviceId) {
+              // Already handled above, skip
+              return false;
+            }
             if (!loc.yodeckPlaylistId) return true; // Needs provisioning
             const effectiveRegion = loc.regionCode || (loc.city ? loc.city.toLowerCase() : null);
             return anyRegion || (effectiveRegion && targetRegions.includes(effectiveRegion));
           })
           .map(loc => loc.id);
         
+        console.log(`[Proposal] Found ${candidateLocationIds.length} candidates for playlist provisioning`);
+        
         if (candidateLocationIds.length > 0) {
           const provisionResult = await ensureSellablePlaylistsForLocations(candidateLocationIds);
           
-          provisioningReport = {
-            totalCreated: provisionResult.totalCreated,
-            totalFixed: provisionResult.totalFixed,
-            actions: [],
-          };
-          
           for (const [locId, result] of provisionResult.results) {
-            if (result.actionTaken !== 'NONE') {
-              const loc = allActiveLocations.find(l => l.id === locId);
-              provisioningReport.actions.push(
-                `${loc?.name || locId}: ${result.actionTaken} → ${result.playlistName || 'n/a'}`
-              );
+            const loc = allActiveLocations.find(l => l.id === locId);
+            provisioningReport.actions.push({
+              locationId: locId,
+              locationName: loc?.name || locId,
+              action: result.actionTaken,
+              playlistId: result.playlistId || undefined,
+              playlistName: result.playlistName || undefined,
+              status: result.success ? 'ok' : 'failed',
+              reason: result.error || result.warnings.join(', ') || undefined,
+            });
+            
+            if (result.success) {
+              if (result.actionTaken === 'PLAYLIST_CREATED') {
+                provisioningReport.summary.created++;
+              } else if (result.actionTaken === 'PLAYLIST_RENAMED') {
+                provisioningReport.summary.renamed++;
+              } else if (result.actionTaken !== 'NONE') {
+                provisioningReport.summary.fixed++;
+              }
+            } else {
+              provisioningReport.summary.failed++;
             }
           }
           
           // Re-run simulation after provisioning
-          if (provisionResult.totalCreated > 0 || provisionResult.totalFixed > 0) {
+          const totalActions = provisionResult.totalCreated + provisionResult.totalFixed;
+          if (totalActions > 0) {
             console.log(`[Proposal] Re-running simulation after provisioning ${provisionResult.totalCreated} created, ${provisionResult.totalFixed} fixed`);
             simulation = await placementEngine.dryRunSimulate(simulationParams);
           }
@@ -2720,7 +2801,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         ].filter(Boolean),
       }));
       
-      // Determine failure reason if no matches
+      // Determine failure reason if no matches - use provisioningReport for specific diagnostics
       let noCapacityReason: string | null = null;
       let nextSteps: string[] = [];
       
@@ -2732,8 +2813,27 @@ Sitemap: ${SITE_URL}/sitemap.xml
         }, {} as Record<string, number>);
         
         if (reasonCounts.NO_PLAYLIST > 0) {
-          noCapacityReason = "Schermen zonder Yodeck-koppeling of playlist";
-          nextSteps.push("Koppel locaties aan Yodeck-schermen in het Locaties-beheer");
+          // Use provisioningReport to give more specific feedback
+          const noScreenActions = provisioningReport.actions.filter(a => a.action === 'NO_SCREEN_FOR_LOCATION');
+          const failedActions = provisioningReport.actions.filter(a => a.status === 'failed');
+          
+          if (noScreenActions.length > 0) {
+            noCapacityReason = "Locaties zonder gekoppeld scherm in de database";
+            nextSteps.push("Koppel schermen aan locaties in het Schermen-beheer");
+          } else if (failedActions.length > 0) {
+            noCapacityReason = "Playlist provisioning mislukt";
+            const firstFail = failedActions[0];
+            if (firstFail.reason) {
+              nextSteps.push(`Fout: ${firstFail.reason}`);
+            }
+            nextSteps.push("Controleer Yodeck-integratie in Systeemstatus");
+          } else if (provisioningReport.screensChecked === 0) {
+            noCapacityReason = "Geen actieve schermen met Yodeck-koppeling";
+            nextSteps.push("Synchroniseer schermen via Yodeck Sync in Systeemstatus");
+          } else {
+            noCapacityReason = "Locaties zonder playlist-mapping";
+            nextSteps.push("Controleer of locaties yodeckDeviceId hebben ingesteld");
+          }
         } else if (reasonCounts.REGION_MISMATCH > 0) {
           noCapacityReason = "Geen schermen in geselecteerde regio's";
           nextSteps.push("Voeg locaties toe in de doelregio's");
@@ -2752,6 +2852,24 @@ Sitemap: ${SITE_URL}/sitemap.xml
       // Derive unique cities from matches for region display
       const matchedCities = [...new Set(matches.map(m => m.city).filter(Boolean))];
       
+      // Add debug info for admin diagnosis
+      const locationsWithDeviceId = allActiveLocations.filter(l => l.yodeckDeviceId).length;
+      const locationsWithPlaylistId = allActiveLocations.filter(l => l.yodeckPlaylistId).length;
+      const readyForAdsLocations = allActiveLocations.filter(l => l.readyForAds).length;
+      
+      const debugInfo = {
+        targetRegionCodes: targetRegions,
+        candidateLocations: allActiveLocations.length,
+        candidateScreens: screensWithYodeckId.length,
+        readyForAdsLocations,
+        locationsWithYodeckDeviceId: locationsWithDeviceId,
+        locationsWithPlaylistMapping: locationsWithPlaylistId,
+        rejectionReasons: simulation.rejectedLocations.reduce((acc, r) => {
+          acc[r.reason] = (acc[r.reason] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>),
+      };
+      
       res.json({
         success: simulation.success,
         proposal: {
@@ -2767,9 +2885,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
           },
           noCapacityReason,
           nextSteps: nextSteps.length > 0 ? nextSteps : null,
-          provisioningReport: provisioningReport && (provisioningReport.totalCreated > 0 || provisioningReport.totalFixed > 0) 
-            ? provisioningReport 
-            : null,
+          // provisioningReport is NEVER null - always provide full diagnostic info
+          provisioningReport,
+          // Debug info for admin diagnosis (collapsible in UI)
+          debug: debugInfo,
         },
       });
     } catch (error: any) {

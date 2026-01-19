@@ -31,10 +31,38 @@ interface ProposalMatch {
   reasons: string[];
 }
 
+interface ProvisioningAction {
+  locationId: string;
+  locationName: string;
+  action: string;
+  playlistId?: string;
+  playlistName?: string;
+  status: 'ok' | 'skipped' | 'failed';
+  reason?: string;
+}
+
 interface ProvisioningReport {
-  totalCreated: number;
-  totalFixed: number;
-  actions: string[];
+  attempted: boolean;
+  locationsChecked: number;
+  screensChecked: number;
+  actions: ProvisioningAction[];
+  summary: {
+    created: number;
+    renamed: number;
+    fixed: number;
+    failed: number;
+    skipped: number;
+  };
+}
+
+interface DebugInfo {
+  targetRegionCodes: string[];
+  candidateLocations: number;
+  candidateScreens: number;
+  readyForAdsLocations: number;
+  locationsWithYodeckDeviceId: number;
+  locationsWithPlaylistMapping: number;
+  rejectionReasons: Record<string, number>;
 }
 
 interface ProposalResponse {
@@ -52,7 +80,8 @@ interface ProposalResponse {
     };
     noCapacityReason: string | null;
     nextSteps: string[] | null;
-    provisioningReport: ProvisioningReport | null;
+    provisioningReport: ProvisioningReport;
+    debug?: DebugInfo;
   };
 }
 
@@ -586,18 +615,29 @@ export default function VideoReview() {
                 ) : proposal?.proposal?.noCapacityReason ? (
                   <div className="space-y-2">
                     {/* Show provisioning report if any actions were taken */}
-                    {proposal.proposal.provisioningReport && (
+                    {proposal.proposal.provisioningReport?.attempted && (
                       <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
                         <div className="flex items-start gap-2">
-                          <CheckCircle className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                          {proposal.proposal.provisioningReport.summary.failed > 0 ? (
+                            <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                          ) : (
+                            <CheckCircle className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                          )}
                           <div>
                             <p className="text-sm font-medium text-blue-800">
-                              Automatisch hersteld: {proposal.proposal.provisioningReport.totalCreated} playlist(s) aangemaakt, {proposal.proposal.provisioningReport.totalFixed} mapping(s) gerepareerd
+                              Provisioning: {proposal.proposal.provisioningReport.summary.created} aangemaakt, {proposal.proposal.provisioningReport.summary.fixed} gerepareerd
+                              {proposal.proposal.provisioningReport.summary.failed > 0 && `, ${proposal.proposal.provisioningReport.summary.failed} mislukt`}
+                            </p>
+                            <p className="text-xs text-blue-700 mt-1">
+                              Gecontroleerd: {proposal.proposal.provisioningReport.locationsChecked} locaties, {proposal.proposal.provisioningReport.screensChecked} schermen
                             </p>
                             {proposal.proposal.provisioningReport.actions.length > 0 && (
                               <ul className="mt-2 text-xs text-blue-700 list-disc list-inside max-h-20 overflow-y-auto">
                                 {proposal.proposal.provisioningReport.actions.map((action, i) => (
-                                  <li key={i}>{action}</li>
+                                  <li key={i} className={action.status === 'failed' ? 'text-red-600' : action.status === 'skipped' ? 'text-amber-600' : ''}>
+                                    {action.locationName}: {action.action}
+                                    {action.reason && ` (${action.reason})`}
+                                  </li>
                                 ))}
                               </ul>
                             )}
@@ -627,12 +667,12 @@ export default function VideoReview() {
                 ) : proposal?.proposal?.matches && proposal.proposal.matches.length > 0 ? (
                   <div className="space-y-2">
                     {/* Show provisioning report if any actions were taken */}
-                    {proposal.proposal.provisioningReport && (
+                    {proposal.proposal.provisioningReport?.attempted && (proposal.proposal.provisioningReport.summary.created > 0 || proposal.proposal.provisioningReport.summary.fixed > 0) && (
                       <div className="p-2 rounded-lg bg-green-50 border border-green-200">
                         <div className="flex items-start gap-2">
                           <CheckCircle className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
                           <p className="text-xs text-green-800">
-                            Automatisch hersteld: {proposal.proposal.provisioningReport.totalCreated} playlist(s) aangemaakt, {proposal.proposal.provisioningReport.totalFixed} mapping(s) gerepareerd
+                            Automatisch hersteld: {proposal.proposal.provisioningReport.summary.created} playlist(s) aangemaakt, {proposal.proposal.provisioningReport.summary.fixed} mapping(s) gerepareerd
                           </p>
                         </div>
                       </div>
