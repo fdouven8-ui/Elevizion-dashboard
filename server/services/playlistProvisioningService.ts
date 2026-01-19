@@ -208,7 +208,8 @@ export async function ensureSellablePlaylistForLocation(locationId: string): Pro
     };
   }
   
-  const { location, yodeckScreen, currentPlaylist, allPlaylists } = context;
+  const { location, yodeckScreen, allPlaylists } = context;
+  let currentPlaylist = context.currentPlaylist;
   const warnings: string[] = [];
   
   if (!location.yodeckDeviceId) {
@@ -259,6 +260,31 @@ export async function ensureSellablePlaylistForLocation(locationId: string): Pro
     });
     
     // Continue to provision a new playlist
+  }
+  
+  // Case 1b: Check if playlist is not assigned to this screen (wrong mapping)
+  if (currentPlaylist && yodeckScreen && !isPlaylistMappedToScreen(currentPlaylist, yodeckScreen)) {
+    console.log(`[PlaylistProvisioning] Playlist ${currentPlaylist.id} is not assigned to screen ${screenId}`);
+    warnings.push(`Playlist ${currentPlaylist.name} is not assigned to screen - will find or create correct one`);
+    
+    // Clear the mapping since it's pointing to a playlist that's not on this screen
+    await db.update(locations)
+      .set({
+        yodeckPlaylistId: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(locations.id, locationId));
+    
+    await logAudit('PLAYLIST_MAPPING_FIXED', {
+      metadata: {
+        locationId,
+        oldPlaylistId: String(currentPlaylist.id),
+        reason: 'Playlist was not assigned to this screen',
+      },
+    });
+    
+    // Nullify for subsequent logic - proceed as if there's no current playlist
+    currentPlaylist = null;
   }
   
   // Case 2: Current playlist exists but name is not canonical
