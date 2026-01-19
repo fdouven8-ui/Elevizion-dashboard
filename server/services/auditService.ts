@@ -22,7 +22,11 @@ export type AuditEventType =
   | "PLAN_APPROVED"
   | "PLAN_PUBLISHED"
   | "PLAN_FAILED"
-  | "PLAYLIST_AUTO_CREATED";
+  | "PLAYLIST_AUTO_CREATED"
+  | "PLAYLIST_RENAMED"
+  | "PLAYLIST_MAPPING_FIXED"
+  | "PLAYLIST_MAPPING_REMOVED_STALE"
+  | "PLAYLIST_DUPLICATES_RESOLVED";
 
 export interface AuditContext {
   actorUserId?: string;

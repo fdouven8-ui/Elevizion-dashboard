@@ -31,6 +31,12 @@ interface ProposalMatch {
   reasons: string[];
 }
 
+interface ProvisioningReport {
+  totalCreated: number;
+  totalFixed: number;
+  actions: string[];
+}
+
 interface ProposalResponse {
   success: boolean;
   proposal: {
@@ -46,6 +52,7 @@ interface ProposalResponse {
     };
     noCapacityReason: string | null;
     nextSteps: string[] | null;
+    provisioningReport: ProvisioningReport | null;
   };
 }
 
@@ -578,6 +585,26 @@ export default function VideoReview() {
                   </div>
                 ) : proposal?.proposal?.noCapacityReason ? (
                   <div className="space-y-2">
+                    {/* Show provisioning report if any actions were taken */}
+                    {proposal.proposal.provisioningReport && (
+                      <div className="p-3 rounded-lg bg-blue-50 border border-blue-200">
+                        <div className="flex items-start gap-2">
+                          <CheckCircle className="h-4 w-4 text-blue-600 mt-0.5 flex-shrink-0" />
+                          <div>
+                            <p className="text-sm font-medium text-blue-800">
+                              Automatisch hersteld: {proposal.proposal.provisioningReport.totalCreated} playlist(s) aangemaakt, {proposal.proposal.provisioningReport.totalFixed} mapping(s) gerepareerd
+                            </p>
+                            {proposal.proposal.provisioningReport.actions.length > 0 && (
+                              <ul className="mt-2 text-xs text-blue-700 list-disc list-inside max-h-20 overflow-y-auto">
+                                {proposal.proposal.provisioningReport.actions.map((action, i) => (
+                                  <li key={i}>{action}</li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     <div className="p-3 rounded-lg bg-amber-50 border border-amber-200">
                       <div className="flex items-start gap-2">
                         <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
@@ -599,6 +626,17 @@ export default function VideoReview() {
                   </div>
                 ) : proposal?.proposal?.matches && proposal.proposal.matches.length > 0 ? (
                   <div className="space-y-2">
+                    {/* Show provisioning report if any actions were taken */}
+                    {proposal.proposal.provisioningReport && (
+                      <div className="p-2 rounded-lg bg-green-50 border border-green-200">
+                        <div className="flex items-start gap-2">
+                          <CheckCircle className="h-4 w-4 text-green-600 mt-0.5 flex-shrink-0" />
+                          <p className="text-xs text-green-800">
+                            Automatisch hersteld: {proposal.proposal.provisioningReport.totalCreated} playlist(s) aangemaakt, {proposal.proposal.provisioningReport.totalFixed} mapping(s) gerepareerd
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     <div className="text-sm text-muted-foreground">
                       {proposal.proposal.matches.length} van {proposal.proposal.requestedScreens} scherm(en) gevonden
                     </div>

@@ -95,11 +95,16 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
     - Publishing triggers ADVERTISER_PUBLISHED email when plan goes live on Yodeck
     - Sidebar menu "Video Beoordelen" under Admin section with pending count badge
     - **Entity Model**: Placement engine operates on LOCATIONS as the unit of ad placement (one screen per location for capacity purposes)
-- **Auto-Playlist Provisioning**: When a location has `yodeckDeviceId` but no `yodeckPlaylistId`, the placement engine automatically provisions a new playlist via `autoPlaylistService.ts`. Features:
-  - Creates playlist via Yodeck API with naming convention: `{locationName} (auto-playlist-{8-char-id})`
-  - Assigns playlist to screen and updates location record
-  - Logs `PLAYLIST_AUTO_CREATED` audit event
-  - `isSellablePlaylist()` helper identifies ad-suitable playlists (excludes 'no-ad', 'intern', 'content-only', 'staff', 'test', 'template')
+- **Auto-Playlist Provisioning & Cleanup Service**: Comprehensive service (`playlistProvisioningService.ts`) that ensures screens always have valid, sellable playlists. Features:
+  - **Canonical Naming**: Enforces naming convention `{locationName} (auto-playlist-{yodeckDeviceId}-fit)` for consistency
+  - **Stale Mapping Cleanup**: Detects and removes DB mappings pointing to non-existent Yodeck playlists
+  - **Playlist Renaming**: Auto-renames non-canonical auto-playlists to match the canonical pattern
+  - **Duplicate Resolution**: Detects multiple auto-playlists for the same device, keeps best match, marks others as "(legacy)"
+  - **Auto-Creation**: Creates new playlists via Yodeck API when no valid playlist exists, assigns to screen
+  - **Proposal Integration**: `/api/admin/assets/:assetId/proposal` automatically runs provisioning before simulation when NO_PLAYLIST rejections occur, then re-simulates
+  - **Audit Events**: Logs `PLAYLIST_AUTO_CREATED`, `PLAYLIST_RENAMED`, `PLAYLIST_MAPPING_FIXED`, `PLAYLIST_MAPPING_REMOVED_STALE`, `PLAYLIST_DUPLICATES_RESOLVED`
+  - **UI Feedback**: VideoReview page shows provisioning report (created/fixed counts) when auto-repair actions are taken
+  - **Idempotent & Safe**: No destructive media deletes, only mapping/naming changes
   - **Design decision**: Playlist sellability is enforced during onboarding/sync, not simulation (per system design: availability MUST NOT depend on Yodeck mapping)
 
 ## Unified Availability & Waitlist System (v2)

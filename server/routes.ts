@@ -2596,10 +2596,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // Get proposal/preview of screens before approval (dry-run, no DB changes)
+  // Includes auto-provisioning: if screens lack playlists, attempts to create them and re-simulates
   app.get("/api/admin/assets/:assetId/proposal", requireAdminAccess, async (req: any, res) => {
     try {
       const { getAdAssetById } = await import("./services/adAssetUploadService");
       const { placementEngine } = await import("./services/placementEngineService");
+      const { ensureSellablePlaylistsForLocations } = await import("./services/playlistProvisioningService");
       
       const asset = await getAdAssetById(req.params.assetId);
       if (!asset) {
@@ -2616,33 +2618,100 @@ Sitemap: ${SITE_URL}/sitemap.xml
         ? parseFloat(String(asset.durationSeconds)) 
         : (advertiser.videoDurationSeconds || 15);
       
-      // Run dry-run simulation without modifying anything
-      const simulation = await placementEngine.dryRunSimulate({
+      const simulationParams = {
         packageType: advertiser.packageType || "STARTER",
         businessCategory: advertiser.businessCategory || advertiser.category || "algemeen",
         competitorGroup: advertiser.competitorGroup || undefined,
         targetRegionCodes: advertiser.targetRegionCodes || [],
         videoDurationSeconds: assetDuration,
-      });
+      };
       
-      // Build playlist name lookup from locations
-      const locationIds = simulation.selectedLocations.map(l => l.id);
-      const locationsData = await storage.getLocationsByIds(locationIds);
-      const playlistNameMap = new Map<string, string>();
-      for (const loc of locationsData) {
-        if (loc.yodeckPlaylistId && loc.yodeckPlaylistName) {
-          playlistNameMap.set(loc.id, loc.yodeckPlaylistName);
+      // First simulation pass
+      let simulation = await placementEngine.dryRunSimulate(simulationParams);
+      
+      // Check if we have NO_PLAYLIST rejections that might be fixable
+      // Run auto-provisioning whenever there are ANY NO_PLAYLIST rejections (not just when simulation fails)
+      // This ensures all screens get proper playlists even when some matches already exist
+      let provisioningReport: { totalCreated: number; totalFixed: number; actions: string[] } | null = null;
+      const noPlaylistRejects = simulation.rejectedLocations.filter(r => r.reason === 'NO_PLAYLIST');
+      
+      if (noPlaylistRejects.length > 0) {
+        console.log(`[Proposal] Found ${noPlaylistRejects.length} locations with NO_PLAYLIST, attempting auto-provisioning...`);
+        
+        // Get all candidate locations in target regions that might need provisioning
+        const allActiveLocations = await storage.getActiveLocations();
+        const targetRegions = advertiser.targetRegionCodes || [];
+        const anyRegion = targetRegions.length === 0;
+        
+        const candidateLocationIds = allActiveLocations
+          .filter(loc => {
+            if (!loc.yodeckDeviceId) return false; // Must have screen coupled
+            if (!loc.yodeckPlaylistId) return true; // Needs provisioning
+            const effectiveRegion = loc.regionCode || (loc.city ? loc.city.toLowerCase() : null);
+            return anyRegion || (effectiveRegion && targetRegions.includes(effectiveRegion));
+          })
+          .map(loc => loc.id);
+        
+        if (candidateLocationIds.length > 0) {
+          const provisionResult = await ensureSellablePlaylistsForLocations(candidateLocationIds);
+          
+          provisioningReport = {
+            totalCreated: provisionResult.totalCreated,
+            totalFixed: provisionResult.totalFixed,
+            actions: [],
+          };
+          
+          for (const [locId, result] of provisionResult.results) {
+            if (result.actionTaken !== 'NONE') {
+              const loc = allActiveLocations.find(l => l.id === locId);
+              provisioningReport.actions.push(
+                `${loc?.name || locId}: ${result.actionTaken} → ${result.playlistName || 'n/a'}`
+              );
+            }
+          }
+          
+          // Re-run simulation after provisioning
+          if (provisionResult.totalCreated > 0 || provisionResult.totalFixed > 0) {
+            console.log(`[Proposal] Re-running simulation after provisioning ${provisionResult.totalCreated} created, ${provisionResult.totalFixed} fixed`);
+            simulation = await placementEngine.dryRunSimulate(simulationParams);
+          }
         }
       }
       
-      // Transform to proposal response format
-      // Note: locationName = screen name in this context (each location has one screen)
+      // Build response - fetch actual playlist names from Yodeck for accuracy
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const yodeckClient = await getYodeckClient();
+      
+      // Fetch playlist names for all selected locations with playlist IDs
+      const playlistNameMap = new Map<string, string>();
+      if (yodeckClient) {
+        const playlistIds = simulation.selectedLocations
+          .filter(loc => loc.yodeckPlaylistId)
+          .map(loc => parseInt(loc.yodeckPlaylistId!, 10))
+          .filter(id => !isNaN(id));
+        
+        // Fetch playlists in parallel (batch)
+        const playlistPromises = playlistIds.map(async (id) => {
+          try {
+            const playlist = await yodeckClient.getPlaylist(id);
+            if (playlist) {
+              playlistNameMap.set(String(id), playlist.name);
+            }
+          } catch (e) {
+            // Silently ignore fetch errors - graceful degradation
+          }
+        });
+        await Promise.all(playlistPromises);
+      }
+      
       const matches = simulation.selectedLocations.map(loc => ({
         locationId: loc.id,
         locationName: loc.name,
         city: loc.city || null,
         playlistId: loc.yodeckPlaylistId || null,
-        playlistName: playlistNameMap.get(loc.id) || null,
+        playlistName: loc.yodeckPlaylistId 
+          ? (playlistNameMap.get(loc.yodeckPlaylistId) || `Playlist ${loc.yodeckPlaylistId}`) 
+          : null,
         score: loc.score,
         estimatedImpressionsPerMonth: Math.round((loc.expectedImpressionsPerWeek || 0) * 4.33),
         reasons: [
@@ -2664,7 +2733,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         
         if (reasonCounts.NO_PLAYLIST > 0) {
           noCapacityReason = "Schermen zonder Yodeck-koppeling of playlist";
-          nextSteps.push("Koppel locaties aan Yodeck-schermen (playlist wordt automatisch aangemaakt)");
+          nextSteps.push("Koppel locaties aan Yodeck-schermen in het Locaties-beheer");
         } else if (reasonCounts.REGION_MISMATCH > 0) {
           noCapacityReason = "Geen schermen in geselecteerde regio's";
           nextSteps.push("Voeg locaties toe in de doelregio's");
@@ -2698,6 +2767,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
           },
           noCapacityReason,
           nextSteps: nextSteps.length > 0 ? nextSteps : null,
+          provisioningReport: provisioningReport && (provisioningReport.totalCreated > 0 || provisioningReport.totalFixed > 0) 
+            ? provisioningReport 
+            : null,
         },
       });
     } catch (error: any) {

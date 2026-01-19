@@ -110,6 +110,7 @@ export interface IStorage {
 
   // Locations
   getLocations(): Promise<Location[]>;
+  getActiveLocations(): Promise<Location[]>;
   getLocation(id: string): Promise<Location | undefined>;
   getLocationsByIds(ids: string[]): Promise<Location[]>;
   getLocationByCode(locationCode: string): Promise<Location | undefined>;
@@ -532,6 +533,13 @@ export class DatabaseStorage implements IStorage {
 
   async getLocations(): Promise<Location[]> {
     return await db.select().from(schema.locations).orderBy(desc(schema.locations.createdAt));
+  }
+
+  async getActiveLocations(): Promise<Location[]> {
+    return await db.select()
+      .from(schema.locations)
+      .where(eq(schema.locations.status, "active"))
+      .orderBy(desc(schema.locations.createdAt));
   }
 
   async getLocation(id: string): Promise<Location | undefined> {

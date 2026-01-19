@@ -542,6 +542,69 @@ export class YodeckClient {
       semaphore.release();
     }
   }
+
+  /**
+   * Rename a playlist in Yodeck
+   */
+  async renamePlaylist(playlistId: number, newName: string): Promise<{ ok: boolean; error?: string }> {
+    await semaphore.acquire();
+    
+    try {
+      const body = { name: newName };
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/playlists/${playlistId}/`, {
+          method: "PATCH",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          const text = await response.text();
+          console.error(`[YodeckClient] Failed to rename playlist ${playlistId}: HTTP ${response.status}`, text);
+          return { ok: false, error: `HTTP ${response.status}: ${text}` };
+        }
+
+        // Invalidate cache for this playlist
+        this.playlistCache.clear();
+        
+        console.log(`[YodeckClient] Renamed playlist ${playlistId} to "${newName}"`);
+        return { ok: true };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        if (err.name === "AbortError") {
+          return { ok: false, error: "timeout" };
+        }
+        throw err;
+      }
+    } catch (err: any) {
+      console.error(`[YodeckClient] Error renaming playlist:`, err);
+      return { ok: false, error: err.message || "unknown_error" };
+    } finally {
+      semaphore.release();
+    }
+  }
+
+  /**
+   * Get all screens (for finding which screen a playlist is assigned to)
+   */
+  async getScreensWithPlaylist(playlistId: number): Promise<YodeckScreen[]> {
+    const screens = await this.getScreens();
+    return screens.filter(s => 
+      s.screen_content?.source_type === 'playlist' && 
+      s.screen_content?.source_id === playlistId
+    );
+  }
 }
 
 let clientInstance: YodeckClient | null = null;
