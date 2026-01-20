@@ -249,31 +249,69 @@ class YodeckPublishService {
       
       let errorCode = "YODECK_UPLOAD_FAILED";
       let errorMessage = axiosError.message;
-      let errorDetails: any = { sentFields: uploadFields, url, statusCode, format: mediaOriginFormat };
+      let errorDetails: any = { 
+        sentFields: uploadFields, 
+        url, 
+        statusCode, 
+        format: mediaOriginFormat,
+        requestHeaders: Object.keys(headers).filter(k => k !== 'Authorization'), // Log header keys (no secrets)
+      };
       let yodeckErrorCode: string | undefined;
       let yodeckMissingField: string | undefined;
       let yodeckInvalidField: string | undefined;
       
       if (responseData) {
-        errorDetails.response = responseData;
-        yodeckErrorCode = responseData.error?.code;
+        // Capture full error structure from Yodeck
+        errorDetails.yodeckError = responseData.error || responseData;
         
-        if (responseData.error?.code === "err_1002" && responseData.error?.details?.missing_key) {
-          yodeckMissingField = responseData.error.details.missing_key;
-          errorCode = "YODECK_MISSING_FIELD";
-          errorMessage = `Yodeck API requires field: ${yodeckMissingField}`;
-          console.error(`[YodeckPublish] HTTP ${statusCode}: Missing field "${yodeckMissingField}" (sent: ${uploadFields.join(", ")})`);
-        } else if (responseData.error?.code === "err_1003" && responseData.error?.details?.invalid_field) {
-          yodeckInvalidField = responseData.error.details.invalid_field;
-          errorCode = "YODECK_INVALID_FIELD";
-          errorMessage = `Yodeck API rejects field: ${yodeckInvalidField}`;
-          console.error(`[YodeckPublish] HTTP ${statusCode}: Invalid field "${yodeckInvalidField}" (sent: ${uploadFields.join(", ")})`);
-        } else {
-          errorMessage = typeof responseData === 'string' ? responseData : JSON.stringify(responseData);
-          console.error(`[YodeckPublish] HTTP ${statusCode} | URL: ${url} | Response: ${errorMessage}`);
+        // Try to parse structured error
+        const yodeckErr = responseData.error || responseData;
+        yodeckErrorCode = yodeckErr?.code;
+        
+        // Log full error details for debugging
+        console.error(`[YodeckPublish] HTTP ${statusCode} | Full Yodeck error:`, JSON.stringify(responseData, null, 2));
+        
+        // Parse missing_key (err_1002) - could be any field, not just media_origin
+        if (yodeckErr?.code === "err_1002") {
+          const missingKey = yodeckErr?.details?.missing_key || yodeckErr?.message?.match(/Missing field[:\s]+(\w+)/i)?.[1];
+          if (missingKey) {
+            yodeckMissingField = missingKey;
+            errorCode = "YODECK_MISSING_FIELD";
+            errorMessage = `Yodeck API requires field: ${missingKey}`;
+            errorDetails.missingField = missingKey;
+          }
+        }
+        // Parse invalid_field (err_1003) - could be any field
+        else if (yodeckErr?.code === "err_1003") {
+          const invalidField = yodeckErr?.details?.invalid_field || yodeckErr?.message?.match(/Invalid field[:\s]+(\w+)/i)?.[1];
+          if (invalidField) {
+            yodeckInvalidField = invalidField;
+            errorCode = "YODECK_INVALID_FIELD";
+            errorMessage = `Yodeck API rejects field: ${invalidField}`;
+            errorDetails.invalidField = invalidField;
+          }
+        }
+        // Check for generic missing fields in message
+        else if (typeof yodeckErr?.message === 'string' && yodeckErr.message.toLowerCase().includes('missing field')) {
+          const match = yodeckErr.message.match(/Missing field[:\s]+(\w+)/i);
+          if (match) {
+            yodeckMissingField = match[1];
+            errorCode = "YODECK_MISSING_FIELD";
+            errorMessage = `Yodeck API requires field: ${match[1]}`;
+            errorDetails.missingField = match[1];
+          }
+        }
+        // Check for other required fields (e.g., workspace, media_type)
+        else if (yodeckErr?.details?.required_fields) {
+          errorDetails.requiredFields = yodeckErr.details.required_fields;
+          errorMessage = `Yodeck requires fields: ${yodeckErr.details.required_fields.join(', ')}`;
+        }
+        // Fallback: use raw message
+        else {
+          errorMessage = yodeckErr?.message || (typeof responseData === 'string' ? responseData : JSON.stringify(responseData));
         }
       } else {
-        console.error(`[YodeckPublish] HTTP ${statusCode} | URL: ${url} | Error: ${errorMessage}`);
+        console.error(`[YodeckPublish] HTTP ${statusCode} | URL: ${url} | Network error: ${errorMessage}`);
       }
       
       return { ok: false, error: errorMessage, errorCode, errorDetails, yodeckErrorCode, yodeckMissingField, yodeckInvalidField };
