@@ -1,0 +1,54 @@
+We have a Yodeck upload integration bug with contradictory behavior.
+
+Observed behavior (from logs):
+
+1. When we send multipart fields: `name`, `media_origin="upload"`, `file` => Yodeck responds HTTP 400:
+   `err_1003 Invalid field name or value` with `details.invalid_field = "media_origin"`.
+2. After we removed `media_origin`, the publish fails with:
+   `Upload failed: Yodeck mist veld: media_origin`
+   This looks like OUR OWN validation/hardcoded requirement, because the log shows we never even got the old HTTP 400 response in that run.
+
+Goal:
+Make the Yodeck upload robust by removing the hard requirement on `media_origin` and implementing a safe fallback strategy.
+
+Tasks:
+A) Remove/disable any local validation that throws if `media_origin` is not present.
+
+* Search codebase for strings: `"media_origin"`, `"mist veld: media_origin"`, `err_1003`, `invalid_field`.
+* If there is a check like `if (!media_origin) throw ...`, delete it.
+* The uploader must not fail before it receives a HTTP response from Yodeck.
+
+B) Implement adaptive upload strategy (2-step):
+
+1. Attempt upload with multipart fields ONLY: `name`, `file` (and optional `folder_id` if already used).
+
+   * This should be the default path.
+2. Only if the response from Yodeck explicitly indicates missing field `media_origin` (or similar),
+   retry with `media_origin`, BUT with allowed values.
+
+   * Note: in our earlier attempt, value `"upload"` caused invalid_field. So the retry must NOT blindly use `"upload"`.
+   * Implement a small list of candidate values to try in order, e.g. `["user", "manual", "web", "upload"]`,
+     OR better: omit `media_origin` completely unless Yodeck docs prove it is required.
+   * Do max 1 retry to avoid loops.
+
+C) Improve logging and error parsing:
+
+* Log: endpoint, status code, and parsed error details `error.code`, `error.message`, `error.details.invalid_field` (if present).
+* Ensure the "missing media_origin" condition is based on Yodeck RESPONSE, not local assumptions.
+
+D) Fix filename normalization:
+
+* Ensure name/filename have exactly one `.mp4` extension.
+* Add helper `normalizeMp4Name(name)` (case-insensitive) and apply to both display name and uploaded filename.
+
+Acceptance criteria:
+
+* Publish retry no longer fails with our local "Yodeck mist veld: media_origin" message without having a real Yodeck HTTP response.
+* Primary attempt (name+file) uploads successfully OR fails with a clear Yodeck response message.
+* No more `err_1003 invalid_field media_origin` in the default path.
+* Filename never ends with `.mp4.mp4`.
+
+Notes:
+
+* Keep all other publish logic unchanged (capacity/selection/placement plan workflow).
+* Touch only the Yodeck upload code path (likely `publishPlan`, `uploadMedia`, `YodeckPublish`).
