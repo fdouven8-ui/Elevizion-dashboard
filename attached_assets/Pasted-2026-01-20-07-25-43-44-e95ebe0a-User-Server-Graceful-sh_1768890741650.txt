@@ -1,0 +1,128 @@
+2026-01-20 07:25:43.44
+e95ebe0a
+User
+[Server] Graceful shutdown complete
+2026-01-20 07:25:43.44
+e95ebe0a
+User
+[Server] Database pool closed
+2026-01-20 07:25:43.45
+e95ebe0a
+System
+main done, exiting
+2026-01-20 07:25:43.45
+e95ebe0a
+System
+command finished successfully with exit code 0
+2026-01-20 07:26:25.58
+ed85345d
+User
+[MEMORY] RSS: 112.4MB | Heap: 32.0/33.8MB | External: 3.9MB
+2026-01-20 07:26:47.23
+ed85345d
+User
+[CapacityWatcher] Starting worker cycle...
+2026-01-20 07:26:47.62
+ed85345d
+User
+[CapacityWatcher] Checking 0 waiting requests...
+2026-01-20 07:26:47.62
+ed85345d
+User
+[CapacityWatcher] Check complete: 0 checked, 0 invited, 0 errors
+2026-01-20 07:27:25.59
+ed85345d
+User
+[MEMORY] RSS: 112.4MB | Heap: 31.9/33.8MB | External: 3.9MB
+2026-01-20 07:28:25.59
+ed85345d
+User
+[MEMORY] RSS: 112.2MB | Heap: 31.9/34.0MB | External: 3.9MB
+2026-01-20 07:29:13.71
+ed85345d
+User
+6:29:13 AM [express] GET /api/debug/test-mode 403 in 726ms :: {"message":"Alleen voor admins"}
+2026-01-20 07:29:13.72
+ed85345d
+User
+6:29:13 AM [express] GET /api/auth/me 200 in 729ms :: {"id":"58bbe4c8-a1a3-434e-b63a-7f4f7ce6d3b3","username":"admin","displayName":"Administrator","email":null,"firstName":null,"lastName":null,"profileImageUrl":null,"role":"eigenaar","rolePreset":"eigenaar","permissions":["view_home","view_screens","edit_screens","view_advertisers","edit_advertisers","view_placements","edit_placements","view_finance","view_onboarding","onboard_advertisers","onboard_screens","manage_templates","manage_integrations","manage_users","edit_system_settings"],"locationId":null,"isActive":true,"forcePasswordChange":false,"lastLoginAt":"2026-01-15T23:21:52.581Z","createdAt":"2025-12-19T21:10:33.316Z","updatedAt":"2026-01-20T06:24:26.454Z"}
+2026-01-20 07:29:13.94
+ed85345d
+User
+6:29:13 AM [express] GET /api/placement-plans 200 in 954ms :: [{"id":"b6411a04-5a74-4eaf-9c2a-5391f915bf35","advertiserId":"9a99d555-8676-49d3-9862-f65859bdcfb1","adAssetId":"f541d463-849a-443a-a791-bad6ea6896d3","linkKey":"ADV-BOUWSERVICEDOUVEN-756846","status":"FAILED","packageType":"SINGLE","requiredTargetCount":1,"proposedTargets":[{"score":30,"locationId":"3321f9c7-4a76-4abd-9cc1-9472d6473d80","locationName":"Bouwservice Douven","capacityAfter":15,"capacityBefore":0,"yodeckPlaylistId":"27644453","expectedImpressionsPerWeek":30}],"approvedTargets":[{"score":30,"locationId":"3321f9c7-4a76-4abd-9cc1-9472d6473d80","locationName":"Bouwservice Douven","capacityAfter":15,"capacityBefore":0,"yodeckPlaylistId":"27644453","expectedImpressionsPerWeek":30}],"simulationReport":{"isFresh":true,"simulatedAt":"2026-01-19T22:33:23.339Z","rejectedCount":0,"selectedCount":1,"rejectedReasons":[],"capacitySnapshot":[{"max":120,"after":15,"before":0,"locationId":"3321f9c7-4a76-4abd-9cc1-9472d6473d80"}],"totalExpectedImpressions":30},"publishReport":{"error":"duplicate key value violates unique constraint \"integration_outbox_idempotency_key_key\"","planId":"b6411a04-5a74-4eaf-9c2a-5391f915bf35","targets":[],"startedAt":"2026-01-19T23:49:45.739Z","completedAt":"2026-01-19T23:49:45.969Z","failedCount":0,"successCount":0,"totalTargets":1,"yodeckMediaId":null},"idempotencyKey":"b20352e9a534b0df0d689abb383e19be00851bd3be0b102bd07e96fc17243ef4","retryCount":3,"lastAttemptAt":"2026-01-19T23:49:46.016Z","lastErrorCode":"PUBLISH_FAILED","lastErrorMessage":"duplicate key value violates unique constraint \"integration_outbox_idempotency_key_key\"","lastErrorDetails":{"stack":"error: duplicate key value violates unique constraint \"integration_outbox_idempotency_key_key\"\n at /home/runner/workspace/dist/index.cjs:64:13356\n at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n at async ZA.uploadMediaFromStorage (/home/runner/workspace/dist/index.cjs:721:7379)\n at async ZA.publishPlan (/home/runner/workspace/dist/index.cjs:721:13453)\n at async /home/runner/workspace/dist/index.cjs:2034:23621","report":{"error":"duplicate key value violates unique constraint \"integration_outbox_idempotency_key_key\"","planId":"b6411a04-5a74-4eaf-9c2a-5391f915bf35","targets":[],"startedAt":"2026-01-19T23:49:45.739Z","completedAt":"2026-01-19T23:49:45.969Z","failedCount":0,"successCount":0,"totalTargets":1,"yodeckMediaId":null}},"simulatedAt":"2026-01-19T22:33:23.339Z","approvedAt":"2026-01-19T22:33:23.431Z","approvedByUserId":"admin","publishedAt":null,"failedAt":"2026-01-19T23:49:46.016Z","rolledBackAt":null,"createdAt":"2026-01-19T22:33:12.187Z","updatedAt":"2026-01-19T22:33:23.431Z","advertiserName":"Bouwservice Douven","assetFileName":"Header Frontpage(2).mp4"}]
+2026-01-20 07:29:16.27
+ed85345d
+User
+6:29:16 AM [express] GET /api/auth/me 304 in 138ms :: {"id":"58bbe4c8-a1a3-434e-b63a-7f4f7ce6d3b3","username":"admin","displayName":"Administrator","email":null,"firstName":null,"lastName":null,"profileImageUrl":null,"role":"eigenaar","rolePreset":"eigenaar","permissions":["view_home","view_screens","edit_screens","view_advertisers","edit_advertisers","view_placements","edit_placements","view_finance","view_onboarding","onboard_advertisers","onboard_screens","manage_templates","manage_integrations","manage_users","edit_system_settings"],"locationId":null,"isActive":true,"forcePasswordChange":false,"lastLoginAt":"2026-01-15T23:21:52.581Z","createdAt":"2025-12-19T21:10:33.316Z","updatedAt":"2026-01-20T06:24:26.454Z"}
+2026-01-20 07:29:16.75
+ed85345d
+User
+6:29:16 AM [express] GET /api/leads 304 in 285ms :: [{"id":"446ea186-d3bc-43b0-a3d7-49f3a831717e","type":"advertiser","companyName":"Basil's Barbershop","contactName":"Basil van der Berg","email":"basil@barbershop-test.nl","phone":"06-12345678","address":null,"city":null,"postcode":null,"kvkNumber":null,"notes":"Auto-categorisatie: beauty (83% zekerheid) - Dit is een testlead","status":"nieuw","source":"test","assignedToUserId":null,"expectedValue":null,"followUpDate":null,"convertedAt":null,"convertedToId":null,"category":"beauty","inferredCategory":"beauty","inferredConfidence":"0.83","finalCategory":null,"categoryUpdatedAt":null,"isHandled":false,"handledAt":null,"handledBy":null,"isDeleted":false,"deletedAt":null,"deletedBy":null,"createdAt":"2026-01-13T14:02:24.160Z","updatedAt":"2026-01-13T14:02:24.160Z"},{"id":"b4e4f2e6-cc61-4f5e-8dcf-b483d44b593e","type":"advertiser","companyName":"Bouwservice Douven","contactName":"Frank Douven","email":"info@bouwservicedouven.nl","phone":"0636166374","address":null,"city":null,"postcode":null,"kvkNumber":null,"notes":null,"status":"nieuw","source":"website","assignedToUserId":null,"expectedValue":null,"followUpDate":null,"convertedAt":null,"convertedToId":null,"category":null,"inferredCategory":null,"inferredConfidence":null,"finalCategory":null,"categoryUpdatedAt":null,"isHandled":false,"handledAt":null,"handledBy":null,"isDeleted":false,"deletedAt":null,"deletedBy":null,"createdAt":"2026-01-11T19:57:54.403Z","updatedAt":"2026-01-11T19:57:54.403Z"},{"id":"d4cd34de-abe1-4f55-845d-dd3ae0bc9a68","type":"advertiser","companyName":"Test","contactName":"Frenky","email":"frenkdoeven@hotmail.com","phone":"0636166374","address":null,"city":null,"postcode":null,"kvkNumber":null,"notes":null,"status":"nieuw","source":"website","assignedToUserId":null,"expectedValue":null,"followUpDate":null,"convertedAt":null,"convertedToId":null,"category":null,"inferredCategory":null,"inferredConfidence":null,"finalCategory":null,"categoryUpdatedAt":null,"isHandled":false,"handledAt":null,"handledBy":null,"isDeleted":false,"deletedAt":null,"deletedBy":null,"createdAt":"2026-01-09T00:03:56.218Z","updatedAt":"2026-01-09T00:03:56.218Z"},{"id":"e5be65a4-5b75-4245-86a3-d3eab07f4521","type":"advertiser","companyName":"Test","contactName":"Frenky","email":"frenkdoeven@hotmail.com","phone":"0636166374","address":null,"city":null,"postcode":null,"kvkNumber":null,"notes":null,"status":"nieuw","source":"website","assignedToUserId":null,"expectedValue":null,"followUpDate":null,"convertedAt":null,"convertedToId":null,"category":null,"inferredCategory":null,"inferredConfidence":null,"finalCategory":null,"categoryUpdatedAt":null,"isHandled":false,"handledAt":null,"handledBy":null,"isDeleted":false,"deletedAt":null,"deletedBy":null,"createdAt":"2026-01-08T23:53:53.398Z","updatedAt":"2026-01-08T23:53:53.398Z"},{"id":"f49d33f4-3907-4980-b024-0221e4200950","type":"advertiser","companyName":"Test","contactName":"Test","email":"frenkdoeven@hotmail.com","phone":"0636166374","address":null,"city":null,"postcode":null,"kvkNumber":null,"notes":null,"status":"nieuw","source":"website","assignedToUserId":null,"expectedValue":null,"followUpDate":null,"convertedAt":null,"convertedToId":null,"category":null,"inferredCategory":null,"inferredConfidence":null,"finalCategory":null,"categoryUpdatedAt":null,"isHandled":false,"handledAt":null,"handledBy":null,"isDeleted":false,"deletedAt":null,"deletedBy":null,"createdAt":"2026-01-08T23:20:07.004Z","updatedAt":"2026-01-08T23:20:07.004Z"},{"id":"b5a92169-8cb0-419b-a30d-20f30758aee2","type":"advertiser","companyName":"Bsd","contactName":"Frenky","email":"frenkdoeven@hotmail.com","phone":"0636166374","address":null,"city":null,"postcode":null,"kvkNumber":null,"notes":null,"status":"nieuw","source":"website","assignedToUserId":null,"expectedValue":null,"followUpDate":null,"convertedAt":null,"convertedToId":null,"category":null,"inferredCategory":null,"inferredConfidence":null,"finalCategory":null,"categoryUpdatedAt":null,"isHandled":false,"handledAt":null,"handledBy":null,"isDeleted":false,"deletedAt":null,"deletedBy":null,"createdAt":"2026-01-08T23:04:20.452Z","updatedAt":"2026-01-08T23:04:20.452Z"}]
+2026-01-20 07:29:16.82
+ed85345d
+User
+6:29:16 AM [express] GET /api/placement-plans 304 in 349ms :: [{"id":"b6411a04-5a74-4eaf-9c2a-5391f915bf35","advertiserId":"9a99d555-8676-49d3-9862-f65859bdcfb1","adAssetId":"f541d463-849a-443a-a791-bad6ea6896d3","linkKey":"ADV-BOUWSERVICEDOUVEN-756846","status":"FAILED","packageType":"SINGLE","requiredTargetCount":1,"proposedTargets":[{"score":30,"locationId":"3321f9c7-4a76-4abd-9cc1-9472d6473d80","locationName":"Bouwservice Douven","capacityAfter":15,"capacityBefore":0,"yodeckPlaylistId":"27644453","expectedImpressionsPerWeek":30}],"approvedTargets":[{"score":30,"locationId":"3321f9c7-4a76-4abd-9cc1-9472d6473d80","locationName":"Bouwservice Douven","capacityAfter":15,"capacityBefore":0,"yodeckPlaylistId":"27644453","expectedImpressionsPerWeek":30}],"simulationReport":{"isFresh":true,"simulatedAt":"2026-01-19T22:33:23.339Z","rejectedCount":0,"selectedCount":1,"rejectedReasons":[],"capacitySnapshot":[{"max":120,"after":15,"before":0,"locationId":"3321f9c7-4a76-4abd-9cc1-9472d6473d80"}],"totalExpectedImpressions":30},"publishReport":{"error":"duplicate key value violates unique constraint \"integration_outbox_idempotency_key_key\"","planId":"b6411a04-5a74-4eaf-9c2a-5391f915bf35","targets":[],"startedAt":"2026-01-19T23:49:45.739Z","completedAt":"2026-01-19T23:49:45.969Z","failedCount":0,"successCount":0,"totalTargets":1,"yodeckMediaId":null},"idempotencyKey":"b20352e9a534b0df0d689abb383e19be00851bd3be0b102bd07e96fc17243ef4","retryCount":3,"lastAttemptAt":"2026-01-19T23:49:46.016Z","lastErrorCode":"PUBLISH_FAILED","lastErrorMessage":"duplicate key value violates unique constraint \"integration_outbox_idempotency_key_key\"","lastErrorDetails":{"stack":"error: duplicate key value violates unique constraint \"integration_outbox_idempotency_key_key\"\n at /home/runner/workspace/dist/index.cjs:64:13356\n at process.processTicksAndRejections (node:internal/process/task_queues:95:5)\n at async ZA.uploadMediaFromStorage (/home/runner/workspace/dist/index.cjs:721:7379)\n at async ZA.publishPlan (/home/runner/workspace/dist/index.cjs:721:13453)\n at async /home/runner/workspace/dist/index.cjs:2034:23621","report":{"error":"duplicate key value violates unique constraint \"integration_outbox_idempotency_key_key\"","planId":"b6411a04-5a74-4eaf-9c2a-5391f915bf35","targets":[],"startedAt":"2026-01-19T23:49:45.739Z","completedAt":"2026-01-19T23:49:45.969Z","failedCount":0,"successCount":0,"totalTargets":1,"yodeckMediaId":null}},"simulatedAt":"2026-01-19T22:33:23.339Z","approvedAt":"2026-01-19T22:33:23.431Z","approvedByUserId":"admin","publishedAt":null,"failedAt":"2026-01-19T23:49:46.016Z","rolledBackAt":null,"createdAt":"2026-01-19T22:33:12.187Z","updatedAt":"2026-01-19T22:33:23.431Z","advertiserName":"Bouwservice Douven","assetFileName":"Header Frontpage(2).mp4"}]
+2026-01-20 07:29:16.87
+ed85345d
+User
+6:29:16 AM [express] GET /api/debug/test-mode 403 in 399ms :: {"message":"Alleen voor admins"}
+2026-01-20 07:29:20.36
+ed85345d
+User
+[YodeckPublish] Publishing plan b6411a04-5a74-4eaf-9c2a-5391f915bf35
+2026-01-20 07:29:20.49
+ed85345d
+User
+[YodeckPublish] Uploading media: ADV-BOUWSERVICEDOUVEN-756846_Header Frontpage(2).mp4 from ad-assets/9a99d555-8676-49d3-9862-f65859bdcfb1/ADV-BOUWSERVICEDOUVEN-ADV-BOUW-202601171555.mp4
+2026-01-20 07:29:20.66
+ed85345d
+User
+[ObjectStorage] getFileByPath: input=ad-assets/9a99d555-8676-49d3-9862-f65859bdcfb1/ADV-BOUWSERVICEDOUVEN-ADV-BOUW-202601171555.mp4 resolved=/replit-objstore-b54c4624-5c27-42d7-8733-ab593ef9b2c8/.private/ad-assets/9a99d555-8676-49d3-9862-f65859bdcfb1/ADV-BOUWSERVICEDOUVEN-ADV-BOUW-202601171555.mp4
+2026-01-20 07:29:20.89
+ed85345d
+User
+[YodeckPublish] Small file (2734701 bytes), using buffer mode
+2026-01-20 07:29:21.24
+ed85345d
+User
+[YodeckPublish] Uploading to Yodeck API: https://app.yodeck.com/api/v2/media
+2026-01-20 07:29:21.24
+ed85345d
+User
+[YodeckPublish] Multipart Content-Length: 2735109 bytes
+2026-01-20 07:29:22.44
+ed85345d
+User
+[YodeckPublish] Upload failed: HTTP 400 {"error":{"code":"err_1002","message":"A field is missing from request input","details":{"missing_key":"media_origin"},"timestamp":"2026-01-20T06:29:22.388926Z"}}
+2026-01-20 07:29:22.48
+ed85345d
+User
+[YodeckPublish] Plan b6411a04-5a74-4eaf-9c2a-5391f915bf35 failed: Upload failed: HTTP 400: {"error":{"code":"err_1002","message":"A field is missing from request input","details":{"missing_key":"media_origin"},"timestamp":"2026-01-20T06:29:22.388926Z"}}
+2026-01-20 07:29:22.62
+ed85345d
+User
+[Audit] PLAN_PUBLISH_FAILED logged for placement_plan:b6411a04-5a74-4eaf-9c2a-5391f915bf35
+2026-01-20 07:29:22.62
+ed85345d
+User
+at async /home/runner/workspace/dist/index.cjs:2044:23802
+2026-01-20 07:29:22.62
+ed85345d
+User
+[PlacementPlans] Error retrying plan: Error: Upload failed: HTTP 400: {"error":{"code":"err_1002","message":"A field is missing from request input","details":{"missing_key":"media_origin"},"timestamp":"2026-01-20T06:29:22.388926Z"}}
+2026-01-20 07:29:22.62
+ed85345d
+User
+at XA.publishPlan (/home/runner/workspace/dist/index.cjs:731:14070)
+2026-01-20 07:29:22.62
+ed85345d
+User
+at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+2026-01-20 07:29:22.67
+ed85345d
+User
+6:29:22 AM [express] POST /api/placement-plans/b6411a04-5a74-4eaf-9c2a-5391f915bf35/retry 500 in 2522ms :: {"message":"Upload failed: HTTP 400: {\"error\":{\"code\":\"err_1002\",\"message\":\"A field is missing from request input\",\"details\":{\"missing_key\":\"media_origin\"},\"timestamp\":\"2026-01-20T06:29:22.388926Z\"}}"}
+2026-01-20 07:29:25.59
+ed85345d
+User
+[MEMORY] RSS: 124.9MB | Heap: 34.2/38.0MB | External: 9.3M

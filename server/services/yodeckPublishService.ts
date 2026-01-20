@@ -209,6 +209,7 @@ class YodeckPublishService {
       // Create form data for upload with proper contentType
       const formData = new FormData();
       formData.append("name", mediaName);
+      formData.append("media_origin", "upload");  // Required by Yodeck API
 
       // Decision: use streaming if file size is known and > BUFFER_FALLBACK_MAX_BYTES
       // Otherwise use buffer for reliability
