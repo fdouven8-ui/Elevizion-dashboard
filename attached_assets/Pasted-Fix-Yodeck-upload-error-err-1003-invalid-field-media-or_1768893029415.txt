@@ -1,0 +1,56 @@
+Fix Yodeck upload error `err_1003 invalid_field: media_origin`
+
+Context:
+
+* Publish van placement plan faalt bij Yodeck upload met HTTP 400:
+  `{"error":{"code":"err_1003","message":"Invalid field name or value","details":{"invalid_field":"media_origin"}}}`
+* In logs zie je dat we multipart uploaden met velden:
+  `name="..." media_origin="upload" file="..."`
+
+Doel:
+
+* Zorg dat publish werkt door de upload request aan te passen aan wat Yodeck accepteert.
+
+Wat je moet doen (concreet):
+
+1. Verwijder `media_origin` volledig uit de multipart form-data upload naar Yodeck.
+
+   * Dus nergens `form.append("media_origin", ...)` meer.
+   * Alleen de velden sturen die wél verwacht worden, minimaal `name` en `file` (en eventueel `folder_id` als dat bij ons bestaat).
+
+2. Fix filename dubbel-extensie bug:
+
+   * In logs staat `file="...mp4.mp4"`.
+   * Zorg dat filename exact één keer `.mp4` heeft.
+   * Maak een helper `ensureMp4Extension(name)` die:
+
+     * als name al eindigt op `.mp4` (case-insensitive) -> laat zo
+     * anders -> voeg `.mp4` toe
+   * Gebruik die helper zowel voor `name` als `filename`.
+
+3. Voeg betere debug logging toe (zonder secrets):
+
+   * Log endpoint + HTTP status + response body bij errors.
+   * Log welke multipart keys je stuurt (alleen keys, geen file content).
+
+4. Add fallback/compat:
+
+   * Maak `YODeckUploadIncludeMediaOrigin=false` (default false).
+   * Gebruik dit alleen als we later ontdekken dat sommige accounts het wél vereisen.
+   * Maar default moet `media_origin` NIET meegaan.
+
+Acceptance criteria:
+
+* `/api/placement-plans/:id/retry` resulteert in `success=true`
+* publishReport krijgt `successCount=1`, `failedCount=0`, `yodeckMediaId` gevuld
+* Geen HTTP 400 err_1003 meer
+* Filename in logs eindigt niet op `.mp4.mp4`
+
+Files/plek om te zoeken:
+
+* Zoek in codebase naar `media_origin` en naar de Yodeck upload functie (bijv. `YodeckPublish`, `publishPlan`, `uploadMedia`, `FormData`, `multipart`).
+* Pas upload daar aan volgens bovenstaande.
+
+Let op:
+
+* Verander verder niets aan capacity/selection logic; alleen upload request en filename-normalisatie.
