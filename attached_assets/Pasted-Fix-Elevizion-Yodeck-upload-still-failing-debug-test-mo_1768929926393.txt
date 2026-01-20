@@ -1,0 +1,105 @@
+Fix Elevizion: Yodeck upload still failing + debug/test-mode admin check mismatch
+
+Context:
+
+* App boots fine, Yodeck routes exist:
+
+  * GET /api/integrations/yodeck/config-status
+  * POST /api/integrations/yodeck/test
+* Publish/upload issue earlier:
+
+  * Yodeck returns HTTP 400 "Missing field media_origin" when not sent
+  * If we send media_origin as string it returns "Invalid field media_origin"
+    => media_origin likely must be sent as structured object (JSON or nested form fields), OR we are using the wrong upload flow/endpoint.
+
+Also:
+
+* GET /api/debug/test-mode returns 403 "Alleen voor admins"
+* But /api/auth/me shows rolePreset="eigenaar" with many permissions.
+  => Our admin check is too strict (probably checks role === "admin") and blocks owner/eigenaar.
+
+Goals:
+
+1. Make Yodeck upload succeed reliably.
+2. Ensure /api/debug/test-mode is accessible for eigenaar (owner) / users with manage_system_settings OR manage_integrations permission.
+
+Part 1 — Yodeck upload: implement correct `media_origin` and/or correct flow
+A) Update the Yodeck upload implementation:
+
+* Do NOT send media_origin as plain string.
+
+* When required, send it as structured object, using BOTH supported encodings (fallback):
+
+  1. JSON field:
+     form.append("media_origin", JSON.stringify({ source: "local", type: "video" }))
+  2. Nested multipart:
+     form.append("media_origin[source]", "local")
+     form.append("media_origin[type]", "video")
+
+* Keep required fields: name + file.
+
+* Ensure filename has exactly one `.mp4` extension (no `.mp4.mp4`).
+
+B) Add a dedicated "Yodeck Upload Test" inside POST /api/integrations/yodeck/test:
+
+* The test endpoint should:
+
+  1. Validate token works (e.g., list screens)
+  2. Attempt a small test upload (use a tiny included mp4 fixture, or generate a 1-second mp4 via ffmpeg at runtime)
+  3. Return structured diagnostics:
+     {
+     ok: boolean,
+     screensOk: boolean,
+     uploadOk: boolean,
+     uploadMethodUsed: "json-media_origin" | "nested-media_origin" | "two-step" | "unknown",
+     yodeckResponse: {status, bodySnippet, errorCode, errorDetails}
+     }
+
+C) If both media_origin encodings still fail, implement two-step upload flow (fallback):
+
+* Detect from Yodeck 400 response patterns or docs:
+
+  * If Yodeck upload endpoint rejects multipart regardless, then:
+
+    1. Create media record via Yodeck API (metadata call)
+    2. Get upload URL / pre-signed URL
+    3. PUT the bytes to that URL
+    4. Finalize/confirm media creation
+* Add this flow behind a feature flag `YODECK_UPLOAD_FLOW=direct|two_step` default "direct", auto-fallback to two_step if direct fails with repeatable 400.
+
+D) Error parsing/logging:
+
+* Always log (without secrets): endpoint, status code, parsed error json fields.
+* Include the exact multipart keys sent (only keys).
+* Never throw "Yodeck mist veld: X" unless it came from Yodeck response; remove local hardcoded checks.
+
+Acceptance for Part 1:
+
+* Retrying placement plan publish succeeds and sets yodeckMediaId.
+* /api/integrations/yodeck/test reports uploadOk=true.
+
+Part 2 — Fix admin authorization for /api/debug/test-mode
+
+* Current behavior: GET /api/debug/test-mode returns 403 "Alleen voor admins" even for eigenaar.
+* Replace strict "admin" role check with permission-based authorization.
+* Allow access if user has ANY of:
+
+  * manage_integrations
+  * edit_system_settings
+  * manage_users
+  * or rolePreset === "eigenaar"
+* Keep other debug endpoints unchanged unless necessary.
+
+Acceptance for Part 2:
+
+* Logged-in owner/eigenaar can access /api/debug/test-mode (HTTP 200).
+* Non-privileged users still get 403.
+
+Deliverables:
+
+* Code changes + brief summary:
+
+  * Which files changed
+  * Which upload flow is used (direct JSON media_origin, nested, or two-step)
+  * Example output from POST /api/integrations/yodeck/test
+  * Confirmation that placement plan publish works

@@ -7359,11 +7359,13 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // Yodeck test connection - uses ONLY process.env.YODECK_API_KEY
-  app.post("/api/integrations/yodeck/test", async (_req, res) => {
+  // Also tests upload functionality with diagnostic details
+  app.post("/api/integrations/yodeck/test", async (req, res) => {
     console.log("[YODECK TEST] handler hit");
     try {
+      // Step 1: Test API connection (list screens)
       const result = await testYodeckConnection();
-      console.log(`[YODECK TEST] result: ok=${result.ok}, count=${(result as any).count || 0}`);
+      console.log(`[YODECK TEST] screens result: ok=${result.ok}, count=${(result as any).count || 0}`);
       
       // If Yodeck returned non-JSON or non-2xx, return 502 Bad Gateway
       if (!result.ok) {
@@ -7371,6 +7373,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(httpStatus).json({
           ok: false,
           success: false,
+          screensOk: false,
+          uploadOk: false,
           message: result.message,
           status: result.statusCode,
           requestedUrl: result.requestedUrl,
@@ -7379,9 +7383,26 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
       
+      // Step 2: Test upload only if explicitly requested via ?testUpload=true
+      // Upload test requires ffmpeg and creates a test file in Yodeck (cleaned up after)
+      const testUpload = req.query.testUpload === 'true';
+      let uploadResult: any = null;
+      
+      if (testUpload) {
+        console.log("[YODECK TEST] Testing upload (testUpload=true requested)...");
+        const { yodeckPublishService } = await import("./services/yodeckPublishService");
+        uploadResult = await yodeckPublishService.testUpload();
+        console.log(`[YODECK TEST] upload result: ok=${uploadResult.ok}, method=${uploadResult.uploadMethodUsed}`);
+      }
+      
       res.json({
         ok: true,
         success: true,
+        screensOk: true,
+        uploadOk: uploadResult?.uploadOk ?? null,
+        uploadMethodUsed: uploadResult?.uploadMethodUsed ?? null,
+        uploadAttempts: uploadResult?.attempts ?? null,
+        uploadError: uploadResult?.finalError ?? null,
         message: result.message,
         count: (result as any).count,
         sampleFields: (result as any).sampleFields,
@@ -7393,6 +7414,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
       res.status(500).json({
         ok: false,
         success: false,
+        screensOk: false,
+        uploadOk: false,
         message: `Server error: ${error.message}`,
         status: 500,
       });
@@ -11050,11 +11073,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     });
   });
 
-  // Debug endpoint for TEST_MODE visibility (admin-only)
+  // Debug endpoint for TEST_MODE visibility (privileged users only)
   app.get("/api/debug/test-mode", isAuthenticated, async (req: any, res) => {
-    // Only allow admin users
-    if (req.user?.role !== "ADMIN") {
-      return res.status(403).json({ message: "Alleen voor admins" });
+    // Allow access for eigenaar, admins, or users with system/integration permissions
+    const user = req.user;
+    const isPrivileged = 
+      user?.rolePreset === "eigenaar" ||
+      user?.role === "ADMIN" ||
+      user?.permissions?.manage_integrations ||
+      user?.permissions?.edit_system_settings ||
+      user?.permissions?.manage_users;
+    
+    if (!isPrivileged) {
+      return res.status(403).json({ message: "Alleen voor beheerders" });
     }
     res.json({
       nodeEnv: process.env.NODE_ENV ?? null,

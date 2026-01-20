@@ -932,6 +932,126 @@ class YodeckPublishService {
       return { ok: false, error: err.message };
     }
   }
+
+  /**
+   * Test upload to verify Yodeck API accepts our media upload format
+   * Creates a minimal test video and attempts upload with all format variants
+   * Returns detailed diagnostics about which format works
+   */
+  async testUpload(): Promise<{
+    ok: boolean;
+    uploadOk: boolean;
+    uploadMethodUsed: 'none' | 'json' | 'nested' | 'unknown';
+    attempts: { format: string; status: number | null; error?: string; success: boolean }[];
+    finalError?: string;
+    yodeckMediaId?: number;
+  }> {
+    console.log(`[YodeckPublish] Running upload test...`);
+    
+    const attempts: { format: string; status: number | null; error?: string; success: boolean }[] = [];
+    
+    // Create a minimal test video using ffmpeg (1 second, 100x100, black)
+    const { exec } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(exec);
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    
+    const testFileName = `yodeck-test-${Date.now()}.mp4`;
+    const testFilePath = path.join("/tmp", testFileName);
+    
+    try {
+      // Generate a minimal test video (1 second, 100x100 black frame)
+      await execAsync(
+        `ffmpeg -y -f lavfi -i color=c=black:s=100x100:d=1 -c:v libx264 -pix_fmt yuv420p -t 1 "${testFilePath}"`,
+        { timeout: 30000 }
+      );
+      
+      const fileBuffer = await fs.readFile(testFilePath);
+      const fileSize = fileBuffer.length;
+      console.log(`[YodeckPublish] Test video created: ${fileSize} bytes`);
+      
+      // Test formats in order
+      const formats: Array<'none' | 'json' | 'nested'> = ['none', 'json', 'nested'];
+      let successFormat: 'none' | 'json' | 'nested' | 'unknown' = 'unknown';
+      let mediaId: number | undefined;
+      
+      for (const format of formats) {
+        console.log(`[YodeckPublish] Testing format: ${format}`);
+        const result = await this.attemptYodeckUpload(
+          fileBuffer,
+          testFileName,
+          testFileName,
+          fileSize,
+          format
+        );
+        
+        attempts.push({
+          format,
+          status: result.errorDetails?.statusCode ?? null,
+          error: result.error,
+          success: result.ok,
+        });
+        
+        if (result.ok && result.mediaId) {
+          successFormat = format;
+          mediaId = result.mediaId;
+          console.log(`[YodeckPublish] Upload test succeeded with format: ${format}, mediaId: ${mediaId}`);
+          
+          // Clean up - delete the test media from Yodeck
+          try {
+            const apiKey = await this.getApiKey();
+            await axios.delete(`${YODECK_BASE_URL}/media/${mediaId}`, {
+              headers: { "Authorization": `Token ${apiKey}` },
+              timeout: 10000,
+            });
+            console.log(`[YodeckPublish] Test media cleaned up from Yodeck`);
+          } catch (cleanupErr: any) {
+            console.log(`[YodeckPublish] Could not clean up test media: ${cleanupErr.message}`);
+          }
+          
+          break;
+        }
+        
+        // If we got a missing_key error for media_origin, continue to next format
+        if (result.yodeckMissingField === "media_origin" || result.yodeckInvalidField === "media_origin") {
+          console.log(`[YodeckPublish] Format ${format} rejected, trying next...`);
+          continue;
+        }
+        
+        // Different error - stop testing
+        if (!result.ok && result.errorCode !== "YODECK_MISSING_FIELD" && result.errorCode !== "YODECK_INVALID_FIELD") {
+          break;
+        }
+      }
+      
+      // Clean up local test file
+      await fs.unlink(testFilePath).catch(() => {});
+      
+      const uploadOk = successFormat !== 'unknown';
+      return {
+        ok: uploadOk,
+        uploadOk,
+        uploadMethodUsed: successFormat,
+        attempts,
+        yodeckMediaId: mediaId,
+        finalError: uploadOk ? undefined : attempts[attempts.length - 1]?.error,
+      };
+    } catch (err: any) {
+      // Clean up on error
+      const fs = await import("fs/promises");
+      await fs.unlink(testFilePath).catch(() => {});
+      
+      console.error(`[YodeckPublish] Upload test error:`, err.message);
+      return {
+        ok: false,
+        uploadOk: false,
+        uploadMethodUsed: 'unknown',
+        attempts,
+        finalError: err.message,
+      };
+    }
+  }
 }
 
 export const yodeckPublishService = new YodeckPublishService();
