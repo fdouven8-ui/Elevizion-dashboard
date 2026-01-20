@@ -150,7 +150,7 @@ class YodeckPublishService {
     mediaName: string,
     idempotencyKey: string,
     advertiserId: string
-  ): Promise<{ ok: boolean; mediaId?: number; error?: string }> {
+  ): Promise<{ ok: boolean; mediaId?: number; error?: string; errorCode?: string; errorDetails?: any }> {
     console.log(`[YodeckPublish] Uploading media: ${mediaName} from ${storagePath}`);
 
     // Check if already uploaded via outbox (succeeded = skip re-upload)
@@ -206,10 +206,17 @@ class YodeckPublishService {
         console.log(`[YodeckPublish] Could not get file metadata, will download to buffer`);
       }
       
-      // Create form data for upload with proper contentType
+      // Create form data for upload with all required fields
       const formData = new FormData();
-      formData.append("name", mediaName);
-      formData.append("media_origin", "upload");  // Required by Yodeck API
+      
+      // Required fields for Yodeck API
+      const uploadFields = {
+        name: mediaName,
+        media_origin: process.env.YODECK_MEDIA_ORIGIN || "upload",  // Required by Yodeck API
+      };
+      
+      formData.append("name", uploadFields.name);
+      formData.append("media_origin", uploadFields.media_origin);
 
       // Decision: use streaming if file size is known and > BUFFER_FALLBACK_MAX_BYTES
       // Otherwise use buffer for reliability
@@ -236,17 +243,19 @@ class YodeckPublishService {
         fileContent = fileBuffer;
       }
       
+      const filename = `${mediaName}.mp4`;
       formData.append("file", fileContent, { 
-        filename: `${mediaName}.mp4`,
+        filename,
         contentType: "video/mp4",  // CRITICAL: must specify video/mp4
         knownLength: fileSize      // Guarantees form-data can calculate Content-Length
       });
 
+      // Log upload fields (no secrets)
+      console.log(`[YodeckPublish] Upload fields: name="${uploadFields.name}" media_origin="${uploadFields.media_origin}" file="${filename}" size=${fileSize} contentType=video/mp4`);
+
       // Upload to Yodeck using axios for proper multipart handling
       const apiKey = await this.getApiKey();
       const url = `${YODECK_BASE_URL}/media`;
-      
-      console.log(`[YodeckPublish] Uploading to Yodeck API: ${url}`);
       
       // Get Content-Length for the multipart request (REQUIRED for Yodeck)
       let contentLength: number;
@@ -298,25 +307,42 @@ class YodeckPublishService {
         console.log(`[YodeckPublish] Upload successful, mediaId=${data.id}`);
         return { ok: true, mediaId: data.id };
       } catch (axiosError: any) {
-        const errorMessage = axiosError.response?.data 
-          ? (typeof axiosError.response.data === 'string' 
-            ? axiosError.response.data 
-            : JSON.stringify(axiosError.response.data))
-          : axiosError.message;
         const statusCode = axiosError.response?.status || 'N/A';
+        const responseData = axiosError.response?.data;
         
-        console.error(`[YodeckPublish] Upload failed: HTTP ${statusCode}`, errorMessage);
+        // Parse Yodeck error response to extract missing_key if present
+        let errorCode = "YODECK_UPLOAD_FAILED";
+        let errorMessage = axiosError.message;
+        let errorDetails: any = { sentFields: Object.keys(uploadFields) };
+        
+        if (responseData) {
+          errorDetails.response = responseData;
+          
+          // Check for err_1002 missing_key error
+          if (responseData.error?.code === "err_1002" && responseData.error?.details?.missing_key) {
+            const missingKey = responseData.error.details.missing_key;
+            errorCode = "YODECK_MISSING_FIELD";
+            errorMessage = `Yodeck mist veld: ${missingKey}`;
+            errorDetails.missingKey = missingKey;
+            console.error(`[YodeckPublish] Upload failed: Missing field "${missingKey}" (sent: ${Object.keys(uploadFields).join(", ")})`);
+          } else {
+            errorMessage = typeof responseData === 'string' ? responseData : JSON.stringify(responseData);
+            console.error(`[YodeckPublish] Upload failed: HTTP ${statusCode}`, errorMessage);
+          }
+        } else {
+          console.error(`[YodeckPublish] Upload failed: HTTP ${statusCode}`, errorMessage);
+        }
         
         await db.update(integrationOutbox)
           .set({ 
             status: "failed",
-            lastError: `HTTP ${statusCode}: ${errorMessage}`,
+            lastError: JSON.stringify({ code: errorCode, message: errorMessage, details: errorDetails }),
             processedAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
 
-        return { ok: false, error: `HTTP ${statusCode}: ${errorMessage}` };
+        return { ok: false, error: errorMessage, errorCode, errorDetails };
       }
     } catch (err: any) {
       console.error(`[YodeckPublish] Upload error:`, err.message);

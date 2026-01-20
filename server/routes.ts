@@ -3100,6 +3100,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // Retry a failed plan
+  // Returns 200 always (except 404/400/409), with success: true/false based on publish result
   app.post("/api/placement-plans/:id/retry", isAuthenticated, async (req, res) => {
     try {
       const { yodeckPublishService } = await import("./services/yodeckPublishService");
@@ -3140,7 +3141,30 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       // Publish (the service will update status to PUBLISHING -> PUBLISHED/FAILED and increment retryCount on failure)
       // Service uses upsert for outbox records, so duplicate key errors are handled gracefully
-      const report = await yodeckPublishService.publishPlan(planId);
+      let report: any;
+      try {
+        report = await yodeckPublishService.publishPlan(planId);
+      } catch (publishError: any) {
+        // Publish failed - get updated plan to show current state
+        const failedPlan = await placementEngine.getPlan(planId);
+        
+        // Check if error is ALREADY_PROCESSING
+        if (publishError.message?.includes("ALREADY_PROCESSING")) {
+          return res.status(409).json({ 
+            message: "Publicatie is al bezig, ververs de pagina over 10 seconden",
+            alreadyProcessing: true
+          });
+        }
+        
+        // Return 200 with success: false and the error details
+        return res.json({ 
+          success: false, 
+          plan: failedPlan,
+          message: "Publish mislukt, zie fout in wachtrij",
+          error: publishError.message,
+          retryCount: failedPlan?.retryCount || 0
+        });
+      }
       
       // Check if any upload/add returned ALREADY_PROCESSING
       const hasAlreadyProcessing = report.targets?.some((t: any) => t.error?.includes("ALREADY_PROCESSING"));
@@ -3154,7 +3178,15 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       // Get updated plan to return current retryCount
       const updatedPlan = await placementEngine.getPlan(planId);
-      res.json({ success: true, report, retryCount: updatedPlan?.retryCount || 0 });
+      const success = updatedPlan?.status === "PUBLISHED";
+      
+      res.json({ 
+        success, 
+        report, 
+        plan: updatedPlan,
+        retryCount: updatedPlan?.retryCount || 0,
+        message: success ? "Publicatie geslaagd" : "Publish mislukt, zie fout in wachtrij"
+      });
     } catch (error: any) {
       console.error("[PlacementPlans] Error retrying plan:", error);
       
@@ -3166,7 +3198,23 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
       
-      res.status(500).json({ message: error.message });
+      // For unexpected errors (not publish failures), return the error details
+      // Get plan state if possible
+      try {
+        const { placementEngine } = await import("./services/placementEngineService");
+        const planId = req.params.id;
+        const plan = await placementEngine.getPlan(planId);
+        return res.json({ 
+          success: false, 
+          plan,
+          message: "Onverwachte fout bij retry",
+          error: error.message,
+          retryCount: plan?.retryCount || 0
+        });
+      } catch {
+        // Can't even get plan - return minimal error
+        res.status(500).json({ message: error.message });
+      }
     }
   });
   

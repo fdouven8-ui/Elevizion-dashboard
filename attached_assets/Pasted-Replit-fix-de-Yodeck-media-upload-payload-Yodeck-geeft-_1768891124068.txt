@@ -1,0 +1,66 @@
+Replit, fix de Yodeck media upload payload. Yodeck geeft nu HTTP 400 err_1002: missing_key "media_origin" bij POST /api/v2/media.
+
+CONTEXT (logs)
+Upload gebruikt axios + multipart en file part klopt, maar Yodeck response:
+{"error":{"code":"err_1002","message":"A field is missing from request input","details":{"missing_key":"media_origin"}}}
+
+DOEL
+
+1. Upload naar Yodeck slaagt door verplichte velden toe te voegen (media_origin).
+2. Maak upload payload robuust: alle required fields altijd mee, en log wat je stuurt (zonder secrets).
+3. Retry endpoint mag niet 500’en als publish faalt; het moet plan netjes FAILED zetten en 200 teruggeven met plan-status.
+
+BACKEND WIJZIGINGEN
+
+A) Voeg verplichte multipart velden toe
+In yodeck client upload (waar je FormData opbouwt voor POST /api/v2/media):
+
+* Voeg ALTIJD deze fields toe (naast de file):
+
+  * form.append("media_origin", "upload")   // REQUIRED volgens error
+  * form.append("name", yodeckName)         // als nog niet aanwezig
+  * form.append("type", "video")            // of "media" afhankelijk van Yodeck API requirement
+  * (optioneel) form.append("tags", "elevizion") als Yodeck dit accepteert
+  * (optioneel) form.append("duration", "<seconds>") alleen als API dat accepteert
+
+BELANGRIJK:
+
+* Gebruik alleen keys die de Yodeck API accepteert.
+* Implementeer een snelle mapping/constant:
+  const YODECK_MEDIA_ORIGIN = process.env.YODECK_MEDIA_ORIGIN || "upload";
+  form.append("media_origin", YODECK_MEDIA_ORIGIN);
+
+B) Verbeter logging (diagnostisch)
+
+* Log één regel vóór request:
+  "[YodeckPublish] Upload multipart fields: name=<...> media_origin=<...> file=<...> size=<...> contentType=video/mp4"
+* Log NIET de auth token.
+
+C) Error handling: parse en toon missing_key
+Als Yodeck HTTP 400 met err_1002:
+
+* lastErrorCode = "YODECK_MISSING_FIELD"
+* lastErrorMessage = `Yodeck mist veld: ${missing_key}`
+* lastErrorDetails = volledige response body + request fields die je stuurde (zonder file data)
+
+D) Retry endpoint response gedrag (belangrijk)
+POST /api/placement-plans/:id/retry moet geen 500 geven.
+
+* Het endpoint mag de job enqueue’en en direct 200 geven.
+* Als je nog steeds “inline publish” doet (liefst niet):
+
+  * vang errors en update plan naar FAILED + errorvelden
+  * return 200 met {success:false, plan, message:"Publish mislukt, zie fout in wachtrij"}.
+    Maar voorkeur: retry endpoint only enqueue, publish via outbox worker.
+
+E) Snelle confirm test
+
+* Na fix: retry plan b6411a04...
+* Verwacht: upload naar Yodeck geeft 200/201 en levert yodeckMediaId op.
+* Daarna playlist add + verify werkt en plan wordt PUBLISHED.
+
+ACCEPTATIECRITERIA
+
+* Geen err_1002 missing_key media_origin meer.
+* Als Yodeck toch 400 geeft, zie ik in dashboard exact welke field ontbreekt.
+* Retry endpoint veroorzaakt geen 500; het laat de mislukking netjes in Publicatie Wachtrij zien.

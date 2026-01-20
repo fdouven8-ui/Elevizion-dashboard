@@ -213,8 +213,17 @@ export default function PublishQueue() {
       }
       return data;
     },
-    onSuccess: () => {
-      toast({ title: "Plan opnieuw gepubliceerd" });
+    onSuccess: (data) => {
+      // Check if publish actually succeeded (endpoint now returns 200 for both success and failure)
+      if (data.success) {
+        toast({ title: "Plan succesvol gepubliceerd" });
+      } else {
+        toast({ 
+          title: "Publicatie mislukt", 
+          description: data.message || "Zie details in de wachtrij",
+          variant: "destructive"
+        });
+      }
       refetch();
       queryClient.invalidateQueries({ queryKey: ["/api/placement-plans", selectedPlanId] });
     },
