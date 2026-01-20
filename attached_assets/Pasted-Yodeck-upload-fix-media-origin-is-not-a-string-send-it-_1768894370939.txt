@@ -1,0 +1,64 @@
+Yodeck upload fix: `media_origin` is not a string — send it as an object (JSON or nested multipart)
+
+Context (logs):
+
+* Attempt without media_origin => HTTP 400 “Missing field media_origin”
+* Attempt with media_origin="upload"/"user"/"web" => HTTP 400 “Invalid field media_origin”
+  => This indicates Yodeck expects `media_origin` as a structured object, not a string.
+
+Goal:
+Make Yodeck media upload succeed by sending `media_origin` as an object. Implement robust fallback formats and better error parsing.
+
+Tasks:
+
+1. Keep current adaptive flow (Attempt 1 without media_origin, Attempt 2 with media_origin), BUT change Attempt 2 to send `media_origin` as an OBJECT, not a string.
+
+2. Implement two object encodings for multipart, in this order:
+   A) JSON-string field:
+
+   * form.append("media_origin", JSON.stringify({ source: "local", type: "video" }))
+   * For videos set type: "video" (or "movie" if docs indicate), for images "image".
+   * Keep name + file as before.
+
+   B) Nested multipart fields (if JSON-string still fails):
+
+   * form.append("media_origin[source]", "local")
+   * form.append("media_origin[type]", "video")
+   * (Optional) form.append("media_origin[format]", "") or omit if unknown.
+   * Keep name + file as before.
+
+   Notes:
+
+   * Yodeck requires media_origin to exist, but rejects plain strings. So do NOT send media_origin="upload".
+   * source should be "local" for file upload (matches portal semantics).
+
+3. Improve Yodeck error parsing:
+
+   * When HTTP 400, parse response body JSON safely and detect:
+
+     * missing field (message contains "Missing field" + field name)
+     * invalid field (details.invalid_field)
+   * Log: status, error.code, error.message, error.details.invalid_field (if present), and the multipart key names you sent (not secrets).
+
+4. Update retry decision logic:
+
+   * If Attempt 1 fails with missing media_origin => go to Attempt 2 (JSON-object).
+   * If Attempt 2 JSON-object fails with invalid_field media_origin => try nested fields variant.
+   * If still fails => throw final error with last response body included.
+
+5. Don’t change the rest of publish logic (capacity/playlist assignment etc). Only change the upload request construction and error parsing.
+
+6. Keep filename normalization:
+
+   * Ensure exactly one “.mp4” extension and avoid “.mp4.mp4”.
+
+Acceptance criteria:
+
+* Upload no longer fails with “Missing field media_origin”
+* Upload no longer fails with “Invalid field media_origin”
+* placement plan publish completes and returns a yodeckMediaId
+
+Where to edit:
+
+* The Yodeck upload function inside publishPlan/YodeckPublish (the code that builds multipart FormData and POSTs to Yodeck).
+* Search for `media_origin` usage and replace string value approach with the object approach above.

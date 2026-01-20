@@ -151,16 +151,24 @@ class YodeckPublishService {
   }
 
   /**
+   * Media origin format types for adaptive upload
+   */
+  private static readonly MEDIA_ORIGIN_FORMATS = {
+    NONE: 'none',           // No media_origin field
+    JSON_OBJECT: 'json',    // JSON-stringified object: { source: "local", type: "video" }
+    NESTED_FIELDS: 'nested' // Nested multipart: media_origin[source], media_origin[type]
+  } as const;
+
+  /**
    * Perform single upload attempt to Yodeck
-   * Returns result with error details if failed
+   * Supports different media_origin formats for API compatibility
    */
   private async attemptYodeckUpload(
     fileBuffer: Buffer,
     normalizedName: string,
     filename: string,
     fileSize: number,
-    includeMediaOrigin: boolean,
-    mediaOriginValue?: string
+    mediaOriginFormat: 'none' | 'json' | 'nested' = 'none'
   ): Promise<{ 
     ok: boolean; 
     mediaId?: number; 
@@ -172,23 +180,32 @@ class YodeckPublishService {
     yodeckInvalidField?: string;
   }> {
     const formData = new FormData();
-    const uploadFields: Record<string, string> = { name: normalizedName };
+    const uploadFields: string[] = ['name'];
     
     formData.append("name", normalizedName);
     
-    if (includeMediaOrigin && mediaOriginValue) {
-      uploadFields.media_origin = mediaOriginValue;
-      formData.append("media_origin", mediaOriginValue);
+    // Add media_origin in the specified format
+    if (mediaOriginFormat === 'json') {
+      // JSON-stringified object format
+      const mediaOriginObj = { source: "local", type: "video" };
+      formData.append("media_origin", JSON.stringify(mediaOriginObj));
+      uploadFields.push('media_origin (JSON object)');
+    } else if (mediaOriginFormat === 'nested') {
+      // Nested multipart fields format
+      formData.append("media_origin[source]", "local");
+      formData.append("media_origin[type]", "video");
+      uploadFields.push('media_origin[source]', 'media_origin[type]');
     }
+    // 'none' = no media_origin field
     
     formData.append("file", fileBuffer, { 
       filename,
       contentType: "video/mp4",
       knownLength: fileSize
     });
+    uploadFields.push('file');
     
-    const fieldKeys = Object.keys(uploadFields).concat(['file']);
-    console.log(`[YodeckPublish] Upload attempt: fields=[${fieldKeys.join(', ')}] name="${normalizedName}" file="${filename}" size=${fileSize}`);
+    console.log(`[YodeckPublish] Upload attempt (format=${mediaOriginFormat}): fields=[${uploadFields.join(', ')}] name="${normalizedName}" file="${filename}" size=${fileSize}`);
     
     const apiKey = await this.getApiKey();
     const url = `${YODECK_BASE_URL}/media`;
@@ -232,7 +249,7 @@ class YodeckPublishService {
       
       let errorCode = "YODECK_UPLOAD_FAILED";
       let errorMessage = axiosError.message;
-      let errorDetails: any = { sentFields: fieldKeys, url, statusCode };
+      let errorDetails: any = { sentFields: uploadFields, url, statusCode, format: mediaOriginFormat };
       let yodeckErrorCode: string | undefined;
       let yodeckMissingField: string | undefined;
       let yodeckInvalidField: string | undefined;
@@ -245,12 +262,12 @@ class YodeckPublishService {
           yodeckMissingField = responseData.error.details.missing_key;
           errorCode = "YODECK_MISSING_FIELD";
           errorMessage = `Yodeck API requires field: ${yodeckMissingField}`;
-          console.error(`[YodeckPublish] HTTP ${statusCode}: Missing field "${yodeckMissingField}" (sent: ${fieldKeys.join(", ")})`);
+          console.error(`[YodeckPublish] HTTP ${statusCode}: Missing field "${yodeckMissingField}" (sent: ${uploadFields.join(", ")})`);
         } else if (responseData.error?.code === "err_1003" && responseData.error?.details?.invalid_field) {
           yodeckInvalidField = responseData.error.details.invalid_field;
           errorCode = "YODECK_INVALID_FIELD";
           errorMessage = `Yodeck API rejects field: ${yodeckInvalidField}`;
-          console.error(`[YodeckPublish] HTTP ${statusCode}: Invalid field "${yodeckInvalidField}" (sent: ${fieldKeys.join(", ")})`);
+          console.error(`[YodeckPublish] HTTP ${statusCode}: Invalid field "${yodeckInvalidField}" (sent: ${uploadFields.join(", ")})`);
         } else {
           errorMessage = typeof responseData === 'string' ? responseData : JSON.stringify(responseData);
           console.error(`[YodeckPublish] HTTP ${statusCode} | URL: ${url} | Response: ${errorMessage}`);
@@ -337,58 +354,51 @@ class YodeckPublishService {
       
       // === ADAPTIVE UPLOAD STRATEGY ===
       // Step 1: Try without media_origin (most common case)
-      console.log(`[YodeckPublish] Attempt 1: Without media_origin`);
-      let result = await this.attemptYodeckUpload(fileBuffer, normalizedName, filename, fileSize, false);
+      console.log(`[YodeckPublish] Attempt 1/3: Without media_origin`);
+      let result = await this.attemptYodeckUpload(fileBuffer, normalizedName, filename, fileSize, 'none');
+      let attemptCount = 1;
+      let successFormat: string | undefined;
       
       if (result.ok) {
-        // Success! Update outbox
+        successFormat = 'none';
+      }
+      
+      // Step 2: If Yodeck says media_origin is MISSING, try JSON object format
+      if (!result.ok && result.yodeckMissingField === "media_origin") {
+        attemptCount = 2;
+        console.log(`[YodeckPublish] Attempt 2/3: With media_origin as JSON object { source: "local", type: "video" }`);
+        result = await this.attemptYodeckUpload(fileBuffer, normalizedName, filename, fileSize, 'json');
+        
+        if (result.ok) {
+          successFormat = 'json';
+        }
+      }
+      
+      // Step 3: If JSON object still fails with invalid_field, try nested fields format
+      if (!result.ok && result.yodeckInvalidField === "media_origin") {
+        attemptCount = 3;
+        console.log(`[YodeckPublish] Attempt 3/3: With media_origin as nested fields [source]=local, [type]=video`);
+        result = await this.attemptYodeckUpload(fileBuffer, normalizedName, filename, fileSize, 'nested');
+        
+        if (result.ok) {
+          successFormat = 'nested';
+        }
+      }
+      
+      // Check for success
+      if (result.ok) {
         await db.update(integrationOutbox)
           .set({
             status: "succeeded",
             externalId: String(result.mediaId),
-            responseJson: { mediaId: result.mediaId, attempts: 1 },
+            responseJson: { mediaId: result.mediaId, attempts: attemptCount, format: successFormat },
             processedAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
         
+        console.log(`[YodeckPublish] Success after ${attemptCount} attempt(s), format=${successFormat}`);
         return { ok: true, mediaId: result.mediaId };
-      }
-      
-      // Step 2: If Yodeck says media_origin is MISSING, retry WITH it
-      if (result.yodeckMissingField === "media_origin") {
-        console.log(`[YodeckPublish] Attempt 2: With media_origin (Yodeck requested it)`);
-        
-        // Try different media_origin values (some accounts may need specific values)
-        const originValues = ["upload", "user", "web"];
-        
-        for (const originValue of originValues) {
-          console.log(`[YodeckPublish] Trying media_origin="${originValue}"`);
-          result = await this.attemptYodeckUpload(fileBuffer, normalizedName, filename, fileSize, true, originValue);
-          
-          if (result.ok) {
-            await db.update(integrationOutbox)
-              .set({
-                status: "succeeded",
-                externalId: String(result.mediaId),
-                responseJson: { mediaId: result.mediaId, attempts: 2, usedMediaOrigin: originValue },
-                processedAt: new Date(),
-                updatedAt: new Date(),
-              })
-              .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
-            
-            return { ok: true, mediaId: result.mediaId };
-          }
-          
-          // If this origin value is invalid, try next one
-          if (result.yodeckInvalidField === "media_origin") {
-            console.log(`[YodeckPublish] media_origin="${originValue}" rejected, trying next...`);
-            continue;
-          }
-          
-          // Different error - stop trying
-          break;
-        }
       }
       
       // All attempts failed - save final error
