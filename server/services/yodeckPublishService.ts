@@ -241,7 +241,9 @@ class YodeckPublishService {
         diagnostics.metadata.mediaId = mediaId;
         
         // Search for upload URL in all plausible locations (case-insensitive)
+        // IMPORTANT: Yodeck v2 API returns "get_upload_url" as the presigned URL field
         const urlSearchPaths = [
+          { path: 'get_upload_url', value: data.get_upload_url },  // Yodeck v2 API standard field
           { path: 'upload_url', value: data.upload_url },
           { path: 'uploadUrl', value: data.uploadUrl },
           { path: 'presigned_url', value: data.presigned_url },
@@ -253,6 +255,7 @@ class YodeckPublishService {
           { path: 'data.file.upload_url', value: data.data?.file?.upload_url },
           { path: 'upload.url', value: data.upload?.url },
           { path: 'upload.upload_url', value: data.upload?.upload_url },
+          { path: 'getUploadUrl', value: data.getUploadUrl },  // camelCase variant
         ];
         
         for (const { path, value } of urlSearchPaths) {
@@ -294,39 +297,105 @@ class YodeckPublishService {
     
     // === STEP 2: Binary upload ===
     if (uploadUrl) {
-      // Use presigned PUT (preferred)
-      console.log(`[YodeckPublish] Two-step upload: Uploading ${fileSize} bytes to presigned URL`);
-      diagnostics.binaryUpload.method = 'presigned_put';
+      console.log(`[YodeckPublish] Two-step upload: Fetching presigned URL from ${uploadUrl}`);
       diagnostics.binaryUpload.contentTypeSent = contentType;
       diagnostics.binaryUpload.bytesSent = fileSize;
       
       try {
-        const response = await axios.put(uploadUrl, bytes, {
+        // Step 2a: Get the actual presigned URL by calling the get_upload_url endpoint
+        const getUrlResponse = await axios.get(uploadUrl, {
           headers: {
-            "Content-Type": contentType,
-            "Content-Length": String(fileSize),
-            // NO Authorization header for presigned URL
+            "Authorization": `Token ${apiKey}`,
+            "Accept": "application/json",
           },
-          timeout: REQUEST_TIMEOUT,
-          maxBodyLength: Infinity,
-          maxContentLength: Infinity,
-          validateStatus: () => true, // Don't throw on any status
+          timeout: 30000,
+          validateStatus: () => true,
         });
         
-        diagnostics.binaryUpload.status = response.status;
+        console.log(`[YodeckPublish] get_upload_url response (${getUrlResponse.status}):`, JSON.stringify(getUrlResponse.data, null, 2));
         
-        // 200, 201, 204 are all success for presigned uploads
-        if ([200, 201, 204].includes(response.status)) {
-          diagnostics.binaryUpload.ok = true;
-          console.log(`[YodeckPublish] Presigned PUT succeeded: ${response.status}`);
+        const urlData = getUrlResponse.data;
+        let presignedUrl: string | undefined;
+        
+        // Search for the actual presigned URL in the response
+        const presignedSearchPaths = [
+          { path: 'url', value: urlData?.url },
+          { path: 'upload_url', value: urlData?.upload_url },
+          { path: 'presigned_url', value: urlData?.presigned_url },
+          { path: 'data.url', value: urlData?.data?.url },
+        ];
+        
+        for (const { path, value } of presignedSearchPaths) {
+          if (value && typeof value === 'string' && value.startsWith('http')) {
+            presignedUrl = value;
+            console.log(`[YodeckPublish] Found presigned URL at "${path}"`);
+            break;
+          }
+        }
+        
+        if (!presignedUrl) {
+          // No presigned URL found - try raw binary PUT to the upload URL
+          console.log(`[YodeckPublish] No presigned URL in response, trying direct PUT with auth`);
+          diagnostics.binaryUpload.method = 'presigned_put';
+          
+          const response = await axios.put(uploadUrl, bytes, {
+            headers: {
+              "Authorization": `Token ${apiKey}`,
+              "Content-Type": contentType,
+              "Content-Length": String(fileSize),
+            },
+            timeout: REQUEST_TIMEOUT,
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+            validateStatus: () => true,
+          });
+          
+          diagnostics.binaryUpload.status = response.status;
+          
+          if ([200, 201, 204].includes(response.status)) {
+            diagnostics.binaryUpload.ok = true;
+            console.log(`[YodeckPublish] Direct PUT succeeded: ${response.status}`);
+          } else {
+            diagnostics.binaryUpload.ok = false;
+            diagnostics.binaryUpload.error = `HTTP ${response.status}`;
+            diagnostics.lastError = {
+              message: `Direct PUT failed with status ${response.status}`,
+              status: response.status,
+              bodySnippet: typeof response.data === 'string' ? response.data.substring(0, 500) : JSON.stringify(response.data || {}).substring(0, 500),
+            };
+          }
         } else {
-          diagnostics.binaryUpload.ok = false;
-          diagnostics.binaryUpload.error = `HTTP ${response.status}`;
-          diagnostics.lastError = {
-            message: `Presigned PUT failed with status ${response.status}`,
-            status: response.status,
-            bodySnippet: typeof response.data === 'string' ? response.data.substring(0, 500) : JSON.stringify(response.data || {}).substring(0, 500),
-          };
+          // Got presigned URL - PUT binary data to it (no auth needed for presigned)
+          console.log(`[YodeckPublish] Uploading ${fileSize} bytes to presigned URL`);
+          diagnostics.binaryUpload.method = 'presigned_put';
+          
+          const response = await axios.put(presignedUrl, bytes, {
+            headers: {
+              "Content-Type": contentType,
+              "Content-Length": String(fileSize),
+              // NO Authorization header for presigned URLs (they have signature in URL)
+            },
+            timeout: REQUEST_TIMEOUT,
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+            validateStatus: () => true,
+          });
+          
+          diagnostics.binaryUpload.status = response.status;
+          
+          // 200, 201, 204 are all success for presigned uploads
+          if ([200, 201, 204].includes(response.status)) {
+            diagnostics.binaryUpload.ok = true;
+            console.log(`[YodeckPublish] Presigned PUT succeeded: ${response.status}`);
+          } else {
+            diagnostics.binaryUpload.ok = false;
+            diagnostics.binaryUpload.error = `HTTP ${response.status}`;
+            diagnostics.lastError = {
+              message: `Presigned PUT failed with status ${response.status}`,
+              status: response.status,
+              bodySnippet: typeof response.data === 'string' ? response.data.substring(0, 500) : JSON.stringify(response.data || {}).substring(0, 500),
+            };
+          }
         }
       } catch (err: any) {
         diagnostics.binaryUpload.ok = false;

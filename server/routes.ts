@@ -799,6 +799,24 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
   
   // ============================================================================
+  // VERSION / BUILD INFO ENDPOINT
+  // Returns build info for debugging deploy mismatches
+  // ============================================================================
+  const BUILD_TIME = new Date().toISOString();
+  const BUILD_ID = `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
+  
+  app.get("/api/version", (_req, res) => {
+    res.json({
+      buildId: BUILD_ID,
+      builtAt: BUILD_TIME,
+      nodeEnv: process.env.NODE_ENV || 'development',
+      nodeVersion: process.version,
+      platform: process.platform,
+      uptime: Math.floor(process.uptime()),
+    });
+  });
+  
+  // ============================================================================
   // DYNAMIC REGIONS API (City-based from actual screen locations)
   // Shows "screens with space" - locations that have room for more ads
   // ============================================================================
@@ -7424,6 +7442,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
         sampleFields: (result as any).sampleFields,
         status: result.statusCode,
         requestedUrl: result.requestedUrl,
+        // Build info for deploy mismatch debugging
+        buildId: BUILD_ID,
+        builtAt: BUILD_TIME,
       });
     } catch (error: any) {
       console.error("[YODECK TEST] error:", error.message);
