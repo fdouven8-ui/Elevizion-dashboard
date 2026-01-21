@@ -3145,6 +3145,45 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
       
+      // === RETRY POLICY ===
+      const MAX_RETRIES = 5;
+      const currentRetryCount = (plan as any)?.retryCount || 0;
+      
+      // Check max retries
+      if (currentRetryCount >= MAX_RETRIES) {
+        return res.status(400).json({
+          success: false,
+          message: `Maximum aantal retries bereikt (${MAX_RETRIES}). Neem contact op met support.`,
+          retryCount: currentRetryCount,
+          maxRetries: MAX_RETRIES,
+          permanentFailure: true,
+        });
+      }
+      
+      // Check for permanent errors (don't retry 400/401/403/404)
+      const lastErrorCode = (plan as any)?.lastErrorCode;
+      const lastErrorMessage = (plan as any)?.lastErrorMessage || '';
+      const permanentErrorPatterns = [
+        'status=400', 'status=401', 'status=403', 'status=404',
+        'Invalid or empty authentication token',
+        'ASSET_NOT_FOUND',
+        'PERMANENT_FAILURE',
+      ];
+      
+      const isPermanentError = permanentErrorPatterns.some(pattern => 
+        lastErrorMessage.includes(pattern) || lastErrorCode === pattern
+      );
+      
+      if (isPermanentError && currentRetryCount > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Permanente fout gedetecteerd: ${lastErrorCode || 'onbekend'}. Retry niet mogelijk.`,
+          lastErrorCode,
+          lastErrorMessage: lastErrorMessage.substring(0, 200),
+          permanentFailure: true,
+        });
+      }
+      
       // Reset status to APPROVED for retry (publishPlan will increment retryCount on failure)
       const { db } = await import("./db");
       const { placementPlans } = await import("@shared/schema");
@@ -11569,6 +11608,16 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // Public endpoint - only returns non-sensitive fields
+  // Public status endpoint - returns only non-sensitive system status
+  // This replaces client calls to /api/debug/test-mode which requires auth
+  app.get("/api/public/status", (_req, res) => {
+    res.json({
+      testMode: isTestMode(),
+      buildId: BUILD_ID,
+      builtAt: BUILD_TIME,
+    });
+  });
+
   app.get("/api/public/company-profile", async (req, res) => {
     try {
       const profile = await storage.getCompanyProfile();

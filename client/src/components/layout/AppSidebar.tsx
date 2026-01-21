@@ -98,15 +98,14 @@ export function AppSidebar() {
   });
   const newLeadsCount = leadsData?.leads?.filter((l: any) => l.status === "nieuw" || l.status === "new").length || 0;
 
-  // Fetch debug endpoint for TEST_MODE indicator (admin-only, more reliable)
-  const { data: testModeConfig } = useQuery<{ nodeEnv: string | null; testModeRaw: string | null; isTestMode: boolean }>({
-    queryKey: ["/api/debug/test-mode"],
+  // Fetch public status endpoint for TEST_MODE indicator (no auth required)
+  const { data: testModeConfig } = useQuery<{ testMode: boolean; buildId?: string; builtAt?: string }>({
+    queryKey: ["/api/public/status"],
     queryFn: async () => {
-      const res = await fetch("/api/debug/test-mode");
-      if (!res.ok) return { isTestMode: false, nodeEnv: null, testModeRaw: null };
+      const res = await fetch("/api/public/status");
+      if (!res.ok) return { testMode: false };
       return res.json();
     },
-    enabled: isAuthenticated,
     staleTime: 30000, // Cache for 30 seconds
   });
 
@@ -165,7 +164,7 @@ export function AppSidebar() {
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
-        {testModeConfig?.isTestMode && (
+        {testModeConfig?.testMode && (
           <div className="px-2 mt-2">
             <Badge className="bg-orange-500 text-white text-[10px] px-2 py-0.5 w-full justify-center">
               <AlertTriangle className="h-3 w-3 mr-1" />

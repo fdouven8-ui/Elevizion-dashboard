@@ -351,6 +351,32 @@ app.use((req, res, next) => {
       
       log(`serving on port ${port}`);
       
+      // Startup health check for Yodeck auth
+      (async () => {
+        try {
+          const { testYodeckConnection } = await import("./integrations");
+          const { getYodeckConfigStatus } = await import("./services/yodeckClient");
+          const config = await getYodeckConfigStatus();
+          
+          if (!config.ok) {
+            console.log(`[BOOT][Yodeck] WARNING: Not configured or invalid token format`);
+            return;
+          }
+          
+          console.log(`[BOOT][Yodeck] Token configured from ${config.activeSource}`);
+          
+          // Do a quick API test
+          const result = await testYodeckConnection();
+          if (result.ok) {
+            console.log(`[BOOT][Yodeck] Connection OK: ${(result as any).count || 0} screens found`);
+          } else {
+            console.log(`[BOOT][Yodeck] Connection FAILED: status=${result.statusCode} body=${(result as any).bodyPreview?.substring(0, 200)}`);
+          }
+        } catch (err: any) {
+          console.log(`[BOOT][Yodeck] Startup check error: ${err.message}`);
+        }
+      })();
+      
       // Start scheduled Yodeck sync (15 minute interval)
       // Run first sync after 30 seconds to allow server to stabilize
       setTimeout(() => {

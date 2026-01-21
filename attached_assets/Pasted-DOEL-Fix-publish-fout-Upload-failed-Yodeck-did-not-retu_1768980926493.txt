@@ -1,0 +1,56 @@
+DOEL: Fix publish-fout: “Upload failed: Yodeck did not return an upload URL… Binary upload cannot proceed.”
+Daarnaast: /api/debug/test-mode geeft 403 vanaf de browser.
+
+WERKWIJZE (GEEN GOKWERK):
+1) Vind in de backend waar de publish/retry flow Yodeck upload start.
+   - Dit is de stap die “metadata/create media” doet en daarna een upload_url verwacht.
+2) Voeg harde observability toe (tijdelijk, maar netjes):
+   - Log ALTIJD per Yodeck request:
+     - requestId/correlationId (uuid) per publish poging
+     - endpoint + method
+     - status code
+     - response content-type
+     - response body (max 2000 chars, safe stringify)
+   - Mask gevoelige data: token, iban, etc.
+3) Als upload_url ontbreekt, log:
+   - volledige Yodeck response die je kreeg
+   - en gooi een error met status + body snippet (niet alleen “upload_url ontbreekt”).
+
+AUTH & RESPONSE VALIDATIE:
+4) Controleer Authorization header format voor Yodeck API.
+   - Gebruik exact:  Authorization: Token <label>:<token_value>
+   - Voeg een startup check toe die 1 simpele Yodeck call doet (bijv screens list) en logt: OK/FAIL + status + body snippet.
+5) Zorg dat fetch/axios JSON correct parse’t:
+   - Als content-type geen application/json is, behandel het als text en log het (kan HTML/Cloudflare/redirect zijn).
+
+UPLOAD FLOW ROBUUST MAKEN:
+6) Maak upload-init + binary upload defensief:
+   - Verwacht dat upload_url in verschillende velden kan zitten (bijv upload_url, uploadUrl, url) -> maak een helper:
+     - const uploadUrl = resp.upload_url || resp.uploadUrl || resp.url || resp?.data?.upload_url ...
+   - Als nog steeds geen uploadUrl: markeer als “PERMANENT FAILURE” met duidelijke reden incl status+body snippet.
+7) Retry policy in publish-queue:
+   - Retry ALLEEN bij: 408, 429, 5xx, network timeouts.
+   - NIET retry bij: 400/401/403/404 (permanent).
+   - Voeg exponential backoff + maxRetries (bijv 5) en daarna status FAILED met reden.
+   - Zorg dat retryCount niet eindeloos doorloopt (nu staat hij op 12).
+
+/api/debug/test-mode 403 FIX:
+8) Frontend mag deze debug endpoint niet callen zonder auth.
+   Kies 1:
+   A) Verwijder de client-call volledig (alleen server logs).
+   OF
+   B) Maak /api/debug/test-mode admin-only en zorg dat de client alleen callt als ingelogd + admin.
+   OF
+   C) Maak een public /api/public/status die alleen { testMode: boolean } teruggeeft (geen gevoelige info), en gebruik die op de homepage.
+
+ACCEPTATIECRITERIA:
+- Een publish poging logt nu duidelijk:
+  - “YODECK_UPLOAD_INIT status=… content-type=… body=…”
+- Als Yodeck 401/403 geeft, zie ik dat meteen in logs en publish faalt zonder eindeloze retries.
+- Als Yodeck wel upload_url geeft, gaat binary upload door en publish succeed.
+- /api/debug/test-mode veroorzaakt geen 403 errors meer in de browser console.
+
+LEVER OP:
+- PR/commit met wijziging
+- Noem exact welke file(s) aangepast zijn en waar de logs staan.
+- Plak een voorbeeld van een mislukte en een geslaagde log flow.

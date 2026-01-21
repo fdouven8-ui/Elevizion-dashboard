@@ -348,13 +348,13 @@ export default function AdvertiserDetail() {
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
   const [renderedMessage, setRenderedMessage] = useState<{ subject: string; body: string } | null>(null);
   
-  // TEST_MODE indicator for admin test tools
+  // TEST_MODE indicator for admin test tools (uses public status endpoint)
   const [testModeActive, setTestModeActive] = useState(false);
   useEffect(() => {
     if (user?.role === "ADMIN") {
-      fetch("/api/debug/test-mode")
+      fetch("/api/public/status")
         .then(res => res.ok ? res.json() : null)
-        .then(data => setTestModeActive(data?.isTestMode === true))
+        .then(data => setTestModeActive(data?.testMode === true))
         .catch(() => {});
     }
   }, [user?.role]);

@@ -195,6 +195,19 @@ class YodeckPublishService {
     const { bytes, name, contentType = 'video/mp4' } = params;
     const fileSize = bytes.length;
     
+    // Generate correlation ID for this upload attempt
+    const corrId = crypto.randomUUID().substring(0, 8);
+    
+    // Helper to log Yodeck API calls with masked sensitive data
+    const logYodeckCall = (step: string, method: string, url: string, status: number, contentType: string | undefined, body: any) => {
+      const safeBody = typeof body === 'string' 
+        ? body.substring(0, 2000)
+        : JSON.stringify(body || {}).substring(0, 2000);
+      // Mask sensitive data
+      const maskedBody = safeBody.replace(/[A-Za-z0-9]{20,}/g, '[MASKED]');
+      console.log(`[YodeckPublish][${corrId}] ${step} ${method} ${url} status=${status} content-type=${contentType || 'unknown'} body=${maskedBody}`);
+    };
+    
     const diagnostics: TwoStepUploadDiagnostics = {
       metadata: { ok: false, rawKeysFound: [], uploadUrlFoundAt: 'none' },
       binaryUpload: { ok: false, method: 'none' },
@@ -213,7 +226,7 @@ class YodeckPublishService {
       }
     };
     
-    console.log(`[YodeckPublish] Two-step upload: Creating metadata for "${name}" (${fileSize} bytes)`);
+    console.log(`[YodeckPublish][${corrId}] Two-step upload: Creating metadata for "${name}" (${fileSize} bytes)`);
     
     let mediaId: number | undefined;
     let uploadUrl: string | undefined;
@@ -233,7 +246,8 @@ class YodeckPublishService {
       diagnostics.metadata.status = response.status;
       diagnostics.metadata.rawKeysFound = data ? Object.keys(data) : [];
       
-      console.log(`[YodeckPublish] Metadata response (${response.status}):`, JSON.stringify(data, null, 2));
+      // Log with observability
+      logYodeckCall('METADATA_CREATE', 'POST', metadataUrl, response.status, response.headers['content-type'], data);
       
       if (response.status >= 200 && response.status < 300 && data?.id) {
         mediaId = data.id;
