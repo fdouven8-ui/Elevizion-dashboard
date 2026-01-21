@@ -22,6 +22,178 @@ const MAX_CONCURRENT = 5;
 const DEFAULT_LIMIT = 100;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 
+/**
+ * Parsed Yodeck token with label:value components
+ */
+export interface ParsedYodeckToken {
+  label: string;
+  value: string;
+  source: 'YODECK_AUTH_TOKEN' | 'YODECK_V2_TOKEN' | 'LABEL+VALUE' | 'DB' | 'NONE';
+  isValid: boolean;
+  error?: string;
+}
+
+/**
+ * Yodeck config status for diagnostics
+ */
+export interface YodeckConfigStatus {
+  ok: boolean;
+  activeSource: 'YODECK_AUTH_TOKEN' | 'YODECK_V2_TOKEN' | 'LABEL+VALUE' | 'DB' | 'NONE';
+  parsedLabelPresent: boolean;
+  parsedValuePresent: boolean;
+  tokenFormatValid: boolean;
+  formatError?: string;
+  baseUrl: string;
+  authFormatExample: string;
+  envPriority: string[];
+}
+
+/**
+ * Parse a combined token string in "label:value" format
+ * Splits on the FIRST colon only, trims whitespace
+ */
+function parseTokenString(token: string): { label: string; value: string; valid: boolean; error?: string } {
+  if (!token || token.trim().length === 0) {
+    return { label: '', value: '', valid: false, error: 'Token is empty' };
+  }
+  
+  const trimmed = token.trim();
+  const colonIndex = trimmed.indexOf(':');
+  
+  if (colonIndex === -1) {
+    return { label: '', value: '', valid: false, error: 'Yodeck token missing label:value format (no colon found)' };
+  }
+  
+  const label = trimmed.substring(0, colonIndex).trim();
+  const value = trimmed.substring(colonIndex + 1).trim();
+  
+  if (!label) {
+    return { label: '', value, valid: false, error: 'Yodeck token has empty label (format: label:apikey)' };
+  }
+  
+  if (!value) {
+    return { label, value: '', valid: false, error: 'Yodeck token has empty value (format: label:apikey)' };
+  }
+  
+  return { label, value, valid: true };
+}
+
+/**
+ * Get the effective Yodeck token with full parsing and validation
+ * Returns parsed token components and source information
+ */
+export async function getYodeckToken(): Promise<ParsedYodeckToken> {
+  // Priority 1: YODECK_AUTH_TOKEN
+  const authToken = process.env.YODECK_AUTH_TOKEN?.trim();
+  if (authToken) {
+    const parsed = parseTokenString(authToken);
+    if (!parsed.valid) {
+      console.warn(`[YodeckClient] YODECK_AUTH_TOKEN format error: ${parsed.error}`);
+    }
+    return {
+      label: parsed.label,
+      value: parsed.value,
+      source: 'YODECK_AUTH_TOKEN',
+      isValid: parsed.valid,
+      error: parsed.error,
+    };
+  }
+  
+  // Priority 2: YODECK_V2_TOKEN
+  const v2Token = process.env.YODECK_V2_TOKEN?.trim();
+  if (v2Token) {
+    const parsed = parseTokenString(v2Token);
+    if (!parsed.valid) {
+      console.warn(`[YodeckClient] YODECK_V2_TOKEN format error: ${parsed.error}`);
+    }
+    return {
+      label: parsed.label,
+      value: parsed.value,
+      source: 'YODECK_V2_TOKEN',
+      isValid: parsed.valid,
+      error: parsed.error,
+    };
+  }
+  
+  // Priority 3: Separate YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE
+  const label = process.env.YODECK_TOKEN_LABEL?.trim();
+  const value = process.env.YODECK_TOKEN_VALUE?.trim();
+  if (label && value) {
+    return {
+      label,
+      value,
+      source: 'LABEL+VALUE',
+      isValid: true,
+    };
+  }
+  if (label || value) {
+    return {
+      label: label || '',
+      value: value || '',
+      source: 'LABEL+VALUE',
+      isValid: false,
+      error: label ? 'YODECK_TOKEN_VALUE is missing' : 'YODECK_TOKEN_LABEL is missing',
+    };
+  }
+  
+  // Priority 4: Database config
+  try {
+    const config = await storage.getIntegrationConfig("yodeck");
+    if (config?.encryptedCredentials) {
+      const { decryptCredentials } = await import("../crypto");
+      const credentials = decryptCredentials(config.encryptedCredentials);
+      const dbToken = credentials.api_key;
+      if (dbToken) {
+        const parsed = parseTokenString(dbToken);
+        if (!parsed.valid) {
+          console.warn(`[YodeckClient] DB token format error: ${parsed.error}`);
+        }
+        return {
+          label: parsed.label,
+          value: parsed.value,
+          source: 'DB',
+          isValid: parsed.valid,
+          error: parsed.error,
+        };
+      }
+    }
+  } catch (err) {
+    // Ignore DB errors, fall through to NONE
+  }
+  
+  return {
+    label: '',
+    value: '',
+    source: 'NONE',
+    isValid: false,
+    error: 'No Yodeck token configured',
+  };
+}
+
+/**
+ * Get Yodeck configuration status for diagnostics endpoint
+ */
+export async function getYodeckConfigStatus(): Promise<YodeckConfigStatus> {
+  const token = await getYodeckToken();
+  
+  return {
+    ok: token.isValid,
+    activeSource: token.source,
+    parsedLabelPresent: Boolean(token.label),
+    parsedValuePresent: Boolean(token.value),
+    tokenFormatValid: token.isValid,
+    formatError: token.error,
+    baseUrl: YODECK_BASE_URL,
+    authFormatExample: 'Authorization: Token <label>:<value>',
+    envPriority: [
+      '1. YODECK_AUTH_TOKEN (format: label:apikey)',
+      '2. YODECK_V2_TOKEN (format: label:apikey)',
+      '3. YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE',
+      '4. Database integration config',
+    ],
+  };
+}
+
 interface YodeckListResponse<T> {
   count: number;
   next: string | null;
@@ -201,36 +373,20 @@ export class YodeckClient {
 
   static async create(): Promise<YodeckClient | null> {
     try {
-      // Option 1: Combined format YODECK_AUTH_TOKEN (format: "label:apikey")
-      const envToken = process.env.YODECK_AUTH_TOKEN;
-      if (envToken) {
-        console.log("[YodeckClient] Using YODECK_AUTH_TOKEN from environment");
-        return new YodeckClient(envToken);
+      // Use centralized token parsing
+      const token = await getYodeckToken();
+      
+      if (!token.isValid) {
+        if (token.source !== 'NONE') {
+          console.warn(`[YodeckClient] Token from ${token.source} is invalid: ${token.error}`);
+        }
+        return null;
       }
-
-      // Option 2: YODECK_V2_TOKEN (format: "label:apikey" - we add "Token " prefix)
-      const v2Token = process.env.YODECK_V2_TOKEN?.trim();
-      if (v2Token) {
-        console.log("[YodeckClient] Using YODECK_V2_TOKEN from environment");
-        return new YodeckClient(v2Token);
-      }
-
-      // Option 3: Separate YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE
-      const label = process.env.YODECK_TOKEN_LABEL;
-      const value = process.env.YODECK_TOKEN_VALUE;
-      if (label && value) {
-        console.log("[YodeckClient] Using YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE from environment");
-        return new YodeckClient(`${label}:${value}`);
-      }
-
-      // Fallback to database integration config
-      const config = await storage.getIntegrationConfig("yodeck");
-      if (!config?.encryptedCredentials) return null;
-      const credentials = decryptCredentials(config.encryptedCredentials);
-      const apiKey = credentials.api_key;
-      if (!apiKey) return null;
-      return new YodeckClient(apiKey);
-    } catch {
+      
+      console.log(`[YodeckClient] Using token from ${token.source}`);
+      return new YodeckClient(`${token.label}:${token.value}`);
+    } catch (err: any) {
+      console.error(`[YodeckClient] Error creating client: ${err.message}`);
       return null;
     }
   }

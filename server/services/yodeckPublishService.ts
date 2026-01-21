@@ -93,19 +93,17 @@ class YodeckPublishService {
   private async getApiKey(): Promise<string> {
     if (this.apiKey) return this.apiKey;
     
-    const envToken = process.env.YODECK_AUTH_TOKEN;
-    if (envToken) {
-      this.apiKey = envToken;
-      return envToken;
+    // Use centralized token parsing from yodeckClient
+    const { getYodeckToken } = await import("./yodeckClient");
+    const token = await getYodeckToken();
+    
+    if (!token.isValid) {
+      throw new Error(token.error || "YODECK_AUTH_TOKEN not configured or invalid format");
     }
     
-    const v2Token = process.env.YODECK_V2_TOKEN?.trim();
-    if (v2Token) {
-      this.apiKey = v2Token;
-      return v2Token;
-    }
-
-    throw new Error("YODECK_AUTH_TOKEN not configured");
+    // Construct label:value token
+    this.apiKey = `${token.label}:${token.value}`;
+    return this.apiKey;
   }
 
   private async makeRequest<T>(

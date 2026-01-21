@@ -1,0 +1,48 @@
+We found an issue in /api/integrations/yodeck/config-status:
+
+Current response:
+
+* hasAuthToken=true
+* hasV2Token=true
+* hasDbConfig=true
+* BUT hasLabel=false and hasValue=false
+* authFormatExample says: Authorization: Token [label:value](label:value)
+
+This indicates our integration is not extracting/parsing label + value correctly, or we are storing a token without the required "label:value" format.
+This can cause inconsistent Yodeck API behavior (screens list works, but uploads/two-step fails or behaves unexpectedly).
+
+Tasks:
+
+1. Normalize token source selection:
+
+* Pick ONE effective token source at runtime (based on envPriority).
+* Expose in config-status: activeSource = "YODECK_AUTH_TOKEN|YODECK_V2_TOKEN|LABEL+VALUE|DB"
+* Expose: parsedLabelPresent, parsedValuePresent (booleans) and tokenFormatValid (boolean).
+* Never expose actual secrets.
+
+2. Robust token parsing:
+
+* If token is provided as single string (YODECK_AUTH_TOKEN or YODECK_V2_TOKEN):
+
+  * Expect format "label:apikey"
+  * Parse on the FIRST ":" only (label can’t be empty, value can’t be empty).
+  * Trim whitespace.
+  * If no ":" present => tokenFormatValid=false and log a clear warning: "Yodeck token missing label:value format".
+* If separate label/value env vars exist, use them.
+* If DB config exists, ensure it stores both label and value OR stores a combined string that is parsed.
+
+3. Force correct Authorization header everywhere:
+
+* Always send: `Authorization: Token <label>:<value>`
+* Never send Bearer.
+* Ensure both label/value exist before making calls; otherwise throw a clear config error.
+
+4. Update test endpoints to fail fast with config error:
+
+* If tokenFormatValid=false, /api/integrations/yodeck/test should return:
+  { screensOk:false, uploadOk:false, error:"Yodeck token must be label:apikey" }
+
+Acceptance:
+
+* /api/integrations/yodeck/config-status shows hasLabel=true and hasValue=true when config is correct.
+* All Yodeck calls use Authorization: Token label:value consistently.

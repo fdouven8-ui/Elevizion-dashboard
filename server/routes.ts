@@ -7070,30 +7070,21 @@ Sitemap: ${SITE_URL}/sitemap.xml
     res.json(status);
   });
 
-  // Yodeck config-status endpoint - checks all auth options
+  // Yodeck config-status endpoint - checks all auth options with token validation
   app.get("/api/integrations/yodeck/config-status", async (_req, res) => {
-    const hasAuthToken = Boolean(process.env.YODECK_AUTH_TOKEN?.trim());
-    const hasV2Token = Boolean(process.env.YODECK_V2_TOKEN?.trim());
-    const hasLabel = Boolean(process.env.YODECK_TOKEN_LABEL?.trim());
-    const hasValue = Boolean(process.env.YODECK_TOKEN_VALUE?.trim());
-    const hasSeparate = hasLabel && hasValue;
-    const hasDbConfig = await getYodeckConfigStatus();
-
+    const { getYodeckConfigStatus: getConfigStatus } = await import("./services/yodeckClient");
+    const config = await getConfigStatus();
+    
     res.json({
-      ok: hasAuthToken || hasV2Token || hasSeparate || hasDbConfig.configured,
-      baseUrl: process.env.YODECK_BASE_URL || "https://app.yodeck.com",
-      hasAuthToken,
-      hasV2Token,
-      hasLabel,
-      hasValue,
-      hasDbConfig: hasDbConfig.configured,
-      authFormatExample: "Authorization: Token <label:value>",
-      envPriority: [
-        "1. YODECK_AUTH_TOKEN (format: label:apikey)",
-        "2. YODECK_V2_TOKEN (format: label:apikey)",
-        "3. YODECK_TOKEN_LABEL + YODECK_TOKEN_VALUE",
-        "4. Database integration config"
-      ]
+      ok: config.ok,
+      activeSource: config.activeSource,
+      parsedLabelPresent: config.parsedLabelPresent,
+      parsedValuePresent: config.parsedValuePresent,
+      tokenFormatValid: config.tokenFormatValid,
+      formatError: config.formatError,
+      baseUrl: config.baseUrl,
+      authFormatExample: config.authFormatExample,
+      envPriority: config.envPriority,
     });
   });
   
@@ -7363,6 +7354,25 @@ Sitemap: ${SITE_URL}/sitemap.xml
   app.post("/api/integrations/yodeck/test", async (req, res) => {
     console.log("[YODECK TEST] handler hit");
     try {
+      // Step 0: Check token format before making API calls
+      const { getYodeckToken } = await import("./services/yodeckClient");
+      const token = await getYodeckToken();
+      
+      if (!token.isValid) {
+        console.log(`[YODECK TEST] Token invalid: ${token.error}`);
+        return res.status(400).json({
+          ok: false,
+          success: false,
+          screensOk: false,
+          uploadOk: false,
+          error: token.error || 'Yodeck token must be label:apikey',
+          activeSource: token.source,
+          parsedLabelPresent: Boolean(token.label),
+          parsedValuePresent: Boolean(token.value),
+          tokenFormatValid: false,
+        });
+      }
+      
       // Step 1: Test API connection (list screens)
       const result = await testYodeckConnection();
       console.log(`[YODECK TEST] screens result: ok=${result.ok}, count=${(result as any).count || 0}`);
