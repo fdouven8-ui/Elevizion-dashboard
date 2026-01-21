@@ -7385,24 +7385,30 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       // Step 2: Test upload only if explicitly requested via ?testUpload=true
       // Upload test requires ffmpeg and creates a test file in Yodeck (cleaned up after)
-      const testUpload = req.query.testUpload === 'true';
+      const wantUploadTest = req.query.testUpload === 'true';
       let uploadResult: any = null;
       
-      if (testUpload) {
+      if (wantUploadTest) {
         console.log("[YODECK TEST] Testing upload (testUpload=true requested)...");
         const { yodeckPublishService } = await import("./services/yodeckPublishService");
         uploadResult = await yodeckPublishService.testUpload();
-        console.log(`[YODECK TEST] upload result: ok=${uploadResult.ok}, method=${uploadResult.uploadMethodUsed}`);
+        console.log(`[YODECK TEST] upload result: uploadOk=${uploadResult.uploadOk}, method=${uploadResult.uploadMethodUsed}`);
       }
       
       res.json({
         ok: true,
         success: true,
         screensOk: true,
+        // Upload results with full diagnostics
         uploadOk: uploadResult?.uploadOk ?? null,
         uploadMethodUsed: uploadResult?.uploadMethodUsed ?? null,
-        uploadAttempts: uploadResult?.attempts ?? null,
-        uploadError: uploadResult?.finalError ?? null,
+        // Detailed step diagnostics from new format
+        metadata: uploadResult?.metadata ?? null,
+        binaryUpload: uploadResult?.binaryUpload ?? null,
+        confirm: uploadResult?.confirm ?? null,
+        lastError: uploadResult?.lastError ?? null,
+        yodeckMediaId: uploadResult?.yodeckMediaId ?? null,
+        // Screen test results
         message: result.message,
         count: (result as any).count,
         sampleFields: (result as any).sampleFields,

@@ -1,0 +1,105 @@
+Fix two-step Yodeck upload flow — uploadOk stays false (must become true)
+
+Context / evidence:
+
+* Running: POST /api/integrations/yodeck/test?testUpload=true
+* Response consistently: screensOk=true, uploadOk=false, uploadMethodUsed="unknown"
+* This proves auth + screen listing works, but the new two-step upload is not being recognized as success (or the binary step fails).
+* Multipart/PATCH fallback previously failed in this tenant; rely on presigned PUT if available.
+
+Goal:
+Make the two-step flow actually succeed and report correctly:
+
+* test endpoint must return uploadOk=true and uploadMethodUsed="two-step"
+* placement plan publish must succeed and set yodeckMediaId
+
+Required behavior:
+UploadOk MUST be computed as:
+
+* metadataCreated == true
+* AND binaryUploadSucceeded == true
+  Confirm/finalize is OPTIONAL and must NOT flip uploadOk to false if binary upload already succeeded.
+
+Tasks (do in this exact order):
+
+1. Improve diagnostics returned by the test endpoint
+   Update POST /api/integrations/yodeck/test?testUpload=true response to include a detailed step object:
+   {
+   screensOk,
+   metadata: { ok, status, mediaId, rawKeysFound: [...], uploadUrlFoundAt: "file.upload_url|upload_url|data.upload_url|none" },
+   binaryUpload: { ok, method: "presigned_put|patch|none", status, contentTypeSent, bytesSent },
+   confirm: { attempted, ok, status, error },
+   uploadOk, uploadMethodUsed,
+   lastError: { message, status, bodySnippet }
+   }
+   Do not log secrets.
+
+2. Fix presigned URL extraction (most common bug)
+   In createMediaMetadata() response parsing:
+
+* Search for upload URL in all plausible locations (case-insensitive key handling):
+
+  * res.upload_url
+  * res.uploadUrl
+  * res.file?.upload_url
+  * res.file?.uploadUrl
+  * res.data?.upload_url
+  * res.data?.file?.upload_url
+    Store which path matched in diagnostics.
+
+3. Fix presigned PUT success criteria
+   In uploadToPresignedUrl():
+
+* Treat HTTP status 200 OR 201 OR 204 as success.
+* Do NOT require a JSON body (presigned responses are often empty).
+* Always send raw bytes (Buffer/stream) as the request body (NOT multipart).
+* Set headers:
+
+  * Content-Type: video/mp4
+  * Content-Length: <bytes>
+  * (Do NOT add Authorization header to presigned URL)
+    Return { ok:true } if status in [200,201,204].
+
+4. Ensure binary upload uses the presigned URL when present
+   Logic:
+
+* If uploadUrl exists -> ALWAYS try presigned PUT first.
+* Only use /media/{id} PATCH fallback if and ONLY if:
+  a) no uploadUrl is present in metadata response, AND
+  b) we have evidence Yodeck supports that PATCH endpoint for upload in our tenant.
+  Given earlier tenant behavior, default should be: if no uploadUrl -> fail with clear error (don’t silently multipart retry loops).
+
+5. Confirm/finalize must be non-blocking
+   In confirmMediaUpload():
+
+* Attempt only if a known confirm endpoint exists AND we have a reason.
+* If confirm fails with 404/405/409 => log diagnostics but DO NOT set uploadOk=false.
+  Final:
+  uploadOk = metadata.ok && binaryUpload.ok
+  uploadMethodUsed = "two-step" when uploadOk true
+
+6. Use the exact same twoStepUploadMedia() in real publish
+   Refactor so BOTH:
+
+* testUpload()
+* publishPlan()/YodeckPublish
+  call the same shared function:
+  twoStepUploadMedia({ bytes, name, contentType:"video/mp4" }) -> { mediaId, uploadOk, diagnostics }
+  Publish should stop using old multipart media_origin logic once two-step works.
+
+Acceptance criteria:
+
+* POST /api/integrations/yodeck/test?testUpload=true returns:
+
+  * screensOk=true
+  * metadata.ok=true with a mediaId
+  * binaryUpload.ok=true (prefer presigned_put)
+  * uploadOk=true
+  * uploadMethodUsed="two-step"
+* Retrying placement plan publish succeeds and yodeckMediaId is populated.
+
+Notes:
+
+* Keep idempotency/outbox/locks intact.
+* No interactive “try random media_origin values”.
+* Avoid infinite retries; max 1 attempt for presigned PUT, and if it fails return diagnostics immediately.

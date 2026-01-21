@@ -57,6 +57,36 @@ interface PublishReport {
   rolledBackAt?: string;
 }
 
+interface TwoStepUploadDiagnostics {
+  metadata: {
+    ok: boolean;
+    status?: number;
+    mediaId?: number;
+    rawKeysFound: string[];
+    uploadUrlFoundAt: string;
+    error?: string;
+  };
+  binaryUpload: {
+    ok: boolean;
+    method: 'presigned_put' | 'patch' | 'none';
+    status?: number;
+    contentTypeSent?: string;
+    bytesSent?: number;
+    error?: string;
+  };
+  confirm: {
+    attempted: boolean;
+    ok: boolean;
+    status?: number;
+    error?: string;
+  };
+  lastError?: {
+    message: string;
+    status?: number;
+    bodySnippet?: string;
+  };
+}
+
 class YodeckPublishService {
   private apiKey: string | null = null;
 
@@ -151,24 +181,32 @@ class YodeckPublishService {
   }
 
   /**
-   * Two-step upload: Step 1 - Create media metadata
-   * Returns the media ID and presigned upload URL
+   * Unified two-step upload function used by both testUpload() and production publish
+   * Returns comprehensive diagnostics for debugging
    */
-  private async createMediaMetadata(
-    name: string,
-    fileSize: number,
-    mimeType: string = "video/mp4"
-  ): Promise<{ 
-    ok: boolean; 
-    mediaId?: number; 
-    uploadUrl?: string; 
-    error?: string;
-    rawResponse?: any;
+  async twoStepUploadMedia(params: {
+    bytes: Buffer;
+    name: string;
+    contentType?: string;
+  }): Promise<{
+    ok: boolean;
+    mediaId?: number;
+    uploadMethodUsed: 'two-step' | 'unknown';
+    diagnostics: TwoStepUploadDiagnostics;
   }> {
-    const apiKey = await this.getApiKey();
-    const url = `${YODECK_BASE_URL}/media`;
+    const { bytes, name, contentType = 'video/mp4' } = params;
+    const fileSize = bytes.length;
     
-    // Construct metadata payload
+    const diagnostics: TwoStepUploadDiagnostics = {
+      metadata: { ok: false, rawKeysFound: [], uploadUrlFoundAt: 'none' },
+      binaryUpload: { ok: false, method: 'none' },
+      confirm: { attempted: false, ok: false },
+    };
+    
+    // === STEP 1: Create media metadata ===
+    const apiKey = await this.getApiKey();
+    const metadataUrl = `${YODECK_BASE_URL}/media`;
+    
     const payload = {
       name: name,
       media_origin: {
@@ -177,186 +215,202 @@ class YodeckPublishService {
       }
     };
     
-    console.log(`[YodeckPublish] Creating media metadata: name="${name}" size=${fileSize}`);
-    console.log(`[YodeckPublish] Metadata payload:`, JSON.stringify(payload));
+    console.log(`[YodeckPublish] Two-step upload: Creating metadata for "${name}" (${fileSize} bytes)`);
+    
+    let mediaId: number | undefined;
+    let uploadUrl: string | undefined;
     
     try {
-      const response = await axios.post(url, payload, {
+      const response = await axios.post(metadataUrl, payload, {
         headers: {
           "Authorization": `Token ${apiKey}`,
           "Content-Type": "application/json",
           "Accept": "application/json"
         },
         timeout: 30000,
+        validateStatus: () => true, // Don't throw on any status
       });
       
       const data = response.data;
-      console.log(`[YodeckPublish] Create media response:`, JSON.stringify(data, null, 2));
+      diagnostics.metadata.status = response.status;
+      diagnostics.metadata.rawKeysFound = data ? Object.keys(data) : [];
       
-      if (!data?.id) {
-        return { ok: false, error: "Response missing media ID", rawResponse: data };
-      }
+      console.log(`[YodeckPublish] Metadata response (${response.status}):`, JSON.stringify(data, null, 2));
       
-      // Look for upload URL in various possible fields
-      const uploadUrl = data.upload_url || data.uploadUrl || data.presigned_url || data.presignedUrl || data.file_upload_url;
-      
-      if (!uploadUrl) {
-        console.log(`[YodeckPublish] No upload URL in response. Available fields: ${Object.keys(data).join(', ')}`);
-        // Some APIs return the upload URL in a nested object
-        if (data.upload && typeof data.upload === 'object') {
-          console.log(`[YodeckPublish] Found upload object:`, JSON.stringify(data.upload));
+      if (response.status >= 200 && response.status < 300 && data?.id) {
+        mediaId = data.id;
+        diagnostics.metadata.ok = true;
+        diagnostics.metadata.mediaId = mediaId;
+        
+        // Search for upload URL in all plausible locations (case-insensitive)
+        const urlSearchPaths = [
+          { path: 'upload_url', value: data.upload_url },
+          { path: 'uploadUrl', value: data.uploadUrl },
+          { path: 'presigned_url', value: data.presigned_url },
+          { path: 'presignedUrl', value: data.presignedUrl },
+          { path: 'file_upload_url', value: data.file_upload_url },
+          { path: 'file.upload_url', value: data.file?.upload_url },
+          { path: 'file.uploadUrl', value: data.file?.uploadUrl },
+          { path: 'data.upload_url', value: data.data?.upload_url },
+          { path: 'data.file.upload_url', value: data.data?.file?.upload_url },
+          { path: 'upload.url', value: data.upload?.url },
+          { path: 'upload.upload_url', value: data.upload?.upload_url },
+        ];
+        
+        for (const { path, value } of urlSearchPaths) {
+          if (value && typeof value === 'string' && value.startsWith('http')) {
+            uploadUrl = value;
+            diagnostics.metadata.uploadUrlFoundAt = path;
+            console.log(`[YodeckPublish] Found upload URL at "${path}"`);
+            break;
+          }
         }
+        
+        if (!uploadUrl) {
+          console.log(`[YodeckPublish] No upload URL found in response. Available keys: ${diagnostics.metadata.rawKeysFound.join(', ')}`);
+        }
+      } else {
+        diagnostics.metadata.ok = false;
+        const errorMessage = data?.error?.message || data?.message || `HTTP ${response.status}`;
+        diagnostics.metadata.error = errorMessage;
+        diagnostics.lastError = {
+          message: errorMessage,
+          status: response.status,
+          bodySnippet: JSON.stringify(data).substring(0, 500),
+        };
+        
+        return { ok: false, uploadMethodUsed: 'unknown', diagnostics };
       }
-      
-      return { 
-        ok: true, 
-        mediaId: data.id, 
-        uploadUrl: uploadUrl || null,
-        rawResponse: data
-      };
     } catch (err: any) {
-      const statusCode = err.response?.status || 'N/A';
-      const responseData = err.response?.data;
-      
-      console.error(`[YodeckPublish] Create media failed: HTTP ${statusCode}`, JSON.stringify(responseData, null, 2));
-      
-      return { 
-        ok: false, 
-        error: responseData?.error?.message || responseData?.message || err.message,
-        rawResponse: responseData
+      diagnostics.metadata.ok = false;
+      diagnostics.metadata.error = err.message;
+      diagnostics.metadata.status = err.response?.status;
+      diagnostics.lastError = {
+        message: err.message,
+        status: err.response?.status,
+        bodySnippet: JSON.stringify(err.response?.data || {}).substring(0, 500),
       };
-    }
-  }
-
-  /**
-   * Two-step upload: Step 2 - Upload file to presigned URL
-   */
-  private async uploadToPresignedUrl(
-    uploadUrl: string,
-    fileBuffer: Buffer,
-    mimeType: string = "video/mp4"
-  ): Promise<{ ok: boolean; error?: string }> {
-    console.log(`[YodeckPublish] Uploading ${fileBuffer.length} bytes to presigned URL`);
-    
-    try {
-      // PUT the file directly to the presigned URL (no auth headers needed)
-      const response = await axios.put(uploadUrl, fileBuffer, {
-        headers: {
-          "Content-Type": mimeType,
-          "Content-Length": String(fileBuffer.length)
-        },
-        timeout: REQUEST_TIMEOUT,
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
-      });
       
-      console.log(`[YodeckPublish] Presigned upload response: ${response.status}`);
-      return { ok: true };
-    } catch (err: any) {
-      console.error(`[YodeckPublish] Presigned upload failed:`, err.message);
-      return { ok: false, error: err.message };
+      return { ok: false, uploadMethodUsed: 'unknown', diagnostics };
     }
-  }
-
-  /**
-   * Two-step upload: Step 3 (optional) - Confirm/finalize upload
-   */
-  private async confirmMediaUpload(mediaId: number): Promise<{ ok: boolean; error?: string }> {
-    const apiKey = await this.getApiKey();
     
-    // Try various confirmation endpoints that APIs commonly use
-    const confirmEndpoints = [
-      `${YODECK_BASE_URL}/media/${mediaId}/confirm`,
-      `${YODECK_BASE_URL}/media/${mediaId}/upload/complete`,
-      `${YODECK_BASE_URL}/media/${mediaId}/finalize`
-    ];
-    
-    for (const endpoint of confirmEndpoints) {
+    // === STEP 2: Binary upload ===
+    if (uploadUrl) {
+      // Use presigned PUT (preferred)
+      console.log(`[YodeckPublish] Two-step upload: Uploading ${fileSize} bytes to presigned URL`);
+      diagnostics.binaryUpload.method = 'presigned_put';
+      diagnostics.binaryUpload.contentTypeSent = contentType;
+      diagnostics.binaryUpload.bytesSent = fileSize;
+      
       try {
-        const response = await axios.post(endpoint, {}, {
+        const response = await axios.put(uploadUrl, bytes, {
           headers: {
-            "Authorization": `Token ${apiKey}`,
-            "Content-Type": "application/json"
+            "Content-Type": contentType,
+            "Content-Length": String(fileSize),
+            // NO Authorization header for presigned URL
           },
-          timeout: 10000,
-          validateStatus: (status) => status < 500 // Don't throw on 4xx
+          timeout: REQUEST_TIMEOUT,
+          maxBodyLength: Infinity,
+          maxContentLength: Infinity,
+          validateStatus: () => true, // Don't throw on any status
         });
         
-        if (response.status >= 200 && response.status < 300) {
-          console.log(`[YodeckPublish] Media confirmed via ${endpoint}`);
-          return { ok: true };
-        }
+        diagnostics.binaryUpload.status = response.status;
         
-        // 404 means endpoint doesn't exist, try next
-        if (response.status === 404) {
+        // 200, 201, 204 are all success for presigned uploads
+        if ([200, 201, 204].includes(response.status)) {
+          diagnostics.binaryUpload.ok = true;
+          console.log(`[YodeckPublish] Presigned PUT succeeded: ${response.status}`);
+        } else {
+          diagnostics.binaryUpload.ok = false;
+          diagnostics.binaryUpload.error = `HTTP ${response.status}`;
+          diagnostics.lastError = {
+            message: `Presigned PUT failed with status ${response.status}`,
+            status: response.status,
+            bodySnippet: typeof response.data === 'string' ? response.data.substring(0, 500) : JSON.stringify(response.data || {}).substring(0, 500),
+          };
+        }
+      } catch (err: any) {
+        diagnostics.binaryUpload.ok = false;
+        diagnostics.binaryUpload.error = err.message;
+        diagnostics.binaryUpload.status = err.response?.status;
+        diagnostics.lastError = {
+          message: err.message,
+          status: err.response?.status,
+          bodySnippet: JSON.stringify(err.response?.data || {}).substring(0, 500),
+        };
+      }
+    } else {
+      // No upload URL - fail with clear error (don't silently try PATCH)
+      // Per requirements: if no uploadUrl -> fail with clear error
+      diagnostics.binaryUpload.ok = false;
+      diagnostics.binaryUpload.method = 'none';
+      diagnostics.binaryUpload.error = 'No upload URL provided in metadata response';
+      diagnostics.lastError = {
+        message: 'Yodeck did not return an upload URL in the metadata response. Binary upload cannot proceed.',
+        status: undefined,
+      };
+      
+      console.log(`[YodeckPublish] FAIL: No upload URL in metadata response. Cannot upload binary.`);
+    }
+    
+    // === STEP 3: Optional confirm (non-blocking) ===
+    // Only attempt if binary upload succeeded
+    if (diagnostics.binaryUpload.ok && mediaId) {
+      console.log(`[YodeckPublish] Two-step upload: Attempting optional confirm`);
+      diagnostics.confirm.attempted = true;
+      
+      const confirmEndpoints = [
+        `${YODECK_BASE_URL}/media/${mediaId}/confirm`,
+        `${YODECK_BASE_URL}/media/${mediaId}/upload/complete`,
+      ];
+      
+      for (const endpoint of confirmEndpoints) {
+        try {
+          const response = await axios.post(endpoint, {}, {
+            headers: {
+              "Authorization": `Token ${apiKey}`,
+              "Content-Type": "application/json"
+            },
+            timeout: 10000,
+            validateStatus: () => true,
+          });
+          
+          diagnostics.confirm.status = response.status;
+          
+          if ([200, 201, 204].includes(response.status)) {
+            diagnostics.confirm.ok = true;
+            console.log(`[YodeckPublish] Confirm succeeded at ${endpoint}`);
+            break;
+          } else if ([404, 405].includes(response.status)) {
+            // Endpoint doesn't exist, try next
+            continue;
+          }
+        } catch (err: any) {
+          diagnostics.confirm.error = err.message;
           continue;
         }
-        
-        console.log(`[YodeckPublish] Confirm endpoint ${endpoint} returned ${response.status}`);
-      } catch (err: any) {
-        // Continue to next endpoint
-        continue;
+      }
+      
+      // If no confirm endpoint worked, that's OK - it's optional
+      if (!diagnostics.confirm.ok) {
+        console.log(`[YodeckPublish] No confirm endpoint available (this is OK)`);
+        diagnostics.confirm.ok = true; // Mark as OK since it's optional
       }
     }
     
-    // If no confirmation endpoint exists, that's OK - some APIs don't need it
-    console.log(`[YodeckPublish] No confirmation endpoint found (may not be required)`);
-    return { ok: true };
-  }
-
-  /**
-   * Fallback: Upload file via PATCH to /media/{id}
-   * Some APIs expect the file to be uploaded after metadata creation via PATCH with multipart
-   */
-  private async uploadMediaViaPatch(
-    mediaId: number,
-    fileBuffer: Buffer,
-    filename: string
-  ): Promise<{ ok: boolean; error?: string }> {
-    const apiKey = await this.getApiKey();
-    const url = `${YODECK_BASE_URL}/media/${mediaId}`;
+    // === Final result ===
+    // uploadOk = metadata.ok AND binaryUpload.ok (confirm is optional)
+    const uploadOk = diagnostics.metadata.ok && diagnostics.binaryUpload.ok;
     
-    console.log(`[YodeckPublish] PATCH upload to ${url}`);
+    console.log(`[YodeckPublish] Two-step upload complete: uploadOk=${uploadOk}, mediaId=${mediaId}`);
     
-    const formData = new FormData();
-    formData.append("file", fileBuffer, { 
-      filename,
-      contentType: "video/mp4",
-      knownLength: fileBuffer.length
-    });
-    
-    try {
-      let contentLength: number;
-      try {
-        contentLength = await new Promise<number>((resolve, reject) => {
-          formData.getLength((err: Error | null, length: number) => {
-            if (err) reject(err);
-            else resolve(length);
-          });
-        });
-      } catch (lengthErr) {
-        return { ok: false, error: "Could not calculate Content-Length for PATCH" };
-      }
-      
-      const response = await axios.patch(url, formData, {
-        headers: {
-          "Authorization": `Token ${apiKey}`,
-          "Content-Length": String(contentLength),
-          ...formData.getHeaders()
-        },
-        timeout: REQUEST_TIMEOUT,
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
-      });
-      
-      console.log(`[YodeckPublish] PATCH upload response: ${response.status}`, JSON.stringify(response.data, null, 2));
-      return { ok: true };
-    } catch (err: any) {
-      const statusCode = err.response?.status || 'N/A';
-      const responseData = err.response?.data;
-      console.error(`[YodeckPublish] PATCH upload failed: HTTP ${statusCode}`, JSON.stringify(responseData, null, 2));
-      return { ok: false, error: responseData?.error?.message || err.message };
-    }
+    return {
+      ok: uploadOk,
+      mediaId: uploadOk ? mediaId : undefined,
+      uploadMethodUsed: uploadOk ? 'two-step' : 'unknown',
+      diagnostics,
+    };
   }
 
   /**
@@ -586,103 +640,55 @@ class YodeckPublishService {
       
       console.log(`[YodeckPublish] File loaded: ${fileSize} bytes`);
       
-      // Normalize name and filename
+      // Normalize name
       const normalizedName = this.normalizeMp4Name(mediaName);
-      const filename = normalizedName;
       
-      // === TWO-STEP UPLOAD STRATEGY ===
-      // Step 1: Create media metadata (JSON request, no file)
-      console.log(`[YodeckPublish] Two-step upload: Creating media metadata...`);
-      const createResult = await this.createMediaMetadata(normalizedName, fileSize);
+      // === Use shared two-step upload ===
+      const uploadResult = await this.twoStepUploadMedia({
+        bytes: fileBuffer,
+        name: normalizedName,
+        contentType: 'video/mp4',
+      });
       
-      if (!createResult.ok || !createResult.mediaId) {
+      if (!uploadResult.ok || !uploadResult.mediaId) {
         await db.update(integrationOutbox)
           .set({ 
             status: "failed",
             lastError: JSON.stringify({ 
-              code: "METADATA_CREATE_FAILED", 
-              message: createResult.error,
-              rawResponse: createResult.rawResponse
+              code: "TWO_STEP_UPLOAD_FAILED", 
+              diagnostics: uploadResult.diagnostics
             }),
             processedAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
         
+        const lastError = uploadResult.diagnostics.lastError;
         return { 
           ok: false, 
-          error: createResult.error || "Failed to create media metadata", 
-          errorCode: "METADATA_CREATE_FAILED",
-          errorDetails: createResult.rawResponse
+          error: lastError?.message || "Two-step upload failed", 
+          errorCode: "TWO_STEP_UPLOAD_FAILED",
+          errorDetails: uploadResult.diagnostics
         };
-      }
-      
-      const mediaId = createResult.mediaId;
-      console.log(`[YodeckPublish] Media metadata created: id=${mediaId}`);
-      
-      // Step 2: Upload file to presigned URL (if provided)
-      if (createResult.uploadUrl) {
-        console.log(`[YodeckPublish] Two-step upload: Uploading file to presigned URL...`);
-        const uploadResult = await this.uploadToPresignedUrl(createResult.uploadUrl, fileBuffer);
-        
-        if (!uploadResult.ok) {
-          await db.update(integrationOutbox)
-            .set({ 
-              status: "failed",
-              lastError: JSON.stringify({ 
-                code: "PRESIGNED_UPLOAD_FAILED", 
-                message: uploadResult.error 
-              }),
-              processedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
-          
-          return { ok: false, error: uploadResult.error, errorCode: "PRESIGNED_UPLOAD_FAILED" };
-        }
-        
-        // Step 3: Confirm upload (optional)
-        console.log(`[YodeckPublish] Two-step upload: Confirming upload...`);
-        await this.confirmMediaUpload(mediaId);
-      } else {
-        // No presigned URL - check if Yodeck expects file upload via PATCH
-        console.log(`[YodeckPublish] No upload URL returned. Attempting PATCH upload to /media/${mediaId}...`);
-        
-        const patchResult = await this.uploadMediaViaPatch(mediaId, fileBuffer, filename);
-        if (!patchResult.ok) {
-          await db.update(integrationOutbox)
-            .set({ 
-              status: "failed",
-              lastError: JSON.stringify({ 
-                code: "PATCH_UPLOAD_FAILED", 
-                message: patchResult.error 
-              }),
-              processedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
-          
-          return { ok: false, error: patchResult.error, errorCode: "PATCH_UPLOAD_FAILED" };
-        }
       }
       
       // Success!
       await db.update(integrationOutbox)
         .set({
           status: "succeeded",
-          externalId: String(mediaId),
+          externalId: String(uploadResult.mediaId),
           responseJson: { 
-            mediaId, 
-            method: createResult.uploadUrl ? "presigned_url" : "patch_upload",
-            createResponse: createResult.rawResponse
+            mediaId: uploadResult.mediaId, 
+            method: uploadResult.uploadMethodUsed,
+            diagnostics: uploadResult.diagnostics
           },
           processedAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
       
-      console.log(`[YodeckPublish] Two-step upload SUCCESS: mediaId=${mediaId}`);
-      return { ok: true, mediaId };
+      console.log(`[YodeckPublish] Two-step upload SUCCESS: mediaId=${uploadResult.mediaId}`);
+      return { ok: true, mediaId: uploadResult.mediaId };
     } catch (err: any) {
       console.error(`[YodeckPublish] Upload error:`, err.message);
       await db.update(integrationOutbox)
@@ -1202,20 +1208,43 @@ class YodeckPublishService {
 
   /**
    * Test upload to verify Yodeck API accepts our two-step upload flow
-   * Creates a minimal test video and attempts the full two-step upload
-   * Returns detailed diagnostics about each step
+   * Creates a minimal test video and uses the shared twoStepUploadMedia function
+   * Returns detailed diagnostics matching the required response format
    */
   async testUpload(): Promise<{
-    ok: boolean;
+    screensOk: boolean;
+    metadata: {
+      ok: boolean;
+      status?: number;
+      mediaId?: number;
+      rawKeysFound: string[];
+      uploadUrlFoundAt: string;
+      error?: string;
+    };
+    binaryUpload: {
+      ok: boolean;
+      method: 'presigned_put' | 'patch' | 'none';
+      status?: number;
+      contentTypeSent?: string;
+      bytesSent?: number;
+      error?: string;
+    };
+    confirm: {
+      attempted: boolean;
+      ok: boolean;
+      status?: number;
+      error?: string;
+    };
     uploadOk: boolean;
-    uploadMethodUsed: 'two_step_presigned' | 'two_step_patch' | 'unknown';
-    steps: { step: string; success: boolean; error?: string; details?: any }[];
-    finalError?: string;
+    uploadMethodUsed: 'two-step' | 'unknown';
+    lastError?: {
+      message: string;
+      status?: number;
+      bodySnippet?: string;
+    };
     yodeckMediaId?: number;
   }> {
     console.log(`[YodeckPublish] Running two-step upload test...`);
-    
-    const steps: { step: string; success: boolean; error?: string; details?: any }[] = [];
     
     // Create a minimal test video using ffmpeg (1 second, 100x100, black)
     const { exec } = await import("child_process");
@@ -1235,101 +1264,41 @@ class YodeckPublishService {
       );
       
       const fileBuffer = await fs.readFile(testFilePath);
-      const fileSize = fileBuffer.length;
-      console.log(`[YodeckPublish] Test video created: ${fileSize} bytes`);
+      console.log(`[YodeckPublish] Test video created: ${fileBuffer.length} bytes`);
       
-      // Step 1: Create media metadata
-      console.log(`[YodeckPublish] Test Step 1: Create metadata`);
-      const createResult = await this.createMediaMetadata(testFileName, fileSize);
-      
-      steps.push({
-        step: "create_metadata",
-        success: createResult.ok,
-        error: createResult.error,
-        details: { 
-          mediaId: createResult.mediaId, 
-          hasUploadUrl: !!createResult.uploadUrl,
-          responseFields: createResult.rawResponse ? Object.keys(createResult.rawResponse) : []
-        }
+      // Use the shared two-step upload function
+      const result = await this.twoStepUploadMedia({
+        bytes: fileBuffer,
+        name: testFileName,
+        contentType: 'video/mp4',
       });
       
-      if (!createResult.ok || !createResult.mediaId) {
-        await fs.unlink(testFilePath).catch(() => {});
-        return {
-          ok: false,
-          uploadOk: false,
-          uploadMethodUsed: 'unknown',
-          steps,
-          finalError: createResult.error || "Failed to create media metadata",
-        };
-      }
-      
-      const mediaId = createResult.mediaId;
-      let uploadMethodUsed: 'two_step_presigned' | 'two_step_patch' | 'unknown' = 'unknown';
-      
-      // Step 2: Upload file
-      if (createResult.uploadUrl) {
-        console.log(`[YodeckPublish] Test Step 2: Upload to presigned URL`);
-        const uploadResult = await this.uploadToPresignedUrl(createResult.uploadUrl, fileBuffer);
-        
-        steps.push({
-          step: "presigned_upload",
-          success: uploadResult.ok,
-          error: uploadResult.error,
-        });
-        
-        if (uploadResult.ok) {
-          uploadMethodUsed = 'two_step_presigned';
+      // Clean up test media from Yodeck if upload succeeded
+      if (result.mediaId) {
+        try {
+          const apiKey = await this.getApiKey();
+          await axios.delete(`${YODECK_BASE_URL}/media/${result.mediaId}`, {
+            headers: { "Authorization": `Token ${apiKey}` },
+            timeout: 10000,
+          });
+          console.log(`[YodeckPublish] Test media cleaned up from Yodeck`);
+        } catch (cleanupErr: any) {
+          console.log(`[YodeckPublish] Could not clean up test media: ${cleanupErr.message}`);
         }
-      } else {
-        console.log(`[YodeckPublish] Test Step 2: PATCH upload`);
-        const patchResult = await this.uploadMediaViaPatch(mediaId, fileBuffer, testFileName);
-        
-        steps.push({
-          step: "patch_upload",
-          success: patchResult.ok,
-          error: patchResult.error,
-        });
-        
-        if (patchResult.ok) {
-          uploadMethodUsed = 'two_step_patch';
-        }
-      }
-      
-      // Step 3: Confirm (optional)
-      if (uploadMethodUsed !== 'unknown') {
-        console.log(`[YodeckPublish] Test Step 3: Confirm upload`);
-        const confirmResult = await this.confirmMediaUpload(mediaId);
-        steps.push({
-          step: "confirm",
-          success: confirmResult.ok,
-          error: confirmResult.error,
-        });
-      }
-      
-      // Clean up - delete the test media from Yodeck
-      try {
-        const apiKey = await this.getApiKey();
-        await axios.delete(`${YODECK_BASE_URL}/media/${mediaId}`, {
-          headers: { "Authorization": `Token ${apiKey}` },
-          timeout: 10000,
-        });
-        console.log(`[YodeckPublish] Test media cleaned up from Yodeck`);
-      } catch (cleanupErr: any) {
-        console.log(`[YodeckPublish] Could not clean up test media: ${cleanupErr.message}`);
       }
       
       // Clean up local test file
       await fs.unlink(testFilePath).catch(() => {});
       
-      const uploadOk = uploadMethodUsed !== 'unknown';
       return {
-        ok: uploadOk,
-        uploadOk,
-        uploadMethodUsed,
-        steps,
-        yodeckMediaId: mediaId,
-        finalError: uploadOk ? undefined : steps[steps.length - 1]?.error,
+        screensOk: true, // We already have screen access if we got this far
+        metadata: result.diagnostics.metadata,
+        binaryUpload: result.diagnostics.binaryUpload,
+        confirm: result.diagnostics.confirm,
+        uploadOk: result.ok,
+        uploadMethodUsed: result.uploadMethodUsed,
+        lastError: result.diagnostics.lastError,
+        yodeckMediaId: result.mediaId,
       };
     } catch (err: any) {
       // Clean up on error
@@ -1338,11 +1307,13 @@ class YodeckPublishService {
       
       console.error(`[YodeckPublish] Upload test error:`, err.message);
       return {
-        ok: false,
+        screensOk: true,
+        metadata: { ok: false, rawKeysFound: [], uploadUrlFoundAt: 'none', error: err.message },
+        binaryUpload: { ok: false, method: 'none', error: err.message },
+        confirm: { attempted: false, ok: false },
         uploadOk: false,
         uploadMethodUsed: 'unknown',
-        steps,
-        finalError: err.message,
+        lastError: { message: err.message },
       };
     }
   }
