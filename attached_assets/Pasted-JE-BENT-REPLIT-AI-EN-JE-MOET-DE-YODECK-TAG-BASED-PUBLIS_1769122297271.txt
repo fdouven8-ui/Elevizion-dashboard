@@ -1,0 +1,104 @@
+JE BENT REPLIT AI EN JE MOET DE YODECK TAG-BASED PUBLISH FLOW FIXEN. VOLG EXACT DIT PLAN.
+
+Context (huidige bug)
+- Publishing faalt op media tag update met:
+  "Object with name=elevizion:ad does not exist."
+- Onze code probeert tags te list/create via /api/v2/tags, maar die endpoint geeft 404.
+- Conclusie: Yodeck Tag CRUD API is NIET beschikbaar. Tags moeten vooraf in Yodeck UI bestaan.
+- We mogen dus NOOIT tags proberen te maken of te “ensure”-en via de API.
+
+Doel
+- Tag-based playlists blijven gebruikt worden.
+- We verwijderen alle “ensureTags/capability probe” logica die /tags gebruikt.
+- We doen alleen:
+  1) Ensure tag-based playlist bestaat (POST/GET /api/v2/tagbased-playlists)
+  2) Assign playlist aan screen (bestaande flow)
+  3) PATCH media met tags, maar ZONDER tags vooraf te creëren/listen.
+- Als tagging faalt omdat de tag niet bestaat, tonen we een duidelijke foutmelding met instructie welke tags de admin 1x in de Yodeck UI moet aanmaken.
+
+BELANGRIJKE FUNCTIONELE REGELS
+1) Verwijder volledig:
+   - GET /api/v2/tags probe
+   - canListTags/canCreateTag capability inferencing
+   - ensureTags() die tags probeert te maken of te valideren via API
+   - elke “YODECK_TAG_API_NOT_AVAILABLE” hard fail; dit mag de publish niet meer stoppen.
+2) Media tagging mag alleen bestaande tags gebruiken.
+3) Gebruik een vaste set “predefined” tags (strings) i.p.v. dynamische tags met IDs.
+   - Gebruik MINIMAAL deze tags:
+     - "elevizion:ad"
+     - "elevizion:advertiser"
+     - "elevizion:plan"
+     - "elevizion:location"
+   - NIET meer: "elevizion:location:<uuid>" etc. (dus geen tag met uuid suffix).
+   - De uuid/ids blijven intern in onze DB en logs, niet als tags in Yodeck.
+4) Als PATCH /media/{id} status 400 geeft met “does not exist”:
+   - Markeer target als FAILED met errorCode "YODECK_TAG_MISSING_PRECREATE_REQUIRED"
+   - errorMessage moet exact uitleggen: “Maak deze tags 1x aan in Yodeck UI: elevizion:ad, elevizion:advertiser, elevizion:plan, elevizion:location”
+   - Voeg de server log toe met dezelfde lijst.
+   - Stop publish netjes (geen infinite retries), en zet plan status FAILED met duidelijke reden.
+
+IMPLEMENTATIE DETAILS (wat je moet aanpassen)
+A) YodeckProbe / capability probe
+- Verwijder probe call naar GET /tags.
+- Verwijder velden canListTags / canCreateTag.
+- Laat probe alleen bestaan voor endpoints die wel bestaan (playlists/screens/media).
+- Zorg dat publish niet meer afhankelijk is van tag capabilities.
+
+B) YodeckTags module/service
+- Refactor: geen “ensure tags exist” meer via API.
+- Laat alleen een helper bestaan die de PREDEFINED_TAGS retourneert en validatie op onze eigen input doet.
+- Voorbeeld:
+  const PREDEFINED_TAGS = ["elevizion:ad","elevizion:advertiser","elevizion:plan","elevizion:location"];
+
+C) Publish flow (YodeckPublish / publishPlan)
+- Waar nu staat:
+  - “Ensuring X tags exist in Yodeck…”
+  - “ENSURE_TAGS…”
+  -> VERWIJDER deze stap volledig.
+- Vervang door:
+  - log: “[YodeckPublish] Tag CRUD API not used; using predefined tags only (must pre-exist in Yodeck UI).”
+- Zorg dat we nog wel tagbased playlists aanmaken (POST /api/v2/tagbased-playlists) zoals eerder.
+
+D) Media tag update
+- Houd PATCH /api/v2/media/{id} met body {"tags":[...]}.
+- Tags die gezet worden moeten nu exact zijn:
+  ["elevizion:ad","elevizion:advertiser","elevizion:plan","elevizion:location"]
+- Logging:
+  - Log de tags set die je probeert te zetten.
+  - Bij error 400 met “does not exist”:
+    - parse response body (error.details.reason.tags) indien aanwezig
+    - zet errorCode = "YODECK_TAG_MISSING_PRECREATE_REQUIRED"
+    - errorMessage bevat lijst met PREDEFINED_TAGS.
+- Geen retries blijven proberen als dit de oorzaak is:
+  - markeer als “permanent error” zodat retry guard niet eindeloos doorgaat.
+
+E) Database / Plan status
+- Zorg dat publishReport.missingTags gevuld wordt met tags die ontbreken als we dat uit de error kunnen halen.
+- Als we niet exact kunnen detecteren welke ontbreken, vul missingTags met alle PREDEFINED_TAGS.
+- lastErrorCode/lastErrorMessage moeten overeenkomen met nieuwe code.
+- Fix ook dat audit event “PLAN_PUBLISHED” NIET gelogd wordt wanneer publish success=false.
+  - Log “PLAN_PUBLISH_FAILED” of iets bestaands, maar “PUBLISHED” alleen bij success.
+
+F) Tagbased playlist schema usage
+- Wanneer je tagbased playlist aanmaakt, zorg dat “tagbased.includes” matcht op "elevizion:ad" (en eventueel workspace filter).
+- content_to_filter moet "only_media" (zoals docs) of wat jullie al gebruiken dat equivalent is.
+- Playlist naam: “Elevizion | <locationName>” of bestaand patroon.
+
+ACCEPTANCE TESTS (moet je ook implementeren)
+1) Unit/integration: probe doet geen GET /tags meer.
+2) Publish flow: als PATCH /media 400 “does not exist”, dan:
+   - plan status FAILED
+   - errorCode = YODECK_TAG_MISSING_PRECREATE_REQUIRED
+   - errorMessage bevat de 4 tags
+   - retryCount stopt met groeien door “permanent error” flag
+3) Happy path (na handmatig tags aanmaken in Yodeck UI):
+   - publish succesvol
+   - playlist ensure OK
+   - media tag update OK
+
+OUTPUT
+- Pas de code aan, update relevante files, en laat me exact zien:
+  - welke bestanden aangepast zijn
+  - de diff/patch (of de belangrijkste codeblokken)
+  - waar ik de PREDEFINED_TAGS kan beheren
+  - hoe ik in logs kan zien dat de nieuwe flow actief is
