@@ -3243,7 +3243,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
           plan: failedPlan,
           message: "Publish mislukt, zie fout in wachtrij",
           error: publishError.message,
-          retryCount: failedPlan?.retryCount || 0
+          retryCount: failedPlan?.retryCount || 0,
+          buildId: global.BUILD_ID,
+          uploadMethodUsed: 'two-step',
         });
       }
       
@@ -3266,7 +3268,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
         report, 
         plan: updatedPlan,
         retryCount: updatedPlan?.retryCount || 0,
-        message: success ? "Publicatie geslaagd" : "Publish mislukt, zie fout in wachtrij"
+        message: success ? "Publicatie geslaagd" : "Publish mislukt, zie fout in wachtrij",
+        buildId: global.BUILD_ID,
+        uploadMethodUsed: 'two-step',
       });
     } catch (error: any) {
       console.error("[PlacementPlans] Error retrying plan:", error);
