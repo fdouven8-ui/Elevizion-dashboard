@@ -1,0 +1,61 @@
+We need publishing to work even if Yodeck does NOT expose a POST endpoint to create playlist items.
+Current fact from logs:
+- GET playlist returns items with keys: id, priority, duration, name, type
+- PUT update requires id for ALL items -> cannot create new items via full update
+
+IMPLEMENT A ROBUST FALLBACK: "placeholder slot replacement".
+
+A) Define placeholders
+1) We will use pre-created placeholder items in each playlist.
+2) Identify placeholder items by one of:
+   - item.name startsWith "ELEVIZION_SLOT"
+   - OR item.name contains "SLOT"
+   - OR (if name not reliable) use duration==1 and type=="media" and maybe name=="Empty" (configurable)
+3) Add config constants:
+   PLACEHOLDER_PREFIX="ELEVIZION_SLOT"
+   MIN_PLACEHOLDER_SLOTS=20  (target number of slots per playlist)
+
+B) Publish algorithm for adding media to playlist
+1) Always do PLAYLIST_GET first.
+2) Try CREATE approach first (optional):
+   - Attempt POST create playlist item (if endpoint exists).
+   - If status is 404/405 or HTML Not Found -> treat as "not supported" and switch to fallback.
+
+3) Fallback: replace an existing placeholder item (guaranteed to have id)
+   - Find the first placeholder item in playlist.items that is not already used by this mediaId.
+   - If found:
+       - Build an UPDATE payload that keeps `id` and required fields.
+       - Update that item so it points to the new media:
+         - if item schema supports "media": set item.media = mediaId
+         - ensure item.type="media"
+         - set item.duration = desiredDuration
+         - set item.priority = nextPriority or keep order
+       - Send the update using the correct Yodeck endpoint for updating an item (not the whole playlist if possible).
+         If there is no item-specific endpoint, do full playlist update but keep ids for ALL items and just change that one item.
+
+4) If NO placeholder exists:
+   - Return a clear error:
+     YODECK_NO_PLACEHOLDER_SLOT
+     message: "No ELEVIZION_SLOT items available. Create placeholders in Yodeck playlist first."
+   - Do NOT keep retrying endlessly.
+
+C) Optional helper to bootstrap placeholders (admin tool)
+1) Add an admin-only checklist page or endpoint that tells:
+   - playlistId
+   - placeholderSlotsFound
+   - placeholderSlotsNeeded
+2) Provide instructions: "Create N items in Yodeck UI named ELEVIZION_SLOT_01..ELEVIZION_SLOT_20"
+
+D) Logging + correctness
+1) Logs must show which path was taken:
+   - PLAYLIST_ITEM_CREATE supported/not supported
+   - PLACEHOLDER_REPLACE used itemId=... oldName=... newMediaId=...
+2) Fix stale errors:
+   - If upload succeeded, do not leave lastErrorCode = YODECK_UPLOAD_FAILED.
+   - On any failure, set lastErrorCode to the real step:
+     YODECK_PLAYLIST_ITEM_CREATE_FAILED / YODECK_PLACEHOLDER_REPLACE_FAILED / YODECK_NO_PLACEHOLDER_SLOT
+
+ACCEPTANCE:
+- Publish succeeds without needing POST create endpoint.
+- Playlist update no longer throws missing_key "id".
+- Logs clearly show placeholder replacement with itemId.

@@ -23,6 +23,48 @@ const REQUEST_TIMEOUT = 120000; // 120 seconds for uploads
 const MAX_RETRIES = 3;
 const BUFFER_FALLBACK_MAX_BYTES = 20 * 1024 * 1024; // 20MB max for buffer fallback
 
+// Placeholder slot configuration for playlist item replacement fallback
+const PLACEHOLDER_PREFIX = "ELEVIZION_SLOT";
+const MIN_PLACEHOLDER_SLOTS = 20;
+
+/**
+ * Check if a playlist item is a placeholder slot (can be reused for new media)
+ * Placeholder items are identified by:
+ * - Name starts with PLACEHOLDER_PREFIX (strict check)
+ * - OR name is exactly "Empty" with short duration
+ * 
+ * Note: Placeholders may already have a media reference (e.g., an "Empty" image),
+ * so we don't require media to be null. We only exclude slots already using our target mediaId.
+ */
+function isPlaceholderSlot(item: any): boolean {
+  const name = (item.name || '').trim();
+  const nameUpper = name.toUpperCase();
+  
+  // Strict check: name must start with ELEVIZION_SLOT
+  const isElevizionSlot = nameUpper.startsWith(PLACEHOLDER_PREFIX);
+  
+  // Alternative: "Empty" placeholder with very short duration (1-2 seconds)
+  const isEmptyPlaceholder = name.toLowerCase() === 'empty' && (item.duration || 0) <= 2;
+  
+  return isElevizionSlot || isEmptyPlaceholder;
+}
+
+/**
+ * Find available placeholder slots that don't already have the target media
+ */
+function findAvailablePlaceholders(items: any[], targetMediaId: number): any[] {
+  return items.filter(item => {
+    if (!isPlaceholderSlot(item)) {
+      return false;
+    }
+    // Exclude if already using target media (avoid duplicates)
+    if (item.media === targetMediaId) {
+      return false;
+    }
+    return true;
+  });
+}
+
 interface YodeckMediaUploadResponse {
   id: number;
   name: string;
@@ -943,27 +985,106 @@ class YodeckPublishService {
         }
       }
       
+      // If POST create failed (404/405), use placeholder slot replacement fallback
       if (!createResult || !createResult.ok) {
-        const errorCode = "YODECK_PLAYLIST_ITEM_CREATE_FAILED";
-        const errorMsg = createResult?.error || "No playlist item create endpoint found";
-        console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
+        const is404Or405 = createResult?.status === 404 || createResult?.status === 405;
         
-        // Persist error in outbox (lastError includes error code prefix)
-        await db.update(integrationOutbox)
-          .set({
-            status: "failed",
-            lastError: `${errorCode}: ${errorMsg}`,
-            processedAt: new Date(),
-            updatedAt: new Date(),
-          })
-          .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+        if (!is404Or405) {
+          // Real error (not just "endpoint not found"), fail immediately
+          const errorCode = "YODECK_PLAYLIST_ITEM_CREATE_FAILED";
+          const errorMsg = createResult?.error || "Playlist item create failed";
+          console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
+          
+          await db.update(integrationOutbox)
+            .set({
+              status: "failed",
+              lastError: `${errorCode}: ${errorMsg}`,
+              processedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+          
+          return { ok: false, error: `${errorCode}: ${errorMsg}` };
+        }
         
-        return { ok: false, error: `${errorCode}: ${errorMsg}` };
+        // Fallback: Replace a placeholder slot
+        console.log(`[YodeckPublish] POST create not supported (404/405), using placeholder slot replacement fallback`);
+        
+        // Find available placeholder slots (ELEVIZION_SLOT prefix, not already using our media)
+        const availablePlaceholders = findAvailablePlaceholders(rawItems, mediaId);
+        console.log(`[YodeckPublish] Found ${availablePlaceholders.length} available placeholder slots in playlist (total items: ${rawItems.length})`);
+        
+        if (availablePlaceholders.length === 0) {
+          const errorCode = "YODECK_NO_PLACEHOLDER_SLOT";
+          const errorMsg = `No available ${PLACEHOLDER_PREFIX} slots found. Create placeholders named "${PLACEHOLDER_PREFIX}_01" to "${PLACEHOLDER_PREFIX}_${MIN_PLACEHOLDER_SLOTS}" in Yodeck playlist.`;
+          console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
+          
+          await db.update(integrationOutbox)
+            .set({
+              status: "failed",
+              lastError: `${errorCode}: ${errorMsg}`,
+              processedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+          
+          return { ok: false, error: `${errorCode}: ${errorMsg}` };
+        }
+        
+        // Use first available placeholder item
+        const targetSlot = availablePlaceholders[0];
+        const targetSlotId = targetSlot.id;
+        const oldName = targetSlot.name;
+        const originalPriority = targetSlot.priority; // Preserve original priority!
+        
+        console.log(`[YodeckPublish] PLACEHOLDER_REPLACE using itemId=${targetSlotId} oldName="${oldName}" originalPriority=${originalPriority} newMediaId=${mediaId}`);
+        
+        // Build updated item - keep id AND priority, only change media/type/duration
+        const updatedItem = {
+          ...targetSlot, // Keep all original fields including id and priority
+          media: mediaId,
+          type: "media",
+          duration: durationSeconds
+          // Do NOT change priority - keep original position in playlist
+        };
+        
+        // Update via full playlist PATCH with all items (including updated one)
+        const updatedItems = rawItems.map((item: any) => {
+          if (item.id === targetSlotId) {
+            return updatedItem;
+          }
+          return item;
+        });
+        
+        const patchResult = await this.makeRequest(
+          "PATCH",
+          `/playlists/${playlistId}`,
+          { items: updatedItems }
+        );
+        
+        if (!patchResult.ok) {
+          const errorCode = "YODECK_PLACEHOLDER_REPLACE_FAILED";
+          const errorMsg = patchResult.error || "Placeholder replacement failed";
+          console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
+          
+          await db.update(integrationOutbox)
+            .set({
+              status: "failed",
+              lastError: `${errorCode}: ${errorMsg}`,
+              processedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+          
+          return { ok: false, error: `${errorCode}: ${errorMsg}` };
+        }
+        
+        console.log(`[YodeckPublish] PLACEHOLDER_REPLACE success itemId=${targetSlotId} mediaId=${mediaId}`);
+      } else {
+        // POST create succeeded
+        const createdItemId = createResult.data?.id;
+        console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE success endpoint=${successEndpoint} createdItemId=${createdItemId}`);
       }
-      
-      // Extract created item ID from response
-      const createdItemId = createResult.data?.id;
-      console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE success endpoint=${successEndpoint} createdItemId=${createdItemId}`)
 
       // VERIFICATION: Re-fetch playlist to confirm media was added (hard requirement)
       await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for Yodeck to process
