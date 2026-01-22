@@ -394,6 +394,10 @@ export const locations = pgTable("locations", {
   loopDurationSeconds: integer("loop_duration_seconds").default(300), // Total loop duration (5 min default)
   exclusivityMode: text("exclusivity_mode").notNull().default("STRICT"), // STRICT = max 1 per competitorGroup, RELAXED = max 2
   yodeckPlaylistId: text("yodeck_playlist_id"), // Ad playlist for this location
+  // Layout configuration for baseline + ads separation
+  yodeckLayoutId: text("yodeck_layout_id"), // Yodeck layout ID for this screen
+  yodeckBaselinePlaylistId: text("yodeck_baseline_playlist_id"), // Baseline playlist (news/weather/placeholder)
+  layoutMode: text("layout_mode").notNull().default("FALLBACK_SCHEDULE"), // LAYOUT | FALLBACK_SCHEDULE
   // Tag-based playlist configuration
   playlistMode: text("playlist_mode").notNull().default("TAG_BASED"), // TAG_BASED | CLASSIC
   playlistTag: text("playlist_tag"), // e.g., "elevizion:location:{locationId}"

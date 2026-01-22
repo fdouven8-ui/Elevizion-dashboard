@@ -15053,6 +15053,31 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         message: `${locationsWithPlaylist[0]?.count || 0} van ${locationCount[0]?.count || 0} locaties hebben een playlist`,
       });
       
+      // 6. Layout support check
+      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
+      const layoutsSupported = await yodeckLayoutService.probeLayoutsSupport();
+      
+      checklist.push({
+        id: "layouts_support",
+        name: "Layouts ondersteuning",
+        status: layoutsSupported ? "ok" : "warning",
+        message: layoutsSupported 
+          ? "Layout API beschikbaar - 2-zone layout mogelijk" 
+          : "Layout API niet beschikbaar - fallback schedule wordt gebruikt",
+      });
+      
+      // 7. Locations with layout configured
+      const locationsWithLayout = await db.select({ count: sql<number>`count(*)` })
+        .from(locations)
+        .where(sql`layout_mode = 'LAYOUT' AND yodeck_layout_id IS NOT NULL`);
+      
+      checklist.push({
+        id: "layouts_configured",
+        name: "Locaties met layout",
+        status: Number(locationsWithLayout[0]?.count) > 0 ? "ok" : "info",
+        message: `${locationsWithLayout[0]?.count || 0} locaties hebben layout mode actief`,
+      });
+      
       const overallStatus = checklist.every(c => c.status === "ok") ? "ok" : 
                             checklist.some(c => c.status === "error") ? "error" : "warning";
       
@@ -15061,6 +15086,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         checklist,
         predefinedTags: PREDEFINED_TAGS,
         capabilities: caps,
+        layoutsSupported,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -15126,6 +15152,52 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     try {
       await db.delete(tagPolicies).where(eq(tagPolicies.id, req.params.id));
       res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // ADMIN: LAYOUTS (Baseline + Ads separation)
+  // ============================================================================
+  
+  app.get("/api/admin/layouts", requireAdminAccess, async (req, res) => {
+    try {
+      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
+      const result = await yodeckLayoutService.getLayoutStatusForLocations();
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  app.post("/api/admin/layouts/apply", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.body;
+      
+      if (!locationId) {
+        return res.status(400).json({ error: "locationId is verplicht" });
+      }
+      
+      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
+      const result = await yodeckLayoutService.applyLayoutToLocation(locationId);
+      
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  app.get("/api/admin/layouts/probe", requireAdminAccess, async (req, res) => {
+    try {
+      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
+      const supported = await yodeckLayoutService.probeLayoutsSupport(true);
+      const status = yodeckLayoutService.getLayoutSupportStatus();
+      
+      res.json({
+        layoutsSupported: supported,
+        lastCheck: status.lastCheck,
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

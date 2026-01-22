@@ -1,0 +1,98 @@
+GA DOOR MET TAAK F: BASELINE CONTENT VS ADS VIA LAYOUTS. Implementeer dit production-ready, maar met een veilige fallback zodat het ook werkt als Yodeck layout/apps (nieuws/weer) nog niet volledig geconfigureerd zijn.
+
+DOEL
+- Elk screen krijgt een vaste “Elevizion Layout” met 2 zones:
+  - Zone BASE: basiscontent (nieuws/weer/klok of fallback playlist)
+  - Zone ADS: tagbased playlist (filter op elevizion:ad)
+- Baseline en Ads zijn strikt gescheiden zodat:
+  1) scherm nooit leeg is
+  2) advertenties altijd op dezelfde plek staan
+  3) onboarding van nieuwe locaties consistent is
+- We willen dit automatisch toepassen bij:
+  - Nieuwe locatie onboarding zodra yodeckScreenId bekend is
+  - Bestaande locaties via een admin “Apply layout” actie
+
+BELANGRIJKE CONSTRAINTS
+- Gebruik GEEN dynamische uuid-tags in playlist filters.
+- Location targeting gebeurt via screen assignment en layout assignment.
+- Als Yodeck “Layout API” niet beschikbaar is in onze omgeving, bouw dan een fallback:
+  - “Layout disabled” maar wel baseline playlist + tagbased ad playlist assigned via schedule.
+  - Toon duidelijke melding in /api/admin/yodeck-setup en in admin UI.
+
+ONTDEKKING / PROBING
+1) Voeg een kleine “YodeckLayoutProbe” toe:
+   - Test of layout endpoints bestaan (bijv. GET /api/v2/layouts of docs equivalent).
+   - Als 404: markeer layoutsUnsupported=true.
+2) Leg in logs vast:
+   - [YodeckLayouts] supported=true/false + endpoint used
+
+DATA MODEL (DB)
+- Voeg aan Location of ScreenMapping (wat jullie al hebben) velden toe:
+  - yodeckLayoutId (nullable)
+  - yodeckBaselinePlaylistId (nullable)
+  - yodeckAdsTagbasedPlaylistId (bestaat al of hergebruik)
+  - layoutMode: "LAYOUT" | "FALLBACK_SCHEDULE" (default: FALLBACK_SCHEDULE tot layout werkt)
+- Voeg migration toe.
+
+LAYOUT STRUCTUUR (EERSTE VERSIE)
+- Maak 1 standaard layout template “Elevizion Standard (16:9)”:
+  - Rechts (70% breed) = ADS zone (tagbased ad playlist)
+  - Links (30% breed) = BASE zone (baseline playlist)
+  - Als je precieze layout schema niet zeker weet: implementeer met de velden uit de Yodeck docs in de repo, en log de volledige request/response bij devMode.
+- Baseline playlist (als nieuws/weer apps te ingewikkeld zijn):
+  - Maak een “Baseline Playlist | <locationName>”
+  - Vul met minimaal 2 items:
+    - klok (als dat kan) of een statische “Welkom / Uw advertentie hier” placeholder afbeelding
+    - optioneel: weer/nieuws later
+  - Als Yodeck geen clock/widget via API ondersteunt, gebruik 1 placeholder media item (image) die we in repo opslaan (assets/baseline-placeholder.png) en uploaden naar Yodeck.
+
+ONBOARDING WIJZIGINGEN (Nieuwe locatie)
+- Zodra yodeckScreenId gekoppeld is:
+  1) ensureBaselinePlaylist(location)
+  2) ensureAdsTagbasedPlaylist(location) (bestaat al)
+  3) if layoutsSupported:
+       ensureLayout(location, baselinePlaylistId, adsPlaylistId)
+       assignLayoutToScreen(screenId, layoutId)
+       set layoutMode="LAYOUT"
+     else:
+       fallbackSchedule:
+         assignBaselinePlaylistToScreen(screenId) (bijv. “always”)
+         assignAdsTagbasedPlaylistToScreen(screenId) (bijv. “always”)
+         set layoutMode="FALLBACK_SCHEDULE"
+- Zorg dat dit idempotent is (zelfde calls herhalen moet safe zijn).
+
+ADMIN UI + ENDPOINTS
+1) Endpoint: POST /api/admin/layouts/apply
+   - body: { locationId } of { screenId }
+   - doet de volledige ensure+assign flow
+   - geeft terug: { ok, mode, layoutId, baselinePlaylistId, adsPlaylistId, logs[] }
+2) Pagina: /admin/layouts
+   - Tabel met locaties:
+     - locationName
+     - yodeckScreenId
+     - layoutMode
+     - layoutId/baselinePlaylistId/adsPlaylistId
+     - knoppen:
+       - “Apply/Repair Layout”
+       - “Open in Yodeck” links (via generateResourceUrls utility)
+3) Update /api/admin/yodeck-setup:
+   - Voeg checks toe:
+     - layoutsSupported?
+     - per locatie: layoutMode status + missing pieces
+
+TESTS / ACCEPTANCE
+- Test 1: layoutsSupported=false (simuleer door probe) => FALLBACK_SCHEDULE werkt en publish blijft werken.
+- Test 2: layoutsSupported=true => layout created+assigned, screen toont baseline + ads zone.
+- Test 3: idempotency => apply 2x geeft dezelfde ids terug zonder duplicates.
+- Log moet zichtbaar zijn:
+  - [YodeckLayouts] ensureLayout OK layoutId=...
+  - [YodeckLayouts] assignLayout OK screenId=...
+
+OPLEVERING
+- Geef mij:
+  - lijst gewijzigde bestanden
+  - migration(s)
+  - waar ik /admin/layouts en apply endpoint kan testen
+  - voorbeeld responses van apply + setup
+  - en welke placeholder asset je hebt toegevoegd (pad + hoe geüpload)
+Maak het minimalistisch en betrouwbaar; geen extra dependencies.
