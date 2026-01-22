@@ -23,47 +23,9 @@ const REQUEST_TIMEOUT = 120000; // 120 seconds for uploads
 const MAX_RETRIES = 3;
 const BUFFER_FALLBACK_MAX_BYTES = 20 * 1024 * 1024; // 20MB max for buffer fallback
 
-// Placeholder slot configuration for playlist item replacement fallback
-const PLACEHOLDER_PREFIX = "ELEVIZION_SLOT";
-const MIN_PLACEHOLDER_SLOTS = 20;
-
-/**
- * Check if a playlist item is a placeholder slot (can be reused for new media)
- * Placeholder items are identified by:
- * - Name starts with PLACEHOLDER_PREFIX (strict check)
- * - OR name is exactly "Empty" with short duration
- * 
- * Note: Placeholders may already have a media reference (e.g., an "Empty" image),
- * so we don't require media to be null. We only exclude slots already using our target mediaId.
- */
-function isPlaceholderSlot(item: any): boolean {
-  const name = (item.name || '').trim();
-  const nameUpper = name.toUpperCase();
-  
-  // Strict check: name must start with ELEVIZION_SLOT
-  const isElevizionSlot = nameUpper.startsWith(PLACEHOLDER_PREFIX);
-  
-  // Alternative: "Empty" placeholder with very short duration (1-2 seconds)
-  const isEmptyPlaceholder = name.toLowerCase() === 'empty' && (item.duration || 0) <= 2;
-  
-  return isElevizionSlot || isEmptyPlaceholder;
-}
-
-/**
- * Find available placeholder slots that don't already have the target media
- */
-function findAvailablePlaceholders(items: any[], targetMediaId: number): any[] {
-  return items.filter(item => {
-    if (!isPlaceholderSlot(item)) {
-      return false;
-    }
-    // Exclude if already using target media (avoid duplicates)
-    if (item.media === targetMediaId) {
-      return false;
-    }
-    return true;
-  });
-}
+// Tag-based playlist configuration
+// Media is tagged with location-specific tags; playlists auto-populate based on tags
+const ELEVIZION_TAG_PREFIX = "elevizion";
 
 interface YodeckMediaUploadResponse {
   id: number;
@@ -151,7 +113,7 @@ class YodeckPublishService {
   }
 
   private async makeRequest<T>(
-    method: "GET" | "POST" | "PATCH" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE" | "PUT",
     endpoint: string,
     body?: any,
     isFormData = false,
@@ -831,7 +793,153 @@ class YodeckPublishService {
   }
 
   /**
-   * Add media to a Yodeck playlist
+   * Update media tags in Yodeck (for tag-based playlist publishing)
+   * Tags associate media with specific locations/advertisers
+   */
+  async updateMediaTags(
+    mediaId: number,
+    tags: string[],
+    idempotencyKey: string,
+    entityId: string
+  ): Promise<{ ok: boolean; error?: string }> {
+    console.log(`[YodeckPublish] MEDIA_TAG_UPDATE starting mediaId=${mediaId} tags=${tags.join(',')}`);
+
+    // Check if already succeeded via outbox
+    const existing = await db.query.integrationOutbox.findFirst({
+      where: and(
+        eq(integrationOutbox.idempotencyKey, idempotencyKey),
+        eq(integrationOutbox.status, "succeeded")
+      ),
+    });
+
+    if (existing) {
+      console.log(`[YodeckPublish] Tags already updated for media ${mediaId}`);
+      return { ok: true };
+    }
+
+    // Upsert outbox record
+    const { storage: storageService } = await import("../storage");
+    const upsertResult = await storageService.upsertOutboxJob({
+      provider: "yodeck",
+      actionType: "update_media_tags",
+      entityType: "placement",
+      entityId,
+      payloadJson: { mediaId, tags },
+      idempotencyKey,
+      status: "processing",
+    });
+    
+    if (upsertResult.isLocked) {
+      console.log(`[YodeckPublish] Tag update job is already being processed`);
+      return { ok: false, error: "ALREADY_PROCESSING" };
+    }
+    
+    await db.update(integrationOutbox)
+      .set({ status: "processing", updatedAt: new Date() })
+      .where(eq(integrationOutbox.id, upsertResult.job.id));
+
+    try {
+      // Try different tag update endpoints/formats
+      const tagPayloads = [
+        { endpoint: `/media/${mediaId}`, method: "PATCH" as const, body: { tags } },
+        { endpoint: `/media/${mediaId}`, method: "PATCH" as const, body: { tag_names: tags } },
+        { endpoint: `/media/${mediaId}`, method: "PUT" as const, body: { tags } },
+      ];
+      
+      let updateResult: { ok: boolean; data?: any; error?: string; status?: number } | null = null;
+      let successEndpoint: string | null = null;
+      
+      for (const attempt of tagPayloads) {
+        const fullUrl = `${YODECK_BASE_URL}${attempt.endpoint}`;
+        console.log(`[YodeckPublish] MEDIA_TAG_UPDATE attempting ${attempt.method} url=${fullUrl} body=${JSON.stringify(attempt.body)}`);
+        
+        const result = await this.makeRequest<any>(attempt.method, attempt.endpoint, attempt.body);
+        
+        if (result.ok) {
+          updateResult = result;
+          successEndpoint = `${attempt.method} ${fullUrl}`;
+          break;
+        }
+        
+        const bodySnippet = result.error?.substring(0, 200) || 'unknown';
+        console.log(`[YodeckPublish] MEDIA_TAG_UPDATE url=${fullUrl} status=${result.status} bodySnippet=${bodySnippet}`);
+        
+        // If not 404/405, this endpoint exists but failed
+        if (result.status !== 404 && result.status !== 405) {
+          updateResult = result;
+          break;
+        }
+      }
+      
+      if (!updateResult || !updateResult.ok) {
+        const errorCode = "YODECK_MEDIA_TAG_UPDATE_FAILED";
+        const errorMsg = updateResult?.error || "Failed to update media tags";
+        console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
+        
+        await db.update(integrationOutbox)
+          .set({
+            status: "failed",
+            lastError: `${errorCode}: ${errorMsg}`,
+            processedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+        
+        return { ok: false, error: `${errorCode}: ${errorMsg}` };
+      }
+      
+      console.log(`[YodeckPublish] MEDIA_TAG_UPDATE success endpoint=${successEndpoint} mediaId=${mediaId}`);
+      
+      await db.update(integrationOutbox)
+        .set({
+          status: "succeeded",
+          responseJson: { success: true, tags },
+          processedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+      
+      return { ok: true };
+    } catch (err: any) {
+      console.error(`[YodeckPublish] Tag update error:`, err.message);
+      await db.update(integrationOutbox)
+        .set({
+          status: "failed",
+          lastError: `YODECK_MEDIA_TAG_UPDATE_FAILED: ${err.message}`,
+          processedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Generate tags for a placement plan
+   * Tags are used to associate media with specific locations
+   */
+  generatePlacementTags(
+    advertiserId: string,
+    planId: string,
+    locationIds: string[]
+  ): string[] {
+    const tags = [
+      `${ELEVIZION_TAG_PREFIX}:ad`,
+      `${ELEVIZION_TAG_PREFIX}:advertiser:${advertiserId}`,
+      `${ELEVIZION_TAG_PREFIX}:plan:${planId}`,
+    ];
+    
+    // Add location-specific tags
+    for (const locationId of locationIds) {
+      tags.push(`${ELEVIZION_TAG_PREFIX}:location:${locationId}`);
+    }
+    
+    return tags;
+  }
+
+  /**
+   * Add media to a Yodeck playlist (DEPRECATED - use tag-based publishing instead)
    */
   async addMediaToPlaylist(
     playlistId: number,
@@ -985,106 +1093,27 @@ class YodeckPublishService {
         }
       }
       
-      // If POST create failed (404/405), use placeholder slot replacement fallback
+      // If POST create failed, report the error (no placeholder fallback - use tag-based publishing instead)
       if (!createResult || !createResult.ok) {
-        const is404Or405 = createResult?.status === 404 || createResult?.status === 405;
+        const errorCode = "YODECK_PLAYLIST_ITEM_CREATE_FAILED";
+        const errorMsg = createResult?.error || "Playlist item create failed. Consider using tag-based publishing.";
+        console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
         
-        if (!is404Or405) {
-          // Real error (not just "endpoint not found"), fail immediately
-          const errorCode = "YODECK_PLAYLIST_ITEM_CREATE_FAILED";
-          const errorMsg = createResult?.error || "Playlist item create failed";
-          console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
-          
-          await db.update(integrationOutbox)
-            .set({
-              status: "failed",
-              lastError: `${errorCode}: ${errorMsg}`,
-              processedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
-          
-          return { ok: false, error: `${errorCode}: ${errorMsg}` };
-        }
+        await db.update(integrationOutbox)
+          .set({
+            status: "failed",
+            lastError: `${errorCode}: ${errorMsg}`,
+            processedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
         
-        // Fallback: Replace a placeholder slot
-        console.log(`[YodeckPublish] POST create not supported (404/405), using placeholder slot replacement fallback`);
-        
-        // Find available placeholder slots (ELEVIZION_SLOT prefix, not already using our media)
-        const availablePlaceholders = findAvailablePlaceholders(rawItems, mediaId);
-        console.log(`[YodeckPublish] Found ${availablePlaceholders.length} available placeholder slots in playlist (total items: ${rawItems.length})`);
-        
-        if (availablePlaceholders.length === 0) {
-          const errorCode = "YODECK_NO_PLACEHOLDER_SLOT";
-          const errorMsg = `No available ${PLACEHOLDER_PREFIX} slots found. Create placeholders named "${PLACEHOLDER_PREFIX}_01" to "${PLACEHOLDER_PREFIX}_${MIN_PLACEHOLDER_SLOTS}" in Yodeck playlist.`;
-          console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
-          
-          await db.update(integrationOutbox)
-            .set({
-              status: "failed",
-              lastError: `${errorCode}: ${errorMsg}`,
-              processedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
-          
-          return { ok: false, error: `${errorCode}: ${errorMsg}` };
-        }
-        
-        // Use first available placeholder item
-        const targetSlot = availablePlaceholders[0];
-        const targetSlotId = targetSlot.id;
-        const oldName = targetSlot.name;
-        const originalPriority = targetSlot.priority; // Preserve original priority!
-        
-        console.log(`[YodeckPublish] PLACEHOLDER_REPLACE using itemId=${targetSlotId} oldName="${oldName}" originalPriority=${originalPriority} newMediaId=${mediaId}`);
-        
-        // Build updated item - keep id AND priority, only change media/type/duration
-        const updatedItem = {
-          ...targetSlot, // Keep all original fields including id and priority
-          media: mediaId,
-          type: "media",
-          duration: durationSeconds
-          // Do NOT change priority - keep original position in playlist
-        };
-        
-        // Update via full playlist PATCH with all items (including updated one)
-        const updatedItems = rawItems.map((item: any) => {
-          if (item.id === targetSlotId) {
-            return updatedItem;
-          }
-          return item;
-        });
-        
-        const patchResult = await this.makeRequest(
-          "PATCH",
-          `/playlists/${playlistId}`,
-          { items: updatedItems }
-        );
-        
-        if (!patchResult.ok) {
-          const errorCode = "YODECK_PLACEHOLDER_REPLACE_FAILED";
-          const errorMsg = patchResult.error || "Placeholder replacement failed";
-          console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
-          
-          await db.update(integrationOutbox)
-            .set({
-              status: "failed",
-              lastError: `${errorCode}: ${errorMsg}`,
-              processedAt: new Date(),
-              updatedAt: new Date(),
-            })
-            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
-          
-          return { ok: false, error: `${errorCode}: ${errorMsg}` };
-        }
-        
-        console.log(`[YodeckPublish] PLACEHOLDER_REPLACE success itemId=${targetSlotId} mediaId=${mediaId}`);
-      } else {
-        // POST create succeeded
-        const createdItemId = createResult.data?.id;
-        console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE success endpoint=${successEndpoint} createdItemId=${createdItemId}`);
+        return { ok: false, error: `${errorCode}: ${errorMsg}` };
       }
+      
+      // POST create succeeded
+      const createdItemId = createResult.data?.id;
+      console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE success endpoint=${successEndpoint} createdItemId=${createdItemId}`);
 
       // VERIFICATION: Re-fetch playlist to confirm media was added (hard requirement)
       await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for Yodeck to process
@@ -1276,57 +1305,39 @@ class YodeckPublishService {
 
       report.yodeckMediaId = String(uploadResult.mediaId);
 
-      // Step 2: Add to each target playlist
+      // Step 2: Tag-based publishing - tag media with all target locations at once
+      // This is scalable (works for 100s of screens) and doesn't require playlist item management
+      const locationIds = approvedTargets.map(t => t.locationId);
+      const tags = this.generatePlacementTags(plan.advertiserId, planId, locationIds);
+      
+      const tagIdempotencyKey = crypto
+        .createHash("sha256")
+        .update(`tags:${planId}:${uploadResult.mediaId}:${locationIds.join(',')}`)
+        .digest("hex");
+      
+      console.log(`[YodeckPublish] Using tag-based publishing for ${locationIds.length} locations`);
+      
+      const tagResult = await this.updateMediaTags(
+        uploadResult.mediaId,
+        tags,
+        tagIdempotencyKey,
+        planId
+      );
+      
+      // Update target reports based on tag result
       for (const target of approvedTargets) {
         const targetReport: { locationId: string; status: string; error?: string } = {
           locationId: target.locationId,
-          status: "pending",
+          status: tagResult.ok ? "tagged" : "failed",
+          ...(tagResult.error ? { error: tagResult.error } : {})
         };
-
-        try {
-          // Get location's yodeck playlist ID
-          const location = await db.query.locations.findFirst({
-            where: eq(locations.id, target.locationId),
-          });
-
-          if (!location?.yodeckPlaylistId) {
-            targetReport.status = "failed";
-            targetReport.error = "No yodeckPlaylistId configured";
-            report.failedCount++;
-            report.targets.push(targetReport);
-            continue;
-          }
-
-          const playlistIdempotencyKey = crypto
-            .createHash("sha256")
-            .update(`playlist:${planId}:${target.locationId}:${uploadResult.mediaId}`)
-            .digest("hex");
-
-          // Parse duration from decimal string
-          const durationSeconds = asset.durationSeconds ? parseFloat(String(asset.durationSeconds)) : 10;
-
-          const addResult = await this.addMediaToPlaylist(
-            parseInt(location.yodeckPlaylistId),
-            uploadResult.mediaId,
-            durationSeconds,
-            playlistIdempotencyKey,
-            target.locationId
-          );
-
-          if (!addResult.ok) {
-            targetReport.status = "failed";
-            targetReport.error = addResult.error;
-            report.failedCount++;
-          } else {
-            targetReport.status = "added_to_playlist";
-            report.successCount++;
-          }
-        } catch (err: any) {
-          targetReport.status = "failed";
-          targetReport.error = err.message;
+        
+        if (tagResult.ok) {
+          report.successCount++;
+        } else {
           report.failedCount++;
         }
-
+        
         report.targets.push(targetReport);
       }
 

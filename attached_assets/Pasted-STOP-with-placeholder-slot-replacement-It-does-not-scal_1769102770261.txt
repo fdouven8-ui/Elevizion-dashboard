@@ -1,0 +1,53 @@
+STOP with placeholder slot replacement. It does not scale (100s of screens).
+We must eliminate any requirement to manually create items in playlists.
+
+TASK: Remove placeholder logic and implement scalable publishing via TAG-BASED playlists.
+
+1) Delete/disable placeholder replacement code paths completely.
+- No ELEVIZION_SLOT detection.
+- No requirement to pre-create items.
+- If playlist item create endpoint doesn't exist, we DO NOT fallback to placeholders.
+
+2) Implement Tag-based playlists approach:
+- For each location (screen location), define a unique tag:
+  playlistTag = `elevizion:location:${locationId}`
+- Publishing an ad to a location = tagging the media with playlistTag.
+- Therefore, publish flow becomes:
+  a) two-step upload (already works)
+  b) update media tags to include:
+     - `elevizion:ad`
+     - `elevizion:advertiser:${advertiserId}`
+     - `elevizion:plan:${planId}`
+     - for each approved target: playlistTag
+  c) mark placement/plan as PUBLISHED if tagging succeeded
+
+3) Implement "update media tags" API call to Yodeck:
+- Try the correct endpoint by probing in code (one-time):
+  A) PATCH `${BASE}/media/${mediaId}` body: { tags: [...] }
+  B) PUT   `${BASE}/media/${mediaId}` body: { tags: [...] }
+  C) PATCH `${BASE}/media/${mediaId}` body: { tag_names: [...] }
+  D) If Yodeck returns the media object, detect which field holds tags and use that format.
+- Always log: MEDIA_TAG_UPDATE url=... status=... content-type=... bodySnippet=...
+
+4) Ensure each location uses a tag-based playlist in Yodeck:
+- Add a field in DB: location.playlistMode = "TAG_BASED" | "CLASSIC"
+- Default new locations to TAG_BASED.
+- For existing locations:
+  - Add an admin UI field to store playlistTag and playlistMode.
+  - If playlistMode is CLASSIC, show a warning: "Classic playlists require manual item management, not supported for scale."
+
+5) Optional: create tag-based playlist via API (if possible)
+- Try to create playlist via API only if endpoint exists; otherwise, user creates 1 playlist per location once.
+- This is acceptable: one-time per location, not per ad.
+
+6) Status & errors
+- If tag update fails:
+  lastErrorCode = "YODECK_MEDIA_TAG_UPDATE_FAILED"
+- If tag update succeeds:
+  plan.status = PUBLISHED, publishedAt set, failedAt cleared
+- Stop leaving lastErrorCode stuck on YODECK_UPLOAD_FAILED.
+
+ACCEPTANCE:
+- Publishing never calls playlist update or playlist item create.
+- No placeholder setup needed.
+- Publish succeeds by tagging media for the target location(s).

@@ -394,6 +394,9 @@ export const locations = pgTable("locations", {
   loopDurationSeconds: integer("loop_duration_seconds").default(300), // Total loop duration (5 min default)
   exclusivityMode: text("exclusivity_mode").notNull().default("STRICT"), // STRICT = max 1 per competitorGroup, RELAXED = max 2
   yodeckPlaylistId: text("yodeck_playlist_id"), // Ad playlist for this location
+  // Tag-based playlist configuration
+  playlistMode: text("playlist_mode").notNull().default("TAG_BASED"), // TAG_BASED | CLASSIC
+  playlistTag: text("playlist_tag"), // e.g., "elevizion:location:{locationId}"
   lastSyncAt: timestamp("last_sync_at"), // Last Yodeck sync time
   // Reporting review flag - set when visitor data exceeds configured limits
   needsReview: boolean("needs_review").default(false), // True if visitorData needs manual review
