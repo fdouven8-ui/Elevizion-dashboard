@@ -1,0 +1,213 @@
+KOPIEER/PLAK DIT IN REPLIT (1 PROMPT) — DOEL: END-TO-END UPLOAD + PUBLISH WERKT, SCHAALBAAR, ZONDER HANDWERK.
+
+CONTEXT:
+- Two-step upload naar Yodeck werkt al (POST /media -> get_upload_url -> PUT presigned).
+- Playlist item updates zijn onbetrouwbaar (items hebben id; update kan geen nieuwe items aanmaken).
+- We willen schaalbaar: TAG-BASED publishing (media tags) + TAG-BASED playlists per locatie.
+- GEEN placeholders, GEEN replace-in-place, GEEN classic playlist-item updates.
+
+EINDRESULTAAT:
+Na POST /api/placement-plans/:id/retry?force=1:
+1) media upload/reuse -> mediaId
+2) voor ELKE target locatie: automatisch een TAG-BASED playlist bestaat + is correct geconfigureerd
+3) media wordt in 1 API call getagd met alle locatie-tags + advertentie tags
+4) verify tags op media
+5) plan status wordt PUBLISHED + correcte publishReport; geen “FAILED” blijft hangen
+
+========================================================
+A) YODECK CLIENT (1 bron van waarheid)
+========================================================
+1) Maak/gebruik één yodeckClient (bv. src/services/yodeckClient.ts):
+- BASE_URL = "https://app.yodeck.com/api/v2"
+- Auth header EXACT:
+  Authorization: "Token " + process.env.YODECK_LABEL + ":" + process.env.YODECK_AUTH_TOKEN
+  (of als je al 1 env var hebt met “label:token”, gebruik die exact)
+- makeRequest(method, path, { json, headers })
+- Log ALTIJD per request:
+  [Yodeck] <method> url=<fullUrl> status=<status> ct=<content-type> bodySnippet=<first 2000 chars>
+
+2) Zorg dat makeRequest JSON netjes verwerkt:
+- Als ct application/json => parse json
+- Anders => text
+- Return altijd { ok, status, ct, data?, text? }
+
+========================================================
+B) CAPABILITY PROBE (zonder gokken)
+========================================================
+3) Voeg een probe toe (1x bij boot + admin endpoint):
+- GET /playlists (kan lijst?)
+- GET /playlists/{id} (kan details?)
+- POST /playlists (kan create?)
+- PATCH/PUT /media/{id} (kan tags setten? + welke fieldname?)
+- GET /media/{id} (tags field detectie)
+Sla op in memory “yodeckCapabilities”:
+{
+  canListPlaylists,
+  canGetPlaylist,
+  canCreatePlaylist,
+  canUpdateMediaTags,
+  tagUpdateMethod: "PATCH"|"PUT",
+  tagFieldName: "tags"|"tag_names"|...,
+  playlistCreateSchemaHint: {...}
+}
+Admin endpoint:
+GET /api/integrations/yodeck/capabilities => return dit object + laatste probe logs.
+
+BELANGRIJK:
+- Als canCreatePlaylist of canUpdateMediaTags false => HARD FAIL met duidelijke error + yodeck response bodySnippet.
+
+========================================================
+C) TAG STRUCTUUR (vast)
+========================================================
+4) Tag structuur exact:
+- elevizion:ad
+- elevizion:advertiser:<advertiserId>
+- elevizion:plan:<planId>
+- elevizion:location:<locationId>  (voor elke target locatie)
+
+5) Per locatie:
+playlistTag = "elevizion:location:" + locationId
+
+========================================================
+D) DATA MODEL (locaties)
+========================================================
+6) Breid Location model uit (db + types):
+- playlistMode: "TAG_BASED" (default)
+- playlistTag: string (default = formula hierboven)
+- yodeckPlaylistId: number|null
+- yodeckScreenId: number|null (als je dit al hebt, hergebruik; anders haal je uit bestaande mapping)
+- yodeckPlaylistVerifiedAt: timestamp|null
+- yodeckPlaylistVerifyStatus: "OK"|"MISSING"|"MISCONFIGURED"|"UNKNOWN"
+- lastYodeckVerifyError: string|null
+
+========================================================
+E) AUTOMATISCH: ENSURE TAG-BASED PLAYLIST PER LOCATIE
+========================================================
+7) Implementeer ensureTagBasedPlaylist(locationId):
+Doel: Location heeft een yodeckPlaylistId die een TAG-BASED playlist is die filtert op location.playlistTag,
+EN die playlist is gekoppeld aan de juiste screen(s) van die locatie.
+
+Stappen:
+a) Load location from DB; ensure playlistTag set (indien leeg: set formule).
+b) Als location.yodeckPlaylistId bestaat:
+   - verifyTagBasedPlaylist(location) via GET /playlists/{id}
+   - als OK: ga door naar “ensurePlaylistAssignedToScreens”
+   - als MISCONFIGURED: FIX via API (PATCH/PUT /playlists/{id}) zodat filter/tag rule = playlistTag
+c) Als location.yodeckPlaylistId ontbreekt:
+   - require yodeckCapabilities.canCreatePlaylist == true, anders HARD FAIL:
+     errorCode="YODECK_PLAYLIST_CREATE_NOT_SUPPORTED"
+   - Create playlist via POST /playlists met:
+     name: `EVZ ${location.name || locationId}`
+     description: `Auto-managed by Elevizion. Filter tag: ${playlistTag}`
+     en het veld/structuur om “tag-based filter” aan te zetten op playlistTag.
+     (Gebruik capability probe schema hint: kijk hoe Yodeck playlists teruggeven: type/rules/filters/tags/query/etc.
+      Bouw exact payload passend bij dat schema. Niet gokken; log keys en gebruik een echte playlist response als template.)
+   - Save returned playlistId in location.yodeckPlaylistId
+   - Verify opnieuw
+
+d) ensurePlaylistAssignedToScreens(location):
+   - Zorg dat de playlist daadwerkelijk op de screen(s) van deze locatie draait.
+   - Gebruik de API die jij al gebruikt/kan gebruiken om screen config te zetten.
+   - Als je geen screenId hebt: haal hem op via je bestaande Yodeck sync (screens list) en match op uuid/displayId.
+   - Als assignment endpoint niet bestaat => HARD FAIL:
+     errorCode="YODECK_PLAYLIST_ASSIGN_NOT_SUPPORTED"
+
+Logging:
+- [YodeckPublish] ENSURE_PLAYLIST locationId=... playlistId=... verify=OK|FIXED|CREATED
+- [YodeckPublish] ENSURE_ASSIGN screenId=... playlistId=... ok=true|false
+
+========================================================
+F) PUBLISH FLOW (alleen tags, geen playlist items)
+========================================================
+8) Pas publishPlan(planId) aan:
+- Gebruik bestaande twoStepUploadMedia() (werkt al)
+- Bepaal targets = approvedTargets (locations)
+- Voor elke target:
+   await ensureTagBasedPlaylist(locationId)
+- Compose tagsToApply:
+  unique([
+    "elevizion:ad",
+    `elevizion:advertiser:${advertiserId}`,
+    `elevizion:plan:${planId}`,
+    ...targets.map(t => `elevizion:location:${t.locationId}`)
+  ])
+
+9) Update media tags (1 call):
+- Vereist yodeckCapabilities.canUpdateMediaTags == true
+- Call <tagUpdateMethod> /media/{mediaId} met body:
+  { <tagFieldName>: tagsToApply }
+- Log: MEDIA_TAG_UPDATE ok/status/ct/bodySnippet
+
+10) Verify tags (hard bewijs):
+- GET /media/{mediaId}
+- Lees tags via tagFieldName (of detecteer uit response)
+- missing = tagsToApply.filter(t => !returnedTags.includes(t))
+- Als missing leeg => OK
+- Anders => HARD FAIL:
+  errorCode="YODECK_MEDIA_TAG_VERIFY_FAILED"
+  include missing + yodeck response snippet
+
+11) Finalize plan status (belangrijk):
+- Als OK:
+  plan.status = "PUBLISHED"
+  plan.publishedAt = now
+  plan.failedAt = null
+  plan.lastErrorCode = null
+  plan.lastErrorMessage = null
+  plan.publishReport = {
+    startedAt, completedAt, totalTargets, successCount: totalTargets, failedCount: 0,
+    yodeckMediaId: String(mediaId),
+    tagsApplied: tagsToApply
+  }
+- Als FAIL:
+  plan.status = "FAILED"
+  plan.failedAt = now
+  plan.lastErrorCode = <real errorCode>
+  plan.lastErrorMessage = <real message>
+  publishReport.failedCount etc.
+
+STOP met:
+- addMediaToPlaylist
+- playlist update items
+- placeholders/slots
+Alles moet via ensureTagBasedPlaylist + media tags.
+
+========================================================
+G) ADMIN/DEBUG ENDPOINTS (zodat ik direct kan zien dat het werkt)
+========================================================
+12) Voeg endpoints toe:
+- GET /api/integrations/yodeck/capabilities  (probe output)
+- POST /api/sync/yodeck/ensure-tag-playlists (batch ensure voor alle locaties; admin-only)
+- GET /api/locations/:id/yodeck-status (toon playlistId, playlistTag, verifyStatus, screen assignment)
+
+13) Zorg dat /api/placement-plans/:id/retry response ALTIJD bevat:
+{
+  success,
+  buildId,
+  uploadMethodUsed,
+  yodeckMediaId,
+  tagsAppliedCount,
+  missingTags,
+  perLocation: [{locationId, playlistId, verifyStatus, assignStatus}],
+  errorCode,
+  errorMessage
+}
+
+========================================================
+H) ACCEPTATIE (MOET JE UITVOEREN EN LOGGEN)
+========================================================
+14) Draai:
+- POST /api/sync/yodeck/ensure-tag-playlists  (moet playlists aanmaken + assignen)
+- POST /api/placement-plans/:id/retry?force=1 (moet publishen)
+In logs moet je zien:
+- ENSURE_PLAYLIST ... CREATED/OK
+- ENSURE_ASSIGN ... ok=true
+- MEDIA_TAG_UPDATE ... status=200/204
+- MEDIA_TAG_VERIFY ok=true missing=[]
+En plan.status wordt PUBLISHED.
+
+LEVER OP:
+- Exacte files die je aangepast hebt
+- 1 voorbeeld van een succesvolle publish log + retry response JSON
+
+START NU MET IMPLEMENTEREN. GEEN PLACEHOLDERS, GEEN REPLACE, GEEN CLASSIC ITEMS.

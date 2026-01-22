@@ -397,6 +397,9 @@ export const locations = pgTable("locations", {
   // Tag-based playlist configuration
   playlistMode: text("playlist_mode").notNull().default("TAG_BASED"), // TAG_BASED | CLASSIC
   playlistTag: text("playlist_tag"), // e.g., "elevizion:location:{locationId}"
+  yodeckPlaylistVerifiedAt: timestamp("yodeck_playlist_verified_at"), // Last verification time
+  yodeckPlaylistVerifyStatus: text("yodeck_playlist_verify_status"), // OK | MISSING | MISCONFIGURED | UNKNOWN
+  lastYodeckVerifyError: text("last_yodeck_verify_error"), // Last verification error message
   lastSyncAt: timestamp("last_sync_at"), // Last Yodeck sync time
   // Reporting review flag - set when visitor data exceeds configured limits
   needsReview: boolean("needs_review").default(false), // True if visitorData needs manual review

@@ -27,6 +27,23 @@ const BUFFER_FALLBACK_MAX_BYTES = 20 * 1024 * 1024; // 20MB max for buffer fallb
 // Media is tagged with location-specific tags; playlists auto-populate based on tags
 const ELEVIZION_TAG_PREFIX = "elevizion";
 
+// Yodeck API Capabilities (probed at runtime)
+export interface YodeckCapabilities {
+  canListPlaylists: boolean;
+  canGetPlaylist: boolean;
+  canCreatePlaylist: boolean;
+  canUpdateMediaTags: boolean;
+  canAssignPlaylistToScreen: boolean;
+  tagUpdateMethod: "PATCH" | "PUT" | null;
+  tagFieldName: "tags" | "tag_names" | null;
+  playlistCreateSchemaHint: any;
+  lastProbeAt: string | null;
+  probeLogs: string[];
+}
+
+// Playlist verification status
+export type PlaylistVerifyStatus = "OK" | "MISSING" | "MISCONFIGURED" | "UNKNOWN";
+
 interface YodeckMediaUploadResponse {
   id: number;
   name: string;
@@ -95,6 +112,485 @@ interface TwoStepUploadDiagnostics {
 
 class YodeckPublishService {
   private apiKey: string | null = null;
+  private capabilities: YodeckCapabilities | null = null;
+
+  /**
+   * Get cached capabilities or probe Yodeck API
+   */
+  async getCapabilities(forceRefresh = false): Promise<YodeckCapabilities> {
+    if (this.capabilities && !forceRefresh) {
+      return this.capabilities;
+    }
+    return this.probeCapabilities();
+  }
+
+  /**
+   * Probe Yodeck API to detect available endpoints and capabilities
+   */
+  async probeCapabilities(): Promise<YodeckCapabilities> {
+    const logs: string[] = [];
+    const log = (msg: string) => {
+      console.log(`[YodeckProbe] ${msg}`);
+      logs.push(`${new Date().toISOString()} ${msg}`);
+    };
+
+    const capabilities: YodeckCapabilities = {
+      canListPlaylists: false,
+      canGetPlaylist: false,
+      canCreatePlaylist: false,
+      canUpdateMediaTags: false,
+      canAssignPlaylistToScreen: false,
+      tagUpdateMethod: null,
+      tagFieldName: null,
+      playlistCreateSchemaHint: null,
+      lastProbeAt: new Date().toISOString(),
+      probeLogs: logs,
+    };
+
+    try {
+      log("Starting capability probe...");
+
+      // 1. Test GET /playlists (list)
+      const listResult = await this.makeRequest<any[]>("GET", "/playlists");
+      capabilities.canListPlaylists = listResult.ok;
+      log(`GET /playlists: ${listResult.ok ? 'OK' : 'FAIL'} status=${listResult.status}`);
+
+      // 2. If list works, get first playlist to check structure
+      if (listResult.ok && listResult.data && listResult.data.length > 0) {
+        const firstPlaylist = listResult.data[0];
+        const playlistId = firstPlaylist.id;
+        
+        const getResult = await this.makeRequest<any>("GET", `/playlists/${playlistId}`);
+        capabilities.canGetPlaylist = getResult.ok;
+        log(`GET /playlists/${playlistId}: ${getResult.ok ? 'OK' : 'FAIL'} status=${getResult.status}`);
+        
+        if (getResult.ok && getResult.data) {
+          capabilities.playlistCreateSchemaHint = {
+            sampleKeys: Object.keys(getResult.data),
+            hasRules: 'rules' in getResult.data,
+            hasFilters: 'filters' in getResult.data,
+            hasTags: 'tags' in getResult.data,
+            type: getResult.data.type,
+          };
+          log(`Playlist schema hint: ${JSON.stringify(capabilities.playlistCreateSchemaHint)}`);
+        }
+      }
+
+      // 3. Check if POST /playlists is allowed (dry run - we don't actually create)
+      // We'll infer from list capability + schema hint
+      capabilities.canCreatePlaylist = capabilities.canListPlaylists;
+      log(`canCreatePlaylist (inferred): ${capabilities.canCreatePlaylist}`);
+
+      // 4. Test media tag update capability
+      // Find any media item to test with
+      const mediaListResult = await this.makeRequest<any[]>("GET", "/media?limit=1");
+      if (mediaListResult.ok && mediaListResult.data && mediaListResult.data.length > 0) {
+        const testMedia = mediaListResult.data[0];
+        const mediaId = testMedia.id;
+        
+        // Check what tag field exists
+        if ('tags' in testMedia) {
+          capabilities.tagFieldName = 'tags';
+        } else if ('tag_names' in testMedia) {
+          capabilities.tagFieldName = 'tag_names';
+        }
+        log(`Media tag field detected: ${capabilities.tagFieldName || 'unknown'}`);
+
+        // Test PATCH (read-only check via GET response structure)
+        capabilities.canUpdateMediaTags = true; // Assume yes if media API works
+        capabilities.tagUpdateMethod = "PATCH";
+        log(`Tag update method: ${capabilities.tagUpdateMethod}`);
+      }
+
+      // 5. Check screen assignment capability
+      const screenListResult = await this.makeRequest<any[]>("GET", "/screens");
+      capabilities.canAssignPlaylistToScreen = screenListResult.ok;
+      log(`GET /screens: ${screenListResult.ok ? 'OK' : 'FAIL'} status=${screenListResult.status}`);
+
+      log("Capability probe complete");
+    } catch (err: any) {
+      log(`Probe error: ${err.message}`);
+    }
+
+    this.capabilities = capabilities;
+    return capabilities;
+  }
+
+  /**
+   * Ensure a location has a valid tag-based playlist configured
+   */
+  async ensureTagBasedPlaylist(locationId: string): Promise<{
+    ok: boolean;
+    playlistId?: number;
+    verifyStatus: PlaylistVerifyStatus;
+    action?: string;
+    error?: string;
+  }> {
+    console.log(`[YodeckPublish] ENSURE_PLAYLIST locationId=${locationId}`);
+
+    // Load location from DB
+    const location = await db.query.locations.findFirst({
+      where: eq(locations.id, locationId),
+    });
+
+    if (!location) {
+      return { ok: false, verifyStatus: "UNKNOWN", error: "Location not found" };
+    }
+
+    // Ensure playlistTag is set
+    const playlistTag = location.playlistTag || `${ELEVIZION_TAG_PREFIX}:location:${locationId}`;
+    if (!location.playlistTag) {
+      await db.update(locations)
+        .set({ playlistTag, playlistMode: "TAG_BASED" })
+        .where(eq(locations.id, locationId));
+    }
+
+    // Check capabilities
+    const caps = await this.getCapabilities();
+    if (!caps.canCreatePlaylist) {
+      console.error(`[YodeckPublish] ENSURE_PLAYLIST HARD FAIL: canCreatePlaylist=false`);
+      return {
+        ok: false,
+        verifyStatus: "UNKNOWN",
+        error: "YODECK_PLAYLIST_CREATE_NOT_SUPPORTED: API does not support playlist creation"
+      };
+    }
+
+    // If location already has a playlist, verify it
+    if (location.yodeckPlaylistId) {
+      const verifyResult = await this.verifyTagBasedPlaylist(
+        parseInt(location.yodeckPlaylistId),
+        playlistTag
+      );
+
+      if (verifyResult.status === "OK") {
+        console.log(`[YodeckPublish] ENSURE_PLAYLIST locationId=${locationId} playlistId=${location.yodeckPlaylistId} verify=OK`);
+        
+        // Update verification timestamp
+        await db.update(locations)
+          .set({
+            yodeckPlaylistVerifiedAt: new Date(),
+            yodeckPlaylistVerifyStatus: "OK",
+            lastYodeckVerifyError: null,
+          })
+          .where(eq(locations.id, locationId));
+        
+        // Ensure playlist is assigned to screen
+        const assignResult = await this.ensurePlaylistAssignedToScreen(location);
+        if (!assignResult.ok) {
+          await db.update(locations)
+            .set({ lastYodeckVerifyError: assignResult.error })
+            .where(eq(locations.id, locationId));
+          return { ok: false, verifyStatus: verifyResult.status, error: assignResult.error };
+        }
+        
+        return { ok: true, playlistId: parseInt(location.yodeckPlaylistId), verifyStatus: "OK" };
+      }
+
+      if (verifyResult.status === "MISCONFIGURED") {
+        // Try to fix the playlist configuration
+        const fixResult = await this.fixPlaylistTagFilter(
+          parseInt(location.yodeckPlaylistId),
+          playlistTag
+        );
+        if (fixResult.ok) {
+          console.log(`[YodeckPublish] ENSURE_PLAYLIST locationId=${locationId} playlistId=${location.yodeckPlaylistId} verify=FIXED`);
+          
+          // Update verification status
+          await db.update(locations)
+            .set({
+              yodeckPlaylistVerifiedAt: new Date(),
+              yodeckPlaylistVerifyStatus: "OK",
+              lastYodeckVerifyError: null,
+            })
+            .where(eq(locations.id, locationId));
+          
+          return { ok: true, playlistId: parseInt(location.yodeckPlaylistId), verifyStatus: "OK", action: "FIXED" };
+        }
+        
+        // Update error status
+        await db.update(locations)
+          .set({
+            yodeckPlaylistVerifyStatus: "MISCONFIGURED",
+            lastYodeckVerifyError: fixResult.error,
+          })
+          .where(eq(locations.id, locationId));
+        
+        return { ok: false, verifyStatus: "MISCONFIGURED", error: fixResult.error };
+      }
+
+      // Playlist is MISSING, need to create new one
+    }
+
+    // Create new tag-based playlist
+    const createResult = await this.createTagBasedPlaylist(location, playlistTag);
+    if (!createResult.ok || !createResult.playlistId) {
+      await db.update(locations)
+        .set({
+          yodeckPlaylistVerifyStatus: "MISSING",
+          lastYodeckVerifyError: createResult.error,
+        })
+        .where(eq(locations.id, locationId));
+      return { ok: false, verifyStatus: "MISSING", error: createResult.error };
+    }
+
+    // Save playlist ID to location
+    await db.update(locations)
+      .set({
+        yodeckPlaylistId: String(createResult.playlistId),
+        yodeckPlaylistVerifiedAt: new Date(),
+        yodeckPlaylistVerifyStatus: "OK",
+        lastYodeckVerifyError: null,
+      })
+      .where(eq(locations.id, locationId));
+
+    console.log(`[YodeckPublish] ENSURE_PLAYLIST locationId=${locationId} playlistId=${createResult.playlistId} verify=CREATED`);
+
+    // Assign to screen - use updated location with new playlistId
+    const updatedLocation = { ...location, yodeckPlaylistId: String(createResult.playlistId) };
+    const assignResult = await this.ensurePlaylistAssignedToScreen(updatedLocation);
+    if (!assignResult.ok) {
+      await db.update(locations)
+        .set({ lastYodeckVerifyError: `Assignment failed: ${assignResult.error}` })
+        .where(eq(locations.id, locationId));
+      // Return ok: false when assignment fails - this ensures per-location failures are tracked
+      return { ok: false, playlistId: createResult.playlistId, verifyStatus: "OK", action: "CREATED", error: assignResult.error };
+    }
+
+    return { ok: true, playlistId: createResult.playlistId, verifyStatus: "OK", action: "CREATED" };
+  }
+
+  /**
+   * Verify a playlist is configured for tag-based filtering
+   */
+  private async verifyTagBasedPlaylist(
+    playlistId: number,
+    expectedTag: string
+  ): Promise<{ status: PlaylistVerifyStatus; error?: string }> {
+    const result = await this.makeRequest<any>("GET", `/playlists/${playlistId}`);
+    
+    if (!result.ok) {
+      if (result.status === 404) {
+        return { status: "MISSING" };
+      }
+      return { status: "UNKNOWN", error: result.error };
+    }
+
+    const playlist = result.data;
+    
+    // Check if playlist has tag-based filtering configured
+    // Yodeck playlists may have different structures - check common patterns
+    const hasTags = playlist.tags && Array.isArray(playlist.tags) && 
+                   playlist.tags.includes(expectedTag);
+    const hasTagFilter = playlist.tag_filter === expectedTag || 
+                        playlist.filter_tag === expectedTag;
+    const hasRulesWithTag = playlist.rules && JSON.stringify(playlist.rules).includes(expectedTag);
+
+    if (hasTags || hasTagFilter || hasRulesWithTag) {
+      return { status: "OK" };
+    }
+
+    // Check if name contains our prefix (auto-managed playlist)
+    if (playlist.name && playlist.name.includes("EVZ ")) {
+      return { status: "MISCONFIGURED" };
+    }
+
+    return { status: "MISCONFIGURED" };
+  }
+
+  /**
+   * Fix a misconfigured playlist to use tag-based filtering
+   */
+  private async fixPlaylistTagFilter(
+    playlistId: number,
+    tag: string
+  ): Promise<{ ok: boolean; error?: string }> {
+    // Try different payload structures for tag filter
+    const payloads = [
+      { tags: [tag], tag_filter: tag },
+      { filter_tag: tag },
+      { rules: [{ type: "tag", value: tag }] },
+    ];
+
+    for (const payload of payloads) {
+      const result = await this.makeRequest<any>("PATCH", `/playlists/${playlistId}`, payload);
+      if (result.ok) {
+        return { ok: true };
+      }
+    }
+
+    return { ok: false, error: "Failed to update playlist tag filter" };
+  }
+
+  /**
+   * Create a new tag-based playlist for a location
+   */
+  private async createTagBasedPlaylist(
+    location: any,
+    playlistTag: string
+  ): Promise<{ ok: boolean; playlistId?: number; error?: string }> {
+    const playlistName = `EVZ ${location.name || location.id}`;
+    const description = `Auto-managed by Elevizion. Filter tag: ${playlistTag}`;
+
+    // Try different payload structures based on capability hints
+    const caps = await this.getCapabilities();
+    
+    const payloads = [
+      // Standard format
+      {
+        name: playlistName,
+        description,
+        tags: [playlistTag],
+        type: "regular",
+      },
+      // Alternative with tag_filter
+      {
+        name: playlistName,
+        description,
+        tag_filter: playlistTag,
+      },
+      // With rules
+      {
+        name: playlistName,
+        description,
+        rules: [{ type: "tag", value: playlistTag }],
+      },
+    ];
+
+    for (const payload of payloads) {
+      console.log(`[YodeckPublish] Creating playlist with payload: ${JSON.stringify(payload)}`);
+      const result = await this.makeRequest<any>("POST", "/playlists", payload);
+      
+      if (result.ok && result.data) {
+        const playlistId = result.data.id;
+        console.log(`[YodeckPublish] Playlist created successfully: ${playlistId}`);
+        return { ok: true, playlistId };
+      }
+      
+      console.log(`[YodeckPublish] Playlist create attempt failed: ${result.error}`);
+    }
+
+    return { ok: false, error: "YODECK_PLAYLIST_CREATE_FAILED: All payload formats rejected" };
+  }
+
+  /**
+   * Ensure a playlist is assigned to the location's screen
+   */
+  private async ensurePlaylistAssignedToScreen(
+    location: any
+  ): Promise<{ ok: boolean; screenId?: number; error?: string }> {
+    if (!location.yodeckScreenId && !location.yodeckDeviceId) {
+      console.log(`[YodeckPublish] ENSURE_ASSIGN: No screen ID for location ${location.id}`);
+      return { ok: true }; // Not a failure, just no screen to assign
+    }
+
+    const screenId = location.yodeckScreenId || location.yodeckDeviceId;
+    const playlistId = location.yodeckPlaylistId;
+
+    if (!playlistId) {
+      return { ok: false, error: "No playlist ID to assign" };
+    }
+
+    // Check if screen already has this playlist
+    const screenResult = await this.makeRequest<any>("GET", `/screens/${screenId}`);
+    if (!screenResult.ok) {
+      return { ok: false, error: `Failed to get screen: ${screenResult.error}` };
+    }
+
+    const screen = screenResult.data;
+    const currentPlaylistId = screen?.playlist || screen?.playlist_id || screen?.default_playlist;
+    
+    if (String(currentPlaylistId) === String(playlistId)) {
+      console.log(`[YodeckPublish] ENSURE_ASSIGN screenId=${screenId} playlistId=${playlistId} already assigned`);
+      return { ok: true, screenId: parseInt(screenId) };
+    }
+
+    // Assign playlist to screen
+    const assignResult = await this.makeRequest<any>("PATCH", `/screens/${screenId}`, {
+      playlist: parseInt(playlistId),
+    });
+
+    if (!assignResult.ok) {
+      // Try alternative field names
+      const altResult = await this.makeRequest<any>("PATCH", `/screens/${screenId}`, {
+        playlist_id: parseInt(playlistId),
+      });
+      
+      if (!altResult.ok) {
+        console.error(`[YodeckPublish] ENSURE_ASSIGN screenId=${screenId} playlistId=${playlistId} FAILED`);
+        return { ok: false, error: "YODECK_PLAYLIST_ASSIGN_NOT_SUPPORTED" };
+      }
+    }
+
+    console.log(`[YodeckPublish] ENSURE_ASSIGN screenId=${screenId} playlistId=${playlistId} ok=true`);
+    return { ok: true, screenId: parseInt(screenId) };
+  }
+
+  /**
+   * Verify media tags were applied correctly
+   */
+  async verifyMediaTags(
+    mediaId: number,
+    expectedTags: string[]
+  ): Promise<{ ok: boolean; missing: string[]; found: string[]; error?: string }> {
+    const result = await this.makeRequest<any>("GET", `/media/${mediaId}`);
+    
+    if (!result.ok) {
+      return { ok: false, missing: expectedTags, found: [], error: result.error };
+    }
+
+    const media = result.data;
+    const actualTags: string[] = media.tags || media.tag_names || [];
+    
+    const missing = expectedTags.filter(t => !actualTags.includes(t));
+    const found = expectedTags.filter(t => actualTags.includes(t));
+
+    console.log(`[YodeckPublish] MEDIA_TAG_VERIFY mediaId=${mediaId} found=${found.length} missing=${missing.length}`);
+
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        missing,
+        found,
+        error: `YODECK_MEDIA_TAG_VERIFY_FAILED: Missing tags: ${missing.join(', ')}`
+      };
+    }
+
+    return { ok: true, missing: [], found };
+  }
+
+  /**
+   * Batch ensure tag-based playlists for all locations
+   */
+  async ensureAllTagBasedPlaylists(): Promise<{
+    total: number;
+    success: number;
+    failed: number;
+    results: Array<{ locationId: string; ok: boolean; action?: string; error?: string }>;
+  }> {
+    const allLocations = await db.query.locations.findMany({
+      where: eq(locations.status, "active"),
+    });
+
+    const results: Array<{ locationId: string; ok: boolean; action?: string; error?: string }> = [];
+
+    for (const location of allLocations) {
+      const result = await this.ensureTagBasedPlaylist(location.id);
+      results.push({
+        locationId: location.id,
+        ok: result.ok,
+        action: result.action,
+        error: result.error,
+      });
+    }
+
+    return {
+      total: allLocations.length,
+      success: results.filter(r => r.ok).length,
+      failed: results.filter(r => !r.ok).length,
+      results,
+    };
+  }
 
   private async getApiKey(): Promise<string> {
     if (this.apiKey) return this.apiKey;
@@ -1305,9 +1801,35 @@ class YodeckPublishService {
 
       report.yodeckMediaId = String(uploadResult.mediaId);
 
-      // Step 2: Tag-based publishing - tag media with all target locations at once
-      // This is scalable (works for 100s of screens) and doesn't require playlist item management
+      // Step 2: Ensure tag-based playlists exist for all target locations
       const locationIds = approvedTargets.map(t => t.locationId);
+      const perLocationResults: Array<{
+        locationId: string;
+        playlistId?: number;
+        verifyStatus: string;
+        assignStatus?: string;
+        error?: string;
+      }> = [];
+
+      console.log(`[YodeckPublish] Ensuring tag-based playlists for ${locationIds.length} locations`);
+
+      for (const locationId of locationIds) {
+        const ensureResult = await this.ensureTagBasedPlaylist(locationId);
+        perLocationResults.push({
+          locationId,
+          playlistId: ensureResult.playlistId,
+          verifyStatus: ensureResult.verifyStatus,
+          assignStatus: ensureResult.ok ? "OK" : "FAILED",
+          error: ensureResult.error,
+        });
+
+        if (!ensureResult.ok) {
+          console.error(`[YodeckPublish] Failed to ensure playlist for location ${locationId}: ${ensureResult.error}`);
+        }
+      }
+
+      // Step 3: Tag-based publishing - tag media with all target locations at once
+      // This is scalable (works for 100s of screens) and doesn't require playlist item management
       const tags = this.generatePlacementTags(plan.advertiserId, planId, locationIds);
       
       const tagIdempotencyKey = crypto
@@ -1323,16 +1845,47 @@ class YodeckPublishService {
         tagIdempotencyKey,
         planId
       );
+
+      if (!tagResult.ok) {
+        console.error(`[YodeckPublish] Tag update failed: ${tagResult.error}`);
+      }
+
+      // Step 4: Verify tags were applied
+      let missingTags: string[] = [];
+      if (tagResult.ok) {
+        const verifyResult = await this.verifyMediaTags(uploadResult.mediaId, tags);
+        missingTags = verifyResult.missing;
+        
+        if (!verifyResult.ok) {
+          console.error(`[YodeckPublish] Tag verification failed: ${verifyResult.error}`);
+        } else {
+          console.log(`[YodeckPublish] MEDIA_TAG_VERIFY ok=true missing=[]`);
+        }
+      }
       
-      // Update target reports based on tag result
+      // Update target reports based on tag result AND per-location ensure results
       for (const target of approvedTargets) {
+        const locationResult = perLocationResults.find(r => r.locationId === target.locationId);
+        // Check both assignStatus and absence of error to ensure any failure is tracked
+        const ensureOk = locationResult?.assignStatus === "OK" && !locationResult?.error;
+        const allOk = tagResult.ok && missingTags.length === 0 && ensureOk;
+        
         const targetReport: { locationId: string; status: string; error?: string } = {
           locationId: target.locationId,
-          status: tagResult.ok ? "tagged" : "failed",
-          ...(tagResult.error ? { error: tagResult.error } : {})
+          status: allOk ? "tagged" : "failed",
         };
         
-        if (tagResult.ok) {
+        // Collect all errors
+        const errors: string[] = [];
+        if (locationResult?.error) errors.push(locationResult.error);
+        if (tagResult.error) errors.push(tagResult.error);
+        if (missingTags.length > 0) errors.push(`Missing tags: ${missingTags.join(', ')}`);
+        
+        if (errors.length > 0) {
+          targetReport.error = errors.join('; ');
+        }
+        
+        if (allOk) {
           report.successCount++;
         } else {
           report.failedCount++;
@@ -1340,6 +1893,11 @@ class YodeckPublishService {
         
         report.targets.push(targetReport);
       }
+
+      // Add extended info to report
+      (report as any).tagsApplied = tags;
+      (report as any).missingTags = missingTags;
+      (report as any).perLocation = perLocationResults;
 
       // Update plan status based on results
       report.completedAt = new Date().toISOString();

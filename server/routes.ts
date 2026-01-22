@@ -3264,6 +3264,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const updatedPlan = await placementEngine.getPlan(planId);
       const success = updatedPlan?.status === "PUBLISHED";
       
+      // Extract tag-based publishing details from report
+      const tagsApplied = report.tagsApplied || [];
+      const missingTags = report.missingTags || [];
+      const perLocation = report.perLocation || [];
+      
       res.json({ 
         success, 
         report, 
@@ -3272,6 +3277,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
         message: success ? "Publicatie geslaagd" : "Publish mislukt, zie fout in wachtrij",
         buildId: global.BUILD_ID,
         uploadMethodUsed: 'two-step',
+        yodeckMediaId: report.yodeckMediaId,
+        tagsAppliedCount: tagsApplied.length,
+        missingTags,
+        perLocation,
+        errorCode: report.failedCount > 0 ? (report.targets?.[0]?.error || 'UNKNOWN') : null,
+        errorMessage: report.failedCount > 0 ? (report.targets?.find((t: any) => t.error)?.error || 'Unknown error') : null,
       });
     } catch (error: any) {
       console.error("[PlacementPlans] Error retrying plan:", error);
@@ -7177,8 +7188,59 @@ Sitemap: ${SITE_URL}/sitemap.xml
     });
   });
   
-  console.log("[routes] Yodeck routes registered: GET /api/integrations/yodeck/config-status, POST /api/integrations/yodeck/test");
-  console.log("[routes] Sync routes registered: POST /api/sync/yodeck/run");
+  // Yodeck capabilities probe endpoint
+  app.get("/api/integrations/yodeck/capabilities", isAuthenticated, async (req, res) => {
+    try {
+      const forceRefresh = req.query.refresh === "true";
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const capabilities = await yodeckPublishService.getCapabilities(forceRefresh);
+      res.json({ ok: true, capabilities });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // Batch ensure tag-based playlists for all locations
+  app.post("/api/sync/yodeck/ensure-tag-playlists", isAuthenticated, requirePermission("manage_integrations"), async (_req, res) => {
+    try {
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const result = await yodeckPublishService.ensureAllTagBasedPlaylists();
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // Location Yodeck status endpoint
+  app.get("/api/locations/:id/yodeck-status", isAuthenticated, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const location = await db.query.locations.findFirst({
+        where: eq(locations.id, id),
+      });
+      
+      if (!location) {
+        return res.status(404).json({ ok: false, error: "Location not found" });
+      }
+      
+      res.json({
+        ok: true,
+        locationId: location.id,
+        playlistId: location.yodeckPlaylistId,
+        playlistTag: location.playlistTag || `elevizion:location:${location.id}`,
+        playlistMode: location.playlistMode,
+        verifyStatus: location.yodeckPlaylistVerifyStatus,
+        verifiedAt: location.yodeckPlaylistVerifiedAt,
+        lastError: location.lastYodeckVerifyError,
+        screenId: location.yodeckDeviceId,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  console.log("[routes] Yodeck routes registered: GET /api/integrations/yodeck/config-status, POST /api/integrations/yodeck/test, GET /api/integrations/yodeck/capabilities");
+  console.log("[routes] Sync routes registered: POST /api/sync/yodeck/run, POST /api/sync/yodeck/ensure-tag-playlists");
 
   // ============================================================================
   // INTEGRATION OUTBOX ROUTES (SSOT Pattern)
