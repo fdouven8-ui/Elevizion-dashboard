@@ -1,0 +1,66 @@
+BUG: Publish gebruikt nog steeds de oude playlist-item flow.
+Bewijs uit logs:
+- "[YodeckPublish] Adding media ... to playlist ..."
+- "PLAYLIST_ITEM_CREATE attempting POST .../playlists/{id}/items"
+Dit mag NIET meer voorkomen. We hebben TAG-BASED publishing gebouwd maar het wordt niet aangeroepen.
+
+DOEL:
+Publish = upload/reuse mediaId -> ensureTagBasedPlaylist per target -> set media tags -> verify -> plan.status=PUBLISHED.
+GEEN playlist item calls. GEEN addMediaToPlaylist. GEEN placeholder/replace.
+
+TAKEN:
+
+1) Zoek in code waar deze log vandaan komt:
+   "[YodeckPublish] Adding media" en "PLAYLIST_ITEM_CREATE".
+   Dit is de oude route. Zet hier een harde guard:
+   - throw new Error("LEGACY_PLAYLIST_FLOW_USED") als deze code ooit nog wordt aangeroepen.
+
+2) In publishPlan(planId):
+   - Verwijder ELKE call naar addMediaToPlaylist / playlist update / playlist item create.
+   - Vervang met:
+     a) mediaId = twoStepUploadMedia(...) (of reuse)
+     b) targets = approvedTargets (locations)
+     c) for each target: await ensureTagBasedPlaylist(target.locationId)
+     d) tagsToApply = unique([
+         "elevizion:ad",
+         `elevizion:advertiser:${advertiserId}`,
+         `elevizion:plan:${planId}`,
+         ...targets.map(t => `elevizion:location:${t.locationId}`)
+       ])
+     e) await updateMediaTags(mediaId, tagsToApply)  (1 call)
+     f) await verifyMediaTags(mediaId, tagsToApply)
+     g) finalize success:
+        - plan.status="PUBLISHED"
+        - failedAt=null
+        - lastErrorCode/message cleared
+        - publishReport.successCount=targets.length failedCount=0 yodeckMediaId=mediaId tagsAppliedCount=tagsToApply.length
+
+3) updateMediaTags(mediaId, tags):
+   - Gebruik 1 van (probe/capabilities) methodes: PATCH of PUT /media/{mediaId}
+   - Payload shape volgens capabilities: { tags: [...] } of { tag_names: [...] }
+   - Log:
+     [YodeckPublish] MEDIA_TAG_UPDATE status=... ct=... tagsCount=...
+
+4) verifyMediaTags(mediaId, tagsToApply):
+   - GET /media/{mediaId}
+   - read returnedTags
+   - missing = tagsToApply.filter(t => !returnedTags.includes(t))
+   - Als missing.length>0 => throw Error("YODECK_MEDIA_TAG_VERIFY_FAILED: missing=...")
+
+5) ensureTagBasedPlaylist(locationId):
+   - Moet playlists kunnen aanmaken/verifiëren/assignen.
+   - Log per locatie:
+     [YodeckPublish] ENSURE_PLAYLIST locationId=... playlistId=... verifyStatus=... assignStatus=...
+
+6) Retry response verbeteren:
+   - Response van POST /api/placement-plans/:id/retry moet bevatten:
+     success, yodeckMediaId, tagsAppliedCount, missingTags, perLocation[{locationId,playlistId,verifyStatus,assignStatus}], errorCode, errorMessage
+   - lastErrorCode mag NOOIT blijven hangen op YODECK_UPLOAD_FAILED als upload al ok was.
+
+ACCEPTATIE:
+- Na retry zie ik GEEN "Adding media ... to playlist" meer.
+- Ik zie:
+  ENSURE_PLAYLIST ...
+  MEDIA_TAG_UPDATE ...
+  MEDIA_TAG_VERIFY ok=true missing=[]
+- plan.status wordt PUBLISHED.

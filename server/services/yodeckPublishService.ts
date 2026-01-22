@@ -1436,6 +1436,7 @@ class YodeckPublishService {
 
   /**
    * Add media to a Yodeck playlist (DEPRECATED - use tag-based publishing instead)
+   * @deprecated This method should NEVER be called. Use tag-based publishing instead.
    */
   async addMediaToPlaylist(
     playlistId: number,
@@ -1444,6 +1445,10 @@ class YodeckPublishService {
     idempotencyKey: string,
     locationId: string
   ): Promise<{ ok: boolean; error?: string }> {
+    // HARD GUARD: This legacy flow must NEVER be used
+    throw new Error("LEGACY_PLAYLIST_FLOW_USED: addMediaToPlaylist is deprecated. Use tag-based publishing (updateMediaTags) instead.");
+    
+    // Legacy code below - unreachable
     console.log(`[YodeckPublish] Adding media ${mediaId} to playlist ${playlistId}`);
 
     // Check if already added via outbox (succeeded = skip)
