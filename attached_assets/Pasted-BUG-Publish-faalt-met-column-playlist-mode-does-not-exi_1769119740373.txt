@@ -1,0 +1,65 @@
+BUG: Publish faalt met: column "playlist_mode" does not exist.
+Dit betekent dat de DB schema migratie voor de nieuwe location velden niet is toegepast.
+
+DOEL:
+- Zorg dat de database de nieuwe kolommen bevat die we in code gebruiken:
+  playlist_mode, playlist_tag, yodeck_playlist_verified_at, yodeck_playlist_verify_status, last_yodeck_verify_error
+- En dat publish daarna doorloopt naar TAG-based flow (geen legacy playlist calls).
+
+TAKEN:
+
+1) Vind de juiste tabelnaam
+- In code gebruiken we Location/locations. Check de echte DB tabelnaam:
+  - Postgres: \dt en \d locations (of via ORM schema)
+  - Prisma/Drizzle/Knex: check schema definitie
+- We moeten exact dezelfde tabel aanpassen waar location records in staan.
+
+2) Maak een migratie die SAFE is (idempotent)
+- Voeg kolommen toe met IF NOT EXISTS.
+- Zet defaults zodat bestaande records niet breken.
+
+Postgres SQL (gebruik dit exact als migratie):
+
+ALTER TABLE locations
+  ADD COLUMN IF NOT EXISTS playlist_mode VARCHAR(20) NOT NULL DEFAULT 'TAG_BASED';
+
+ALTER TABLE locations
+  ADD COLUMN IF NOT EXISTS playlist_tag TEXT;
+
+ALTER TABLE locations
+  ADD COLUMN IF NOT EXISTS yodeck_playlist_verified_at TIMESTAMPTZ;
+
+ALTER TABLE locations
+  ADD COLUMN IF NOT EXISTS yodeck_playlist_verify_status VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN';
+
+ALTER TABLE locations
+  ADD COLUMN IF NOT EXISTS last_yodeck_verify_error TEXT;
+
+-- backfill tags for existing rows
+UPDATE locations
+SET playlist_tag = COALESCE(playlist_tag, 'elevizion:location:' || id::text)
+WHERE playlist_tag IS NULL OR playlist_tag = '';
+
+3) Zorg dat migraties automatisch draaien
+- Voeg/controleer een “runMigrations()” bij startup (voor production).
+- Of als je al migratie tooling hebt (Prisma migrate / drizzle / knex):
+  - voeg migration file toe in de juiste map
+  - zorg dat deploy pipeline deze toepast.
+
+4) Code consistency: snake_case vs camelCase
+- De DB kolom heet playlist_mode.
+- Controleer of ORM mapping correct is:
+  - Als je code playlistMode gebruikt, map naar playlist_mode.
+  - Als je raw SQL gebruikt, gebruik playlist_mode.
+- Fix eventuele mismatch zodat dezelfde naam overal gebruikt wordt.
+
+5) Herclassificeer de foutcode
+- Deze fout is DB schema mismatch, niet “playlist add”.
+- Zet errorCode op iets als DB_SCHEMA_MISMATCH of LOCATION_SCHEMA_OUTDATED zodat dit meteen duidelijk is.
+
+ACCEPTANCE TEST:
+A) Herstart server (zodat migratie runt)
+B) Open de foutdetails opnieuw: mag niet meer "playlist_mode does not exist" zijn.
+C) Doe opnieuw “Retry publish”:
+   - moet voorbij DB error komen
+   - moet logs tonen: ENSURE_PLAYLIST … / MEDIA_TAG
