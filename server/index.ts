@@ -302,6 +302,15 @@ app.use((req, res, next) => {
 (async () => {
   await initializeAdminUser();
   
+  // Run database migrations (safe/idempotent)
+  try {
+    const { runLocationPlaylistMigration } = await import("./migrations/locationPlaylistColumns");
+    await runLocationPlaylistMigration();
+  } catch (migrationError: any) {
+    console.error("[BOOT] FATAL: Migration failed:", migrationError.message);
+    // Don't exit - log the error but continue (columns may already exist)
+  }
+  
   // Check video processing dependencies (ffprobe/ffmpeg)
   await checkVideoProcessingDependencies();
   

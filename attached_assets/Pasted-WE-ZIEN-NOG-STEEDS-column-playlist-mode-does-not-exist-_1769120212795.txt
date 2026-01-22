@@ -1,0 +1,61 @@
+WE ZIEN NOG STEEDS: column "playlist_mode" does not exist (PLAYLIST_ADD_FAILED).
+Dus: migratie is NIET toegepast of op de verkeerde tabel/DB.
+
+DOEL: Zet de kolommen daadwerkelijk in de LIVE database en bewijs dat ze bestaan.
+
+STAPPEN (DO NOT SKIP):
+
+1) Print DB info bij startup (1x) zodat we weten welke DB gebruikt wordt:
+- log DATABASE_URL host/dbname (mask credentials)
+- log schema (public?) en omgeving (NODE_ENV, isTestMode)
+
+2) Detecteer de echte tabelnaam voor locaties:
+- Run a query:
+  SELECT table_name FROM information_schema.tables
+  WHERE table_schema='public' AND table_name ILIKE '%location%';
+- Log de uitkomst.
+- Kies de juiste tabel (meestal "locations" of "screen_locations" of "Location").
+
+3) Run a SAFE idempotent migration tegen de JUISTE tabel (in production):
+Gebruik een migration runner die ALTIJD draait bij boot (voor production) OF voer dit uit in de bestaande migratie tooling.
+
+Postgres SQL (pas <TABLE> aan naar de echte tabelnaam uit stap 2):
+
+ALTER TABLE <TABLE>
+  ADD COLUMN IF NOT EXISTS playlist_mode VARCHAR(20) NOT NULL DEFAULT 'TAG_BASED';
+
+ALTER TABLE <TABLE>
+  ADD COLUMN IF NOT EXISTS playlist_tag TEXT;
+
+ALTER TABLE <TABLE>
+  ADD COLUMN IF NOT EXISTS yodeck_playlist_verified_at TIMESTAMPTZ;
+
+ALTER TABLE <TABLE>
+  ADD COLUMN IF NOT EXISTS yodeck_playlist_verify_status VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN';
+
+ALTER TABLE <TABLE>
+  ADD COLUMN IF NOT EXISTS last_yodeck_verify_error TEXT;
+
+UPDATE <TABLE>
+SET playlist_tag = COALESCE(NULLIF(playlist_tag,''), 'elevizion:location:' || id::text)
+WHERE playlist_tag IS NULL OR playlist_tag='';
+
+4) HARD VERIFY (moet in logs komen):
+- Run:
+  SELECT column_name
+  FROM information_schema.columns
+  WHERE table_schema='public' AND table_name='<TABLE>'
+  AND column_name IN ('playlist_mode','playlist_tag','yodeck_playlist_verified_at','yodeck_playlist_verify_status','last_yodeck_verify_error')
+  ORDER BY column_name;
+- Log de rows. Als er minder dan 5 terugkomen: FAIL FAST (throw) zodat we het direct zien.
+
+5) Fix ORM mapping mismatch:
+- Als code playlistMode gebruikt (camelCase), map naar playlist_mode (snake_case) in ORM.
+- Zorg dat alle queries exact dezelfde tabel/kolomnamen gebruiken.
+
+6) Redeploy + restart.
+
+ACCEPTANCE:
+A) Na restart zie ik in logs stap 4 met alle 5 kolommen aanwezig.
+B) Retry publish geeft NIET meer "playlist_mode does not exist".
+C) Daarna moet publish verder gaan met ENSURE_PLAYLIST + MEDIA_TAG_UPDATE + MEDIA_TAG_VERIFY.
