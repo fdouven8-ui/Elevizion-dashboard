@@ -3149,8 +3149,15 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const MAX_RETRIES = 5;
       const currentRetryCount = (plan as any)?.retryCount || 0;
       
-      // Check max retries
-      if (currentRetryCount >= MAX_RETRIES) {
+      // Force retry option: ?force=1 or X-Force-Retry header
+      const forceRetry = req.query.force === '1' || req.headers['x-force-retry'] === '1';
+      
+      // Dev/test mode bypasses retry limits
+      const isDevMode = process.env.NODE_ENV === 'development' || process.env.TEST_MODE?.toUpperCase() === 'TRUE';
+      const bypassGuards = forceRetry || isDevMode;
+      
+      // Check max retries (skip if force/dev mode)
+      if (currentRetryCount >= MAX_RETRIES && !bypassGuards) {
         return res.status(400).json({
           success: false,
           message: `Maximum aantal retries bereikt (${MAX_RETRIES}). Neem contact op met support.`,
@@ -3160,7 +3167,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
       
-      // Check for permanent errors (don't retry 400/401/403/404)
+      // Check for permanent errors (don't retry 400/401/403/404) - skip if force/dev mode
       const lastErrorCode = (plan as any)?.lastErrorCode;
       const lastErrorMessage = (plan as any)?.lastErrorMessage || '';
       const permanentErrorPatterns = [
@@ -3174,7 +3181,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         lastErrorMessage.includes(pattern) || lastErrorCode === pattern
       );
       
-      if (isPermanentError && currentRetryCount > 0) {
+      if (isPermanentError && currentRetryCount > 0 && !bypassGuards) {
         return res.status(400).json({
           success: false,
           message: `Permanente fout gedetecteerd: ${lastErrorCode || 'onbekend'}. Retry niet mogelijk.`,
@@ -3184,17 +3191,34 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
       
-      // Reset status to APPROVED for retry (publishPlan will increment retryCount on failure)
-      const { db } = await import("./db");
-      const { placementPlans } = await import("@shared/schema");
-      const { eq } = await import("drizzle-orm");
+      // Log bypass if used
+      if (bypassGuards && (currentRetryCount >= MAX_RETRIES || isPermanentError)) {
+        console.log(`[PlacementPlans] Retry guard bypassed: force=${forceRetry}, devMode=${isDevMode}, retryCount=${currentRetryCount}, isPermanentError=${isPermanentError}`);
+      }
       
-      await db.update(placementPlans)
+      // Reset retryCount if force retry
+      if (forceRetry) {
+        const { db } = await import("./db");
+        const { placementPlans } = await import("@shared/schema");
+        const { eq } = await import("drizzle-orm");
+        await db.update(placementPlans)
+          .set({ retryCount: 0 })
+          .where(eq(placementPlans.id, planId));
+        console.log(`[PlacementPlans] Force retry: reset retryCount to 0 for plan ${planId}`);
+      }
+      
+      // Reset status to APPROVED for retry (publishPlan will increment retryCount on failure)
+      // Note: db/placementPlans/eq may be imported above for forceRetry, use dynamic import pattern for safety
+      const dbMod = await import("./db");
+      const schemaMod = await import("@shared/schema");
+      const ormMod = await import("drizzle-orm");
+      
+      await dbMod.db.update(schemaMod.placementPlans)
         .set({ 
           status: "APPROVED",
           lastAttemptAt: new Date(),
         })
-        .where(eq(placementPlans.id, planId));
+        .where(ormMod.eq(schemaMod.placementPlans.id, planId));
       
       // Publish (the service will update status to PUBLISHING -> PUBLISHED/FAILED and increment retryCount on failure)
       // Service uses upsert for outbox records, so duplicate key errors are handled gracefully

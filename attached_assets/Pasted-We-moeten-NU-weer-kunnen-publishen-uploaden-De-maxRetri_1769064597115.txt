@@ -1,0 +1,35 @@
+We moeten NU weer kunnen publishen/uploaden. De maxRetries guard zit in de weg.
+Doel: publish flow werkend krijgen (two-step upload), daarna pas limits netjes maken.
+
+1) Voeg onmiddellijk een "force retry" mogelijkheid toe
+- In POST /api/placement-plans/:id/retry:
+  - Als plan.permanentFailure=true of retryCount >= maxRetries:
+    - Sta retry toch toe wanneer query ?force=1 of header 'X-Force-Retry: 1' aanwezig is (admin-only als auth bestaat; anders tijdelijk toegestaan).
+    - Als force actief is: zet retryCount = 0 en permanentFailure=false en ga door met publish poging.
+- Alternatief (ook goed): maak endpoint POST /api/placement-plans/:id/reset-retries en gebruik die voordat je retry doet.
+
+2) Zet maxRetries check tijdelijk UIT voor development
+- Als nodeEnv === 'development' of TEST_MODE === true:
+  - negeer maxRetries volledig (alleen loggen).
+- In production blijft guard bestaan, maar force=1 mag tijdelijk voor jou als admin.
+
+3) Zorg dat publish EXACT dezelfde upload code gebruikt als de werkende test
+- Zoek waar /api/debug/test-mode de two-step upload gebruikt (uploadOk true).
+- Exporteer die logica naar 1 centrale service (yodeckUploadService) en laat publish/retry diezelfde service gebruiken.
+- Verwijder oude “single-step/binary direct” code paths in publish.
+
+4) Log de echte oorzaak als het nog faalt
+- Log per publish poging:
+  - buildId (van /api/version)
+  - uploadImpl (bijv "two-step")
+  - YODECK_INIT: status + content-type + bodySnippet (max 2000 chars)
+  - YODECK_BINARY: status
+  - YODECK_CONFIRM: status
+- Als uploadUrl ontbreekt: sla lastYodeckStatus + lastYodeckBodySnippet op in plan en return dat in de retry response.
+
+ACCEPTATIE:
+- Ik kan direct weer publishen door:
+  POST /api/placement-plans/:id/retry?force=1
+  en het systeem probeert echt te uploaden (niet meteen blokkeren).
+- Publish gebruikt dezelfde two-step upload die al werkt in test-mode.
+- Als het faalt, zie ik lastYodeckStatus/bodySnippet in response/logs.
