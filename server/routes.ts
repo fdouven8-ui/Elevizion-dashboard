@@ -3255,7 +3255,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(409).json({ 
           message: "Een of meer publicatie jobs zijn al bezig, ververs de pagina over 10 seconden",
           alreadyProcessing: true,
-          report
+          report,
+          buildId: global.BUILD_ID,
         });
       }
       
@@ -3279,7 +3280,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
       if (error.message?.includes("ALREADY_PROCESSING")) {
         return res.status(409).json({ 
           message: "Publicatie is al bezig, ververs de pagina over 10 seconden",
-          alreadyProcessing: true
+          alreadyProcessing: true,
+          buildId: global.BUILD_ID,
         });
       }
       
@@ -3294,11 +3296,13 @@ Sitemap: ${SITE_URL}/sitemap.xml
           plan,
           message: "Onverwachte fout bij retry",
           error: error.message,
-          retryCount: plan?.retryCount || 0
+          retryCount: plan?.retryCount || 0,
+          buildId: global.BUILD_ID,
+          uploadMethodUsed: 'two-step',
         });
       } catch {
         // Can't even get plan - return minimal error
-        res.status(500).json({ message: error.message });
+        res.status(500).json({ message: error.message, buildId: global.BUILD_ID });
       }
     }
   });
