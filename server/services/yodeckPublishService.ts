@@ -150,7 +150,8 @@ class YodeckPublishService {
 
         if (!response.ok) {
           const errorText = await response.text();
-          return { ok: false, status: response.status, error: `HTTP ${response.status}: ${errorText}` };
+          const contentType = response.headers.get('content-type') || 'unknown';
+          return { ok: false, status: response.status, error: `HTTP ${response.status} [${contentType}]: ${errorText}` };
         }
 
         if (response.status === 204) {
@@ -917,20 +918,23 @@ class YodeckPublishService {
       let createResult: { ok: boolean; data?: any; error?: string; status?: number } | null = null;
       let successEndpoint: string | null = null;
       
+      const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
+      
       for (const endpoint of createEndpoints) {
-        console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE attempting POST endpoint=${endpoint.path} payload=${JSON.stringify(endpoint.payload)}`);
+        const fullUrl = `${YODECK_API_BASE}${endpoint.path}`;
+        console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE attempting POST url=${fullUrl} payload=${JSON.stringify(endpoint.payload)}`);
         
         const result = await this.makeRequest<any>("POST", endpoint.path, endpoint.payload);
         
         if (result.ok) {
           createResult = result;
-          successEndpoint = endpoint.path;
+          successEndpoint = fullUrl;
           break;
         }
         
-        // Log the error
+        // Log the error with full URL
         const bodySnippet = result.error?.substring(0, 200) || 'unknown';
-        console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE endpoint=${endpoint.path} status=${result.status} bodySnippet=${bodySnippet}`);
+        console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE url=${fullUrl} status=${result.status} bodySnippet=${bodySnippet}`);
         
         // If not 404, this endpoint exists but request failed - use this result
         if (result.status !== 404) {
