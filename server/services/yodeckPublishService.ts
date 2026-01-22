@@ -880,12 +880,14 @@ class YodeckPublishService {
         priority: nextPriority
       };
       
-      // Preserve existing items and add new one
+      // Preserve existing items with proper sequential priorities, then add new one
+      // Sort by existing priority first, then assign sequential priorities to avoid duplicates
+      const sortedExisting = [...currentItems].sort((a, b) => (a.priority || 0) - (b.priority || 0));
       const newItems = [
-        ...currentItems.map(item => ({
+        ...sortedExisting.map((item, index) => ({
           ...item,
-          // Ensure all items have priority
-          priority: item.priority ?? 1,
+          // Assign sequential priorities starting from 1
+          priority: index + 1,
         })),
         newItem
       ];
