@@ -34,6 +34,8 @@ export interface YodeckCapabilities {
   canCreatePlaylist: boolean;
   canUpdateMediaTags: boolean;
   canAssignPlaylistToScreen: boolean;
+  canListTags: boolean;
+  canCreateTag: boolean;
   tagUpdateMethod: "PATCH" | "PUT" | null;
   tagFieldName: "tags" | "tag_names" | null;
   playlistCreateSchemaHint: any;
@@ -113,6 +115,113 @@ interface TwoStepUploadDiagnostics {
 class YodeckPublishService {
   private apiKey: string | null = null;
   private capabilities: YodeckCapabilities | null = null;
+  private tagCache: Map<string, { id: number; name: string }> = new Map();
+  private tagCacheLoaded = false;
+
+  /**
+   * List all tags from Yodeck API
+   */
+  async listTags(): Promise<{ id: number; name: string }[]> {
+    const result = await this.makeRequest<any>("GET", "/tags");
+    
+    console.log(`[YodeckTags] LIST_TAGS status=${result.status} ok=${result.ok}`);
+    
+    if (!result.ok) {
+      console.error(`[YodeckTags] LIST_TAGS failed: ${result.error}`);
+      return [];
+    }
+    
+    // Handle paginated or array response
+    const tags = Array.isArray(result.data) 
+      ? result.data 
+      : (result.data?.results || []);
+    
+    // Update cache
+    for (const tag of tags) {
+      if (tag.name) {
+        this.tagCache.set(tag.name, { id: tag.id, name: tag.name });
+      }
+    }
+    this.tagCacheLoaded = true;
+    
+    console.log(`[YodeckTags] LIST_TAGS loaded ${tags.length} tags into cache`);
+    return tags;
+  }
+
+  /**
+   * Create a tag in Yodeck
+   */
+  async createTag(name: string): Promise<{ ok: boolean; id?: number; error?: string }> {
+    console.log(`[YodeckTags] TAG_CREATE attempting name=${name}`);
+    
+    const result = await this.makeRequest<any>("POST", "/tags", { name });
+    
+    console.log(`[YodeckTags] TAG_CREATE name=${name} status=${result.status} ok=${result.ok}`);
+    
+    if (result.ok && result.data?.id) {
+      this.tagCache.set(name, { id: result.data.id, name });
+      return { ok: true, id: result.data.id };
+    }
+    
+    // Handle 409 conflict (already exists) as success
+    if (result.status === 409 || result.error?.includes("already exists")) {
+      console.log(`[YodeckTags] TAG_CREATE name=${name} already exists (conflict)`);
+      return { ok: true };
+    }
+    
+    return { ok: false, error: result.error || `Failed to create tag: status=${result.status}` };
+  }
+
+  /**
+   * Ensure all required tags exist in Yodeck
+   * Creates missing tags automatically
+   */
+  async ensureTagsExist(tagNames: string[]): Promise<{ ok: boolean; created: string[]; failed: string[]; error?: string }> {
+    const caps = await this.getCapabilities();
+    
+    if (!caps.canListTags || !caps.canCreateTag) {
+      const errorMsg = `YODECK_TAG_API_NOT_AVAILABLE: canListTags=${caps.canListTags}, canCreateTag=${caps.canCreateTag}`;
+      console.error(`[YodeckTags] ENSURE_TAGS HARD FAIL: ${errorMsg}`);
+      return { ok: false, created: [], failed: tagNames, error: errorMsg };
+    }
+    
+    // Load tags into cache if not already loaded
+    if (!this.tagCacheLoaded) {
+      await this.listTags();
+    }
+    
+    const created: string[] = [];
+    const failed: string[] = [];
+    
+    for (const tagName of tagNames) {
+      // Skip if already in cache
+      if (this.tagCache.has(tagName)) {
+        continue;
+      }
+      
+      // Create the tag
+      const result = await this.createTag(tagName);
+      if (result.ok) {
+        created.push(tagName);
+      } else {
+        failed.push(tagName);
+        console.error(`[YodeckTags] Failed to create tag ${tagName}: ${result.error}`);
+      }
+    }
+    
+    console.log(`[YodeckTags] ENSURE_TAGS complete: ${created.length} created, ${failed.length} failed`);
+    
+    if (failed.length > 0) {
+      return { 
+        ok: false, 
+        created, 
+        failed, 
+        error: `Failed to create ${failed.length} tags: ${failed.join(', ')}` 
+      };
+    }
+    
+    return { ok: true, created, failed: [] };
+  }
 
   /**
    * Get cached capabilities or probe Yodeck API
@@ -140,6 +249,8 @@ class YodeckPublishService {
       canCreatePlaylist: false,
       canUpdateMediaTags: false,
       canAssignPlaylistToScreen: false,
+      canListTags: false,
+      canCreateTag: false,
       tagUpdateMethod: null,
       tagFieldName: null,
       playlistCreateSchemaHint: null,
@@ -207,6 +318,15 @@ class YodeckPublishService {
       capabilities.canAssignPlaylistToScreen = screenListResult.ok;
       log(`GET /screens: ${screenListResult.ok ? 'OK' : 'FAIL'} status=${screenListResult.status}`);
 
+      // 6. Check tag API capability (GET /tags and POST /tags)
+      const tagListResult = await this.makeRequest<any[]>("GET", "/tags");
+      capabilities.canListTags = tagListResult.ok;
+      log(`GET /tags: ${tagListResult.ok ? 'OK' : 'FAIL'} status=${tagListResult.status}`);
+      
+      // Infer canCreateTag from canListTags - if we can list, we assume we can create
+      capabilities.canCreateTag = tagListResult.ok;
+      log(`canCreateTag (inferred): ${capabilities.canCreateTag}`);
+
       log("Capability probe complete");
     } catch (err: any) {
       log(`Probe error: ${err.message}`);
@@ -243,6 +363,13 @@ class YodeckPublishService {
       await db.update(locations)
         .set({ playlistTag, playlistMode: "TAG_BASED" })
         .where(eq(locations.id, locationId));
+    }
+
+    // Ensure the location tag exists in Yodeck before using it in playlist filter
+    const ensureTagResult = await this.ensureTagsExist([playlistTag]);
+    if (!ensureTagResult.ok) {
+      console.warn(`[YodeckPublish] ENSURE_PLAYLIST warning: could not ensure tag ${playlistTag} exists: ${ensureTagResult.error}`);
+      // Continue anyway - playlist creation may still work if tag already exists
     }
 
     // Check capabilities
@@ -1836,6 +1963,17 @@ class YodeckPublishService {
       // Step 3: Tag-based publishing - tag media with all target locations at once
       // This is scalable (works for 100s of screens) and doesn't require playlist item management
       const tags = this.generatePlacementTags(plan.advertiserId, planId, locationIds);
+      
+      // Step 3a: Ensure all tags exist in Yodeck before applying them
+      console.log(`[YodeckPublish] Ensuring ${tags.length} tags exist in Yodeck...`);
+      const ensureTagsResult = await this.ensureTagsExist(tags);
+      
+      if (!ensureTagsResult.ok) {
+        console.error(`[YodeckPublish] ENSURE_TAGS failed: ${ensureTagsResult.error}`);
+        // Continue anyway - updateMediaTags will fail with a clear error if tags don't exist
+      } else {
+        console.log(`[YodeckPublish] ENSURE_TAGS ok: ${ensureTagsResult.created.length} created`);
+      }
       
       const tagIdempotencyKey = crypto
         .createHash("sha256")
