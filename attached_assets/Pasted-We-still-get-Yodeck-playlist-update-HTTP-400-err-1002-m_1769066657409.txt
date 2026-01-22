@@ -1,0 +1,60 @@
+We still get Yodeck playlist update HTTP 400 err_1002 missing_key="id".
+Logs show:
+- PLAYLIST_GET firstItemKeys = id,priority,duration,name,type
+- newItemKeys = media,type,duration,priority (no id)
+=> This Yodeck endpoint requires every item to have an id, meaning it DOES NOT create new items via full update.
+
+FIX: Add new playlist item via a CREATE endpoint (POST) that returns an item id, then optionally reorder.
+
+TASK:
+
+1) Keep current GET playlist logging, but change the implementation:
+
+2) Add "create playlist item" step:
+- Find the correct Yodeck API v2 endpoint to create a playlist item.
+  Try in this order (stop when one works):
+  A) POST https://app.yodeck.com/api/v2/playlists/{playlistId}/items
+  B) POST https://app.yodeck.com/api/v2/playlists/{playlistId}/items/
+  C) POST https://app.yodeck.com/api/v2/playlist_items
+     with body including playlist reference (playlist: playlistId) + media + type + duration + priority
+  D) If GET playlist response includes a link like items_url or related.items, use that.
+
+- Payload should match the existing item schema as closely as possible.
+  Use GET playlist first item as template:
+  existingItemExample keys: id, priority, duration, name, type
+  New item should set:
+    type: "media"
+    media: <mediaId>   (if required by API)
+    duration: <default or from asset>
+    priority: nextPriority
+    name: (optional) set to file name if allowed, otherwise omit
+
+- After POST, parse returned JSON and extract createdItemId.
+
+3) Only after the item is created:
+- Optionally reorder priorities by fetching playlist again and PATCH/PUT existing items INCLUDING their id fields.
+- When updating existing items, ensure payload items include id for ALL entries.
+
+4) Make it backwards compatible:
+- If POST create endpoint not found/returns 404, log a clear error:
+  "No playlist item create endpoint found" with status+body.
+- Do NOT attempt full update that would create items (it will keep failing missing id).
+
+5) Logging:
+- Log:
+  PLAYLIST_ITEM_CREATE endpoint=... status=... bodySnippet=...
+  createdItemId=...
+- If reorder performed:
+  PLAYLIST_REORDER status=...
+
+6) Update error codes:
+- If create fails: lastErrorCode = YODECK_PLAYLIST_ITEM_CREATE_FAILED
+- If reorder fails: lastErrorCode = YODECK_PLAYLIST_REORDER_FAILED
+- Also fix the stale lastErrorCode currently stuck on YODECK_UPLOAD_FAILED.
+
+ACCEPTANCE:
+- Retry publishes successfully:
+  - upload ok (or already uploaded)
+  - create playlist item returns 200/201 and yields item id
+  - plan transitions to PUBLISHED (not FAILED)
+- No more missing_key "id".

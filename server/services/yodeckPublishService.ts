@@ -846,11 +846,15 @@ class YodeckPublishService {
       }
 
       // Get raw items from response - preserve ALL fields exactly as Yodeck returned them
-      const rawItems = (getResult.data as any)?.items || [];
+      const rawData = getResult.data as any;
+      const rawItems = rawData?.items || [];
+      
+      // Extract items_url if available for dynamic endpoint
+      const itemsUrl = rawData?.items_url || rawData?.related?.items || null;
       
       // Log first item keys for debugging
       const firstItemKeys = rawItems.length > 0 ? Object.keys(rawItems[0]).join(',') : 'none';
-      console.log(`[YodeckPublish] PLAYLIST_GET itemsCount=${rawItems.length} firstItemKeys=${firstItemKeys}`);
+      console.log(`[YodeckPublish] PLAYLIST_GET itemsCount=${rawItems.length} firstItemKeys=${firstItemKeys} itemsUrl=${itemsUrl || 'none'}`);
       
       // Check if media already exists in playlist (check both id and media fields)
       const alreadyExists = rawItems.some((item: any) => 
@@ -877,45 +881,85 @@ class YodeckPublishService {
         ? Math.max(...existingPriorities) + 1 
         : 1;
 
-      // Build new item - Yodeck API requires 'media' field (not 'id') for media references + priority
-      // New items should NOT have 'id' field - Yodeck assigns that
-      const newItem = { 
+      // Build new item payload for POST create endpoint
+      const newItemPayload = { 
         media: mediaId, 
         type: "media", 
         duration: durationSeconds,
         priority: nextPriority
       };
       
-      // Preserve existing items EXACTLY as returned by Yodeck (including their 'id' field!)
-      // Only update priority if we need sequential ordering
-      const sortedExisting = [...rawItems].sort((a: any, b: any) => (a.priority || 0) - (b.priority || 0));
-      const existingItemsWithPriority = sortedExisting.map((item: any, index: number) => {
-        // Keep ALL original fields (including 'id'!), only update priority
-        return {
-          ...item,
-          priority: index + 1,
-        };
-      });
+      // Try multiple POST endpoints in order (stop when one works)
+      // Include dynamic items_url from GET response if available
+      const createEndpoints: Array<{ path: string; payload: any }> = [];
       
-      // Check that existing items have 'id' field preserved
-      const hasIdInExisting = existingItemsWithPriority.length > 0 && existingItemsWithPriority[0].id !== undefined;
-      
-      // Combine existing items (with their ids) + new item (without id)
-      const newItems = [...existingItemsWithPriority, newItem];
-      
-      console.log(`[YodeckPublish] PLAYLIST_UPDATE itemsCount=${newItems.length} newItemKeys=${Object.keys(newItem).join(',')} includesIdInExisting=${hasIdInExisting} includesIdInNew=false`);
-      
-      const patchResult = await this.makeRequest(
-        "PATCH",
-        `/playlists/${playlistId}`,
-        { items: newItems }
-      );
-
-      if (!patchResult.ok) {
-        const errorMsg = `YODECK_PLAYLIST_UPDATE_FAILED: ${patchResult.error}`;
-        console.error(`[YodeckPublish] Playlist update failed: status=${patchResult.status} error=${patchResult.error}`);
-        throw new Error(errorMsg);
+      // If items_url from GET response, try it first (most reliable)
+      if (itemsUrl) {
+        try {
+          // Extract relative path from full URL if needed
+          const relativePath = itemsUrl.startsWith('http') 
+            ? new URL(itemsUrl).pathname.replace('/api/v2', '')
+            : itemsUrl;
+          createEndpoints.push({ path: relativePath, payload: newItemPayload });
+        } catch (e) {
+          // If URL parsing fails, skip this endpoint (fallbacks will still be tried)
+          console.log(`[YodeckPublish] Could not parse items_url: ${itemsUrl}`);
+        }
       }
+      
+      // Standard endpoints as fallback
+      createEndpoints.push(
+        { path: `/playlists/${playlistId}/items`, payload: newItemPayload },
+        { path: `/playlists/${playlistId}/items/`, payload: newItemPayload },
+        { path: `/playlist_items`, payload: { ...newItemPayload, playlist: playlistId } },
+      );
+      
+      let createResult: { ok: boolean; data?: any; error?: string; status?: number } | null = null;
+      let successEndpoint: string | null = null;
+      
+      for (const endpoint of createEndpoints) {
+        console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE attempting POST endpoint=${endpoint.path} payload=${JSON.stringify(endpoint.payload)}`);
+        
+        const result = await this.makeRequest<any>("POST", endpoint.path, endpoint.payload);
+        
+        if (result.ok) {
+          createResult = result;
+          successEndpoint = endpoint.path;
+          break;
+        }
+        
+        // Log the error
+        const bodySnippet = result.error?.substring(0, 200) || 'unknown';
+        console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE endpoint=${endpoint.path} status=${result.status} bodySnippet=${bodySnippet}`);
+        
+        // If not 404, this endpoint exists but request failed - use this result
+        if (result.status !== 404) {
+          createResult = result;
+          break;
+        }
+      }
+      
+      if (!createResult || !createResult.ok) {
+        const errorCode = "YODECK_PLAYLIST_ITEM_CREATE_FAILED";
+        const errorMsg = createResult?.error || "No playlist item create endpoint found";
+        console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
+        
+        // Persist error in outbox (lastError includes error code prefix)
+        await db.update(integrationOutbox)
+          .set({
+            status: "failed",
+            lastError: `${errorCode}: ${errorMsg}`,
+            processedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+        
+        return { ok: false, error: `${errorCode}: ${errorMsg}` };
+      }
+      
+      // Extract created item ID from response
+      const createdItemId = createResult.data?.id;
+      console.log(`[YodeckPublish] PLAYLIST_ITEM_CREATE success endpoint=${successEndpoint} createdItemId=${createdItemId}`)
 
       // VERIFICATION: Re-fetch playlist to confirm media was added (hard requirement)
       await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for Yodeck to process
