@@ -1,0 +1,62 @@
+We have a Yodeck playlist update failure:
+
+HTTP 400 err_1002: "A field is missing from request input" details.missing_key="id"
+
+This means we are sending playlist items without the required `id` field (likely existing items).
+Fix the playlist update by preserving existing item IDs exactly as returned by Yodeck.
+
+TASK:
+
+1) Locate the code that does:
+   "[YodeckPublish] Adding media <mediaId> to playlist <playlistId>"
+   and then calls the Yodeck playlist update endpoint.
+
+2) Before updating, ALWAYS fetch the playlist from Yodeck:
+   GET https://app.yodeck.com/api/v2/playlists/{playlistId}
+   Store response as `playlist`.
+
+3) Inspect the exact item shape returned by Yodeck:
+   - Log keys of first item: Object.keys(playlist.items?.[0] || {})
+   - Ensure we can see if items contain: id, media, type, duration, priority, etc.
+
+4) Build the update payload using the returned items AS THE BASELINE:
+   - existingItems = playlist.items (do NOT rebuild from scratch)
+   - For each existing item, keep its `id` unchanged.
+   - Only update/normalize `priority` if needed, but never drop `id`.
+   - If you renumber priorities, do it like:
+       existingItemsSorted = stable sort by (priority ?? index)
+       existingItemsSorted = existingItemsSorted.map((it, idx) => ({ ...it, priority: idx+1 }))
+     IMPORTANT: keep `id` and all other required fields intact.
+
+5) Add the new item in the same schema Yodeck expects:
+   - Base the new item on the shape of an existing "media" item from GET response.
+   - Example (ONLY if GET response items look like this):
+       newItem = { media: mediaId, type: "media", duration: <existingDefault>, priority: n+1 }
+   - Do NOT include `id` for the new item unless Yodeck explicitly requires it in docs/response shape.
+   - If Yodeck requires `id` even for new items, then we must use a dedicated "create playlist item" endpoint instead of full update (see step 6).
+
+6) Prefer a dedicated “add item” endpoint if available (best practice):
+   - Check if Yodeck has an endpoint like:
+       POST /api/v2/playlists/{playlistId}/items
+     or similar.
+   - If it exists, use it for adding the new item, so we don’t have to PUT the entire items array.
+   - If not available, proceed with full playlist update but preserving existing item ids.
+
+7) Logging (must be crystal clear):
+   - Log: PLAYLIST_GET itemsCount=... firstItemKeys=...
+   - Log: PLAYLIST_UPDATE itemsCount=... newItemKeys=... includesIdInExisting=true includesIdInNew=false
+   - On error, log full error body snippet.
+
+8) Error code mapping (also fix this):
+   - If playlist update fails, set:
+       lastErrorCode = "YODECK_PLAYLIST_UPDATE_FAILED"
+       lastErrorMessage = actual 400 error body
+   - Do NOT leave lastErrorCode as YODECK_UPLOAD_FAILED anymore (upload succeeded).
+
+ACCEPTANCE:
+- Retry publishes successfully:
+  - upload step OK (or already uploaded)
+  - playlist update returns 200/204
+  - plan status transitions to PUBLISHED (or your success status)
+- No more missing_key "id".
+- lastErrorCode reflects the real failing step.

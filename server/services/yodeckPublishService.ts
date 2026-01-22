@@ -845,10 +845,15 @@ class YodeckPublishService {
         throw new Error(`Could not get playlist: ${getResult.error}`);
       }
 
-      const currentItems: YodeckPlaylistItem[] = getResult.data?.items || [];
+      // Get raw items from response - preserve ALL fields exactly as Yodeck returned them
+      const rawItems = (getResult.data as any)?.items || [];
+      
+      // Log first item keys for debugging
+      const firstItemKeys = rawItems.length > 0 ? Object.keys(rawItems[0]).join(',') : 'none';
+      console.log(`[YodeckPublish] PLAYLIST_GET itemsCount=${rawItems.length} firstItemKeys=${firstItemKeys}`);
       
       // Check if media already exists in playlist (check both id and media fields)
-      const alreadyExists = currentItems.some(item => 
+      const alreadyExists = rawItems.some((item: any) => 
         (item.id === mediaId || item.media === mediaId) && item.type === "media"
       );
       if (alreadyExists) {
@@ -865,34 +870,40 @@ class YodeckPublishService {
       }
 
       // Determine next priority: max of existing priorities + 1 (or 1 if no items)
-      const existingPriorities = currentItems
-        .map(item => item.priority)
-        .filter((p): p is number => typeof p === 'number');
+      const existingPriorities = rawItems
+        .map((item: any) => item.priority)
+        .filter((p: any): p is number => typeof p === 'number');
       const nextPriority = existingPriorities.length > 0 
         ? Math.max(...existingPriorities) + 1 
         : 1;
 
       // Build new item - Yodeck API requires 'media' field (not 'id') for media references + priority
-      const newItem: YodeckPlaylistItem = { 
+      // New items should NOT have 'id' field - Yodeck assigns that
+      const newItem = { 
         media: mediaId, 
         type: "media", 
         duration: durationSeconds,
         priority: nextPriority
       };
       
-      // Preserve existing items with proper sequential priorities, then add new one
-      // Sort by existing priority first, then assign sequential priorities to avoid duplicates
-      const sortedExisting = [...currentItems].sort((a, b) => (a.priority || 0) - (b.priority || 0));
-      const newItems = [
-        ...sortedExisting.map((item, index) => ({
+      // Preserve existing items EXACTLY as returned by Yodeck (including their 'id' field!)
+      // Only update priority if we need sequential ordering
+      const sortedExisting = [...rawItems].sort((a: any, b: any) => (a.priority || 0) - (b.priority || 0));
+      const existingItemsWithPriority = sortedExisting.map((item: any, index: number) => {
+        // Keep ALL original fields (including 'id'!), only update priority
+        return {
           ...item,
-          // Assign sequential priorities starting from 1
           priority: index + 1,
-        })),
-        newItem
-      ];
+        };
+      });
       
-      console.log(`[YodeckPublish] PLAYLIST_UPDATE playloadItemsCount=${newItems.length} newItem={media:${mediaId}, priority:${nextPriority}}`);
+      // Check that existing items have 'id' field preserved
+      const hasIdInExisting = existingItemsWithPriority.length > 0 && existingItemsWithPriority[0].id !== undefined;
+      
+      // Combine existing items (with their ids) + new item (without id)
+      const newItems = [...existingItemsWithPriority, newItem];
+      
+      console.log(`[YodeckPublish] PLAYLIST_UPDATE itemsCount=${newItems.length} newItemKeys=${Object.keys(newItem).join(',')} includesIdInExisting=${hasIdInExisting} includesIdInNew=false`);
       
       const patchResult = await this.makeRequest(
         "PATCH",
