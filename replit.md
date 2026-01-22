@@ -59,6 +59,7 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **Admin Video Review Workflow**: Mandatory admin approval for uploaded videos at `/video-review`, including proposal preview for screen matching, automatic placement plan creation upon approval, and email notifications.
 - **Auto-Playlist Provisioning & Cleanup Service**: Ensures screens have valid, sellable playlists by enforcing canonical naming, cleaning up stale mappings, resolving duplicates, and auto-creating playlists via the Yodeck API.
 - **Tag-Based Publishing System**: Production-hardened ad publishing using Yodeck media tags for scalability and robust error tracking.
+- **Layout-Based Content Separation**: 2-zone layout system with 30% BASE (left) for baseline content and 70% ADS (right) for advertisements. Admin page at `/layouts` manages layout configuration per location. Includes API probing with cached status, idempotent playlist/layout creation, and fallback schedule mode when Yodeck layouts API is unavailable.
 
 ## External Dependencies
 
