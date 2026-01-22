@@ -1,0 +1,47 @@
+We hebben nu een echte publish failure oorzaak:
+Yodeck playlist update faalt met HTTP 400:
+code=missing_key_nested, missing_key="priority", parent_field="items".
+
+OPDRACHT: Fix playlist update payload naar Yodeck.
+
+1) Zoek de code waar we media toevoegen aan playlist 27644453
+   (log: "[YodeckPublish] Adding media 29408113 to playlist 27644453")
+   Dit is een call naar Yodeck playlist endpoint (api/v2/playlists/... of iets soortgelijks).
+
+2) Inspecteer de payload die we sturen. In de response staat:
+missing_key_nested -> items.priority ontbreekt.
+Dus: elk item in payload.items moet een "priority" bevatten.
+
+3) Pas de payload aan:
+- Als we een item toevoegen voor een mediaId:
+  items: [{
+    media: <mediaId>  (of juiste key die Yodeck verwacht),
+    priority: <number>
+  }]
+- Bepaal priority:
+  - Als playlist items al bestaan: pak hoogste priority + 1
+  - Anders: priority = 1
+- Als Yodeck een andere naming verwacht (bijv "media_id"): gebruik exact volgens bestaande item structuur die je ophaalt via GET playlist.
+
+4) Maak het robuust:
+- Doe eerst GET op playlist details om bestaande items te lezen en hun priorities.
+- Als response items heeft met veld "priority": respecteer dat.
+- Voeg nieuw item toe met correcte priority.
+- Update playlist met volledige items array (als API dat vereist) of via add-item endpoint (als die bestaat).
+
+5) Logging:
+- Log de playlist update request payload (zonder gevoelige info) in 1 regel:
+  PLAYLIST_UPDATE payloadItemsCount=.. newItem={mediaId, priority}
+- Log response status + body snippet.
+
+6) Error handling:
+- Als playlist update faalt: zet lastErrorCode/Message naar iets als:
+  YODECK_PLAYLIST_UPDATE_FAILED
+  en lastErrorMessage met de echte 400 fout.
+- Overschrijf de oude upload error (nu is upload ok).
+- publishReport.targets[0].error moet de echte playlist fout tonen.
+
+ACCEPTATIE:
+- Publish retry slaagt: uploadOk true AND playlist update ok AND plan status -> PUBLISHED/ACTIVE.
+- Geen 400 missing_key_nested meer.
+- lastErrorCode/Message reflecteert playlist fouten (niet meer “no upload URL”).

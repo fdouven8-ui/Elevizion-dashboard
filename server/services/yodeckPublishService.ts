@@ -30,9 +30,11 @@ interface YodeckMediaUploadResponse {
 }
 
 interface YodeckPlaylistItem {
-  id: number;
+  id?: number;
+  media?: number;
   type: string;
   duration?: number;
+  priority?: number;
 }
 
 interface PublishTarget {
@@ -843,10 +845,12 @@ class YodeckPublishService {
         throw new Error(`Could not get playlist: ${getResult.error}`);
       }
 
-      const currentItems = getResult.data?.items || [];
+      const currentItems: YodeckPlaylistItem[] = getResult.data?.items || [];
       
-      // Check if media already exists in playlist
-      const alreadyExists = currentItems.some(item => item.id === mediaId && item.type === "media");
+      // Check if media already exists in playlist (check both id and media fields)
+      const alreadyExists = currentItems.some(item => 
+        (item.id === mediaId || item.media === mediaId) && item.type === "media"
+      );
       if (alreadyExists) {
         console.log(`[YodeckPublish] Media already in playlist`);
         await db.update(integrationOutbox)
@@ -860,8 +864,33 @@ class YodeckPublishService {
         return { ok: true };
       }
 
-      // Add new item to playlist
-      const newItems = [...currentItems, { id: mediaId, type: "media", duration: durationSeconds }];
+      // Determine next priority: max of existing priorities + 1 (or 1 if no items)
+      const existingPriorities = currentItems
+        .map(item => item.priority)
+        .filter((p): p is number => typeof p === 'number');
+      const nextPriority = existingPriorities.length > 0 
+        ? Math.max(...existingPriorities) + 1 
+        : 1;
+
+      // Build new item - Yodeck API requires 'media' field (not 'id') for media references + priority
+      const newItem: YodeckPlaylistItem = { 
+        media: mediaId, 
+        type: "media", 
+        duration: durationSeconds,
+        priority: nextPriority
+      };
+      
+      // Preserve existing items and add new one
+      const newItems = [
+        ...currentItems.map(item => ({
+          ...item,
+          // Ensure all items have priority
+          priority: item.priority ?? 1,
+        })),
+        newItem
+      ];
+      
+      console.log(`[YodeckPublish] PLAYLIST_UPDATE playloadItemsCount=${newItems.length} newItem={media:${mediaId}, priority:${nextPriority}}`);
       
       const patchResult = await this.makeRequest(
         "PATCH",
@@ -870,7 +899,9 @@ class YodeckPublishService {
       );
 
       if (!patchResult.ok) {
-        throw new Error(`Could not update playlist: ${patchResult.error}`);
+        const errorMsg = `YODECK_PLAYLIST_UPDATE_FAILED: ${patchResult.error}`;
+        console.error(`[YodeckPublish] Playlist update failed: status=${patchResult.status} error=${patchResult.error}`);
+        throw new Error(errorMsg);
       }
 
       // VERIFICATION: Re-fetch playlist to confirm media was added (hard requirement)
@@ -898,7 +929,9 @@ class YodeckPublishService {
       }
       
       const verifiedItems = verifyResult.data?.items || [];
-      const mediaFound = verifiedItems.some(item => item.id === mediaId && item.type === "media");
+      const mediaFound = verifiedItems.some(item => 
+        (item.id === mediaId || item.media === mediaId) && item.type === "media"
+      );
       
       if (!mediaFound) {
         console.error(`[YodeckPublish] VERIFICATION FAILED: Media ${mediaId} not found in playlist ${playlistId}`);
@@ -961,18 +994,26 @@ class YodeckPublishService {
         return { ok: false, error: getResult.error };
       }
 
-      const currentItems = getResult.data?.items || [];
-      const filteredItems = currentItems.filter(item => !(item.id === mediaId && item.type === "media"));
+      const currentItems: YodeckPlaylistItem[] = getResult.data?.items || [];
+      const filteredItems = currentItems.filter(item => 
+        !((item.id === mediaId || item.media === mediaId) && item.type === "media")
+      );
 
       if (filteredItems.length === currentItems.length) {
         // Media wasn't in playlist
         return { ok: true };
       }
 
+      // Ensure priority is preserved for remaining items
+      const itemsWithPriority = filteredItems.map((item, index) => ({
+        ...item,
+        priority: item.priority ?? (index + 1),
+      }));
+
       const patchResult = await this.makeRequest(
         "PATCH",
         `/playlists/${playlistId}`,
-        { items: filteredItems }
+        { items: itemsWithPriority }
       );
 
       if (!patchResult.ok) {
