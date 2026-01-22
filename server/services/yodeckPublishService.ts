@@ -264,16 +264,20 @@ class YodeckPublishService {
       return { ok: false, verifyStatus: "UNKNOWN", error: "Location not found" };
     }
 
-    // Ensure playlistTag is set
-    const playlistTag = location.playlistTag || `${ELEVIZION_TAG_PREFIX}:location:${locationId}`;
-    if (!location.playlistTag) {
+    // CRITICAL FIX: Always use "elevizion:ad" for tagbased playlist filter
+    // Location-specific targeting is done via PLAYLIST ASSIGNMENT to screens, not via uuid-tags
+    // This ensures all media with "elevizion:ad" tag shows on all Elevizion playlists
+    const playlistFilterTag = "elevizion:ad"; // Must match PREDEFINED_TAGS[0]
+    
+    // Update location record if needed
+    if (location.playlistTag !== playlistFilterTag) {
       await db.update(locations)
-        .set({ playlistTag, playlistMode: "TAG_BASED" })
+        .set({ playlistTag: playlistFilterTag, playlistMode: "TAG_BASED" })
         .where(eq(locations.id, locationId));
     }
 
     // NOTE: Tag CRUD API not available - tags must be pre-created in Yodeck UI
-    console.log(`[YodeckPublish] ENSURE_PLAYLIST: Tag CRUD API not used; playlist will filter on predefined tag ${playlistTag}`);
+    console.log(`[YodeckPublish] ENSURE_PLAYLIST: Using predefined filter tag "${playlistFilterTag}" (not uuid-based)`);
 
     // Check capabilities
     const caps = await this.getCapabilities();
@@ -290,7 +294,7 @@ class YodeckPublishService {
     if (location.yodeckPlaylistId) {
       const verifyResult = await this.verifyTagBasedPlaylist(
         parseInt(location.yodeckPlaylistId),
-        playlistTag
+        playlistFilterTag
       );
 
       if (verifyResult.status === "OK") {
@@ -321,7 +325,7 @@ class YodeckPublishService {
         // Try to fix the playlist configuration
         const fixResult = await this.fixPlaylistTagFilter(
           parseInt(location.yodeckPlaylistId),
-          playlistTag
+          playlistFilterTag
         );
         if (fixResult.ok) {
           console.log(`[YodeckPublish] ENSURE_PLAYLIST locationId=${locationId} playlistId=${location.yodeckPlaylistId} verify=FIXED`);
@@ -352,8 +356,8 @@ class YodeckPublishService {
       // Playlist is MISSING, need to create new one
     }
 
-    // Create new tag-based playlist
-    const createResult = await this.createTagBasedPlaylist(location, playlistTag);
+    // Create new tag-based playlist with predefined filter tag
+    const createResult = await this.createTagBasedPlaylist(location, playlistFilterTag);
     if (!createResult.ok || !createResult.playlistId) {
       await db.update(locations)
         .set({

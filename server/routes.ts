@@ -10,7 +10,7 @@ import crypto from "crypto";
 import { encryptToken, decryptToken, isTokenEncryptionEnabled } from "./tokenEncryption";
 import { sql, desc, eq, and, or, isNull, isNotNull } from "drizzle-orm";
 import { db } from "./db";
-import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens, placements, adAssets } from "@shared/schema";
+import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens, placements, adAssets, tagPolicies, e2eTestRuns, placementPlans, placementTargets, integrationOutbox } from "@shared/schema";
 import { MAX_ADS_PER_SCREEN } from "@shared/regions";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
@@ -14989,6 +14989,381 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         matchConfidence: screen.matchConfidence,
         matchReason: screen.matchReason,
         lastSeenAt: screen.lastSeenAt,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // ADMIN: YODECK SETUP CHECKLIST
+  // ============================================================================
+  
+  app.get("/api/admin/yodeck-setup", requireAdminAccess, async (req, res) => {
+    try {
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const { PREDEFINED_TAGS } = await import("./services/yodeckPublishService");
+      
+      const checklist = [];
+      
+      // 1. Check Yodeck API connectivity
+      const caps = await yodeckPublishService.getCapabilities(true);
+      checklist.push({
+        id: "api_connectivity",
+        name: "Yodeck API bereikbaar",
+        status: caps.canListPlaylists ? "ok" : "error",
+        message: caps.canListPlaylists ? "API is bereikbaar" : "Kan Yodeck API niet bereiken",
+      });
+      
+      // 2. Check playlists endpoint
+      checklist.push({
+        id: "playlists_endpoint",
+        name: "Playlists ophalen",
+        status: caps.canListPlaylists ? "ok" : "error",
+        message: caps.canListPlaylists ? "GET /playlists werkt" : "GET /playlists faalt",
+      });
+      
+      // 3. Check screens endpoint
+      checklist.push({
+        id: "screens_endpoint",
+        name: "Screens ophalen",
+        status: caps.canAssignPlaylistToScreen ? "ok" : "error",
+        message: caps.canAssignPlaylistToScreen ? "GET /screens werkt" : "GET /screens faalt",
+      });
+      
+      // 4. Predefined tags notice
+      checklist.push({
+        id: "predefined_tags",
+        name: "Predefined tags",
+        status: "warning",
+        message: `Maak deze tags 1x handmatig aan in Yodeck UI: ${PREDEFINED_TAGS.join(', ')}`,
+        action: "Ga naar Yodeck > Tags > New Tag",
+      });
+      
+      // 5. Check for at least one location with playlist
+      const locationCount = await db.select({ count: sql<number>`count(*)` }).from(locations);
+      const locationsWithPlaylist = await db.select({ count: sql<number>`count(*)` })
+        .from(locations)
+        .where(sql`yodeck_playlist_id IS NOT NULL`);
+      
+      checklist.push({
+        id: "locations_setup",
+        name: "Locaties met playlists",
+        status: Number(locationsWithPlaylist[0]?.count) > 0 ? "ok" : "warning",
+        message: `${locationsWithPlaylist[0]?.count || 0} van ${locationCount[0]?.count || 0} locaties hebben een playlist`,
+      });
+      
+      const overallStatus = checklist.every(c => c.status === "ok") ? "ok" : 
+                            checklist.some(c => c.status === "error") ? "error" : "warning";
+      
+      res.json({
+        overallStatus,
+        checklist,
+        predefinedTags: PREDEFINED_TAGS,
+        capabilities: caps,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // ADMIN: TAG POLICIES
+  // ============================================================================
+  
+  app.get("/api/admin/tag-policies", requireAdminAccess, async (req, res) => {
+    try {
+      const policies = await db.select().from(tagPolicies).orderBy(tagPolicies.tagType, tagPolicies.tagName);
+      const { ALLOWED_TAG_PREFIXES, PREDEFINED_TAGS } = await import("@shared/schema");
+      
+      res.json({
+        policies,
+        allowedPrefixes: ALLOWED_TAG_PREFIXES,
+        predefinedTags: PREDEFINED_TAGS,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  app.post("/api/admin/tag-policies", requireAdminAccess, async (req, res) => {
+    try {
+      const { tagName, tagType, description } = req.body;
+      
+      if (!tagName) {
+        return res.status(400).json({ error: "Tag naam is verplicht" });
+      }
+      
+      // Validate tag prefix
+      const { ALLOWED_TAG_PREFIXES } = await import("@shared/schema");
+      const hasValidPrefix = ALLOWED_TAG_PREFIXES.some(prefix => tagName.startsWith(prefix));
+      if (!hasValidPrefix) {
+        return res.status(400).json({ 
+          error: `Tag moet beginnen met: ${ALLOWED_TAG_PREFIXES.join(', ')}` 
+        });
+      }
+      
+      const [policy] = await db.insert(tagPolicies).values({
+        tagName,
+        tagType: tagType || "custom",
+        description,
+      }).returning();
+      
+      res.json({ 
+        success: true, 
+        policy,
+        message: `Tag '${tagName}' toegevoegd. Vergeet niet om deze ook in Yodeck UI aan te maken!`
+      });
+    } catch (error: any) {
+      if (error.code === "23505") {
+        return res.status(400).json({ error: "Tag bestaat al" });
+      }
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  app.delete("/api/admin/tag-policies/:id", requireAdminAccess, async (req, res) => {
+    try {
+      await db.delete(tagPolicies).where(eq(tagPolicies.id, req.params.id));
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // ADMIN: MONITORING & ALERTS
+  // ============================================================================
+  
+  app.get("/api/admin/monitoring", requireAdminAccess, async (req, res) => {
+    try {
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      
+      // Count publish failures in last 24h
+      const failuresLast24h = await db.select({ count: sql<number>`count(*)` })
+        .from(placementPlans)
+        .where(and(
+          eq(placementPlans.status, "FAILED"),
+          sql`failed_at > NOW() - INTERVAL '24 hours'`
+        ));
+      
+      // Get last successful publish
+      const lastSuccessfulPublish = await db.select()
+        .from(placementPlans)
+        .where(eq(placementPlans.status, "PUBLISHED"))
+        .orderBy(sql`published_at DESC`)
+        .limit(1);
+      
+      // Get outbox backlog
+      const outboxBacklog = await db.select({ count: sql<number>`count(*)` })
+        .from(integrationOutbox)
+        .where(eq(integrationOutbox.status, "pending"));
+      
+      // Check Yodeck auth
+      const caps = await yodeckPublishService.getCapabilities();
+      const yodeckAuthOk = caps.canListPlaylists;
+      
+      const failureCount = Number(failuresLast24h[0]?.count) || 0;
+      const backlogCount = Number(outboxBacklog[0]?.count) || 0;
+      
+      const alerts = [];
+      if (failureCount > 0) {
+        alerts.push({
+          type: "error",
+          message: `${failureCount} publish failures in de laatste 24 uur`,
+        });
+      }
+      if (!yodeckAuthOk) {
+        alerts.push({
+          type: "error",
+          message: "Yodeck API is niet bereikbaar",
+        });
+      }
+      if (backlogCount > 10) {
+        alerts.push({
+          type: "warning",
+          message: `${backlogCount} jobs in de outbox wachtrij`,
+        });
+      }
+      
+      res.json({
+        status: alerts.length === 0 ? "healthy" : alerts.some(a => a.type === "error") ? "critical" : "warning",
+        publishFailuresLast24h: failureCount,
+        lastSuccessfulPublish: lastSuccessfulPublish[0]?.publishedAt || null,
+        outboxBacklog: backlogCount,
+        yodeckAuthOk,
+        alerts,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // ADMIN: E2E CHAIN TEST
+  // ============================================================================
+  
+  app.get("/api/admin/e2e-tests", requireAdminAccess, async (req, res) => {
+    try {
+      const tests = await db.select()
+        .from(e2eTestRuns)
+        .orderBy(sql`started_at DESC`)
+        .limit(20);
+      
+      res.json({ tests });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  app.post("/api/admin/e2e-tests/run", requireAdminAccess, async (req: any, res) => {
+    try {
+      const { locationId } = req.body;
+      const { yodeckPublishService, PREDEFINED_TAGS } = await import("./services/yodeckPublishService");
+      
+      const steps: { step: string; status: "ok" | "failed" | "skipped"; message: string; timestamp: string }[] = [];
+      let testMediaId: string | null = null;
+      
+      const addStep = (step: string, status: "ok" | "failed" | "skipped", message: string) => {
+        steps.push({ step, status, message, timestamp: new Date().toISOString() });
+      };
+      
+      // Create test run record
+      const [testRun] = await db.insert(e2eTestRuns).values({
+        testType: "YODECK_CHAIN",
+        testLocationId: locationId || null,
+        triggeredBy: req.user?.id,
+      }).returning();
+      
+      try {
+        // Step 1: Check Yodeck connectivity
+        const caps = await yodeckPublishService.getCapabilities(true);
+        if (caps.canListPlaylists) {
+          addStep("yodeck_connectivity", "ok", "Yodeck API bereikbaar");
+        } else {
+          addStep("yodeck_connectivity", "failed", "Yodeck API niet bereikbaar");
+          throw new Error("Yodeck API niet bereikbaar");
+        }
+        
+        // Step 2: Ensure tagbased playlist for location (if provided)
+        if (locationId) {
+          const ensureResult = await yodeckPublishService.ensureTagBasedPlaylist(locationId);
+          if (ensureResult.ok) {
+            addStep("ensure_playlist", "ok", `Playlist ${ensureResult.playlistId} verified/created`);
+          } else {
+            addStep("ensure_playlist", "failed", ensureResult.error || "Playlist ensure failed");
+          }
+        } else {
+          addStep("ensure_playlist", "skipped", "Geen locatie opgegeven");
+        }
+        
+        // Step 3: Verify predefined tags info
+        addStep("predefined_tags", "ok", `Tags die moeten bestaan in Yodeck: ${PREDEFINED_TAGS.join(', ')}`);
+        
+        // Step 4: Check tag update capability
+        if (caps.canUpdateMediaTags) {
+          addStep("tag_capability", "ok", "Media tag update capability aanwezig");
+        } else {
+          addStep("tag_capability", "failed", "Media tag update niet ondersteund");
+        }
+        
+        // Update test run with success
+        await db.update(e2eTestRuns)
+          .set({
+            completedAt: new Date(),
+            ok: steps.every(s => s.status !== "failed"),
+            stepsJson: steps,
+            testMediaId,
+          })
+          .where(eq(e2eTestRuns.id, testRun.id));
+        
+        res.json({
+          success: steps.every(s => s.status !== "failed"),
+          testRunId: testRun.id,
+          steps,
+        });
+      } catch (error: any) {
+        // Update test run with failure
+        await db.update(e2eTestRuns)
+          .set({
+            completedAt: new Date(),
+            ok: false,
+            stepsJson: steps,
+            error: error.message,
+          })
+          .where(eq(e2eTestRuns.id, testRun.id));
+        
+        res.json({
+          success: false,
+          testRunId: testRun.id,
+          steps,
+          error: error.message,
+        });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // PLACEMENT PLAN DETAILS WITH YODECK URLS
+  // ============================================================================
+  
+  app.get("/api/placement-plans/:id/yodeck-info", requireAdminAccess, async (req, res) => {
+    try {
+      const { generateResourceUrls } = await import("./utils/yodeckUrls");
+      
+      const plan = await db.select().from(placementPlans).where(eq(placementPlans.id, req.params.id)).limit(1);
+      if (!plan[0]) {
+        return res.status(404).json({ error: "Plan niet gevonden" });
+      }
+      
+      const targets = await db.select()
+        .from(placementTargets)
+        .where(eq(placementTargets.planId, req.params.id));
+      
+      // Get location info for each target
+      const targetDetails = await Promise.all(targets.map(async (target) => {
+        const location = await db.select().from(locations).where(eq(locations.id, target.locationId)).limit(1);
+        const loc = location[0];
+        
+        return {
+          locationId: target.locationId,
+          locationName: loc?.name || target.locationId,
+          status: target.status,
+          yodeckMediaId: target.yodeckMediaId,
+          yodeckPlaylistId: target.yodeckPlaylistId,
+          yodeckScreenId: loc?.yodeckScreenId || loc?.yodeckDeviceId,
+          urls: generateResourceUrls({
+            mediaId: target.yodeckMediaId,
+            playlistId: target.yodeckPlaylistId,
+            screenId: loc?.yodeckScreenId || loc?.yodeckDeviceId,
+          }),
+          publishedAt: target.publishedAt,
+          errorMessage: target.errorMessage,
+        };
+      }));
+      
+      // Get asset info
+      const asset = plan[0].adAssetId 
+        ? await db.select().from(adAssets).where(eq(adAssets.id, plan[0].adAssetId)).limit(1)
+        : [];
+      
+      res.json({
+        planId: plan[0].id,
+        status: plan[0].status,
+        yodeckMediaId: (plan[0].publishReport as any)?.yodeckMediaId,
+        tagsApplied: ["elevizion:ad", "elevizion:advertiser", "elevizion:plan", "elevizion:location"],
+        publishReport: plan[0].publishReport,
+        publishedAt: plan[0].publishedAt,
+        asset: asset[0] ? {
+          id: asset[0].id,
+          fileName: asset[0].fileName,
+        } : null,
+        targets: targetDetails,
+        urls: generateResourceUrls({
+          mediaId: (plan[0].publishReport as any)?.yodeckMediaId,
+        }),
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

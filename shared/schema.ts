@@ -2588,3 +2588,67 @@ export const ADVERTISER_CATEGORIES = [
   "overig",
 ] as const;
 export type AdvertiserCategory = typeof ADVERTISER_CATEGORIES[number];
+
+// ============================================
+// E2E Test Runs - For admin chain verification
+// ============================================
+export const e2eTestRuns = pgTable("e2e_test_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  testType: text("test_type").notNull().default("YODECK_CHAIN"), // YODECK_CHAIN | PUBLISH_FLOW | etc.
+  startedAt: timestamp("started_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"),
+  ok: boolean("ok"),
+  stepsJson: jsonb("steps_json"), // Array of step results
+  error: text("error"),
+  testLocationId: varchar("test_location_id"),
+  testMediaId: text("test_media_id"),
+  triggeredBy: varchar("triggered_by"), // user ID who triggered the test
+});
+
+export const insertE2eTestRunSchema = createInsertSchema(e2eTestRuns).omit({
+  id: true,
+  startedAt: true,
+});
+export type E2eTestRun = typeof e2eTestRuns.$inferSelect;
+export type InsertE2eTestRun = z.infer<typeof insertE2eTestRunSchema>;
+
+// ============================================
+// Tag Policies - Whitelist/allowed tags for publishing
+// ============================================
+export const tagPolicies = pgTable("tag_policies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  tagName: text("tag_name").notNull().unique(), // e.g., "category:food", "campaign:summer2024"
+  tagType: text("tag_type").notNull().default("custom"), // predefined | category | campaign | format | custom
+  description: text("description"),
+  isActive: boolean("is_active").notNull().default(true),
+  requiresYodeckCreation: boolean("requires_yodeck_creation").notNull().default(true), // true = must be created in Yodeck UI
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const insertTagPolicySchema = createInsertSchema(tagPolicies).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type TagPolicy = typeof tagPolicies.$inferSelect;
+export type InsertTagPolicy = z.infer<typeof insertTagPolicySchema>;
+
+// Predefined tag prefixes that are always allowed
+export const ALLOWED_TAG_PREFIXES = [
+  "elevizion:",
+  "category:",
+  "campaign:",
+  "format:",
+] as const;
+export type AllowedTagPrefix = typeof ALLOWED_TAG_PREFIXES[number];
+
+// Static predefined tags - must be pre-created manually in Yodeck UI
+export const PREDEFINED_TAGS = [
+  "elevizion:ad",
+  "elevizion:advertiser", 
+  "elevizion:plan",
+  "elevizion:location",
+] as const;
+export type PredefinedTag = typeof PREDEFINED_TAGS[number];
+

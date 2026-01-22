@@ -1,0 +1,113 @@
+JE BENT REPLIT AI. We hebben bewezen dat de keten 1x end-to-end werkt (upload → publish → Yodeck tags → tagbased playlist → screen). Nu moet je het systeem PRODUCTION-READY maken met de onderstaande 8 verbeteringen. Implementeer dit zonder nieuwe vragen, met duidelijke code changes + waar ik het kan vinden in de UI.
+
+BELANGRIJKE CONTEXT (log facts)
+- Media tagging werkt nu via PATCH /api/v2/media/{mediaId} met tags:
+  ["elevizion:ad","elevizion:advertiser","elevizion:plan","elevizion:location"]
+- Tags CRUD API bestaat niet (/api/v2/tags geeft 404), dus we mogen tags niet via API aanmaken.
+- Tagbased playlists bestaan en worden gebruikt.
+- In logs staat soms dat playlist filtert op "elevizion:location:<uuid>" — dit is gevaarlijk want we gebruiken geen uuid-tags op media. Fix dit hard.
+
+DOEL
+1) Tagbased playlist filtering hard correct maken (minimaal op elevizion:ad)
+2) Dashboard inzicht: “waar is mijn advertentie live?” (screen/playlist/media links)
+3) Retry/error handling: retries stoppen bij permanente fouten, reset bij succes, correcte audit
+4) 1-klik E2E keten-test (admin) die publish + verify doet
+5) Yodeck setup checklist in dashboard (tags bestaan etc.) zodat onboarding niet stukloopt
+6) Baseline content vs Ads scheiden via layouts (nieuws/weer/klok + advertentiezone)
+7) Tag policy/whitelist + beheer UI voor toekomstige finetune tags (category/campaign/format)
+8) Monitoring/alerts voor publish failures en integratie health
+
+IMPLEMENTATIE-DETAILS (MOET JE EXACT ZO DOEN)
+
+A) TAGBASED PLAYLIST FILTER FIX (kritiek)
+- In ensureTagBasedPlaylist() / playlist builder:
+  - Zorg dat tagbased.includes ALTIJD minstens "elevizion:ad" bevat.
+  - Verwijder elke afhankelijkheid van dynamische uuid-tags zoals "elevizion:location:<uuid>" in includes/excludes.
+  - Als we locatie-specifiek willen, doe dat via PLAYLIST ASSIGNMENT (welke playlist aan welk screen), niet via uuid-tags.
+- Voeg een verify stap toe:
+  - Na ensure playlist: fetch playlist (GET /api/v2/tagbased-playlists/{id} of list+find)
+  - Valideer dat "elevizion:ad" in includes zit. Zo niet: update playlist (PATCH/PUT) of maak opnieuw aan.
+- Log duidelijk:
+  - "[YodeckPublish] Tagbased playlist includes verified: elevizion:ad present"
+
+B) DASHBOARD: "WAAR STAAT MIJN AD LIVE?"
+- Voeg in de UI bij Advertentie/Placement Plan detail:
+  - yodeckMediaId + knop "Open media in Yodeck"
+  - per target/location: playlistId + knop "Open playlist in Yodeck"
+  - per location: screen link indien beschikbaar (als we screenId hebben) + "Open screen in Yodeck"
+- Toon ook:
+  - tagsApplied lijst
+  - lastPublishReport overzicht (success/failed, timestamps)
+- Voeg server-side helpers toe om de juiste Yodeck URLs te genereren (base: https://app.yodeck.com/ ...), plaats dit in één utility (yodeckUrls.ts).
+
+C) RETRY/ERROR HANDLING & AUDIT
+- Bij publish success=true:
+  - reset retryCount naar 0
+  - lastErrorCode/Message/Details naar null
+- Permanent error detectie:
+  - Als Yodeck 400 met “does not exist” op tags: errorCode = YODECK_TAG_MISSING_PRECREATE_REQUIRED, markeer plan als FAILED en zet isPermanentError=true zodat retry guard stopt.
+  - Andere duidelijke permanente fouten (401/403 invalid token) markeer als permanent.
+- Audit logging:
+  - Log PLAN_PUBLISHED alleen bij success=true
+  - Log PLAN_PUBLISH_FAILED bij success=false
+  - Laat bestaande PLAN_RETRY_RESOLVED bestaan maar alleen als het echt van FAILED → SUCCESS gaat.
+
+D) ADMIN: 1-KLIK E2E KETEN-TEST
+- Maak een admin pagina /admin/e2e-tests:
+  - Knop "Run Yodeck E2E Test"
+  - Test flow:
+    1) upload een kleine meegeleverde testvideo (gebruik een bestaande mp4 uit repo of generate dummy asset) naar Yodeck (two-step upload flow)
+    2) zet tags (elevizion:ad + etc.)
+    3) ensure tagbased playlist (met includes elevizion:ad) voor 1 gekozen testlocation
+    4) assign playlist aan screen (of verifieer assignment)
+    5) verify: MEDIA_TAG_VERIFY found >=4 en playlist verify OK
+  - Resultaat opslaan in db tabel e2e_test_runs (id, startedAt, completedAt, ok, steps JSON, error)
+  - Toon run history in de UI.
+
+E) YODECK SETUP CHECKLIST (dashboard)
+- Maak een pagina /admin/yodeck-setup met checklist:
+  - Can reach /playlists, /screens (OK)
+  - Predefined media tags exist: test door 1 tijdelijke tag set/verify op een testmedia of probeer tags te setten en catch “does not exist”
+  - Tagbased playlist template works: ensure+verify includes elevizion:ad
+  - Screen assignment present for test location
+- Toon “✅ Completed / ⚠ Needs action” en concrete instructie als tags ontbreken (maak 1x in Yodeck UI: elevizion:ad, elevizion:advertiser, elevizion:plan, elevizion:location).
+
+F) BASELINE CONTENT VS ADS VIA LAYOUTS
+- Implementeer een standaard "Elevizion Layout" per locatie/screen:
+  - Zone A: baseline content (nieuws/weer/klok) (placeholder als je niet direct apps wil selecteren)
+  - Zone B: ads: tagbased playlist
+- In onboarding “nieuwe locatie”:
+  - maak/ensure layout + ensure tagbased ad playlist
+  - koppel layout aan screen zodra yodeck screen bekend is
+- Als je geen automatische nieuws/weer app selectie wil:
+  - gebruik een “Baseline Playlist” die we later vullen; maar zorg dat de layout structuur al klopt.
+
+G) TAG POLICY + WHITELIST (voor finetune tags)
+- Voeg config toe:
+  - ALLOWED_TAG_PREFIXES = ["elevizion:","category:","campaign:","format:"]
+  - EN een expliciete allowlist voor elevizion:* tags.
+- Valideer bij publish:
+  - tags die niet matchen → reject met duidelijke fout
+- Admin UI:
+  - /admin/tag-policy
+  - beheer lijst met category/campaign/format tags (CRUD in onze DB)
+  - let op: dit maakt NIET automatisch tags in Yodeck; toon instructie “maak ook in Yodeck UI aan”.
+
+H) MONITORING/ALERTS
+- Voeg in /system-health of nieuw /admin/alerts:
+  - count publish failures last 24h
+  - last successful publish timestamp
+  - yodeck auth OK check (simple GET /screens)
+  - outbox/queue backlog
+- Als failures > 0:
+  - toon rode banner in admin dashboard
+  - log een server warning
+- Optioneel: stuur een mail naar admin bij >N failures (configurable).
+
+OPLEVERING
+- Pas de code aan en geef mij:
+  1) lijst met aangepaste bestanden
+  2) korte uitleg per onderdeel (A–H) waar ik het kan testen in de UI
+  3) eventuele nieuwe migrations (SQL) en hoe ik ze run (of laat Replit ze automatisch uitvoeren)
+  4) voorbeelden van logregels die ik moet zien bij succesvolle publish en bij tag-missing error
+Maak het robuust, minimalistisch en consistent met de bestaande Elevizion codebase.
