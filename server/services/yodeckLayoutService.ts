@@ -1006,20 +1006,204 @@ export interface ForceLayoutResult {
   verified: boolean;
   layoutId?: string;
   layoutName?: string;
+  beforeLayoutName?: string;
+  afterLayoutName?: string;
+  screenshotTimestamp?: string;
   error?: string;
   logs: string[];
 }
 
 /**
- * Force screen to use Elevizion layout with hard verification
- * Creates layout if needed, assigns to screen, pushes and verifies
+ * Step 1: Force reset screen content to break existing content binding
+ * Sets screen to playlist mode with no playlist (or minimal content)
+ * This clears any existing demo layout and prepares for fresh assignment
+ */
+async function forceResetScreenContent(
+  screenId: string
+): Promise<{ ok: boolean; error?: string; logs: string[] }> {
+  const logs: string[] = [];
+  
+  logs.push(`[ForceReset] Resetting screen ${screenId} content...`);
+  
+  // Get current screen info for logging
+  const currentInfo = await yodeckRequest<{
+    id: number;
+    name: string;
+    default_playlist_type: string;
+    default_playlist?: number;
+    current_layout?: { id: number; name: string };
+  }>(`/screens/${screenId}`);
+  
+  if (currentInfo.ok && currentInfo.data) {
+    const currentType = currentInfo.data.default_playlist_type;
+    const currentLayout = currentInfo.data.current_layout?.name || "none";
+    logs.push(`[ForceReset] Current: type=${currentType}, layout=${currentLayout}`);
+  }
+  
+  // Step 1a: Set screen to "playlist" mode with null/empty content
+  // This breaks the existing layout/playlist binding
+  const resetResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
+    default_playlist_type: "playlist",
+    default_playlist: null,  // Clear content
+  });
+  
+  if (!resetResult.ok) {
+    logs.push(`[ForceReset] PATCH failed: ${resetResult.error}`);
+    return { ok: false, error: `RESET_FAILED: ${resetResult.error}`, logs };
+  }
+  logs.push(`[ForceReset] Screen content cleared (mode=playlist, playlist=null)`);
+  
+  // Step 1b: Push to sync the reset
+  logs.push(`[ForceReset] Pushing reset to screen...`);
+  const pushResult = await yodeckRequest(`/screens/${screenId}/push/`, "POST", {});
+  if (!pushResult.ok) {
+    logs.push(`[ForceReset] Push warning: ${pushResult.error} (continuing)`);
+  } else {
+    logs.push(`[ForceReset] Reset pushed successfully`);
+  }
+  
+  // Step 1c: Wait for screen to process reset
+  logs.push(`[ForceReset] Waiting 3s for screen to process reset...`);
+  await new Promise(resolve => setTimeout(resolve, 3000));
+  
+  logs.push(`[ForceReset] Screen reset complete`);
+  return { ok: true, logs };
+}
+
+/**
+ * Step 2: Apply Elevizion layout to screen (after reset)
+ * Sets screen mode to LAYOUT with proper layoutId
+ */
+async function applyElevizionLayoutToScreen(
+  screenId: string,
+  layoutId: string,
+  layoutName: string
+): Promise<{ ok: boolean; error?: string; logs: string[] }> {
+  const logs: string[] = [];
+  
+  logs.push(`[ApplyLayout] Assigning layout ${layoutName} (${layoutId}) to screen ${screenId}...`);
+  
+  // Set screen to layout mode with Elevizion layout
+  const assignResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
+    default_playlist_type: "layout",
+    default_playlist: parseInt(layoutId, 10),
+  });
+  
+  if (!assignResult.ok) {
+    logs.push(`[ApplyLayout] Assignment failed: ${assignResult.error}`);
+    return { ok: false, error: `ASSIGN_FAILED: ${assignResult.error}`, logs };
+  }
+  logs.push(`[ApplyLayout] Layout assigned successfully`);
+  
+  // Push changes to screen
+  logs.push(`[ApplyLayout] Pushing layout to screen...`);
+  const pushResult = await yodeckRequest(`/screens/${screenId}/push/`, "POST", {});
+  if (!pushResult.ok) {
+    logs.push(`[ApplyLayout] Push warning: ${pushResult.error} (continuing)`);
+  } else {
+    logs.push(`[ApplyLayout] Layout pushed successfully`);
+  }
+  
+  return { ok: true, logs };
+}
+
+/**
+ * Step 3: Verify screen is now using Elevizion layout
+ * Fetches screen details and checks mode + layout name
+ * Returns screenshot timestamp for audit
+ */
+async function verifyScreenLayout(
+  screenId: string,
+  expectedLayoutId: string
+): Promise<{
+  ok: boolean;
+  verified: boolean;
+  currentMode?: string;
+  currentLayoutName?: string;
+  screenshotTimestamp?: string;
+  error?: string;
+  logs: string[];
+}> {
+  const logs: string[] = [];
+  
+  logs.push(`[Verify] Checking screen ${screenId} configuration...`);
+  
+  // Wait for changes to propagate
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  const screenStatus = await getScreenContentStatus(screenId);
+  
+  if (!screenStatus.ok) {
+    logs.push(`[Verify] Failed to get screen status: ${screenStatus.error}`);
+    return { ok: false, verified: false, error: `STATUS_CHECK_FAILED: ${screenStatus.error}`, logs };
+  }
+  
+  const screenshotTimestamp = new Date().toISOString();
+  logs.push(`[Verify] Screenshot timestamp: ${screenshotTimestamp}`);
+  logs.push(`[Verify] Current mode: ${screenStatus.mode}`);
+  logs.push(`[Verify] Current layout: ${screenStatus.layoutName || "none"}`);
+  logs.push(`[Verify] Is Elevizion: ${screenStatus.isElevizionLayout}`);
+  
+  if (screenStatus.mode !== "layout") {
+    logs.push(`[Verify] FAILED: Screen mode is '${screenStatus.mode}', expected 'layout'`);
+    return {
+      ok: true,
+      verified: false,
+      currentMode: screenStatus.mode,
+      currentLayoutName: screenStatus.layoutName,
+      screenshotTimestamp,
+      logs,
+    };
+  }
+  
+  if (!screenStatus.isElevizionLayout) {
+    logs.push(`[Verify] FAILED: Screen layout '${screenStatus.layoutName}' is not Elevizion`);
+    return {
+      ok: true,
+      verified: false,
+      currentMode: screenStatus.mode,
+      currentLayoutName: screenStatus.layoutName,
+      screenshotTimestamp,
+      logs,
+    };
+  }
+  
+  logs.push(`[Verify] SUCCESS: Screen is on Elevizion layout '${screenStatus.layoutName}'`);
+  return {
+    ok: true,
+    verified: true,
+    currentMode: screenStatus.mode,
+    currentLayoutName: screenStatus.layoutName,
+    screenshotTimestamp,
+    logs,
+  };
+}
+
+/**
+ * Force screen to use Elevizion layout with hard reset + double push + verification
+ * 
+ * Flow:
+ * 1. Reset screen content (clear existing binding)
+ * 2. Push reset
+ * 3. Wait 3s
+ * 4. Apply Elevizion layout
+ * 5. Push layout
+ * 6. Verify (with 1 retry if still on demo layout)
+ * 
+ * Used by:
+ * - POST /api/admin/layouts/:id/force
+ * - Publish flow (Step 6)
+ * - Repair button in /layouts UI
  */
 export async function ensureScreenUsesElevizionLayout(
   locationId: string
 ): Promise<ForceLayoutResult> {
   const logs: string[] = [];
+  let beforeLayoutName: string | undefined;
+  let afterLayoutName: string | undefined;
+  let screenshotTimestamp: string | undefined;
   
-  logs.push(`[ForceLayout] Starting for location ${locationId}`);
+  logs.push(`[ForceLayout] === Starting hard reset + double push for location ${locationId} ===`);
   
   // Get location
   const location = await db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
@@ -1034,61 +1218,61 @@ export async function ensureScreenUsesElevizionLayout(
     return { ok: false, verified: false, error: "No Yodeck screen linked", logs };
   }
 
-  // Check current screen status
+  // Get current screen status for logging (beforeLayoutName)
   const currentStatus = await getScreenContentStatus(screenId);
-  logs.push(`[ForceLayout] Current screen status: mode=${currentStatus.mode}, layout=${currentStatus.layoutName || "none"}, isElevizion=${currentStatus.isElevizionLayout}`);
+  beforeLayoutName = currentStatus.layoutName || "none";
+  logs.push(`[ForceLayout] BEFORE: mode=${currentStatus.mode}, layout=${beforeLayoutName}, isElevizion=${currentStatus.isElevizionLayout}`);
 
-  // If already on correct Elevizion layout, verify and return
+  // If already on correct Elevizion layout, just verify and return
   if (currentStatus.mode === "layout" && currentStatus.isElevizionLayout) {
-    if (!loc.yodeckLayoutId || currentStatus.layoutId === loc.yodeckLayoutId) {
-      logs.push(`[ForceLayout] Screen already on correct Elevizion layout`);
-      return { 
-        ok: true, 
-        verified: true, 
-        layoutId: currentStatus.layoutId,
-        layoutName: currentStatus.layoutName,
-        logs 
-      };
-    }
+    logs.push(`[ForceLayout] Screen already on Elevizion layout - verifying...`);
+    screenshotTimestamp = new Date().toISOString();
+    afterLayoutName = currentStatus.layoutName;
+    return { 
+      ok: true, 
+      verified: true, 
+      layoutId: currentStatus.layoutId,
+      layoutName: currentStatus.layoutName,
+      beforeLayoutName,
+      afterLayoutName,
+      screenshotTimestamp,
+      logs 
+    };
   }
 
-  // Step 1: Ensure baseline playlist exists and is seeded
+  // === PREREQUISITE: Ensure playlists exist ===
   logs.push(`[ForceLayout] Ensuring baseline playlist...`);
   const baselineResult = await ensureBaselinePlaylist(locationId, loc.name);
   logs.push(...baselineResult.logs);
   if (!baselineResult.ok || !baselineResult.playlistId) {
-    return { ok: false, verified: false, error: baselineResult.error || "Failed to create baseline playlist", logs };
+    return { ok: false, verified: false, beforeLayoutName, error: baselineResult.error || "Failed to create baseline playlist", logs };
   }
 
-  // Step 2: Ensure ads tagbased playlist
   logs.push(`[ForceLayout] Ensuring ads playlist...`);
   const adsResult = await ensureAdsPlaylist(locationId);
   logs.push(...adsResult.logs);
   if (!adsResult.ok || !adsResult.playlistId) {
-    return { ok: false, verified: false, error: adsResult.error || "Failed to create ads playlist", logs };
+    return { ok: false, verified: false, beforeLayoutName, error: adsResult.error || "Failed to create ads playlist", logs };
   }
 
-  // Step 3: Check if layouts are supported
-  const layoutsSupported = await probeLayoutsSupport();
-  if (!layoutsSupported) {
-    logs.push(`[ForceLayout] Layouts API not available, cannot force Elevizion layout`);
-    return { ok: false, verified: false, error: "LAYOUTS_API_NOT_AVAILABLE", logs };
+  // Check if layouts are supported
+  const layoutsApiSupported = await probeLayoutsSupport();
+  if (!layoutsApiSupported) {
+    logs.push(`[ForceLayout] Layouts API not available`);
+    return { ok: false, verified: false, beforeLayoutName, error: "LAYOUTS_API_NOT_AVAILABLE", logs };
   }
 
-  // Step 4: Create/ensure Elevizion layout exists
+  // === ENSURE ELEVIZION LAYOUT EXISTS ===
   logs.push(`[ForceLayout] Ensuring Elevizion layout exists...`);
   
-  // First, look for existing Elevizion Standard layout
   const existingLayouts = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>("/layouts");
   let layoutId: string | undefined;
   let layoutName: string | undefined;
   
   if (existingLayouts.ok && existingLayouts.data?.results) {
-    // Look for location-specific layout first
     const locationLayoutName = `Elevizion Standard | ${loc.name}`;
     let existingLayout = existingLayouts.data.results.find(l => l.name === locationLayoutName);
     
-    // If not found, look for generic Elevizion layout
     if (!existingLayout) {
       existingLayout = existingLayouts.data.results.find(l => 
         l.name.startsWith(ELEVIZION_LAYOUT_PREFIX) && l.name.includes("Standard")
@@ -1102,7 +1286,6 @@ export async function ensureScreenUsesElevizionLayout(
     }
   }
 
-  // If no existing layout, create one
   if (!layoutId) {
     logs.push(`[ForceLayout] Creating new Elevizion layout...`);
     const createLayoutName = `Elevizion Standard | ${loc.name}`;
@@ -1114,34 +1297,20 @@ export async function ensureScreenUsesElevizionLayout(
       regions: [
         {
           name: "BASE",
-          x: 0,
-          y: 0,
-          width: 30,
-          height: 100,
-          z_index: 1,
-          item: {
-            type: "playlist",
-            id: parseInt(baselineResult.playlistId, 10),
-          },
+          x: 0, y: 0, width: 30, height: 100, z_index: 1,
+          item: { type: "playlist", id: parseInt(baselineResult.playlistId, 10) },
         },
         {
           name: "ADS",
-          x: 30,
-          y: 0,
-          width: 70,
-          height: 100,
-          z_index: 1,
-          item: {
-            type: "playlist",
-            id: parseInt(adsResult.playlistId, 10),
-          },
+          x: 30, y: 0, width: 70, height: 100, z_index: 1,
+          item: { type: "playlist", id: parseInt(adsResult.playlistId, 10) },
         },
       ],
     });
 
     if (!createResult.ok || !createResult.data) {
       logs.push(`[ForceLayout] Failed to create layout: ${createResult.error}`);
-      return { ok: false, verified: false, error: `CREATE_LAYOUT_FAILED: ${createResult.error}`, logs };
+      return { ok: false, verified: false, beforeLayoutName, error: `CREATE_LAYOUT_FAILED: ${createResult.error}`, logs };
     }
 
     layoutId = String(createResult.data.id);
@@ -1151,64 +1320,129 @@ export async function ensureScreenUsesElevizionLayout(
 
   // Save layout ID to DB
   await db.update(locations)
-    .set({ 
-      yodeckLayoutId: layoutId,
-      layoutMode: "LAYOUT" 
-    })
+    .set({ yodeckLayoutId: layoutId, layoutMode: "LAYOUT" })
     .where(eq(locations.id, locationId));
   logs.push(`[ForceLayout] Saved layout ID to database`);
 
-  // Step 5: Assign layout to screen
-  logs.push(`[ForceLayout] Assigning layout to screen...`);
-  const assignResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
-    default_playlist_type: "layout",
-    default_playlist: parseInt(layoutId, 10),
-  });
-
-  if (!assignResult.ok) {
-    logs.push(`[ForceLayout] Failed to assign layout: ${assignResult.error}`);
-    return { ok: false, verified: false, error: `ASSIGN_LAYOUT_FAILED: ${assignResult.error}`, logs };
-  }
-  logs.push(`[ForceLayout] Layout assigned to screen`);
-
-  // Step 6: Push to screen (trigger sync)
-  logs.push(`[ForceLayout] Pushing changes to screen...`);
-  const pushResult = await yodeckRequest(`/screens/${screenId}/push/`, "POST", {});
-  if (!pushResult.ok) {
-    // Push might fail but screen might still update - continue to verify
-    logs.push(`[ForceLayout] Push warning: ${pushResult.error} (continuing to verify)`);
-  } else {
-    logs.push(`[ForceLayout] Push successful`);
-  }
-
-  // Step 7: Hard verify - wait a moment and check screen status
-  logs.push(`[ForceLayout] Verifying screen configuration...`);
-  await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s for propagation
-
-  const verifyStatus = await getScreenContentStatus(screenId);
+  // === STEP 1: FORCE RESET SCREEN CONTENT (clear demo layout binding) ===
+  logs.push(`[ForceLayout] === STEP 1: Force Reset Screen Content ===`);
+  const resetResult = await forceResetScreenContent(screenId);
+  logs.push(...resetResult.logs);
   
-  if (!verifyStatus.ok) {
-    logs.push(`[ForceLayout] Verification failed: ${verifyStatus.error}`);
-    return { ok: false, verified: false, layoutId, layoutName, error: `VERIFY_FAILED: ${verifyStatus.error}`, logs };
+  if (!resetResult.ok) {
+    return { ok: false, verified: false, beforeLayoutName, layoutId, layoutName, error: resetResult.error, logs };
   }
 
-  if (verifyStatus.mode !== "layout") {
-    logs.push(`[ForceLayout] VERIFICATION FAILED: Screen mode is ${verifyStatus.mode}, expected layout`);
-    return { ok: false, verified: false, layoutId, layoutName, error: "SCREEN_LAYOUT_NOT_APPLIED", logs };
+  // === STEP 2: APPLY ELEVIZION LAYOUT ===
+  logs.push(`[ForceLayout] === STEP 2: Apply Elevizion Layout ===`);
+  const applyResult = await applyElevizionLayoutToScreen(screenId, layoutId, layoutName!);
+  logs.push(...applyResult.logs);
+  
+  if (!applyResult.ok) {
+    return { ok: false, verified: false, beforeLayoutName, layoutId, layoutName, error: applyResult.error, logs };
   }
 
-  if (!verifyStatus.isElevizionLayout) {
-    logs.push(`[ForceLayout] VERIFICATION FAILED: Screen layout is not Elevizion (${verifyStatus.layoutName})`);
-    return { ok: false, verified: false, layoutId, layoutName, error: "SCREEN_LAYOUT_NOT_APPLIED", logs };
+  // === STEP 3: VERIFY (with 1 retry) ===
+  logs.push(`[ForceLayout] === STEP 3: Verify (attempt 1) ===`);
+  let verifyResult = await verifyScreenLayout(screenId, layoutId);
+  logs.push(...verifyResult.logs);
+  screenshotTimestamp = verifyResult.screenshotTimestamp;
+  afterLayoutName = verifyResult.currentLayoutName;
+
+  if (verifyResult.ok && verifyResult.verified) {
+    logs.push(`[ForceLayout] SUCCESS on first attempt`);
+    logs.push(`[ForceLayout] beforeLayoutName: ${beforeLayoutName}`);
+    logs.push(`[ForceLayout] afterLayoutName: ${afterLayoutName}`);
+    logs.push(`[ForceLayout] screenshotTimestamp: ${screenshotTimestamp}`);
+    return {
+      ok: true,
+      verified: true,
+      layoutId,
+      layoutName,
+      beforeLayoutName,
+      afterLayoutName,
+      screenshotTimestamp,
+      logs,
+    };
   }
 
-  logs.push(`[ForceLayout] VERIFIED: Screen is on Elevizion layout ${verifyStatus.layoutName}`);
-  return { 
-    ok: true, 
-    verified: true, 
-    layoutId: verifyStatus.layoutId,
-    layoutName: verifyStatus.layoutName,
-    logs 
+  // === RETRY: If demo layout still active, do full reset+apply again ===
+  logs.push(`[ForceLayout] First attempt failed - demo layout stuck. Retrying with full reset...`);
+  
+  // Reset again
+  const retryResetResult = await forceResetScreenContent(screenId);
+  logs.push(...retryResetResult.logs);
+  if (!retryResetResult.ok) {
+    return { 
+      ok: false, 
+      verified: false, 
+      beforeLayoutName, 
+      afterLayoutName,
+      screenshotTimestamp,
+      layoutId, 
+      layoutName, 
+      error: "SCREEN_LAYOUT_STUCK (PERMANENT) - Reset failed on retry", 
+      logs 
+    };
+  }
+
+  // Apply again
+  const retryApplyResult = await applyElevizionLayoutToScreen(screenId, layoutId, layoutName!);
+  logs.push(...retryApplyResult.logs);
+  if (!retryApplyResult.ok) {
+    return { 
+      ok: false, 
+      verified: false, 
+      beforeLayoutName, 
+      afterLayoutName,
+      screenshotTimestamp,
+      layoutId, 
+      layoutName, 
+      error: "SCREEN_LAYOUT_STUCK (PERMANENT) - Apply failed on retry", 
+      logs 
+    };
+  }
+
+  // Verify again
+  logs.push(`[ForceLayout] === STEP 3: Verify (attempt 2 - final) ===`);
+  verifyResult = await verifyScreenLayout(screenId, layoutId);
+  logs.push(...verifyResult.logs);
+  screenshotTimestamp = verifyResult.screenshotTimestamp;
+  afterLayoutName = verifyResult.currentLayoutName;
+
+  if (verifyResult.ok && verifyResult.verified) {
+    logs.push(`[ForceLayout] SUCCESS on retry`);
+    logs.push(`[ForceLayout] beforeLayoutName: ${beforeLayoutName}`);
+    logs.push(`[ForceLayout] afterLayoutName: ${afterLayoutName}`);
+    logs.push(`[ForceLayout] screenshotTimestamp: ${screenshotTimestamp}`);
+    return {
+      ok: true,
+      verified: true,
+      layoutId,
+      layoutName,
+      beforeLayoutName,
+      afterLayoutName,
+      screenshotTimestamp,
+      logs,
+    };
+  }
+
+  // === PERMANENT FAILURE ===
+  logs.push(`[ForceLayout] PERMANENT FAILURE - Screen layout stuck on '${afterLayoutName}'`);
+  logs.push(`[ForceLayout] beforeLayoutName: ${beforeLayoutName}`);
+  logs.push(`[ForceLayout] afterLayoutName: ${afterLayoutName}`);
+  logs.push(`[ForceLayout] screenshotTimestamp: ${screenshotTimestamp}`);
+  
+  return {
+    ok: false,
+    verified: false,
+    layoutId,
+    layoutName,
+    beforeLayoutName,
+    afterLayoutName,
+    screenshotTimestamp,
+    error: "SCREEN_LAYOUT_STUCK (PERMANENT)",
+    logs,
   };
 }
 
