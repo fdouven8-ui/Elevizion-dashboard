@@ -108,8 +108,8 @@ export default function YodeckDebug() {
     <div className="space-y-6" data-testid="yodeck-debug-page">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold" data-testid="page-title">Yodeck Debug & Fix</h1>
-          <p className="text-muted-foreground">Debug en repareer scherm layouts direct</p>
+          <h1 className="text-2xl font-bold" data-testid="page-title">Yodeck Debug & Force Tools</h1>
+          <p className="text-muted-foreground">If you can see this page, routing is fixed.</p>
         </div>
       </div>
 

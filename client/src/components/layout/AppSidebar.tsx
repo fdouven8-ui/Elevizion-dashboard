@@ -39,6 +39,8 @@ import {
   Send,
   Clock,
   PlaySquare,
+  LayoutGrid,
+  Bug,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
@@ -347,6 +349,30 @@ export function AppSidebar() {
                       <Link href="/video-review" data-testid="nav-video-review">
                         <PlaySquare className="h-4 w-4" />
                         <span className="text-[13px]">Video Beoordelen</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton 
+                      asChild 
+                      tooltip="Layouts"
+                      className={`h-9 rounded-lg transition-colors ${(isActive("/layouts") || isActive("/admin/layouts")) ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
+                    >
+                      <Link href="/admin/layouts" data-testid="nav-layouts">
+                        <LayoutGrid className="h-4 w-4" />
+                        <span className="text-[13px]">Layouts</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton 
+                      asChild 
+                      tooltip="Yodeck Debug"
+                      className={`h-9 rounded-lg transition-colors ${(isActive("/yodeck-debug") || isActive("/admin/yodeck-debug")) ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
+                    >
+                      <Link href="/admin/yodeck-debug" data-testid="nav-yodeck-debug">
+                        <Bug className="h-4 w-4" />
+                        <span className="text-[13px]">Yodeck Debug</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

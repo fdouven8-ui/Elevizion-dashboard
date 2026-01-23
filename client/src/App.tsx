@@ -113,7 +113,9 @@ function DashboardRouter() {
         <Route path="/playlist-mapping" component={PlaylistMapping} />
         <Route path="/video-review" component={VideoReview} />
         <Route path="/layouts" component={Layouts} />
+        <Route path="/admin/layouts" component={Layouts} />
         <Route path="/yodeck-debug" component={YodeckDebug} />
+        <Route path="/admin/yodeck-debug" component={YodeckDebug} />
         <Route component={NotFound} />
       </Switch>
     </DashboardLayout>
