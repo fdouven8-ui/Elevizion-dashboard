@@ -16,12 +16,15 @@ interface ScreenOption {
 interface ScreenStatus {
   ok: boolean;
   mode: string;
+  rawContentType?: string;
   layoutId?: string;
   layoutName?: string;
   isElevizionLayout: boolean;
   lastSeenOnline?: string;
   lastScreenshotAt?: string;
+  isOnline?: boolean;
   error?: string;
+  rawApiResponse?: string;
 }
 
 interface ForceFixResult {
@@ -206,10 +209,26 @@ export default function YodeckDebug() {
                   <p className="font-mono text-sm" data-testid="status-screen-id">{selectedScreen.yodeckDeviceId}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Mode</p>
+                  <p className="text-sm text-muted-foreground">Mode (parsed)</p>
                   <Badge variant={statusData.mode === "layout" ? "default" : "secondary"} data-testid="status-mode">
                     {statusData.mode}
                   </Badge>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Raw Content Type</p>
+                  <p className="font-mono text-xs" data-testid="status-raw-content-type">{statusData.rawContentType || "-"}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Online Status</p>
+                  {statusData.isOnline ? (
+                    <Badge variant="default" className="bg-green-600" data-testid="status-online">
+                      <CheckCircle className="h-3 w-3 mr-1" /> Online
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" data-testid="status-online">
+                      Offline/Onbekend
+                    </Badge>
+                  )}
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Layout/Playlist Naam</p>

@@ -848,10 +848,12 @@ export function isElevizionLayout(layoutName: string | null | undefined): boolea
 /**
  * Get current screen content status from Yodeck
  * Returns the current content mode (layout/playlist/schedule) and layout details
+ * Logs raw API response for debugging
  */
 export async function getScreenContentStatus(screenId: string): Promise<{
   ok: boolean;
   mode: "layout" | "playlist" | "schedule" | "unknown";
+  rawContentType?: string;
   layoutId?: string;
   layoutName?: string;
   playlistId?: string;
@@ -859,26 +861,45 @@ export async function getScreenContentStatus(screenId: string): Promise<{
   isElevizionLayout: boolean;
   lastSeenOnline?: string;
   lastScreenshotAt?: string;
+  isOnline?: boolean;
   error?: string;
+  rawApiResponse?: string;
 }> {
-  const result = await yodeckRequest<{
-    id: number;
-    name: string;
-    default_playlist_type?: string;
-    default_playlist?: number;
-    default_playlist_name?: string;
-    layout?: { id: number; name: string };
-    current_layout?: { id: number; name: string };
-    last_seen_online?: string;
-    last_screenshot_at?: string;
-  }>(`/screens/${screenId}`);
+  console.log(`[ScreenStatus] GET /screens/${screenId}`);
+  
+  const result = await yodeckRequest<any>(`/screens/${screenId}`);
 
   if (!result.ok || !result.data) {
-    return { ok: false, mode: "unknown", isElevizionLayout: false, error: result.error };
+    const errorMsg = `HTTP error: ${result.error}`;
+    console.error(`[ScreenStatus] ${errorMsg}`);
+    return { ok: false, mode: "unknown", isElevizionLayout: false, error: errorMsg };
   }
 
   const screen = result.data;
-  const playlistType = screen.default_playlist_type?.toLowerCase() || "unknown";
+  
+  // Log raw response for debugging
+  const rawApiResponse = JSON.stringify({
+    id: screen.id,
+    name: screen.name,
+    default_playlist_type: screen.default_playlist_type,
+    default_playlist: screen.default_playlist,
+    layout: screen.layout,
+    current_layout: screen.current_layout,
+    content_type: screen.content_type,
+    assigned_layout: screen.assigned_layout,
+    last_seen_online: screen.last_seen_online,
+    status: screen.status,
+  });
+  console.log(`[ScreenStatus] Raw: ${rawApiResponse}`);
+  
+  // Try multiple field names for content type
+  const rawContentType = screen.default_playlist_type 
+    || screen.content_type 
+    || screen.playlist_type 
+    || "unknown";
+  const playlistType = String(rawContentType).toLowerCase();
+  
+  console.log(`[ScreenStatus] Content type: "${rawContentType}"`);
   
   // Determine mode
   let mode: "layout" | "playlist" | "schedule" | "unknown" = "unknown";
@@ -889,17 +910,21 @@ export async function getScreenContentStatus(screenId: string): Promise<{
   
   if (playlistType === "layout") {
     mode = "layout";
-    // Try to get layout details
-    const layout = screen.layout || screen.current_layout;
-    if (layout) {
+    // Try multiple layout field names
+    const layout = screen.layout || screen.current_layout || screen.assigned_layout;
+    if (layout && typeof layout === "object") {
       layoutId = String(layout.id);
       layoutName = layout.name;
+      console.log(`[ScreenStatus] Layout from object: id=${layoutId}, name=${layoutName}`);
     } else if (screen.default_playlist) {
       layoutId = String(screen.default_playlist);
-      // Fetch layout name
+      console.log(`[ScreenStatus] Layout ID: ${layoutId}, fetching name...`);
       const layoutResult = await yodeckRequest<{ id: number; name: string }>(`/layouts/${screen.default_playlist}`);
       if (layoutResult.ok && layoutResult.data) {
         layoutName = layoutResult.data.name;
+        console.log(`[ScreenStatus] Fetched layout name: ${layoutName}`);
+      } else {
+        console.log(`[ScreenStatus] Failed to fetch layout: ${layoutResult.error}`);
       }
     }
   } else if (playlistType === "playlist") {
@@ -910,11 +935,17 @@ export async function getScreenContentStatus(screenId: string): Promise<{
     }
   } else if (playlistType === "schedule") {
     mode = "schedule";
+  } else {
+    console.log(`[ScreenStatus] Unknown type: "${playlistType}"`);
   }
+
+  const isOnline = screen.status === "online" || screen.is_online === true;
+  console.log(`[ScreenStatus] mode=${mode}, layout=${layoutName || "-"}, isElevizion=${isElevizionLayout(layoutName)}, online=${isOnline}`);
 
   return {
     ok: true,
     mode,
+    rawContentType,
     layoutId,
     layoutName,
     playlistId,
@@ -922,6 +953,8 @@ export async function getScreenContentStatus(screenId: string): Promise<{
     isElevizionLayout: isElevizionLayout(layoutName),
     lastSeenOnline: screen.last_seen_online,
     lastScreenshotAt: screen.last_screenshot_at,
+    isOnline,
+    rawApiResponse,
   };
 }
 
@@ -1098,6 +1131,9 @@ async function forceResetScreenContent(
 /**
  * Step 2: Apply Elevizion layout to screen (after reset)
  * Sets screen mode to LAYOUT with proper layoutId
+ * Endpoints used:
+ *   - PATCH /screens/{id}/ for assignment
+ *   - POST /screens/{id}/push/ for push
  */
 async function applyElevizionLayoutToScreen(
   screenId: string,
@@ -1106,35 +1142,46 @@ async function applyElevizionLayoutToScreen(
 ): Promise<{ ok: boolean; error?: string; logs: string[] }> {
   const logs: string[] = [];
   
-  logs.push(`[ApplyLayout] Assigning layout ${layoutName} (${layoutId}) to screen ${screenId}...`);
+  logs.push(`[ApplyLayout] === Assigning layout to screen ===`);
+  logs.push(`[ApplyLayout] Screen ID: ${screenId}`);
+  logs.push(`[ApplyLayout] Layout ID: ${layoutId}`);
+  logs.push(`[ApplyLayout] Layout Name: ${layoutName}`);
   
   // Set screen to layout mode with Elevizion layout
-  const assignResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
+  const assignPayload = {
     default_playlist_type: "layout",
     default_playlist: parseInt(layoutId, 10),
-  });
+  };
+  logs.push(`[ApplyLayout] Endpoint: PATCH /screens/${screenId}/`);
+  logs.push(`[ApplyLayout] Payload: ${JSON.stringify(assignPayload)}`);
+  
+  const assignResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", assignPayload);
   
   if (!assignResult.ok) {
-    logs.push(`[ApplyLayout] Assignment failed: ${assignResult.error}`);
+    logs.push(`[ApplyLayout] Assignment FAILED: ${assignResult.error}`);
     return { ok: false, error: `ASSIGN_FAILED: ${assignResult.error}`, logs };
   }
-  logs.push(`[ApplyLayout] Layout assigned successfully`);
+  logs.push(`[ApplyLayout] Assignment SUCCESS`);
   
   // Push changes to screen
-  logs.push(`[ApplyLayout] Pushing layout to screen...`);
+  logs.push(`[ApplyLayout] Endpoint: POST /screens/${screenId}/push/`);
   const pushResult = await yodeckRequest(`/screens/${screenId}/push/`, "POST", {});
   if (!pushResult.ok) {
-    logs.push(`[ApplyLayout] Push warning: ${pushResult.error} (continuing)`);
+    logs.push(`[ApplyLayout] Push WARNING: ${pushResult.error} (continuing anyway)`);
   } else {
-    logs.push(`[ApplyLayout] Layout pushed successfully`);
+    logs.push(`[ApplyLayout] Push SUCCESS`);
   }
+  
+  // Wait for push to propagate
+  logs.push(`[ApplyLayout] Waiting 2s for push to propagate...`);
+  await new Promise(resolve => setTimeout(resolve, 2000));
   
   return { ok: true, logs };
 }
 
 /**
  * Step 3: Verify screen is now using Elevizion layout
- * Fetches screen details and checks mode + layout name
+ * Polls up to 3 times with increasing delays (3s, 5s, 8s)
  * Returns screenshot timestamp for audit
  */
 async function verifyScreenLayout(
@@ -1145,61 +1192,71 @@ async function verifyScreenLayout(
   verified: boolean;
   currentMode?: string;
   currentLayoutName?: string;
+  rawContentType?: string;
   screenshotTimestamp?: string;
+  isOnline?: boolean;
   error?: string;
   logs: string[];
 }> {
   const logs: string[] = [];
+  const delays = [3000, 5000, 8000]; // 3s, 5s, 8s
   
-  logs.push(`[Verify] Checking screen ${screenId} configuration...`);
+  logs.push(`[Verify] Starting verification for screen ${screenId} (expected layout: ${expectedLayoutId})`);
   
-  // Wait for changes to propagate
-  await new Promise(resolve => setTimeout(resolve, 2000));
+  let lastScreenStatus: Awaited<ReturnType<typeof getScreenContentStatus>> | null = null;
+  let screenshotTimestamp = new Date().toISOString();
   
-  const screenStatus = await getScreenContentStatus(screenId);
-  
-  if (!screenStatus.ok) {
-    logs.push(`[Verify] Failed to get screen status: ${screenStatus.error}`);
-    return { ok: false, verified: false, error: `STATUS_CHECK_FAILED: ${screenStatus.error}`, logs };
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    const delay = delays[attempt];
+    logs.push(`[Verify] Attempt ${attempt + 1}/3: waiting ${delay / 1000}s...`);
+    await new Promise(resolve => setTimeout(resolve, delay));
+    
+    screenshotTimestamp = new Date().toISOString();
+    logs.push(`[Verify] Attempt ${attempt + 1}: Fetching screen status at ${screenshotTimestamp}`);
+    
+    lastScreenStatus = await getScreenContentStatus(screenId);
+    
+    if (!lastScreenStatus.ok) {
+      logs.push(`[Verify] Attempt ${attempt + 1}: API error: ${lastScreenStatus.error}`);
+      continue;
+    }
+    
+    logs.push(`[Verify] Attempt ${attempt + 1}: rawContentType="${lastScreenStatus.rawContentType}", mode="${lastScreenStatus.mode}", layout="${lastScreenStatus.layoutName || "-"}", isElevizion=${lastScreenStatus.isElevizionLayout}, online=${lastScreenStatus.isOnline}`);
+    
+    // Check if verification passed
+    if (lastScreenStatus.mode === "layout" && lastScreenStatus.isElevizionLayout) {
+      logs.push(`[Verify] SUCCESS on attempt ${attempt + 1}: Screen is on Elevizion layout '${lastScreenStatus.layoutName}'`);
+      return {
+        ok: true,
+        verified: true,
+        currentMode: lastScreenStatus.mode,
+        currentLayoutName: lastScreenStatus.layoutName,
+        rawContentType: lastScreenStatus.rawContentType,
+        screenshotTimestamp,
+        isOnline: lastScreenStatus.isOnline,
+        logs,
+      };
+    }
+    
+    logs.push(`[Verify] Attempt ${attempt + 1}: Not yet on Elevizion layout, will retry...`);
   }
   
-  const screenshotTimestamp = new Date().toISOString();
-  logs.push(`[Verify] Screenshot timestamp: ${screenshotTimestamp}`);
-  logs.push(`[Verify] Current mode: ${screenStatus.mode}`);
-  logs.push(`[Verify] Current layout: ${screenStatus.layoutName || "none"}`);
-  logs.push(`[Verify] Is Elevizion: ${screenStatus.isElevizionLayout}`);
+  // All attempts failed
+  const currentMode = lastScreenStatus?.mode || "unknown";
+  const currentLayoutName = lastScreenStatus?.layoutName;
+  const rawContentType = lastScreenStatus?.rawContentType;
+  const isOnline = lastScreenStatus?.isOnline;
   
-  if (screenStatus.mode !== "layout") {
-    logs.push(`[Verify] FAILED: Screen mode is '${screenStatus.mode}', expected 'layout'`);
-    return {
-      ok: true,
-      verified: false,
-      currentMode: screenStatus.mode,
-      currentLayoutName: screenStatus.layoutName,
-      screenshotTimestamp,
-      logs,
-    };
-  }
+  logs.push(`[Verify] FAILED after 3 attempts: mode="${currentMode}", layout="${currentLayoutName || "-"}", isElevizion=${lastScreenStatus?.isElevizionLayout || false}`);
   
-  if (!screenStatus.isElevizionLayout) {
-    logs.push(`[Verify] FAILED: Screen layout '${screenStatus.layoutName}' is not Elevizion`);
-    return {
-      ok: true,
-      verified: false,
-      currentMode: screenStatus.mode,
-      currentLayoutName: screenStatus.layoutName,
-      screenshotTimestamp,
-      logs,
-    };
-  }
-  
-  logs.push(`[Verify] SUCCESS: Screen is on Elevizion layout '${screenStatus.layoutName}'`);
   return {
     ok: true,
-    verified: true,
-    currentMode: screenStatus.mode,
-    currentLayoutName: screenStatus.layoutName,
+    verified: false,
+    currentMode,
+    currentLayoutName,
+    rawContentType,
     screenshotTimestamp,
+    isOnline,
     logs,
   };
 }
