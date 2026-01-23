@@ -15574,10 +15574,54 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   app.get("/api/admin/yodeck-debug/status/:screenId", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.params;
-      const { getScreenContentStatus } = await import("./services/yodeckLayoutService");
+      const { yodeckRequest } = await import("./services/yodeckLayoutService");
+      const { mapYodeckScreen, logYodeckScreenStructure } = await import("./services/yodeckScreenMapper");
       
-      const status = await getScreenContentStatus(screenId);
-      res.json(status);
+      const fetchedAt = new Date().toISOString();
+      const result = await yodeckRequest<any>(`/screens/${screenId}`);
+      
+      if (!result.ok) {
+        return res.json({ 
+          ok: false, 
+          mode: "unknown", 
+          isElevizionLayout: false, 
+          error: result.error,
+          fetchedAt,
+        });
+      }
+
+      const raw = result.data;
+      logYodeckScreenStructure(raw, `[DebugStatus] Screen ${screenId}`);
+      const mapped = mapYodeckScreen(raw);
+      
+      // If mode is layout but layoutName is missing, fetch it
+      let layoutName = mapped.layoutName;
+      if (mapped.contentMode === "layout" && mapped.layoutId && !layoutName) {
+        const layoutResult = await yodeckRequest<{ id: number; name: string }>(`/layouts/${mapped.layoutId}`);
+        if (layoutResult.ok && layoutResult.data) {
+          layoutName = layoutResult.data.name;
+        }
+      }
+      
+      // Convert to existing response format for compatibility
+      const isElevizionLayout = layoutName?.startsWith("Elevizion") || false;
+      
+      res.json({
+        ok: true,
+        mode: mapped.contentMode,
+        rawContentType: mapped.rawKeysUsed.contentModeValue,
+        layoutId: mapped.layoutId,
+        layoutName,
+        playlistId: mapped.playlistId,
+        playlistName: mapped.playlistName,
+        isElevizionLayout,
+        isOnline: mapped.isOnline,
+        lastSeenOnline: mapped.lastSeenOnline,
+        lastScreenshotAt: mapped.lastScreenshotAt,
+        rawKeysUsed: mapped.rawKeysUsed,
+        warnings: mapped.warnings,
+        fetchedAt,
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -15746,6 +15790,106 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.json({ lastSyncAt: new Date().toISOString() });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // RAW YODECK DEBUG ENDPOINTS - Direct API response for debugging
+  // ============================================================================
+  
+  app.get("/api/admin/yodeck/raw/screens/:screenId", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { yodeckRequest } = await import("./services/yodeckLayoutService");
+      const { mapYodeckScreen, logYodeckScreenStructure } = await import("./services/yodeckScreenMapper");
+      
+      const fetchedAt = new Date().toISOString();
+      const urlUsed = `/screens/${screenId}`;
+      
+      const result = await yodeckRequest<any>(urlUsed);
+      
+      if (!result.ok) {
+        return res.status(502).json({ 
+          ok: false, 
+          fetchedAt, 
+          urlUsed, 
+          error: result.error 
+        });
+      }
+
+      const raw = result.data;
+      logYodeckScreenStructure(raw, `[RawDebug] Screen ${screenId}`);
+      const mapped = mapYodeckScreen(raw);
+
+      res.json({ 
+        ok: true, 
+        fetchedAt, 
+        urlUsed,
+        raw,
+        mapped,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get("/api/admin/yodeck/raw/layouts/:layoutId", requireAdminAccess, async (req, res) => {
+    try {
+      const { layoutId } = req.params;
+      const { yodeckRequest } = await import("./services/yodeckLayoutService");
+      
+      const fetchedAt = new Date().toISOString();
+      const urlUsed = `/layouts/${layoutId}`;
+      
+      const result = await yodeckRequest<any>(urlUsed);
+      
+      if (!result.ok) {
+        return res.status(502).json({ 
+          ok: false, 
+          fetchedAt, 
+          urlUsed, 
+          error: result.error 
+        });
+      }
+
+      res.json({ 
+        ok: true, 
+        fetchedAt, 
+        urlUsed,
+        raw: result.data,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get("/api/admin/yodeck/raw/playlists/:playlistId", requireAdminAccess, async (req, res) => {
+    try {
+      const { playlistId } = req.params;
+      const { yodeckRequest } = await import("./services/yodeckLayoutService");
+      
+      const fetchedAt = new Date().toISOString();
+      const urlUsed = `/playlists/${playlistId}`;
+      
+      const result = await yodeckRequest<any>(urlUsed);
+      
+      if (!result.ok) {
+        return res.status(502).json({ 
+          ok: false, 
+          fetchedAt, 
+          urlUsed, 
+          error: result.error 
+        });
+      }
+
+      res.json({ 
+        ok: true, 
+        fetchedAt, 
+        urlUsed,
+        raw: result.data,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
     }
   });
 

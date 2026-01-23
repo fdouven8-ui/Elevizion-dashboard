@@ -1,0 +1,78 @@
+WE MOETEN STOPPEN MET NIEUWE FEATURES EN EERST DE BASIS 100% STABIEL MAKEN.
+Doel: dashboard moet exact hetzelfde tonen als Yodeck (online status + huidige content mode + layout/playlist naam + IDs) en “Force Elevizion Layout” moet betrouwbaar werken.
+
+A) FIX: YODECK SCREEN STATUS MAPPING (root oorzaak van “mode: unknown” en “scherm offline” in dashboard)
+1) Voeg een server util toe: yodeckScreenMapper.ts met functie:
+   mapYodeckScreen(rawScreen) -> {
+     screenId,
+     isOnline, lastSeenOnline, lastScreenshotAt,
+     contentMode: "playlist"|"layout"|"media"|"schedule"|"app"| "unknown",
+     playlistId, playlistName,
+     layoutId, layoutName,
+     rawKeysUsed: { ... } // voor debug: welke velden zijn gebruikt
+   }
+2) Maak mapping ROBUUST voor varianten in Yodeck response. Geen aannames.
+   - Log altijd 1x per sync welke keys beschikbaar zijn (Object.keys + nested hints).
+   - Als content mode niet gevonden wordt: set unknown maar log WHY + welke velden ontbreken.
+
+3) Pas ALLE plekken aan die screen status tonen (Schermen pagina, /admin/yodeck-debug, publish verify) zodat ze deze mapper gebruiken.
+   => Nooit meer “unknown” omdat we verkeerde velden lezen.
+
+B) ADD: RAW YODECK ENDPOINTS VOOR DEBUG (zodat Frank altijd kan zien wat Yodeck écht teruggeeft)
+1) Voeg endpoints toe:
+   GET /api/admin/yodeck/raw/screens/:screenId
+   GET /api/admin/yodeck/raw/layouts/:layoutId
+   GET /api/admin/yodeck/raw/playlists/:playlistId
+   Deze returnen:
+   { ok:true, fetchedAt, urlUsed, raw: <exact JSON van Yodeck> }
+2) In /admin/yodeck-debug pagina: toon een “RAW JSON” accordion (read-only) + de gemapte waarden (uit A).
+
+C) FIX: FORCE FLOW MOET ECHT WERKEN (reset -> apply -> push -> verify)
+Belangrijk: we moeten dezelfde API gebruiken als Yodeck “Save & Push to this screen”.
+1) Zoek in de Yodeck API docs onder “Screens” exact de juiste endpoints/payloads voor:
+   - Update screen content type (playlist/layout)
+   - Assign layout / assign playlist
+   - Push content to screen (als aparte endpoint bestaat)
+2) Implementeer deze flow in 1 functie:
+   forceApplyElevizionLayout(screenId, locationId):
+     Step 1: Fetch screen RAW (B) + map (A) => log BEFORE
+     Step 2: Reset content:
+       - Set content to playlist mode met lege/none playlist (payload volgens docs)
+       - Push naar screen (volgens docs)
+       - Wait/poll: herhaal GET screen totdat mapper contentMode == "playlist" (max 15s)
+     Step 3: Ensure baseline playlist exists (create playlist payload ALTIJD met items: [])
+     Step 4: Ensure ads playlist exists (tagbased playlist of normale playlist; maar consistent)
+     Step 5: Ensure Elevizion layout exists:
+       - Layout create payload MOET exact voldoen aan docs:
+         regions[] vereist: top,left,width,height,zindex,duration,res_width,res_height,order
+       - Gebruik integers, geen strings, en log het volledige payload
+     Step 6: Apply layout to screen:
+       - Set contentMode/layout + layoutId (payload volgens docs)
+       - Push naar screen
+       - Wait/poll: herhaal GET screen tot mapper contentMode == "layout" EN layoutName startsWith("Elevizion") (max 20s)
+     Step 7: Log AFTER (raw + mapped) en return success.
+   Als verify faalt: return duidelijke error met:
+     { code:"SCREEN_LAYOUT_STUCK", before:{...}, after:{...}, rawAfter:{...}, hints:[...] }
+
+D) FIX: BASELINE UPLOAD 404
+De log gaf “[Baseline] Upload failed: HTTP 404”.
+Dit betekent dat we de verkeerde endpoint of flow gebruiken.
+1) Controleer Yodeck docs: media upload is vaak 2-step (get_upload_url + PUT) zoals bij video.
+2) Maak uploadBaselineAsset dezelfde bewezen 2-step flow gebruiken als video upload.
+3) Tag baseline media met elevizion:baseline en voeg die daarna als item toe aan baseline playlist via playlist update/patch (volgens docs).
+4) Als baseline upload niet kan: degrade netjes:
+   - Baseline playlist blijft leeg maar UI toont waarschuwing “Baseline leeg – voeg handmatig content toe in Yodeck”.
+
+E) UI: MAAK HET ZICHTBAAR EN EERLIJK
+1) In Schermen-lijst:
+   - Toon “laatste sync” + “laatst online volgens Yodeck”
+   - Toon contentMode + layout/playlist naam
+   - Toon “Open in Yodeck” links (screen/layout/playlist) met generateResourceUrls()
+2) In /admin/yodeck-debug:
+   - Grote knop “Force Elevizion Layout op dit scherm”
+   - Toon stap-voor-stap logs + raw JSON snapshots.
+3) Als Yodeck API faalt: laat dat DIRECT zien, niet stil falen.
+
+BELANGRIJK: geen nieuwe features meer tot A t/m E stabiel zijn.
+Eerst: mapping correct, debug raw correct, force flow correct, baseline upload correct.
+Daarna pas verder bouwen.

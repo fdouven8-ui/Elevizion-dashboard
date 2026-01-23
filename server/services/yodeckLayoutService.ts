@@ -47,7 +47,7 @@ async function getYodeckToken(): Promise<string | null> {
   return process.env.YODECK_AUTH_TOKEN || null;
 }
 
-async function yodeckRequest<T>(
+export async function yodeckRequest<T>(
   endpoint: string,
   method: "GET" | "POST" | "PUT" | "PATCH" = "GET",
   body?: any
@@ -847,8 +847,8 @@ export function isElevizionLayout(layoutName: string | null | undefined): boolea
 
 /**
  * Get current screen content status from Yodeck
+ * Uses yodeckScreenMapper for robust field mapping across API variants.
  * Returns the current content mode (layout/playlist/schedule) and layout details
- * Logs raw API response for debugging
  */
 export async function getScreenContentStatus(screenId: string): Promise<{
   ok: boolean;
@@ -864,7 +864,11 @@ export async function getScreenContentStatus(screenId: string): Promise<{
   isOnline?: boolean;
   error?: string;
   rawApiResponse?: string;
+  rawKeysUsed?: any;
+  warnings?: string[];
 }> {
+  const { mapYodeckScreen, logYodeckScreenStructure } = await import("./yodeckScreenMapper");
+  
   console.log(`[ScreenStatus] GET /screens/${screenId}`);
   
   const result = await yodeckRequest<any>(`/screens/${screenId}`);
@@ -877,84 +881,53 @@ export async function getScreenContentStatus(screenId: string): Promise<{
 
   const screen = result.data;
   
-  // Log raw response for debugging
-  const rawApiResponse = JSON.stringify({
-    id: screen.id,
-    name: screen.name,
-    default_playlist_type: screen.default_playlist_type,
-    default_playlist: screen.default_playlist,
-    layout: screen.layout,
-    current_layout: screen.current_layout,
-    content_type: screen.content_type,
-    assigned_layout: screen.assigned_layout,
-    last_seen_online: screen.last_seen_online,
-    status: screen.status,
-  });
-  console.log(`[ScreenStatus] Raw: ${rawApiResponse}`);
+  // Log structure once for debugging
+  logYodeckScreenStructure(screen, `[ScreenStatus] Screen ${screenId}`);
   
-  // Try multiple field names for content type
-  const rawContentType = screen.default_playlist_type 
-    || screen.content_type 
-    || screen.playlist_type 
-    || "unknown";
-  const playlistType = String(rawContentType).toLowerCase();
+  // Use the mapper for robust field parsing
+  const mapped = mapYodeckScreen(screen);
   
-  console.log(`[ScreenStatus] Content type: "${rawContentType}"`);
-  
-  // Determine mode
-  let mode: "layout" | "playlist" | "schedule" | "unknown" = "unknown";
-  let layoutId: string | undefined;
-  let layoutName: string | undefined;
-  let playlistId: string | undefined;
-  let playlistName: string | undefined;
-  
-  if (playlistType === "layout") {
-    mode = "layout";
-    // Try multiple layout field names
-    const layout = screen.layout || screen.current_layout || screen.assigned_layout;
-    if (layout && typeof layout === "object") {
-      layoutId = String(layout.id);
-      layoutName = layout.name;
-      console.log(`[ScreenStatus] Layout from object: id=${layoutId}, name=${layoutName}`);
-    } else if (screen.default_playlist) {
-      layoutId = String(screen.default_playlist);
-      console.log(`[ScreenStatus] Layout ID: ${layoutId}, fetching name...`);
-      const layoutResult = await yodeckRequest<{ id: number; name: string }>(`/layouts/${screen.default_playlist}`);
-      if (layoutResult.ok && layoutResult.data) {
-        layoutName = layoutResult.data.name;
-        console.log(`[ScreenStatus] Fetched layout name: ${layoutName}`);
-      } else {
-        console.log(`[ScreenStatus] Failed to fetch layout: ${layoutResult.error}`);
-      }
-    }
-  } else if (playlistType === "playlist") {
-    mode = "playlist";
-    if (screen.default_playlist) {
-      playlistId = String(screen.default_playlist);
-      playlistName = screen.default_playlist_name;
-    }
-  } else if (playlistType === "schedule") {
-    mode = "schedule";
-  } else {
-    console.log(`[ScreenStatus] Unknown type: "${playlistType}"`);
+  if (mapped.warnings.length > 0) {
+    console.log(`[ScreenStatus] Mapper warnings: ${mapped.warnings.join("; ")}`);
   }
+  
+  // If mode is layout but layoutName is missing, fetch it
+  let layoutName = mapped.layoutName;
+  if (mapped.contentMode === "layout" && mapped.layoutId && !layoutName) {
+    console.log(`[ScreenStatus] Layout ID: ${mapped.layoutId}, fetching name...`);
+    const layoutResult = await yodeckRequest<{ id: number; name: string }>(`/layouts/${mapped.layoutId}`);
+    if (layoutResult.ok && layoutResult.data) {
+      layoutName = layoutResult.data.name;
+      console.log(`[ScreenStatus] Fetched layout name: ${layoutName}`);
+    } else {
+      console.log(`[ScreenStatus] Failed to fetch layout: ${layoutResult.error}`);
+    }
+  }
+  
+  // Convert mapped mode to our type
+  const mode: "layout" | "playlist" | "schedule" | "unknown" = 
+    mapped.contentMode === "layout" ? "layout" :
+    mapped.contentMode === "playlist" ? "playlist" :
+    mapped.contentMode === "schedule" ? "schedule" :
+    "unknown";
 
-  const isOnline = screen.status === "online" || screen.is_online === true;
-  console.log(`[ScreenStatus] mode=${mode}, layout=${layoutName || "-"}, isElevizion=${isElevizionLayout(layoutName)}, online=${isOnline}`);
+  console.log(`[ScreenStatus] mode=${mode}, layout=${layoutName || "-"}, isElevizion=${isElevizionLayout(layoutName)}, online=${mapped.isOnline}`);
 
   return {
     ok: true,
     mode,
-    rawContentType,
-    layoutId,
-    layoutName,
-    playlistId,
-    playlistName,
+    rawContentType: mapped.rawKeysUsed.contentModeValue || undefined,
+    layoutId: mapped.layoutId || undefined,
+    layoutName: layoutName || undefined,
+    playlistId: mapped.playlistId || undefined,
+    playlistName: mapped.playlistName || undefined,
     isElevizionLayout: isElevizionLayout(layoutName),
-    lastSeenOnline: screen.last_seen_online,
-    lastScreenshotAt: screen.last_screenshot_at,
-    isOnline,
-    rawApiResponse,
+    lastSeenOnline: mapped.lastSeenOnline || undefined,
+    lastScreenshotAt: mapped.lastScreenshotAt || undefined,
+    isOnline: mapped.isOnline,
+    rawApiResponse: JSON.stringify(screen),
+    rawKeysUsed: mapped.rawKeysUsed,
+    warnings: mapped.warnings.length > 0 ? mapped.warnings : undefined,
   };
 }
 

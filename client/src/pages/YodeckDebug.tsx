@@ -4,7 +4,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { RefreshCw, Zap, CheckCircle, XCircle, AlertCircle, Monitor } from "lucide-react";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { RefreshCw, Zap, CheckCircle, XCircle, AlertCircle, Monitor, ExternalLink, Code } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 interface ScreenOption {
@@ -19,12 +20,32 @@ interface ScreenStatus {
   rawContentType?: string;
   layoutId?: string;
   layoutName?: string;
+  playlistId?: string;
+  playlistName?: string;
   isElevizionLayout: boolean;
   lastSeenOnline?: string;
   lastScreenshotAt?: string;
   isOnline?: boolean;
   error?: string;
-  rawApiResponse?: string;
+  rawKeysUsed?: {
+    contentModeField: string | null;
+    contentModeValue: string | null;
+    playlistIdField: string | null;
+    layoutIdField: string | null;
+    layoutNameField: string | null;
+    onlineField: string | null;
+  };
+  warnings?: string[];
+  fetchedAt?: string;
+}
+
+interface RawScreenData {
+  ok: boolean;
+  fetchedAt: string;
+  urlUsed: string;
+  raw: any;
+  mapped: any;
+  error?: string;
 }
 
 interface ForceFixResult {
@@ -75,6 +96,19 @@ export default function YodeckDebug() {
     queryKey: ["/api/admin/yodeck-debug/status", selectedScreen?.yodeckDeviceId],
     queryFn: async () => {
       const res = await fetch(`/api/admin/yodeck-debug/status/${selectedScreen?.yodeckDeviceId}`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: !!selectedScreen?.yodeckDeviceId,
+    refetchInterval: false,
+  });
+
+  const { data: rawData, isLoading: rawLoading, refetch: refetchRaw } = useQuery<RawScreenData>({
+    queryKey: ["/api/admin/yodeck/raw/screens", selectedScreen?.yodeckDeviceId],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/yodeck/raw/screens/${selectedScreen?.yodeckDeviceId}`, {
         credentials: "include",
       });
       if (!res.ok) throw new Error(await res.text());
@@ -203,6 +237,7 @@ export default function YodeckDebug() {
             {statusLoading ? (
               <p className="text-muted-foreground">Laden...</p>
             ) : statusData ? (
+              <>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4" data-testid="status-grid">
                 <div>
                   <p className="text-sm text-muted-foreground">Screen ID</p>
@@ -272,7 +307,99 @@ export default function YodeckDebug() {
                     <p className="text-red-500" data-testid="status-error">{statusData.error}</p>
                   </div>
                 )}
+                {statusData.warnings && statusData.warnings.length > 0 && (
+                  <div className="col-span-full">
+                    <p className="text-sm text-muted-foreground">Mapper Warnings</p>
+                    <ul className="text-yellow-600 text-sm list-disc list-inside">
+                      {statusData.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                    </ul>
+                  </div>
+                )}
               </div>
+
+              {/* Yodeck Links */}
+              <div className="flex gap-2 mt-4 flex-wrap" data-testid="yodeck-links">
+                <a 
+                  href={`https://app.yodeck.com/screens/${selectedScreen.yodeckDeviceId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+                  data-testid="link-yodeck-screen"
+                >
+                  <ExternalLink className="h-3 w-3" /> Open Screen in Yodeck
+                </a>
+                {statusData.layoutId && (
+                  <a 
+                    href={`https://app.yodeck.com/layouts/${statusData.layoutId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+                    data-testid="link-yodeck-layout"
+                  >
+                    <ExternalLink className="h-3 w-3" /> Open Layout in Yodeck
+                  </a>
+                )}
+                {statusData.playlistId && (
+                  <a 
+                    href={`https://app.yodeck.com/playlists/${statusData.playlistId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+                    data-testid="link-yodeck-playlist"
+                  >
+                    <ExternalLink className="h-3 w-3" /> Open Playlist in Yodeck
+                  </a>
+                )}
+              </div>
+
+              {/* Raw Keys Used - debugging info */}
+              {statusData.rawKeysUsed && (
+                <div className="mt-4 p-3 bg-slate-100 rounded text-xs font-mono" data-testid="raw-keys-used">
+                  <p className="font-semibold mb-1">Parsed Fields:</p>
+                  <p>Mode: {statusData.rawKeysUsed.contentModeField || "-"} = "{statusData.rawKeysUsed.contentModeValue || "-"}"</p>
+                  <p>Online: {statusData.rawKeysUsed.onlineField || "-"}</p>
+                  <p>Layout ID: {statusData.rawKeysUsed.layoutIdField || "-"}</p>
+                  <p>Layout Name: {statusData.rawKeysUsed.layoutNameField || "-"}</p>
+                </div>
+              )}
+
+              {/* Raw JSON Accordion */}
+              <Accordion type="single" collapsible className="mt-4">
+                <AccordionItem value="raw-json">
+                  <AccordionTrigger className="text-sm">
+                    <span className="flex items-center gap-2">
+                      <Code className="h-4 w-4" />
+                      RAW JSON (Yodeck API Response)
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent>
+                    {rawLoading ? (
+                      <p className="text-muted-foreground">Laden...</p>
+                    ) : rawData?.raw ? (
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted-foreground">
+                          Fetched: {rawData.fetchedAt} | Endpoint: {rawData.urlUsed}
+                        </p>
+                        <pre className="bg-slate-950 text-slate-50 p-4 rounded-lg overflow-x-auto text-xs max-h-96" data-testid="raw-json-content">
+                          {JSON.stringify(rawData.raw, null, 2)}
+                        </pre>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => refetchRaw()}
+                          className="mt-2"
+                          data-testid="button-refresh-raw"
+                        >
+                          <RefreshCw className="h-3 w-3 mr-1" /> Refresh Raw
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="text-muted-foreground">Geen raw data beschikbaar</p>
+                    )}
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+              </>
             ) : (
               <p className="text-muted-foreground">Geen data beschikbaar</p>
             )}
