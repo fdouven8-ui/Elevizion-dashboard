@@ -60,6 +60,8 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **Auto-Playlist Provisioning & Cleanup Service**: Ensures screens have valid, sellable playlists by enforcing canonical naming, cleaning up stale mappings, resolving duplicates, and auto-creating playlists via the Yodeck API.
 - **Tag-Based Publishing System**: Production-hardened ad publishing using Yodeck media tags for scalability and robust error tracking.
 - **Layout-Based Content Separation**: 2-zone layout system with 30% BASE (left) for baseline content and 70% ADS (right) for advertisements. Admin page at `/layouts` manages layout configuration per location. Includes API probing with cached status, idempotent playlist/layout creation, and fallback schedule mode when Yodeck layouts API is unavailable.
+- **Yodeck Screen Mapper**: Centralized `yodeckScreenMapper.ts` as single source of truth for interpreting Yodeck screen status. Handles all known API field variants (`default_playlist_type`, `content_type`, `layout`, `current_layout`, etc.) with robust fallbacks and logging.
+- **Yodeck Debug Tools**: Admin page at `/admin/yodeck-debug` with raw JSON display, status mapping info, Yodeck links, and force layout tools. Raw debug endpoints at `/api/admin/yodeck/raw/screens/:id`, `/api/admin/yodeck/raw/layouts/:id`, `/api/admin/yodeck/raw/playlists/:id`.
 
 ## External Dependencies
 
