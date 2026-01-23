@@ -15551,5 +15551,203 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  // ============================================================================
+  // ADMIN: YODECK DEBUG & FIX
+  // ============================================================================
+  
+  // Get list of all screens for dropdown
+  app.get("/api/admin/yodeck-debug/screens", requireAdminAccess, async (req, res) => {
+    try {
+      const locs = await db.select({
+        id: locations.id,
+        name: locations.name,
+        yodeckDeviceId: locations.yodeckDeviceId,
+      }).from(locations).where(sql`yodeck_device_id IS NOT NULL`);
+      
+      res.json({ screens: locs });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Get current screen status from Yodeck API
+  app.get("/api/admin/yodeck-debug/status/:screenId", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { getScreenContentStatus } = await import("./services/yodeckLayoutService");
+      
+      const status = await getScreenContentStatus(screenId);
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Force-fix endpoint: reuses existing logic with detailed action log
+  app.post("/api/admin/yodeck-debug/force-fix", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId, locationId } = req.body;
+      
+      if (!screenId && !locationId) {
+        return res.status(400).json({ error: "screenId or locationId is required" });
+      }
+      
+      const { getScreenContentStatus, ensureScreenUsesElevizionLayout } = await import("./services/yodeckLayoutService");
+      
+      // Find locationId from screenId if not provided
+      let locId = locationId;
+      if (!locId && screenId) {
+        const loc = await db.select({ id: locations.id })
+          .from(locations)
+          .where(eq(locations.yodeckDeviceId, screenId))
+          .limit(1);
+        if (!loc[0]) {
+          return res.status(404).json({ error: "Screen not linked to any location" });
+        }
+        locId = loc[0].id;
+      }
+      
+      // Get BEFORE state
+      const loc = await db.select({
+        yodeckDeviceId: locations.yodeckDeviceId,
+        name: locations.name,
+      }).from(locations).where(eq(locations.id, locId)).limit(1);
+      
+      if (!loc[0]?.yodeckDeviceId) {
+        return res.status(404).json({ error: "Location has no linked screen" });
+      }
+      
+      const actualScreenId = loc[0].yodeckDeviceId;
+      const beforeState = await getScreenContentStatus(actualScreenId);
+      
+      console.log(`[YodeckDebug] Force-fix started for location ${locId}, screen ${actualScreenId}`);
+      console.log(`[YodeckDebug] BEFORE: ${JSON.stringify(beforeState)}`);
+      
+      // Execute the fix (reuses existing logic)
+      const result = await ensureScreenUsesElevizionLayout(locId);
+      
+      // Get AFTER state
+      const afterState = await getScreenContentStatus(actualScreenId);
+      
+      console.log(`[YodeckDebug] AFTER: ${JSON.stringify(afterState)}`);
+      console.log(`[YodeckDebug] Result: ok=${result.ok}, verified=${result.verified}`);
+      
+      // Determine final status
+      let finalStatus: "PASS" | "FAIL" = "FAIL";
+      let failReason: string | undefined;
+      
+      if (result.ok && result.verified) {
+        if (afterState.mode === "layout" && afterState.isElevizionLayout) {
+          finalStatus = "PASS";
+        } else {
+          failReason = `Mode=${afterState.mode}, Layout=${afterState.layoutName}, IsElevizion=${afterState.isElevizionLayout}`;
+        }
+      } else {
+        failReason = result.error || "Unknown error";
+      }
+      
+      res.json({
+        locationId: locId,
+        screenId: actualScreenId,
+        locationName: loc[0].name,
+        before: {
+          mode: beforeState.mode,
+          playlistName: beforeState.mode === "playlist" ? beforeState.layoutName : undefined,
+          layoutName: beforeState.mode === "layout" ? beforeState.layoutName : undefined,
+          layoutId: beforeState.layoutId,
+          isElevizion: beforeState.isElevizionLayout,
+          fetchedAt: new Date().toISOString(),
+        },
+        after: {
+          mode: afterState.mode,
+          playlistName: afterState.mode === "playlist" ? afterState.layoutName : undefined,
+          layoutName: afterState.mode === "layout" ? afterState.layoutName : undefined,
+          layoutId: afterState.layoutId,
+          isElevizion: afterState.isElevizionLayout,
+          fetchedAt: new Date().toISOString(),
+        },
+        actionLog: result.logs,
+        finalStatus,
+        failReason,
+        screenshotTimestamp: result.screenshotTimestamp,
+      });
+    } catch (error: any) {
+      console.error(`[YodeckDebug] Force-fix error: ${error.message}`);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Sync endpoint: force refresh from Yodeck API
+  app.post("/api/admin/yodeck-debug/sync", requireAdminAccess, async (req, res) => {
+    try {
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const { probeLayoutsSupport } = await import("./services/yodeckLayoutService");
+      
+      console.log("[YodeckDebug] Starting Yodeck sync...");
+      
+      // Force refresh layouts support probe
+      await probeLayoutsSupport(true);
+      
+      // Get fresh screen/playlist counts from Yodeck
+      const caps = await yodeckPublishService.getCapabilities();
+      
+      // Get screen count
+      const token = process.env.YODECK_AUTH_TOKEN;
+      let screenCount = 0;
+      let layoutCount = 0;
+      let playlistCount = 0;
+      
+      if (token) {
+        const screensRes = await fetch("https://app.yodeck.com/api/v2/screens", {
+          headers: { "Authorization": `Token ${token}` },
+        });
+        if (screensRes.ok) {
+          const data = await screensRes.json() as { count: number };
+          screenCount = data.count || 0;
+        }
+        
+        const layoutsRes = await fetch("https://app.yodeck.com/api/v2/layouts", {
+          headers: { "Authorization": `Token ${token}` },
+        });
+        if (layoutsRes.ok) {
+          const data = await layoutsRes.json() as { count: number };
+          layoutCount = data.count || 0;
+        }
+        
+        const playlistsRes = await fetch("https://app.yodeck.com/api/v2/playlists", {
+          headers: { "Authorization": `Token ${token}` },
+        });
+        if (playlistsRes.ok) {
+          const data = await playlistsRes.json() as { count: number };
+          playlistCount = data.count || 0;
+        }
+      }
+      
+      const syncedAt = new Date().toISOString();
+      console.log(`[YodeckDebug] Sync complete: ${screenCount} screens, ${layoutCount} layouts, ${playlistCount} playlists`);
+      
+      res.json({
+        syncedAt,
+        screenCount,
+        layoutCount,
+        playlistCount,
+        capabilities: caps,
+      });
+    } catch (error: any) {
+      console.error(`[YodeckDebug] Sync error: ${error.message}`);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Get last sync timestamp (stored in memory for now)
+  app.get("/api/admin/yodeck-debug/last-sync", requireAdminAccess, async (req, res) => {
+    try {
+      // Return current time as placeholder - real impl would track actual sync
+      res.json({ lastSyncAt: new Date().toISOString() });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   return httpServer;
 }

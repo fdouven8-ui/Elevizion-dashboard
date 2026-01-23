@@ -1,8 +1,9 @@
 import { useAppData } from "@/hooks/use-app-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink, AlertCircle, AlertTriangle, CheckCircle, Link2 } from "lucide-react";
+import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink, AlertCircle, AlertTriangle, CheckCircle, Link2, RefreshCw } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
   Table,
@@ -167,6 +168,23 @@ export default function Screens() {
     },
   });
 
+  // Yodeck sync mutation
+  const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const syncYodeck = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/admin/yodeck-debug/sync", {});
+      return await res.json();
+    },
+    onSuccess: (data) => {
+      setLastSyncAt(data.syncedAt);
+      queryClient.invalidateQueries({ queryKey: ["/api/screens/with-business"] });
+      toast({ title: "Yodeck gesynchroniseerd", description: `${data.screenCount} screens, ${data.layoutCount} layouts, ${data.playlistCount} playlists` });
+    },
+    onError: (error: Error) => {
+      toast({ title: "Sync mislukt", description: error.message, variant: "destructive" });
+    },
+  });
+
   const [cityFilter, setCityFilter] = useState<string>("");
   const [locationFilter, setLocationFilter] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string[]>(
@@ -323,7 +341,24 @@ export default function Screens() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight" data-testid="page-title">Schermen</h1>
-          <p className="text-muted-foreground text-sm">Monitor en beheer je digital signage displays</p>
+          <div className="flex items-center gap-3 text-sm text-muted-foreground">
+            <span>Monitor en beheer je digital signage displays</span>
+            {lastSyncAt && (
+              <span className="text-xs" data-testid="last-sync-timestamp">
+                Laatste Yodeck sync: {new Date(lastSyncAt).toLocaleString("nl-NL")}
+              </span>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => syncYodeck.mutate()}
+              disabled={syncYodeck.isPending}
+              data-testid="sync-yodeck-button"
+            >
+              <RefreshCw className={`h-4 w-4 mr-1 ${syncYodeck.isPending ? 'animate-spin' : ''}`} />
+              Sync
+            </Button>
+          </div>
         </div>
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogTrigger asChild>

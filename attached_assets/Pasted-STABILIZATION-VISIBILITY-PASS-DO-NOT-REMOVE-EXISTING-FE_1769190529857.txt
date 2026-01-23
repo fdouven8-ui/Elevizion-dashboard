@@ -1,0 +1,131 @@
+STABILIZATION + VISIBILITY PASS (DO NOT REMOVE EXISTING FEATURES)
+
+Context:
+The Elevizion system already uses layout-based publishing (baseline zone + ads zone).
+That remains the STANDARD production flow.
+Nothing existing may be removed, renamed, or redesigned.
+
+Problem:
+The system works internally but the admin has NO single visible place to:
+- see what a screen is actually using (playlist vs layout)
+- force-fix a screen when Yodeck keeps demo content
+- verify BEFORE / AFTER results
+This causes confusion and loss of trust.
+
+GOAL:
+Add ONE clear admin control surface that:
+- does not replace existing logic
+- only exposes and triggers existing logic
+- makes the system understandable and debuggable
+
+----------------------------------------------------------------
+1) NEW ADMIN PAGE: /admin/yodeck-debug
+----------------------------------------------------------------
+
+Create a new admin-only page called "Yodeck Debug & Fix".
+
+UI requirements (must be visible, no hidden logic):
+- Dropdown: Select Screen (label shows screen name + Yodeck ID)
+- BIG primary button: "Force Elevizion Layout on this Screen"
+- Secondary button: "Sync screen status now"
+
+Below buttons show 3 panels:
+
+A) CURRENT YODECK STATE (live from API)
+- screenId
+- mode (playlist | layout)
+- playlist name (if any)
+- layout name (if any)
+- last_seen_online
+- last_screenshot_at
+
+B) ACTION LOG (last run)
+For each step show:
+- step name
+- HTTP method + endpoint
+- status code
+- short response summary
+
+C) RESULT
+- BEFORE state (snapshot)
+- AFTER state (snapshot)
+- FINAL STATUS:
+  - PASS (green): layout applied and active
+  - FAIL (red): reason shown clearly
+
+----------------------------------------------------------------
+2) FORCE-FIX ENDPOINT (NO NEW LOGIC)
+----------------------------------------------------------------
+
+POST /api/admin/yodeck-debug/force-fix
+
+Input:
+{ screenId }
+
+Implementation MUST reuse EXISTING logic, not reimplement it.
+
+Steps (exact order):
+1. GET screen details → store as BEFORE
+2. Call existing forceResetScreenContent(screenId)
+   - push to screen
+   - wait 3 seconds
+3. Call existing applyElevizionLayoutToScreen(screenId)
+   - push to screen
+   - wait 2 seconds
+4. GET screen details again → AFTER
+5. VERIFY:
+   - mode === "layout"
+   - layout.name starts with "Elevizion"
+If verification fails:
+   - retry ONCE
+   - if still failing → return PERMANENT FAILURE with reason
+
+Return full structured result for UI panels.
+
+----------------------------------------------------------------
+3) SYNC STATUS ENDPOINT
+----------------------------------------------------------------
+
+POST /api/admin/yodeck-debug/sync
+
+- Force refresh of:
+  - screens
+  - layouts
+  - playlists
+from Yodeck API
+- Update local cache / DB timestamps
+- Return "sync completed at"
+
+----------------------------------------------------------------
+4) DASHBOARD ACCURACY FIX (NO UI REDESIGN)
+----------------------------------------------------------------
+
+In existing /schermen list:
+- online/offline is derived ONLY from:
+  last_seen_online <= 15 minutes
+- add small text: "Last Yodeck sync: {timestamp}"
+- add manual "Sync now" button that calls the sync endpoint
+
+----------------------------------------------------------------
+IMPORTANT CONSTRAINTS (MANDATORY)
+----------------------------------------------------------------
+
+DO NOT:
+- remove layouts
+- change layout naming
+- remove baseline playlists
+- alter publish flow steps
+- hide buttons behind feature flags
+
+DO:
+- expose existing behavior clearly
+- show BEFORE / AFTER proof
+- make failure impossible to miss
+
+If a button is not visible in the UI, it is considered NOT implemented.
+
+This task is complete ONLY when:
+- I can click ONE button
+- I see exactly what Yodeck had
+- I see exactly what changed
+- I see PASS or FAIL with reason

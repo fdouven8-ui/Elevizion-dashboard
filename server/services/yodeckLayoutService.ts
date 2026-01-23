@@ -838,6 +838,8 @@ export async function getScreenContentStatus(screenId: string): Promise<{
   playlistId?: string;
   playlistName?: string;
   isElevizionLayout: boolean;
+  lastSeenOnline?: string;
+  lastScreenshotAt?: string;
   error?: string;
 }> {
   const result = await yodeckRequest<{
@@ -848,6 +850,8 @@ export async function getScreenContentStatus(screenId: string): Promise<{
     default_playlist_name?: string;
     layout?: { id: number; name: string };
     current_layout?: { id: number; name: string };
+    last_seen_online?: string;
+    last_screenshot_at?: string;
   }>(`/screens/${screenId}`);
 
   if (!result.ok || !result.data) {
@@ -897,6 +901,8 @@ export async function getScreenContentStatus(screenId: string): Promise<{
     playlistId,
     playlistName,
     isElevizionLayout: isElevizionLayout(layoutName),
+    lastSeenOnline: screen.last_seen_online,
+    lastScreenshotAt: screen.last_screenshot_at,
   };
 }
 
