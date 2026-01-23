@@ -470,24 +470,33 @@ class YodeckPublishService {
     const caps = await this.getCapabilities();
     
     const payloads = [
-      // Standard format
+      // Standard format - items: [] is REQUIRED by Yodeck API
       {
         name: playlistName,
         description,
         tags: [playlistTag],
         type: "regular",
+        items: [],
+        add_gaps: false,
+        shuffle_content: false,
       },
       // Alternative with tag_filter
       {
         name: playlistName,
         description,
         tag_filter: playlistTag,
+        items: [],
+        add_gaps: false,
+        shuffle_content: false,
       },
       // With rules
       {
         name: playlistName,
         description,
         rules: [{ type: "tag", value: playlistTag }],
+        items: [],
+        add_gaps: false,
+        shuffle_content: false,
       },
     ];
 

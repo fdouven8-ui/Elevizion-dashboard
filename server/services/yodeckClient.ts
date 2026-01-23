@@ -595,10 +595,16 @@ export class YodeckClient {
     await semaphore.acquire();
     
     try {
-      const body: Record<string, any> = { name };
+      const body: Record<string, any> = { 
+        name,
+        items: [],
+        add_gaps: false,
+        shuffle_content: false,
+      };
       if (workspaceId) {
         body.workspace = workspaceId;
       }
+      console.log(`[YodeckClient] Creating playlist "${name}" with items: [] (required field)`);
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);

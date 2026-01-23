@@ -1,0 +1,45 @@
+We have a real blocking bug in Yodeck playlist creation.
+
+Evidence (from /admin/yodeck-debug):
+HTTP 400 {"error":{"code":"missing_key_generic","message":"Invalid request input","details":{"missing_key":"items"}}}
+This happens when creating the baseline playlist ("Baseline | Bouwservice Douven").
+
+Fix requirement:
+Yodeck POST /api/v2/playlists requires the "items" field in the request body. Even when we want an empty playlist, we MUST send items: [].
+
+Implement the fix everywhere we create playlists:
+1) Baseline playlist creation (ensureBaselinePlaylist / ensureBaselinePlaylistId / createBaselinePlaylist).
+2) Any other playlist creation in the codebase (ads playlist, fallback schedule playlist, tag-based playlist, etc.) that uses POST /api/v2/playlists.
+
+Exact change:
+When calling POST https://app.yodeck.com/api/v2/playlists, always send a body like:
+{
+  "name": "<playlist name>",
+  "description": "<optional>",
+  "workspace": { "id": <workspaceId> } OR { "name": "<workspaceName>" } (keep what we already use),
+  "items": [],
+  "add_gaps": false,
+  "shuffle_content": false
+}
+Important: do NOT omit "items" ever.
+
+Also fix defensive behavior:
+- If we already have the playlist, do not recreate it.
+- If we create it successfully, store playlistId in DB for the location.
+- Log clearly:
+  - "Creating playlist ... payload includes items: []"
+  - On error, include status code + response body.
+
+After fixing playlist creation, re-run the Force flow:
+- /api/admin/layouts/:id/force OR the Force Elevizion Layout button
+It must no longer fail at "Creating baseline playlist".
+
+Acceptance criteria:
+- Clicking "Force Elevizion Layout op dit Scherm" completes without 400 errors.
+- Baseline playlist gets created successfully in Yodeck.
+- Baseline seeding can add the placeholder media to that playlist (if implemented).
+- The debug page should show mode/layout status without "unknown" once sync runs.
+- Add a minimal unit/integration test (or a mock) that verifies POST /playlists payload always includes items: [].
+
+Search the codebase for any POST to "/api/v2/playlists" and patch all of them consistently.
+Do not remove or revert existing layout/tag logic; only fix playlist creation + logging/tests.

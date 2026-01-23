@@ -333,19 +333,30 @@ export async function ensureBaselinePlaylist(
   // Create baseline playlist
   logs.push(`Creating baseline playlist: ${playlistName}`);
   
-  const createResult = await yodeckRequest<{ id: number }>("/playlists/", "POST", {
+  const payload = {
     name: playlistName,
     description: "Elevizion baseline content - voeg handmatig content toe in Yodeck (nieuws, weer, klok of afbeelding)",
     default_duration: 10,
     background_color: "#1a1a2e",
-  });
+    items: [],
+    add_gaps: false,
+    shuffle_content: false,
+  };
+  logs.push(`Creating playlist with payload (items: [] included): ${JSON.stringify(payload)}`);
+  
+  const createResult = await yodeckRequest<{ id: number }>("/playlists/", "POST", payload);
 
   if (!createResult.ok) {
-    logs.push(`Failed to create baseline playlist: ${createResult.error}`);
+    logs.push(`Failed to create baseline playlist: HTTP error - ${createResult.error}`);
     return { ok: false, error: createResult.error, logs };
   }
 
-  const playlistId = String(createResult.data!.id);
+  if (!createResult.data?.id) {
+    logs.push(`Failed to create baseline playlist: No ID returned in response`);
+    return { ok: false, error: "No playlist ID in response", logs };
+  }
+
+  const playlistId = String(createResult.data.id);
   logs.push(`Baseline playlist created: ${playlistId}`);
 
   // Update location with baseline playlist ID
