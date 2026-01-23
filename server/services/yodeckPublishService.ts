@@ -1963,6 +1963,67 @@ class YodeckPublishService {
       (report as any).missingTags = missingTags;
       (report as any).perLocation = perLocationResults;
 
+      // Step 5: Ensure ads surface is active on screens (layout or schedule)
+      // This guarantees ads are visible, not just tagged
+      console.log(`[YodeckPublish] Ensuring ads surface is active for ${locationIds.length} locations`);
+      const surfaceResults: Array<{ locationId: string; surfaceActive: boolean; mode?: string; error?: string }> = [];
+      
+      for (const locationId of locationIds) {
+        const locationResult = perLocationResults.find(r => r.locationId === locationId);
+        if (!locationResult?.playlistId) continue;
+        
+        const loc = await db.query.locations.findFirst({
+          where: eq(locations.id, locationId),
+        });
+        
+        if (!loc?.yodeckDeviceId) {
+          surfaceResults.push({ 
+            locationId, 
+            surfaceActive: false, 
+            error: "No Yodeck screen linked" 
+          });
+          continue;
+        }
+        
+        try {
+          const { ensureAdsSurfaceActive } = await import("./yodeckLayoutService");
+          const surfaceResult = await ensureAdsSurfaceActive({
+            locationId,
+            screenId: loc.yodeckDeviceId,
+            adsPlaylistId: String(locationResult.playlistId),
+          });
+          
+          surfaceResult.logs.forEach(log => console.log(log));
+          
+          surfaceResults.push({
+            locationId,
+            surfaceActive: surfaceResult.surfaceActive,
+            mode: surfaceResult.mode,
+            error: surfaceResult.error,
+          });
+          
+          // Update target report if surface failed
+          if (!surfaceResult.surfaceActive) {
+            const targetIdx = report.targets.findIndex(t => t.locationId === locationId);
+            if (targetIdx >= 0 && report.targets[targetIdx].status === "tagged") {
+              report.targets[targetIdx].status = "failed";
+              report.targets[targetIdx].error = surfaceResult.error || "ADS_SURFACE_NOT_ACTIVE";
+              report.successCount--;
+              report.failedCount++;
+            }
+          }
+        } catch (e: any) {
+          console.error(`[YodeckPublish] Surface check failed for ${locationId}: ${e.message}`);
+          surfaceResults.push({ 
+            locationId, 
+            surfaceActive: false, 
+            error: e.message 
+          });
+        }
+      }
+      
+      (report as any).surfaceResults = surfaceResults;
+
       // Update plan status based on results
       report.completedAt = new Date().toISOString();
       report.publishedAt = new Date().toISOString();

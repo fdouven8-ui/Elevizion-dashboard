@@ -11,8 +11,13 @@
 import { db } from "../db";
 import { locations } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
+import * as fs from "fs";
+import * as path from "path";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
+const BASELINE_ASSET_PATH = path.join(process.cwd(), "assets/baseline/elevizion-baseline-1080p.png");
+const BASELINE_ASSET_TAG = "elevizion:baseline";
+const BASELINE_MEDIA_NAME = "Elevizion Baseline Placeholder";
 
 // Cache layout support status
 let layoutsSupported: boolean | null = null;
@@ -125,11 +130,167 @@ export function getLayoutSupportStatus(): { supported: boolean | null; lastCheck
   return { supported: layoutsSupported, lastCheck: layoutsProbeLastCheck };
 }
 
+// Cache for baseline media ID (idempotency)
+let cachedBaselineMediaId: string | null = null;
+
+/**
+ * Find existing baseline placeholder media in Yodeck by tag
+ */
+async function findBaselineMedia(): Promise<{ id: string; name: string } | null> {
+  const result = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string; tags: string[] }> }>("/medias");
+  if (!result.ok || !result.data?.results) return null;
+  
+  const baselineMedia = result.data.results.find(m => 
+    m.tags?.includes(BASELINE_ASSET_TAG) || m.name === BASELINE_MEDIA_NAME
+  );
+  
+  if (baselineMedia) {
+    cachedBaselineMediaId = String(baselineMedia.id);
+    return { id: String(baselineMedia.id), name: baselineMedia.name };
+  }
+  return null;
+}
+
+/**
+ * Upload baseline placeholder asset to Yodeck (idempotent)
+ * Returns existing media ID if already uploaded
+ */
+export async function ensureBaselineAsset(): Promise<{ ok: boolean; mediaId?: string; error?: string; logs: string[] }> {
+  const logs: string[] = [];
+  
+  // Check cache first
+  if (cachedBaselineMediaId) {
+    logs.push(`[Baseline] Using cached baseline media ID: ${cachedBaselineMediaId}`);
+    return { ok: true, mediaId: cachedBaselineMediaId, logs };
+  }
+  
+  // Check if baseline asset already exists in Yodeck
+  logs.push(`[Baseline] Checking for existing baseline media...`);
+  const existing = await findBaselineMedia();
+  if (existing) {
+    logs.push(`[Baseline] Found existing baseline media: ${existing.id} (${existing.name})`);
+    return { ok: true, mediaId: existing.id, logs };
+  }
+  
+  // Check if local asset file exists
+  if (!fs.existsSync(BASELINE_ASSET_PATH)) {
+    logs.push(`[Baseline] ERROR: Asset file not found at ${BASELINE_ASSET_PATH}`);
+    return { ok: false, error: "Baseline asset file not found", logs };
+  }
+  
+  // Upload the asset to Yodeck
+  logs.push(`[Baseline] Uploading baseline placeholder asset...`);
+  
+  const token = await getYodeckToken();
+  if (!token) {
+    return { ok: false, error: "Yodeck token not configured", logs };
+  }
+  
+  try {
+    const fileBuffer = fs.readFileSync(BASELINE_ASSET_PATH);
+    const blob = new Blob([fileBuffer], { type: "image/png" });
+    
+    const formData = new FormData();
+    formData.append("name", BASELINE_MEDIA_NAME);
+    formData.append("description", "Elevizion standaard baseline placeholder - Welkom scherm");
+    formData.append("tags", BASELINE_ASSET_TAG);
+    formData.append("file", blob, "elevizion-baseline-1080p.png");
+    
+    const response = await fetch(`${YODECK_BASE_URL}/medias/`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Token ${token}`,
+      },
+      body: formData,
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      logs.push(`[Baseline] Upload failed: HTTP ${response.status}: ${errorText}`);
+      return { ok: false, error: `Upload failed: HTTP ${response.status}`, logs };
+    }
+    
+    const data = await response.json() as { id: number };
+    const mediaId = String(data.id);
+    cachedBaselineMediaId = mediaId;
+    
+    logs.push(`[Baseline] Successfully uploaded baseline asset: ${mediaId}`);
+    return { ok: true, mediaId, logs };
+  } catch (error: any) {
+    logs.push(`[Baseline] Upload error: ${error.message}`);
+    return { ok: false, error: error.message, logs };
+  }
+}
+
+/**
+ * Check if a playlist has any items (exported for API use)
+ */
+export async function checkPlaylistEmpty(playlistId: string): Promise<boolean> {
+  const result = await yodeckRequest<{ items?: any[]; media_items?: any[] }>(`/playlists/${playlistId}`);
+  if (!result.ok || !result.data) return true;
+  
+  const items = result.data.items || result.data.media_items || [];
+  return items.length === 0;
+}
+
+// Alias for internal use
+const isPlaylistEmpty = checkPlaylistEmpty;
+
+/**
+ * Add media item to playlist
+ */
+async function addMediaToPlaylist(playlistId: string, mediaId: string): Promise<{ ok: boolean; error?: string }> {
+  const result = await yodeckRequest<any>(`/playlists/${playlistId}/items/`, "POST", {
+    media: parseInt(mediaId, 10),
+    duration: 10,
+    enabled: true,
+  });
+  
+  if (!result.ok) {
+    return { ok: false, error: result.error };
+  }
+  return { ok: true };
+}
+
+/**
+ * Seed baseline placeholder into a playlist if empty
+ */
+export async function seedBaselinePlaylist(playlistId: string): Promise<{ ok: boolean; seeded: boolean; error?: string; logs: string[] }> {
+  const logs: string[] = [];
+  
+  // Check if playlist is empty
+  logs.push(`[Baseline] Checking if playlist ${playlistId} is empty...`);
+  const empty = await isPlaylistEmpty(playlistId);
+  
+  if (!empty) {
+    logs.push(`[Baseline] Playlist ${playlistId} already has content, skipping seed`);
+    return { ok: true, seeded: false, logs };
+  }
+  
+  // Ensure baseline asset is uploaded
+  const assetResult = await ensureBaselineAsset();
+  logs.push(...assetResult.logs);
+  
+  if (!assetResult.ok || !assetResult.mediaId) {
+    return { ok: false, seeded: false, error: assetResult.error || "Failed to ensure baseline asset", logs };
+  }
+  
+  // Add baseline asset to playlist
+  logs.push(`[Baseline] Adding baseline media ${assetResult.mediaId} to playlist ${playlistId}...`);
+  const addResult = await addMediaToPlaylist(playlistId, assetResult.mediaId);
+  
+  if (!addResult.ok) {
+    logs.push(`[Baseline] Failed to add media to playlist: ${addResult.error}`);
+    return { ok: false, seeded: false, error: addResult.error, logs };
+  }
+  
+  logs.push(`[Baseline] Seeded placeholder asset into baseline playlist ${playlistId}`);
+  return { ok: true, seeded: true, logs };
+}
+
 /**
  * Ensure baseline playlist exists for a location
- * Creates a simple playlist with placeholder content
- * Note: Baseline playlist starts empty - admin should add content in Yodeck UI
- * (news/weather widgets, clock, or custom placeholder images)
+ * Creates playlist and seeds with placeholder content if empty
  */
 export async function ensureBaselinePlaylist(
   locationId: string,
@@ -160,6 +321,11 @@ export async function ensureBaselinePlaylist(
       await db.update(locations)
         .set({ yodeckBaselinePlaylistId: String(existing.id) })
         .where(eq(locations.id, locationId));
+      
+      // Auto-seed if empty
+      const seedResult = await seedBaselinePlaylist(String(existing.id));
+      logs.push(...seedResult.logs);
+      
       return { ok: true, playlistId: String(existing.id), logs };
     }
   }
@@ -181,7 +347,6 @@ export async function ensureBaselinePlaylist(
 
   const playlistId = String(createResult.data!.id);
   logs.push(`Baseline playlist created: ${playlistId}`);
-  logs.push(`NOTE: Voeg handmatig content toe aan deze playlist in Yodeck (nieuws, weer, klok, of placeholder afbeelding)`);
 
   // Update location with baseline playlist ID
   await db.update(locations)
@@ -189,6 +354,10 @@ export async function ensureBaselinePlaylist(
     .where(eq(locations.id, locationId));
 
   logs.push(`Location updated with baseline playlist ID`);
+  
+  // Auto-seed with placeholder content
+  const seedResult = await seedBaselinePlaylist(playlistId);
+  logs.push(...seedResult.logs);
   
   return { ok: true, playlistId, logs };
 }
@@ -207,8 +376,9 @@ export async function ensureAdsPlaylist(
     const result = await yodeckPublishService.ensureTagBasedPlaylist(locationId);
     
     if (result.ok) {
-      logs.push(`Ads tagbased playlist ready: ${result.playlistId}`);
-      return { ok: true, playlistId: result.playlistId, logs };
+      const playlistIdStr = String(result.playlistId);
+      logs.push(`Ads tagbased playlist ready: ${playlistIdStr}`);
+      return { ok: true, playlistId: playlistIdStr, logs };
     } else {
       logs.push(`Failed to ensure ads playlist: ${result.error}`);
       return { ok: false, error: result.error, logs };
@@ -485,6 +655,100 @@ export async function applyLayoutToLocation(locationId: string): Promise<LayoutA
 }
 
 /**
+ * Ensure ads playlist is active on screen via layout or schedule
+ * Called after successful publish to guarantee ads are visible
+ */
+export async function ensureAdsSurfaceActive(params: {
+  locationId: string;
+  screenId: string;
+  adsPlaylistId: string;
+}): Promise<{ ok: boolean; surfaceActive: boolean; mode?: LayoutMode; error?: string; logs: string[] }> {
+  const { locationId, screenId, adsPlaylistId } = params;
+  const logs: string[] = [];
+  
+  logs.push(`[AutoSurface] Checking ads surface for location ${locationId}, screen ${screenId}`);
+  
+  // Get location
+  const location = await db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
+  if (!location[0]) {
+    return { ok: false, surfaceActive: false, error: "Locatie niet gevonden", logs };
+  }
+  
+  const loc = location[0];
+  
+  // Check if layout mode is already configured and active
+  if (loc.layoutMode === "LAYOUT" && loc.yodeckLayoutId) {
+    logs.push(`[AutoSurface] Layout mode already active with layout ${loc.yodeckLayoutId}`);
+    return { ok: true, surfaceActive: true, mode: "LAYOUT", logs };
+  }
+  
+  // Check if fallback schedule is already configured with ads playlist
+  if (loc.layoutMode === "FALLBACK_SCHEDULE" && loc.yodeckPlaylistId === adsPlaylistId) {
+    logs.push(`[AutoSurface] Fallback schedule already active with ads playlist ${adsPlaylistId}`);
+    return { ok: true, surfaceActive: true, mode: "FALLBACK_SCHEDULE", logs };
+  }
+  
+  // Surface not active - need to apply layout or fallback
+  logs.push(`[AutoSurface] Surface not active, applying layout/fallback...`);
+  
+  // Check if layouts are supported
+  const layoutsSupported = await probeLayoutsSupport();
+  
+  if (layoutsSupported) {
+    // Try to apply layout
+    logs.push(`[AutoSurface] Layouts supported, applying layout...`);
+    
+    // Ensure baseline playlist exists
+    const baselineResult = await ensureBaselinePlaylist(locationId, loc.name);
+    logs.push(...baselineResult.logs);
+    
+    if (baselineResult.ok && baselineResult.playlistId) {
+      // Ensure layout exists
+      const layoutResult = await ensureLayout(locationId, loc.name, baselineResult.playlistId, adsPlaylistId);
+      logs.push(...layoutResult.logs);
+      
+      if (layoutResult.ok && layoutResult.layoutId) {
+        // Assign layout to screen
+        const assignResult = await assignLayoutToScreen(screenId, layoutResult.layoutId);
+        logs.push(...assignResult.logs);
+        
+        if (assignResult.ok) {
+          logs.push(`[AutoSurface] Layout applied successfully`);
+          return { ok: true, surfaceActive: true, mode: "LAYOUT", logs };
+        }
+      }
+    }
+    
+    logs.push(`[AutoSurface] Layout mode failed, falling back to schedule...`);
+  }
+  
+  // Fallback: assign ads playlist directly to screen
+  logs.push(`[AutoSurface] Applying fallback schedule with ads playlist ${adsPlaylistId}...`);
+  
+  const scheduleResult = await yodeckRequest<any>(`/screens/${screenId}/`, "PATCH", {
+    default_playlist: parseInt(adsPlaylistId, 10),
+  });
+  
+  if (!scheduleResult.ok) {
+    logs.push(`[AutoSurface] Failed to assign ads playlist to screen: ${scheduleResult.error}`);
+    return { 
+      ok: false, 
+      surfaceActive: false, 
+      error: `ADS_SURFACE_NOT_ACTIVE: ${scheduleResult.error}`, 
+      logs 
+    };
+  }
+  
+  // Update location mode
+  await db.update(locations)
+    .set({ layoutMode: "FALLBACK_SCHEDULE" })
+    .where(eq(locations.id, locationId));
+  
+  logs.push(`[AutoSurface] Fallback schedule applied successfully`);
+  return { ok: true, surfaceActive: true, mode: "FALLBACK_SCHEDULE", logs };
+}
+
+/**
  * Get layout status for all locations
  */
 export async function getLayoutStatusForLocations(): Promise<{
@@ -495,6 +759,7 @@ export async function getLayoutStatusForLocations(): Promise<{
     layoutMode: string;
     layoutId: string | null;
     baselinePlaylistId: string | null;
+    baselineEmpty: boolean;
     adsPlaylistId: string | null;
     status: "complete" | "partial" | "none";
   }>;
@@ -512,27 +777,39 @@ export async function getLayoutStatusForLocations(): Promise<{
     adsPlaylistId: locations.yodeckPlaylistId,
   }).from(locations);
 
-  return {
-    locations: locs.map(loc => {
-      let status: "complete" | "partial" | "none" = "none";
-      
-      if (loc.layoutMode === "LAYOUT" && loc.layoutId && loc.baselinePlaylistId && loc.adsPlaylistId) {
-        status = "complete";
-      } else if (loc.adsPlaylistId || loc.baselinePlaylistId) {
-        status = "partial";
+  const locationsWithStatus = await Promise.all(locs.map(async loc => {
+    let status: "complete" | "partial" | "none" = "none";
+    let baselineEmpty = true;
+    
+    if (loc.layoutMode === "LAYOUT" && loc.layoutId && loc.baselinePlaylistId && loc.adsPlaylistId) {
+      status = "complete";
+    } else if (loc.adsPlaylistId || loc.baselinePlaylistId) {
+      status = "partial";
+    }
+    
+    if (loc.baselinePlaylistId) {
+      try {
+        baselineEmpty = await checkPlaylistEmpty(loc.baselinePlaylistId);
+      } catch (e) {
+        baselineEmpty = true;
       }
-      
-      return {
-        id: loc.id,
-        name: loc.name,
-        screenId: loc.screenId,
-        layoutMode: loc.layoutMode || "FALLBACK_SCHEDULE",
-        layoutId: loc.layoutId,
-        baselinePlaylistId: loc.baselinePlaylistId,
-        adsPlaylistId: loc.adsPlaylistId,
-        status,
-      };
-    }),
+    }
+    
+    return {
+      id: loc.id,
+      name: loc.name,
+      screenId: loc.screenId,
+      layoutMode: loc.layoutMode || "FALLBACK_SCHEDULE",
+      layoutId: loc.layoutId,
+      baselinePlaylistId: loc.baselinePlaylistId,
+      baselineEmpty,
+      adsPlaylistId: loc.adsPlaylistId,
+      status,
+    };
+  }));
+
+  return {
+    locations: locationsWithStatus,
     layoutsSupported: supported,
   };
 }
@@ -540,11 +817,15 @@ export async function getLayoutStatusForLocations(): Promise<{
 export const yodeckLayoutService = {
   probeLayoutsSupport,
   getLayoutSupportStatus,
+  ensureBaselineAsset,
+  seedBaselinePlaylist,
+  checkPlaylistEmpty,
   ensureBaselinePlaylist,
   ensureAdsPlaylist,
   ensureLayout,
   assignLayoutToScreen,
   applyFallbackSchedule,
   applyLayoutToLocation,
+  ensureAdsSurfaceActive,
   getLayoutStatusForLocations,
 };

@@ -15202,6 +15202,59 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.status(500).json({ error: error.message });
     }
   });
+  
+  app.post("/api/admin/layouts/:locationId/seed-baseline", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
+      
+      const location = await storage.getLocation(locationId);
+      if (!location) {
+        return res.status(404).json({ error: "Locatie niet gevonden" });
+      }
+      
+      if (!location.yodeckBaselinePlaylistId) {
+        return res.status(400).json({ error: "Baseline playlist niet geconfigureerd" });
+      }
+      
+      const result = await yodeckLayoutService.seedBaselinePlaylist(location.yodeckBaselinePlaylistId);
+      
+      res.json({
+        ok: result.ok,
+        seeded: result.seeded,
+        error: result.error,
+        logs: result.logs,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  app.get("/api/admin/layouts/:locationId/baseline-status", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
+      
+      const location = await storage.getLocation(locationId);
+      if (!location) {
+        return res.status(404).json({ error: "Locatie niet gevonden" });
+      }
+      
+      if (!location.yodeckBaselinePlaylistId) {
+        return res.json({ hasPlaylist: false, isEmpty: true });
+      }
+      
+      const isEmpty = await yodeckLayoutService.checkPlaylistEmpty(location.yodeckBaselinePlaylistId);
+      
+      res.json({
+        hasPlaylist: true,
+        playlistId: location.yodeckBaselinePlaylistId,
+        isEmpty,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
 
   // ============================================================================
   // ADMIN: MONITORING & ALERTS

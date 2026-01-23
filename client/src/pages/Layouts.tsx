@@ -15,7 +15,8 @@ import {
   ExternalLink,
   Loader2,
   Monitor,
-  List
+  List,
+  ImagePlus
 } from "lucide-react";
 
 interface LocationLayout {
@@ -25,6 +26,7 @@ interface LocationLayout {
   layoutMode: string;
   layoutId: string | null;
   baselinePlaylistId: string | null;
+  baselineEmpty: boolean;
   adsPlaylistId: string | null;
   status: "complete" | "partial" | "none";
 }
@@ -66,9 +68,17 @@ const modeBadge = (mode: string) => {
   }
 };
 
+interface SeedResult {
+  ok: boolean;
+  seeded: boolean;
+  error?: string;
+  logs: string[];
+}
+
 export default function Layouts() {
   const queryClient = useQueryClient();
   const [applyingLocation, setApplyingLocation] = useState<string | null>(null);
+  const [seedingLocation, setSeedingLocation] = useState<string | null>(null);
 
   const { data, isLoading, refetch, isFetching } = useQuery<LayoutsResponse>({
     queryKey: ["admin-layouts"],
@@ -116,6 +126,40 @@ export default function Layouts() {
     },
     onSettled: () => {
       setApplyingLocation(null);
+    },
+  });
+
+  const seedMutation = useMutation({
+    mutationFn: async (locationId: string) => {
+      const res = await fetch(`/api/admin/layouts/${locationId}/seed-baseline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to seed baseline");
+      return res.json() as Promise<SeedResult>;
+    },
+    onMutate: (locationId) => {
+      setSeedingLocation(locationId);
+    },
+    onSuccess: (result) => {
+      if (result.ok) {
+        if (result.seeded) {
+          toast.success("Baseline placeholder toegevoegd");
+        } else {
+          toast.info("Baseline heeft al content");
+        }
+        result.logs.forEach(log => console.log("[Baseline]", log));
+      } else {
+        toast.error(result.error || "Seed mislukt");
+      }
+      queryClient.invalidateQueries({ queryKey: ["admin-layouts"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+    onSettled: () => {
+      setSeedingLocation(null);
     },
   });
 
@@ -248,14 +292,24 @@ export default function Layouts() {
                           </a>
                         )}
                         {loc.baselinePlaylistId && (
-                          <a 
-                            href={yodeckUrl("playlist", loc.baselinePlaylistId) || "#"} 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-xs text-blue-600 hover:underline flex items-center gap-1"
-                          >
-                            Baseline <ExternalLink className="h-3 w-3" />
-                          </a>
+                          <div className="flex items-center gap-1">
+                            <a 
+                              href={yodeckUrl("playlist", loc.baselinePlaylistId) || "#"} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                            >
+                              Baseline <ExternalLink className="h-3 w-3" />
+                            </a>
+                            {loc.baselineEmpty && (
+                              <Badge 
+                                variant="outline" 
+                                className="text-[10px] bg-red-50 text-red-700 border-red-200 px-1 py-0"
+                              >
+                                Leeg
+                              </Badge>
+                            )}
+                          </div>
                         )}
                         {loc.adsPlaylistId && (
                           <a 
@@ -273,20 +327,38 @@ export default function Layouts() {
                       </div>
                     </TableCell>
                     <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        variant={loc.status === "complete" ? "outline" : "default"}
-                        onClick={() => applyMutation.mutate(loc.id)}
-                        disabled={!loc.screenId || applyingLocation === loc.id}
-                        data-testid={`button-apply-layout-${loc.id}`}
-                      >
-                        {applyingLocation === loc.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                        ) : (
-                          <Play className="h-4 w-4 mr-2" />
+                      <div className="flex gap-2 justify-end">
+                        {loc.baselinePlaylistId && loc.baselineEmpty && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => seedMutation.mutate(loc.id)}
+                            disabled={seedingLocation === loc.id}
+                            data-testid={`button-seed-baseline-${loc.id}`}
+                          >
+                            {seedingLocation === loc.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                            ) : (
+                              <ImagePlus className="h-4 w-4 mr-2" />
+                            )}
+                            Seed
+                          </Button>
                         )}
-                        {loc.status === "complete" ? "Opnieuw" : "Toepassen"}
-                      </Button>
+                        <Button
+                          size="sm"
+                          variant={loc.status === "complete" ? "outline" : "default"}
+                          onClick={() => applyMutation.mutate(loc.id)}
+                          disabled={!loc.screenId || applyingLocation === loc.id}
+                          data-testid={`button-apply-layout-${loc.id}`}
+                        >
+                          {applyingLocation === loc.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                          ) : (
+                            <Play className="h-4 w-4 mr-2" />
+                          )}
+                          {loc.status === "complete" ? "Opnieuw" : "Toepassen"}
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
