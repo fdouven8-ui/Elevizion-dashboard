@@ -2024,6 +2024,97 @@ class YodeckPublishService {
       
       (report as any).surfaceResults = surfaceResults;
 
+      // Step 6: Verify screen is on Elevizion layout (not a demo/external layout)
+      // This ensures ads are truly visible, not hidden behind "Visitors - Black Friday Deal" etc.
+      console.log(`[YodeckPublish] Verifying Elevizion layout for ${locationIds.length} locations`);
+      const layoutVerifyResults: Array<{ locationId: string; layoutVerified: boolean; layoutName?: string; error?: string }> = [];
+      
+      for (const locationId of locationIds) {
+        const loc = await db.query.locations.findFirst({
+          where: eq(locations.id, locationId),
+        });
+        
+        if (!loc?.yodeckDeviceId) {
+          layoutVerifyResults.push({ 
+            locationId, 
+            layoutVerified: false, 
+            error: "No Yodeck screen linked" 
+          });
+          // Mark target as failed - no screen means no layout verification possible
+          const targetIdx = report.targets.findIndex(t => t.locationId === locationId);
+          if (targetIdx >= 0 && report.targets[targetIdx].status === "tagged") {
+            report.targets[targetIdx].status = "failed";
+            report.targets[targetIdx].error = "SCREEN_NOT_LINKED";
+            report.successCount--;
+            report.failedCount++;
+          }
+          continue;
+        }
+        
+        try {
+          const { getScreenContentStatus, isElevizionLayout, ensureScreenUsesElevizionLayout } = await import("./yodeckLayoutService");
+          const screenStatus = await getScreenContentStatus(loc.yodeckDeviceId);
+          
+          if (screenStatus.ok && screenStatus.mode === "layout" && isElevizionLayout(screenStatus.layoutName)) {
+            // Screen is on correct Elevizion layout
+            layoutVerifyResults.push({
+              locationId,
+              layoutVerified: true,
+              layoutName: screenStatus.layoutName,
+            });
+            console.log(`[YodeckPublish] Location ${locationId}: Elevizion layout OK (${screenStatus.layoutName})`);
+          } else {
+            // Screen is on wrong layout - attempt auto-fix
+            console.log(`[YodeckPublish] Location ${locationId}: Wrong layout detected (${screenStatus.layoutName || screenStatus.mode}), attempting auto-fix...`);
+            
+            const forceResult = await ensureScreenUsesElevizionLayout(locationId);
+            forceResult.logs.forEach(log => console.log(log));
+            
+            if (forceResult.ok && forceResult.verified) {
+              layoutVerifyResults.push({
+                locationId,
+                layoutVerified: true,
+                layoutName: forceResult.layoutName,
+              });
+              console.log(`[YodeckPublish] Location ${locationId}: Auto-fixed to Elevizion layout (${forceResult.layoutName})`);
+            } else {
+              // Failed to fix - mark target as failed
+              layoutVerifyResults.push({
+                locationId,
+                layoutVerified: false,
+                error: forceResult.error || "SCREEN_LAYOUT_NOT_APPLIED",
+              });
+              
+              const targetIdx = report.targets.findIndex(t => t.locationId === locationId);
+              if (targetIdx >= 0 && report.targets[targetIdx].status === "tagged") {
+                report.targets[targetIdx].status = "failed";
+                report.targets[targetIdx].error = forceResult.error || "SCREEN_LAYOUT_NOT_APPLIED";
+                report.successCount--;
+                report.failedCount++;
+              }
+              console.log(`[YodeckPublish] Location ${locationId}: FAILED - could not apply Elevizion layout`);
+            }
+          }
+        } catch (e: any) {
+          console.error(`[YodeckPublish] Layout verify failed for ${locationId}: ${e.message}`);
+          layoutVerifyResults.push({ 
+            locationId, 
+            layoutVerified: false, 
+            error: e.message 
+          });
+          // Mark target as failed on verification error
+          const targetIdx = report.targets.findIndex(t => t.locationId === locationId);
+          if (targetIdx >= 0 && report.targets[targetIdx].status === "tagged") {
+            report.targets[targetIdx].status = "failed";
+            report.targets[targetIdx].error = `LAYOUT_VERIFY_ERROR: ${e.message}`;
+            report.successCount--;
+            report.failedCount++;
+          }
+        }
+      }
+      
+      (report as any).layoutVerifyResults = layoutVerifyResults;
+
       // Update plan status based on results
       report.completedAt = new Date().toISOString();
       report.publishedAt = new Date().toISOString();

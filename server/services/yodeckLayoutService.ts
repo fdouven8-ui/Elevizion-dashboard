@@ -814,6 +814,493 @@ export async function getLayoutStatusForLocations(): Promise<{
   };
 }
 
+// Layout identity constants
+const ELEVIZION_LAYOUT_PREFIX = "Elevizion";
+const ELEVIZION_STANDARD_LAYOUT_NAME = "Elevizion - Standard 30/70";
+
+/**
+ * Check if a layout name is an Elevizion-managed layout
+ */
+export function isElevizionLayout(layoutName: string | null | undefined): boolean {
+  if (!layoutName) return false;
+  return layoutName.startsWith(ELEVIZION_LAYOUT_PREFIX);
+}
+
+/**
+ * Get current screen content status from Yodeck
+ * Returns the current content mode (layout/playlist/schedule) and layout details
+ */
+export async function getScreenContentStatus(screenId: string): Promise<{
+  ok: boolean;
+  mode: "layout" | "playlist" | "schedule" | "unknown";
+  layoutId?: string;
+  layoutName?: string;
+  playlistId?: string;
+  playlistName?: string;
+  isElevizionLayout: boolean;
+  error?: string;
+}> {
+  const result = await yodeckRequest<{
+    id: number;
+    name: string;
+    default_playlist_type?: string;
+    default_playlist?: number;
+    default_playlist_name?: string;
+    layout?: { id: number; name: string };
+    current_layout?: { id: number; name: string };
+  }>(`/screens/${screenId}`);
+
+  if (!result.ok || !result.data) {
+    return { ok: false, mode: "unknown", isElevizionLayout: false, error: result.error };
+  }
+
+  const screen = result.data;
+  const playlistType = screen.default_playlist_type?.toLowerCase() || "unknown";
+  
+  // Determine mode
+  let mode: "layout" | "playlist" | "schedule" | "unknown" = "unknown";
+  let layoutId: string | undefined;
+  let layoutName: string | undefined;
+  let playlistId: string | undefined;
+  let playlistName: string | undefined;
+  
+  if (playlistType === "layout") {
+    mode = "layout";
+    // Try to get layout details
+    const layout = screen.layout || screen.current_layout;
+    if (layout) {
+      layoutId = String(layout.id);
+      layoutName = layout.name;
+    } else if (screen.default_playlist) {
+      layoutId = String(screen.default_playlist);
+      // Fetch layout name
+      const layoutResult = await yodeckRequest<{ id: number; name: string }>(`/layouts/${screen.default_playlist}`);
+      if (layoutResult.ok && layoutResult.data) {
+        layoutName = layoutResult.data.name;
+      }
+    }
+  } else if (playlistType === "playlist") {
+    mode = "playlist";
+    if (screen.default_playlist) {
+      playlistId = String(screen.default_playlist);
+      playlistName = screen.default_playlist_name;
+    }
+  } else if (playlistType === "schedule") {
+    mode = "schedule";
+  }
+
+  return {
+    ok: true,
+    mode,
+    layoutId,
+    layoutName,
+    playlistId,
+    playlistName,
+    isElevizionLayout: isElevizionLayout(layoutName),
+  };
+}
+
+export type LayoutConfigStatus = "OK" | "WRONG_LAYOUT" | "NO_LAYOUT" | "ERROR";
+
+export interface ScreenLayoutStatus {
+  locationId: string;
+  screenId: string;
+  status: LayoutConfigStatus;
+  currentMode: string;
+  currentLayoutId?: string;
+  currentLayoutName?: string;
+  expectedLayoutId?: string;
+  error?: string;
+}
+
+/**
+ * Check if screen has correct Elevizion layout configuration
+ */
+export async function checkScreenLayoutConfig(locationId: string): Promise<ScreenLayoutStatus> {
+  const location = await db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
+  if (!location[0]) {
+    return { 
+      locationId, 
+      screenId: "", 
+      status: "ERROR", 
+      currentMode: "unknown",
+      error: "Location not found" 
+    };
+  }
+
+  const loc = location[0];
+  const screenId = loc.yodeckDeviceId;
+
+  if (!screenId) {
+    return { 
+      locationId, 
+      screenId: "", 
+      status: "ERROR", 
+      currentMode: "unknown",
+      error: "No Yodeck screen linked" 
+    };
+  }
+
+  const screenStatus = await getScreenContentStatus(screenId);
+  
+  if (!screenStatus.ok) {
+    return { 
+      locationId, 
+      screenId, 
+      status: "ERROR", 
+      currentMode: "unknown",
+      error: screenStatus.error || "Failed to fetch screen status"
+    };
+  }
+
+  // Check if screen is using a layout
+  if (screenStatus.mode !== "layout") {
+    return {
+      locationId,
+      screenId,
+      status: "NO_LAYOUT",
+      currentMode: screenStatus.mode,
+      currentLayoutName: screenStatus.layoutName,
+      expectedLayoutId: loc.yodeckLayoutId || undefined,
+    };
+  }
+
+  // Check if it's an Elevizion layout
+  if (!screenStatus.isElevizionLayout) {
+    return {
+      locationId,
+      screenId,
+      status: "WRONG_LAYOUT",
+      currentMode: "layout",
+      currentLayoutId: screenStatus.layoutId,
+      currentLayoutName: screenStatus.layoutName,
+      expectedLayoutId: loc.yodeckLayoutId || undefined,
+    };
+  }
+
+  // Check if it matches our expected layout
+  if (loc.yodeckLayoutId && screenStatus.layoutId !== loc.yodeckLayoutId) {
+    return {
+      locationId,
+      screenId,
+      status: "WRONG_LAYOUT",
+      currentMode: "layout",
+      currentLayoutId: screenStatus.layoutId,
+      currentLayoutName: screenStatus.layoutName,
+      expectedLayoutId: loc.yodeckLayoutId,
+    };
+  }
+
+  return {
+    locationId,
+    screenId,
+    status: "OK",
+    currentMode: "layout",
+    currentLayoutId: screenStatus.layoutId,
+    currentLayoutName: screenStatus.layoutName,
+  };
+}
+
+export interface ForceLayoutResult {
+  ok: boolean;
+  verified: boolean;
+  layoutId?: string;
+  layoutName?: string;
+  error?: string;
+  logs: string[];
+}
+
+/**
+ * Force screen to use Elevizion layout with hard verification
+ * Creates layout if needed, assigns to screen, pushes and verifies
+ */
+export async function ensureScreenUsesElevizionLayout(
+  locationId: string
+): Promise<ForceLayoutResult> {
+  const logs: string[] = [];
+  
+  logs.push(`[ForceLayout] Starting for location ${locationId}`);
+  
+  // Get location
+  const location = await db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
+  if (!location[0]) {
+    return { ok: false, verified: false, error: "Location not found", logs };
+  }
+
+  const loc = location[0];
+  const screenId = loc.yodeckDeviceId;
+
+  if (!screenId) {
+    return { ok: false, verified: false, error: "No Yodeck screen linked", logs };
+  }
+
+  // Check current screen status
+  const currentStatus = await getScreenContentStatus(screenId);
+  logs.push(`[ForceLayout] Current screen status: mode=${currentStatus.mode}, layout=${currentStatus.layoutName || "none"}, isElevizion=${currentStatus.isElevizionLayout}`);
+
+  // If already on correct Elevizion layout, verify and return
+  if (currentStatus.mode === "layout" && currentStatus.isElevizionLayout) {
+    if (!loc.yodeckLayoutId || currentStatus.layoutId === loc.yodeckLayoutId) {
+      logs.push(`[ForceLayout] Screen already on correct Elevizion layout`);
+      return { 
+        ok: true, 
+        verified: true, 
+        layoutId: currentStatus.layoutId,
+        layoutName: currentStatus.layoutName,
+        logs 
+      };
+    }
+  }
+
+  // Step 1: Ensure baseline playlist exists and is seeded
+  logs.push(`[ForceLayout] Ensuring baseline playlist...`);
+  const baselineResult = await ensureBaselinePlaylist(locationId, loc.name);
+  logs.push(...baselineResult.logs);
+  if (!baselineResult.ok || !baselineResult.playlistId) {
+    return { ok: false, verified: false, error: baselineResult.error || "Failed to create baseline playlist", logs };
+  }
+
+  // Step 2: Ensure ads tagbased playlist
+  logs.push(`[ForceLayout] Ensuring ads playlist...`);
+  const adsResult = await ensureAdsPlaylist(locationId);
+  logs.push(...adsResult.logs);
+  if (!adsResult.ok || !adsResult.playlistId) {
+    return { ok: false, verified: false, error: adsResult.error || "Failed to create ads playlist", logs };
+  }
+
+  // Step 3: Check if layouts are supported
+  const layoutsSupported = await probeLayoutsSupport();
+  if (!layoutsSupported) {
+    logs.push(`[ForceLayout] Layouts API not available, cannot force Elevizion layout`);
+    return { ok: false, verified: false, error: "LAYOUTS_API_NOT_AVAILABLE", logs };
+  }
+
+  // Step 4: Create/ensure Elevizion layout exists
+  logs.push(`[ForceLayout] Ensuring Elevizion layout exists...`);
+  
+  // First, look for existing Elevizion Standard layout
+  const existingLayouts = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>("/layouts");
+  let layoutId: string | undefined;
+  let layoutName: string | undefined;
+  
+  if (existingLayouts.ok && existingLayouts.data?.results) {
+    // Look for location-specific layout first
+    const locationLayoutName = `Elevizion Standard | ${loc.name}`;
+    let existingLayout = existingLayouts.data.results.find(l => l.name === locationLayoutName);
+    
+    // If not found, look for generic Elevizion layout
+    if (!existingLayout) {
+      existingLayout = existingLayouts.data.results.find(l => 
+        l.name.startsWith(ELEVIZION_LAYOUT_PREFIX) && l.name.includes("Standard")
+      );
+    }
+    
+    if (existingLayout) {
+      layoutId = String(existingLayout.id);
+      layoutName = existingLayout.name;
+      logs.push(`[ForceLayout] Found existing Elevizion layout: ${layoutName} (${layoutId})`);
+    }
+  }
+
+  // If no existing layout, create one
+  if (!layoutId) {
+    logs.push(`[ForceLayout] Creating new Elevizion layout...`);
+    const createLayoutName = `Elevizion Standard | ${loc.name}`;
+    
+    const createResult = await yodeckRequest<{ id: number; name: string }>("/layouts/", "POST", {
+      name: createLayoutName,
+      description: "Elevizion 2-zone layout (30% Baseline + 70% Ads)",
+      screen_type: "landscape",
+      regions: [
+        {
+          name: "BASE",
+          x: 0,
+          y: 0,
+          width: 30,
+          height: 100,
+          z_index: 1,
+          item: {
+            type: "playlist",
+            id: parseInt(baselineResult.playlistId, 10),
+          },
+        },
+        {
+          name: "ADS",
+          x: 30,
+          y: 0,
+          width: 70,
+          height: 100,
+          z_index: 1,
+          item: {
+            type: "playlist",
+            id: parseInt(adsResult.playlistId, 10),
+          },
+        },
+      ],
+    });
+
+    if (!createResult.ok || !createResult.data) {
+      logs.push(`[ForceLayout] Failed to create layout: ${createResult.error}`);
+      return { ok: false, verified: false, error: `CREATE_LAYOUT_FAILED: ${createResult.error}`, logs };
+    }
+
+    layoutId = String(createResult.data.id);
+    layoutName = createLayoutName;
+    logs.push(`[ForceLayout] Created layout: ${layoutName} (${layoutId})`);
+  }
+
+  // Save layout ID to DB
+  await db.update(locations)
+    .set({ 
+      yodeckLayoutId: layoutId,
+      layoutMode: "LAYOUT" 
+    })
+    .where(eq(locations.id, locationId));
+  logs.push(`[ForceLayout] Saved layout ID to database`);
+
+  // Step 5: Assign layout to screen
+  logs.push(`[ForceLayout] Assigning layout to screen...`);
+  const assignResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
+    default_playlist_type: "layout",
+    default_playlist: parseInt(layoutId, 10),
+  });
+
+  if (!assignResult.ok) {
+    logs.push(`[ForceLayout] Failed to assign layout: ${assignResult.error}`);
+    return { ok: false, verified: false, error: `ASSIGN_LAYOUT_FAILED: ${assignResult.error}`, logs };
+  }
+  logs.push(`[ForceLayout] Layout assigned to screen`);
+
+  // Step 6: Push to screen (trigger sync)
+  logs.push(`[ForceLayout] Pushing changes to screen...`);
+  const pushResult = await yodeckRequest(`/screens/${screenId}/push/`, "POST", {});
+  if (!pushResult.ok) {
+    // Push might fail but screen might still update - continue to verify
+    logs.push(`[ForceLayout] Push warning: ${pushResult.error} (continuing to verify)`);
+  } else {
+    logs.push(`[ForceLayout] Push successful`);
+  }
+
+  // Step 7: Hard verify - wait a moment and check screen status
+  logs.push(`[ForceLayout] Verifying screen configuration...`);
+  await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2s for propagation
+
+  const verifyStatus = await getScreenContentStatus(screenId);
+  
+  if (!verifyStatus.ok) {
+    logs.push(`[ForceLayout] Verification failed: ${verifyStatus.error}`);
+    return { ok: false, verified: false, layoutId, layoutName, error: `VERIFY_FAILED: ${verifyStatus.error}`, logs };
+  }
+
+  if (verifyStatus.mode !== "layout") {
+    logs.push(`[ForceLayout] VERIFICATION FAILED: Screen mode is ${verifyStatus.mode}, expected layout`);
+    return { ok: false, verified: false, layoutId, layoutName, error: "SCREEN_LAYOUT_NOT_APPLIED", logs };
+  }
+
+  if (!verifyStatus.isElevizionLayout) {
+    logs.push(`[ForceLayout] VERIFICATION FAILED: Screen layout is not Elevizion (${verifyStatus.layoutName})`);
+    return { ok: false, verified: false, layoutId, layoutName, error: "SCREEN_LAYOUT_NOT_APPLIED", logs };
+  }
+
+  logs.push(`[ForceLayout] VERIFIED: Screen is on Elevizion layout ${verifyStatus.layoutName}`);
+  return { 
+    ok: true, 
+    verified: true, 
+    layoutId: verifyStatus.layoutId,
+    layoutName: verifyStatus.layoutName,
+    logs 
+  };
+}
+
+/**
+ * Get detailed layout status for all locations with screen info
+ */
+export async function getDetailedLayoutStatus(): Promise<{
+  locations: Array<{
+    id: string;
+    name: string;
+    screenId: string | null;
+    currentMode: string;
+    currentLayoutId?: string;
+    currentLayoutName?: string;
+    expectedLayoutId?: string;
+    status: LayoutConfigStatus;
+    baselinePlaylistId?: string;
+    baselineEmpty: boolean;
+    adsPlaylistId?: string;
+    canFix: boolean;
+  }>;
+  layoutsSupported: boolean;
+}> {
+  const supported = await probeLayoutsSupport();
+  
+  const locs = await db.select({
+    id: locations.id,
+    name: locations.name,
+    screenId: locations.yodeckDeviceId,
+    layoutId: locations.yodeckLayoutId,
+    baselinePlaylistId: locations.yodeckBaselinePlaylistId,
+    adsPlaylistId: locations.yodeckPlaylistId,
+  }).from(locations);
+
+  const detailedLocs = await Promise.all(locs.map(async loc => {
+    let status: LayoutConfigStatus = "ERROR";
+    let currentMode = "unknown";
+    let currentLayoutId: string | undefined;
+    let currentLayoutName: string | undefined;
+    let baselineEmpty = true;
+    let canFix = false;
+
+    if (loc.screenId) {
+      const screenStatus = await getScreenContentStatus(loc.screenId);
+      
+      if (screenStatus.ok) {
+        currentMode = screenStatus.mode;
+        currentLayoutId = screenStatus.layoutId;
+        currentLayoutName = screenStatus.layoutName;
+        
+        if (screenStatus.mode === "layout" && screenStatus.isElevizionLayout) {
+          status = "OK";
+        } else if (screenStatus.mode === "layout") {
+          status = "WRONG_LAYOUT";
+          canFix = supported;
+        } else {
+          status = "NO_LAYOUT";
+          canFix = supported;
+        }
+      }
+    }
+
+    if (loc.baselinePlaylistId) {
+      try {
+        baselineEmpty = await checkPlaylistEmpty(loc.baselinePlaylistId);
+      } catch (e) {
+        baselineEmpty = true;
+      }
+    }
+
+    return {
+      id: loc.id,
+      name: loc.name,
+      screenId: loc.screenId,
+      currentMode,
+      currentLayoutId,
+      currentLayoutName,
+      expectedLayoutId: loc.layoutId || undefined,
+      status,
+      baselinePlaylistId: loc.baselinePlaylistId || undefined,
+      baselineEmpty,
+      adsPlaylistId: loc.adsPlaylistId || undefined,
+      canFix,
+    };
+  }));
+
+  return {
+    locations: detailedLocs,
+    layoutsSupported: supported,
+  };
+}
+
 export const yodeckLayoutService = {
   probeLayoutsSupport,
   getLayoutSupportStatus,
@@ -828,4 +1315,10 @@ export const yodeckLayoutService = {
   applyLayoutToLocation,
   ensureAdsSurfaceActive,
   getLayoutStatusForLocations,
+  // New functions for layout enforcement
+  isElevizionLayout,
+  getScreenContentStatus,
+  checkScreenLayoutConfig,
+  ensureScreenUsesElevizionLayout,
+  getDetailedLayoutStatus,
 };

@@ -1,0 +1,80 @@
+DOEL: Fix dat screens soms op een Yodeck demo-layout staan (“Visitors – Black Friday Deal”) i.p.v. de Elevizion 2-zone layout, waardoor ads niet zichtbaar zijn. Replit moet dit automatisch detecteren, corrigeren en hard verifiëren.
+
+CONTEXT:
+- We gebruiken layout-based content separation (BASE 30% + ADS 70%).
+- Baseline playlists worden automatisch gevuld met placeholder.
+- Ads worden tag-based gepubliceerd (media krijgt tags zoals elevizion:ad, elevizion:advertiser, elevizion:plan, elevizion:location).
+- Probleem: In Yodeck staat Screen Content op Layout, maar de enige selecteerbare layout is een demo (Visitors – Black Friday Deal). Hierdoor werkt Elevizion ads-surface niet.
+
+TAKEN:
+
+A) Detecteer “wrong layout” (demo/extern) en corrigeer automatisch
+1) Voeg een policy toe: Elevizion-managed screens MOGEN NIET op een niet-Elevizion layout staan.
+2) Definieer Elevizion layout identiteit:
+   - layout.name moet starten met "Elevizion" (bijv. "Elevizion - Standard 30/70")
+   - of layout bevat metadata/tag (als API dat ondersteunt)
+3) Bij screen sync + bij publish + bij /layouts Apply/Repair:
+   - haal huidige screen content mode op (playlist/layout/schedule/etc)
+   - als mode != "Layout": zet mode naar "Layout"
+   - als mode == "Layout" maar gekozen layout is niet Elevizion: markeer als INVALID_CONFIG en auto-fix:
+     - assign Elevizion layout (zie B)
+     - save + push to screen
+
+B) Garandeer dat Elevizion layout bestaat en selecteerbaar is
+1) Implementeer ensureElevizionLayoutForLocation(locationId):
+   - Zoek eerst bestaande layouts met name prefix "Elevizion - Standard"
+   - Als niet gevonden: maak layout aan via Yodeck layouts API:
+     - 2 zones: BASE (30% links) en ADS (70% rechts)
+     - BASE zone koppelt aan yodeckBaselinePlaylistId van locatie
+     - ADS zone koppelt aan yodeckAdsPlaylistId (tagbased playlist voor ads)
+   - Zorg idempotent:
+     - als layout al bestaat, hergebruik dezelfde id
+   - Sla layoutId op in DB (locations.yodeckLayoutId)
+
+2) Zorg dat layouts in de juiste workspace komen:
+   - gebruik dezelfde workspace als de screen/location
+   - als workspace mismatch: maak layout opnieuw in juiste workspace en update yodeckLayoutId
+
+C) Screen assignment + push moet altijd gebeuren (hard verify)
+1) Voeg ensureScreenUsesElevizionLayout(screenId, locationId) toe:
+   - Ensure baseline playlist bestaat + gevuld (bestaat al)
+   - Ensure ads tagbased playlist bestaat
+   - Ensure Elevizion layout bestaat (B)
+   - Assign layout aan screen (set screen content to Layout + layoutId)
+   - Save & Push (gebruik Yodeck API push-to-screen of een equivalent)
+2) Hard verify na push:
+   - Fetch screen details opnieuw
+   - Controleer: mode==Layout en layoutId==location.yodeckLayoutId
+   - Als niet waar: fail met errorCode=SCREEN_LAYOUT_NOT_APPLIED (permanent wanneer repeated)
+
+D) UI/Admin feedback (zodat ik dit meteen zie)
+1) Update /layouts admin pagina:
+   - Toon per screen:
+     - currentContentMode (Playlist/Layout/Schedule)
+     - currentLayoutName
+     - badge:
+       - 🟢 OK (Elevizion layout actief)
+       - 🟡 FIXABLE (verkeerde layout, auto-fix beschikbaar)
+       - 🔴 ERROR (layout API niet beschikbaar / push mislukt)
+   - Voeg knop “Force Elevizion Layout” per locatie/screen (calls POST /api/admin/layouts/:id/force)
+2) Nieuwe endpoint:
+   - POST /api/admin/layouts/:id/force
+   - Doet: ensureScreenUsesElevizionLayout(screenId, locationId) + return resultaat
+
+E) Publish flow blokkeren als screen verkeerd staat
+1) In publishPlan(), na tagging + surface activation:
+   - roep ensureScreenUsesElevizionLayout voor target screen(s) aan
+   - Als fail: target failed met errorCode=ADS_SURFACE_NOT_ACTIVE of SCREEN_LAYOUT_NOT_APPLIED
+   - Publish success alleen als screen config bevestigd is
+
+ACCEPTATIECRITERIA:
+- Als een screen op “Visitors – Black Friday Deal” staat, wordt dit automatisch vervangen door “Elevizion - Standard 30/70”.
+- Na Save+Push is screen mode=Layout en layoutId correct.
+- Ads met tag elevizion:ad worden zichtbaar in ADS-zone.
+- /layouts toont duidelijk status en biedt “Force Elevizion Layout”.
+- Publishing kan niet “geslaagd” zijn als screen nog op demo-layout staat.
+
+LEVER OP:
+- Welke files aangepast
+- DB migratie (als nodig)
+- Voorbeeld logregels voor: detect wrong layout, apply, push, verify

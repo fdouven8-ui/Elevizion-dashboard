@@ -15256,6 +15256,62 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  // Force Elevizion layout on screen (detect wrong layout, fix, push, verify)
+  app.post("/api/admin/layouts/:locationId/force", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { ensureScreenUsesElevizionLayout } = await import("./services/yodeckLayoutService");
+      
+      console.log(`[ForceLayout] API called for location ${locationId}`);
+      const result = await ensureScreenUsesElevizionLayout(locationId);
+      
+      result.logs.forEach(log => console.log(log));
+      
+      if (!result.ok) {
+        return res.status(400).json({ 
+          success: false, 
+          error: result.error,
+          verified: false,
+          logs: result.logs,
+        });
+      }
+      
+      res.json({
+        success: true,
+        verified: result.verified,
+        layoutId: result.layoutId,
+        layoutName: result.layoutName,
+        logs: result.logs,
+      });
+    } catch (error: any) {
+      console.error(`[ForceLayout] Error: ${error.message}`);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // Get detailed layout status for all locations (includes screen current config)
+  app.get("/api/admin/layouts/detailed", requireAdminAccess, async (req, res) => {
+    try {
+      const { getDetailedLayoutStatus } = await import("./services/yodeckLayoutService");
+      const status = await getDetailedLayoutStatus();
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Check screen layout config for a single location
+  app.get("/api/admin/layouts/:locationId/screen-status", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { checkScreenLayoutConfig } = await import("./services/yodeckLayoutService");
+      const status = await checkScreenLayoutConfig(locationId);
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ============================================================================
   // ADMIN: MONITORING & ALERTS
   // ============================================================================

@@ -16,7 +16,9 @@ import {
   Loader2,
   Monitor,
   List,
-  ImagePlus
+  ImagePlus,
+  Zap,
+  ShieldCheck
 } from "lucide-react";
 
 interface LocationLayout {
@@ -29,6 +31,27 @@ interface LocationLayout {
   baselineEmpty: boolean;
   adsPlaylistId: string | null;
   status: "complete" | "partial" | "none";
+}
+
+// Extended interface with detailed screen status
+interface DetailedLocationLayout {
+  id: string;
+  name: string;
+  screenId: string | null;
+  currentMode: string;
+  currentLayoutId?: string;
+  currentLayoutName?: string;
+  expectedLayoutId?: string;
+  status: "OK" | "WRONG_LAYOUT" | "NO_LAYOUT" | "ERROR";
+  baselinePlaylistId?: string;
+  baselineEmpty: boolean;
+  adsPlaylistId?: string;
+  canFix: boolean;
+}
+
+interface DetailedLayoutsResponse {
+  locations: DetailedLocationLayout[];
+  layoutsSupported: boolean;
 }
 
 interface LayoutsResponse {
@@ -75,15 +98,61 @@ interface SeedResult {
   logs: string[];
 }
 
+interface ForceResult {
+  success: boolean;
+  verified: boolean;
+  layoutId?: string;
+  layoutName?: string;
+  error?: string;
+  logs: string[];
+}
+
+// Layout status badge helper
+const layoutStatusBadge = (status: "OK" | "WRONG_LAYOUT" | "NO_LAYOUT" | "ERROR", currentLayoutName?: string) => {
+  switch (status) {
+    case "OK":
+      return (
+        <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">
+          <CheckCircle2 className="h-3 w-3 mr-1" />
+          OK
+        </Badge>
+      );
+    case "WRONG_LAYOUT":
+      return (
+        <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
+          <AlertTriangle className="h-3 w-3 mr-1" />
+          Verkeerde Layout
+        </Badge>
+      );
+    case "NO_LAYOUT":
+      return (
+        <Badge variant="outline" className="bg-orange-50 text-orange-700 border-orange-200">
+          <AlertTriangle className="h-3 w-3 mr-1" />
+          Geen Layout
+        </Badge>
+      );
+    case "ERROR":
+    default:
+      return (
+        <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">
+          <XCircle className="h-3 w-3 mr-1" />
+          Fout
+        </Badge>
+      );
+  }
+};
+
 export default function Layouts() {
   const queryClient = useQueryClient();
   const [applyingLocation, setApplyingLocation] = useState<string | null>(null);
   const [seedingLocation, setSeedingLocation] = useState<string | null>(null);
+  const [forcingLocation, setForcingLocation] = useState<string | null>(null);
 
-  const { data, isLoading, refetch, isFetching } = useQuery<LayoutsResponse>({
-    queryKey: ["admin-layouts"],
+  // Use detailed status that includes current screen layout info
+  const { data, isLoading, refetch, isFetching } = useQuery<DetailedLayoutsResponse>({
+    queryKey: ["admin-layouts-detailed"],
     queryFn: async () => {
-      const res = await fetch("/api/admin/layouts", { credentials: "include" });
+      const res = await fetch("/api/admin/layouts/detailed", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch layouts");
       return res.json();
     },
@@ -119,7 +188,7 @@ export default function Layouts() {
       } else {
         toast.error(result.error || "Layout toepassen mislukt");
       }
-      queryClient.invalidateQueries({ queryKey: ["admin-layouts"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-layouts-detailed"] });
     },
     onError: (error: Error) => {
       toast.error(error.message);
@@ -153,13 +222,49 @@ export default function Layouts() {
       } else {
         toast.error(result.error || "Seed mislukt");
       }
-      queryClient.invalidateQueries({ queryKey: ["admin-layouts"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-layouts-detailed"] });
     },
     onError: (error: Error) => {
       toast.error(error.message);
     },
     onSettled: () => {
       setSeedingLocation(null);
+    },
+  });
+
+  // Force Elevizion layout on screen
+  const forceMutation = useMutation({
+    mutationFn: async (locationId: string) => {
+      const res = await fetch(`/api/admin/layouts/${locationId}/force`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to force layout");
+      }
+      return res.json() as Promise<ForceResult>;
+    },
+    onMutate: (locationId) => {
+      setForcingLocation(locationId);
+    },
+    onSuccess: (result) => {
+      if (result.success && result.verified) {
+        toast.success(`Elevizion layout geforceerd en geverifieerd: ${result.layoutName}`);
+      } else if (result.success) {
+        toast.warning("Layout toegepast maar niet geverifieerd");
+      } else {
+        toast.error(result.error || "Force layout mislukt");
+      }
+      result.logs?.forEach(log => console.log("[ForceLayout]", log));
+      queryClient.invalidateQueries({ queryKey: ["admin-layouts-detailed"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+    },
+    onSettled: () => {
+      setForcingLocation(null);
     },
   });
 
@@ -264,7 +369,7 @@ export default function Layouts() {
                 <TableRow>
                   <TableHead>Locatie</TableHead>
                   <TableHead>Screen ID</TableHead>
-                  <TableHead>Mode</TableHead>
+                  <TableHead>Huidige Layout</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Resources</TableHead>
                   <TableHead className="text-right">Acties</TableHead>
@@ -277,13 +382,26 @@ export default function Layouts() {
                     <TableCell className="font-mono text-sm">
                       {loc.screenId || <span className="text-muted-foreground">-</span>}
                     </TableCell>
-                    <TableCell>{modeBadge(loc.layoutMode)}</TableCell>
-                    <TableCell>{statusBadge(loc.status)}</TableCell>
                     <TableCell>
-                      <div className="flex gap-1">
-                        {loc.layoutId && (
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs text-muted-foreground">
+                          Mode: {loc.currentMode}
+                        </span>
+                        {loc.currentLayoutName ? (
+                          <span className="text-xs font-medium">
+                            {loc.currentLayoutName}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">-</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>{layoutStatusBadge(loc.status, loc.currentLayoutName)}</TableCell>
+                    <TableCell>
+                      <div className="flex gap-1 flex-wrap">
+                        {loc.expectedLayoutId && (
                           <a 
-                            href={yodeckUrl("layout", loc.layoutId) || "#"} 
+                            href={yodeckUrl("layout", loc.expectedLayoutId) || "#"} 
                             target="_blank" 
                             rel="noopener noreferrer"
                             className="text-xs text-blue-600 hover:underline flex items-center gap-1"
@@ -321,13 +439,13 @@ export default function Layouts() {
                             Ads <ExternalLink className="h-3 w-3" />
                           </a>
                         )}
-                        {!loc.layoutId && !loc.baselinePlaylistId && !loc.adsPlaylistId && (
+                        {!loc.expectedLayoutId && !loc.baselinePlaylistId && !loc.adsPlaylistId && (
                           <span className="text-xs text-muted-foreground">-</span>
                         )}
                       </div>
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex gap-2 justify-end">
+                      <div className="flex gap-2 justify-end flex-wrap">
                         {loc.baselinePlaylistId && loc.baselineEmpty && (
                           <Button
                             size="sm"
@@ -344,9 +462,27 @@ export default function Layouts() {
                             Seed
                           </Button>
                         )}
+                        {/* Force Elevizion Layout button - shown for wrong/no layout */}
+                        {(loc.status === "WRONG_LAYOUT" || loc.status === "NO_LAYOUT") && loc.canFix && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => forceMutation.mutate(loc.id)}
+                            disabled={forcingLocation === loc.id}
+                            data-testid={`button-force-layout-${loc.id}`}
+                          >
+                            {forcingLocation === loc.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                            ) : (
+                              <Zap className="h-4 w-4 mr-2" />
+                            )}
+                            Force Elevizion
+                          </Button>
+                        )}
+                        {/* Apply/Refresh button */}
                         <Button
                           size="sm"
-                          variant={loc.status === "complete" ? "outline" : "default"}
+                          variant={loc.status === "OK" ? "outline" : "default"}
                           onClick={() => applyMutation.mutate(loc.id)}
                           disabled={!loc.screenId || applyingLocation === loc.id}
                           data-testid={`button-apply-layout-${loc.id}`}
@@ -356,7 +492,7 @@ export default function Layouts() {
                           ) : (
                             <Play className="h-4 w-4 mr-2" />
                           )}
-                          {loc.status === "complete" ? "Opnieuw" : "Toepassen"}
+                          {loc.status === "OK" ? "Vernieuwen" : "Toepassen"}
                         </Button>
                       </div>
                     </TableCell>
