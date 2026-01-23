@@ -450,40 +450,48 @@ export async function ensureLayout(
     }
   }
 
-  // Create layout with 2 regions
+  // Create layout with 2 regions (1920x1080 resolution)
+  // Baseline: left 30% = 576px, Ads: right 70% = 1344px
   logs.push(`Creating layout: ${layoutName}`);
   
-  const createResult = await yodeckRequest<{ id: number }>("/layouts/", "POST", {
+  const layoutPayload = {
     name: layoutName,
     description: "Elevizion 2-zone layout (Baseline + Ads)",
-    screen_type: "landscape", // 16:9
+    screen_type: "landscape",
+    res_width: 1920,
+    res_height: 1080,
     regions: [
       {
         name: "BASE",
-        x: 0,
-        y: 0,
-        width: 30, // 30% width
-        height: 100,
-        z_index: 1,
-        item: {
-          type: "playlist",
-          id: parseInt(baselinePlaylistId, 10),
-        },
+        left: 0,
+        top: 0,
+        width: 576,  // 30% of 1920
+        height: 1080,
+        zindex: 1,
+        order: 0,
+        duration: 0,
+        res_width: 576,
+        res_height: 1080,
+        playlist: parseInt(baselinePlaylistId, 10),
       },
       {
         name: "ADS",
-        x: 30,
-        y: 0,
-        width: 70, // 70% width
-        height: 100,
-        z_index: 1,
-        item: {
-          type: "playlist",
-          id: parseInt(adsPlaylistId, 10),
-        },
+        left: 576,
+        top: 0,
+        width: 1344,  // 70% of 1920
+        height: 1080,
+        zindex: 1,
+        order: 1,
+        duration: 0,
+        res_width: 1344,
+        res_height: 1080,
+        playlist: parseInt(adsPlaylistId, 10),
       },
     ],
-  });
+  };
+  logs.push(`Layout payload: ${JSON.stringify(layoutPayload)}`);
+  
+  const createResult = await yodeckRequest<{ id: number }>("/layouts/", "POST", layoutPayload);
 
   if (!createResult.ok) {
     logs.push(`Failed to create layout: ${createResult.error}`);
@@ -1307,23 +1315,46 @@ export async function ensureScreenUsesElevizionLayout(
     logs.push(`[ForceLayout] Creating new Elevizion layout...`);
     const createLayoutName = `Elevizion Standard | ${loc.name}`;
     
-    const createResult = await yodeckRequest<{ id: number; name: string }>("/layouts/", "POST", {
+    // Full Yodeck layout payload with all required region fields
+    // Resolution: 1920x1080, Baseline: 30% (576px), Ads: 70% (1344px)
+    const layoutPayload = {
       name: createLayoutName,
       description: "Elevizion 2-zone layout (30% Baseline + 70% Ads)",
       screen_type: "landscape",
+      res_width: 1920,
+      res_height: 1080,
       regions: [
         {
           name: "BASE",
-          x: 0, y: 0, width: 30, height: 100, z_index: 1,
-          item: { type: "playlist", id: parseInt(baselineResult.playlistId, 10) },
+          left: 0,
+          top: 0,
+          width: 576,  // 30% of 1920
+          height: 1080,
+          zindex: 1,
+          order: 0,
+          duration: 0,
+          res_width: 576,
+          res_height: 1080,
+          playlist: parseInt(baselineResult.playlistId, 10),
         },
         {
           name: "ADS",
-          x: 30, y: 0, width: 70, height: 100, z_index: 1,
-          item: { type: "playlist", id: parseInt(adsResult.playlistId, 10) },
+          left: 576,
+          top: 0,
+          width: 1344,  // 70% of 1920
+          height: 1080,
+          zindex: 1,
+          order: 1,
+          duration: 0,
+          res_width: 1344,
+          res_height: 1080,
+          playlist: parseInt(adsResult.playlistId, 10),
         },
       ],
-    });
+    };
+    logs.push(`[ForceLayout] Layout payload: ${JSON.stringify(layoutPayload)}`);
+    
+    const createResult = await yodeckRequest<{ id: number; name: string }>("/layouts/", "POST", layoutPayload);
 
     if (!createResult.ok || !createResult.data) {
       logs.push(`[ForceLayout] Failed to create layout: ${createResult.error}`);
