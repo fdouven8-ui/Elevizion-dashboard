@@ -1032,9 +1032,27 @@ export async function checkScreenLayoutConfig(locationId: string): Promise<Scree
   };
 }
 
+export interface RawSnapshot {
+  step: "before" | "afterReset" | "afterApply" | "afterVerify";
+  timestamp: string;
+  raw: any;
+  topLevelKeys: string[];
+  mapped: {
+    contentMode: string;
+    layoutId: string | null;
+    layoutName: string | null;
+    playlistId: string | null;
+    playlistName: string | null;
+    isOnline: boolean;
+  };
+  rawKeysUsed: any;
+  warnings: string[];
+}
+
 export interface ForceLayoutResult {
   ok: boolean;
   verified: boolean;
+  verifyUnavailable?: boolean;
   layoutId?: string;
   layoutName?: string;
   beforeLayoutName?: string;
@@ -1042,6 +1060,64 @@ export interface ForceLayoutResult {
   screenshotTimestamp?: string;
   error?: string;
   logs: string[];
+  rawSnapshots?: RawSnapshot[];
+}
+
+/**
+ * Capture a raw snapshot of screen status from Yodeck API
+ * Used for debugging and audit trail in force flow
+ */
+async function captureRawSnapshot(
+  screenId: string,
+  step: RawSnapshot["step"]
+): Promise<RawSnapshot> {
+  const { mapYodeckScreen } = await import("./yodeckScreenMapper");
+  const timestamp = new Date().toISOString();
+  
+  const result = await yodeckRequest<any>(`/screens/${screenId}`);
+  
+  if (!result.ok || !result.data) {
+    return {
+      step,
+      timestamp,
+      raw: null,
+      topLevelKeys: [],
+      mapped: {
+        contentMode: "unknown",
+        layoutId: null,
+        layoutName: null,
+        playlistId: null,
+        playlistName: null,
+        isOnline: false,
+      },
+      rawKeysUsed: {},
+      warnings: [`Failed to fetch screen: ${result.error}`],
+    };
+  }
+
+  const raw = result.data;
+  const topLevelKeys = Object.keys(raw);
+  const mapped = mapYodeckScreen(raw);
+
+  // Log snapshot for debugging
+  console.log(`[RawSnapshot] ${step} @ ${timestamp} - mode=${mapped.contentMode}, layout=${mapped.layoutName || "-"}, keys=${topLevelKeys.length}`);
+
+  return {
+    step,
+    timestamp,
+    raw,
+    topLevelKeys,
+    mapped: {
+      contentMode: mapped.contentMode,
+      layoutId: mapped.layoutId,
+      layoutName: mapped.layoutName,
+      playlistId: mapped.playlistId,
+      playlistName: mapped.playlistName,
+      isOnline: mapped.isOnline,
+    },
+    rawKeysUsed: mapped.rawKeysUsed,
+    warnings: mapped.warnings,
+  };
 }
 
 /**
@@ -1254,6 +1330,7 @@ export async function ensureScreenUsesElevizionLayout(
   locationId: string
 ): Promise<ForceLayoutResult> {
   const logs: string[] = [];
+  const rawSnapshots: RawSnapshot[] = [];
   let beforeLayoutName: string | undefined;
   let afterLayoutName: string | undefined;
   let screenshotTimestamp: string | undefined;
@@ -1263,19 +1340,28 @@ export async function ensureScreenUsesElevizionLayout(
   // Get location
   const location = await db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
   if (!location[0]) {
-    return { ok: false, verified: false, error: "Location not found", logs };
+    return { ok: false, verified: false, error: "Location not found", logs, rawSnapshots };
   }
 
   const loc = location[0];
   const screenId = loc.yodeckDeviceId;
 
   if (!screenId) {
-    return { ok: false, verified: false, error: "No Yodeck screen linked", logs };
+    return { ok: false, verified: false, error: "No Yodeck screen linked", logs, rawSnapshots };
+  }
+
+  // === CAPTURE RAW SNAPSHOT: BEFORE ===
+  logs.push(`[ForceLayout] Capturing BEFORE snapshot...`);
+  const beforeSnapshot = await captureRawSnapshot(screenId, "before");
+  rawSnapshots.push(beforeSnapshot);
+  logs.push(`[ForceLayout] BEFORE: mode=${beforeSnapshot.mapped.contentMode}, layout=${beforeSnapshot.mapped.layoutName || "-"}, keys=${beforeSnapshot.topLevelKeys.length}`);
+  if (beforeSnapshot.warnings.length > 0) {
+    logs.push(`[ForceLayout] BEFORE warnings: ${beforeSnapshot.warnings.join("; ")}`);
   }
 
   // Get current screen status for logging (beforeLayoutName)
   const currentStatus = await getScreenContentStatus(screenId);
-  beforeLayoutName = currentStatus.layoutName || "none";
+  beforeLayoutName = currentStatus.layoutName || beforeSnapshot.mapped.layoutName || "none";
   logs.push(`[ForceLayout] BEFORE: mode=${currentStatus.mode}, layout=${beforeLayoutName}, isElevizion=${currentStatus.isElevizionLayout}`);
 
   // If already on correct Elevizion layout, just verify and return
@@ -1291,7 +1377,8 @@ export async function ensureScreenUsesElevizionLayout(
       beforeLayoutName,
       afterLayoutName,
       screenshotTimestamp,
-      logs 
+      logs,
+      rawSnapshots,
     };
   }
 
@@ -1300,21 +1387,21 @@ export async function ensureScreenUsesElevizionLayout(
   const baselineResult = await ensureBaselinePlaylist(locationId, loc.name);
   logs.push(...baselineResult.logs);
   if (!baselineResult.ok || !baselineResult.playlistId) {
-    return { ok: false, verified: false, beforeLayoutName, error: baselineResult.error || "Failed to create baseline playlist", logs };
+    return { ok: false, verified: false, beforeLayoutName, error: baselineResult.error || "Failed to create baseline playlist", logs, rawSnapshots };
   }
 
   logs.push(`[ForceLayout] Ensuring ads playlist...`);
   const adsResult = await ensureAdsPlaylist(locationId);
   logs.push(...adsResult.logs);
   if (!adsResult.ok || !adsResult.playlistId) {
-    return { ok: false, verified: false, beforeLayoutName, error: adsResult.error || "Failed to create ads playlist", logs };
+    return { ok: false, verified: false, beforeLayoutName, error: adsResult.error || "Failed to create ads playlist", logs, rawSnapshots };
   }
 
   // Check if layouts are supported
   const layoutsApiSupported = await probeLayoutsSupport();
   if (!layoutsApiSupported) {
     logs.push(`[ForceLayout] Layouts API not available`);
-    return { ok: false, verified: false, beforeLayoutName, error: "LAYOUTS_API_NOT_AVAILABLE", logs };
+    return { ok: false, verified: false, beforeLayoutName, error: "LAYOUTS_API_NOT_AVAILABLE", logs, rawSnapshots };
   }
 
   // === ENSURE ELEVIZION LAYOUT EXISTS ===
@@ -1388,7 +1475,7 @@ export async function ensureScreenUsesElevizionLayout(
 
     if (!createResult.ok || !createResult.data) {
       logs.push(`[ForceLayout] Failed to create layout: ${createResult.error}`);
-      return { ok: false, verified: false, beforeLayoutName, error: `CREATE_LAYOUT_FAILED: ${createResult.error}`, logs };
+      return { ok: false, verified: false, beforeLayoutName, error: `CREATE_LAYOUT_FAILED: ${createResult.error}`, logs, rawSnapshots };
     }
 
     layoutId = String(createResult.data.id);
@@ -1408,8 +1495,14 @@ export async function ensureScreenUsesElevizionLayout(
   logs.push(...resetResult.logs);
   
   if (!resetResult.ok) {
-    return { ok: false, verified: false, beforeLayoutName, layoutId, layoutName, error: resetResult.error, logs };
+    return { ok: false, verified: false, beforeLayoutName, layoutId, layoutName, error: resetResult.error, logs, rawSnapshots };
   }
+
+  // === CAPTURE RAW SNAPSHOT: AFTER RESET ===
+  logs.push(`[ForceLayout] Capturing AFTER RESET snapshot...`);
+  const afterResetSnapshot = await captureRawSnapshot(screenId, "afterReset");
+  rawSnapshots.push(afterResetSnapshot);
+  logs.push(`[ForceLayout] AFTER RESET: mode=${afterResetSnapshot.mapped.contentMode}, layout=${afterResetSnapshot.mapped.layoutName || "-"}`);
 
   // === STEP 2: APPLY ELEVIZION LAYOUT ===
   logs.push(`[ForceLayout] === STEP 2: Apply Elevizion Layout ===`);
@@ -1417,8 +1510,14 @@ export async function ensureScreenUsesElevizionLayout(
   logs.push(...applyResult.logs);
   
   if (!applyResult.ok) {
-    return { ok: false, verified: false, beforeLayoutName, layoutId, layoutName, error: applyResult.error, logs };
+    return { ok: false, verified: false, beforeLayoutName, layoutId, layoutName, error: applyResult.error, logs, rawSnapshots };
   }
+
+  // === CAPTURE RAW SNAPSHOT: AFTER APPLY ===
+  logs.push(`[ForceLayout] Capturing AFTER APPLY snapshot...`);
+  const afterApplySnapshot = await captureRawSnapshot(screenId, "afterApply");
+  rawSnapshots.push(afterApplySnapshot);
+  logs.push(`[ForceLayout] AFTER APPLY: mode=${afterApplySnapshot.mapped.contentMode}, layout=${afterApplySnapshot.mapped.layoutName || "-"}`);
 
   // === STEP 3: VERIFY (with 1 retry) ===
   logs.push(`[ForceLayout] === STEP 3: Verify (attempt 1) ===`);
@@ -1426,6 +1525,32 @@ export async function ensureScreenUsesElevizionLayout(
   logs.push(...verifyResult.logs);
   screenshotTimestamp = verifyResult.screenshotTimestamp;
   afterLayoutName = verifyResult.currentLayoutName;
+
+  // === CAPTURE RAW SNAPSHOT: AFTER VERIFY ===
+  logs.push(`[ForceLayout] Capturing AFTER VERIFY snapshot...`);
+  const afterVerifySnapshot = await captureRawSnapshot(screenId, "afterVerify");
+  rawSnapshots.push(afterVerifySnapshot);
+  logs.push(`[ForceLayout] AFTER VERIFY: mode=${afterVerifySnapshot.mapped.contentMode}, layout=${afterVerifySnapshot.mapped.layoutName || "-"}`);
+
+  // === CHECK: If contentMode is still "unknown", we cannot make a reliable decision ===
+  if (afterVerifySnapshot.mapped.contentMode === "unknown") {
+    logs.push(`[ForceLayout] WARNING: Cannot read screen content mode - verify unavailable`);
+    logs.push(`[ForceLayout] Available keys: ${afterVerifySnapshot.topLevelKeys.join(", ")}`);
+    logs.push(`[ForceLayout] Warnings: ${afterVerifySnapshot.warnings.join("; ")}`);
+    return {
+      ok: false,
+      verified: false,
+      verifyUnavailable: true,
+      layoutId,
+      layoutName,
+      beforeLayoutName,
+      afterLayoutName: afterVerifySnapshot.mapped.layoutName || undefined,
+      screenshotTimestamp,
+      error: "VERIFY_UNAVAILABLE: Cannot read screen content mode from Yodeck response",
+      logs,
+      rawSnapshots,
+    };
+  }
 
   if (verifyResult.ok && verifyResult.verified) {
     logs.push(`[ForceLayout] SUCCESS on first attempt`);
@@ -1441,6 +1566,7 @@ export async function ensureScreenUsesElevizionLayout(
       afterLayoutName,
       screenshotTimestamp,
       logs,
+      rawSnapshots,
     };
   }
 
@@ -1459,8 +1585,9 @@ export async function ensureScreenUsesElevizionLayout(
       screenshotTimestamp,
       layoutId, 
       layoutName, 
-      error: "SCREEN_LAYOUT_STUCK (PERMANENT) - Reset failed on retry", 
-      logs 
+      error: "RESET_FAILED_ON_RETRY", 
+      logs,
+      rawSnapshots,
     };
   }
 
@@ -1476,8 +1603,9 @@ export async function ensureScreenUsesElevizionLayout(
       screenshotTimestamp,
       layoutId, 
       layoutName, 
-      error: "SCREEN_LAYOUT_STUCK (PERMANENT) - Apply failed on retry", 
-      logs 
+      error: "APPLY_FAILED_ON_RETRY", 
+      logs,
+      rawSnapshots,
     };
   }
 
@@ -1487,6 +1615,38 @@ export async function ensureScreenUsesElevizionLayout(
   logs.push(...verifyResult.logs);
   screenshotTimestamp = verifyResult.screenshotTimestamp;
   afterLayoutName = verifyResult.currentLayoutName;
+
+  // === CAPTURE FINAL RAW SNAPSHOT ===
+  logs.push(`[ForceLayout] Capturing FINAL VERIFY snapshot...`);
+  const finalSnapshot = await captureRawSnapshot(screenId, "afterVerify");
+  // Replace the last afterVerify snapshot with this final one
+  const existingAfterVerifyIndex = rawSnapshots.findIndex(s => s.step === "afterVerify");
+  if (existingAfterVerifyIndex >= 0) {
+    rawSnapshots[existingAfterVerifyIndex] = finalSnapshot;
+  } else {
+    rawSnapshots.push(finalSnapshot);
+  }
+  logs.push(`[ForceLayout] FINAL: mode=${finalSnapshot.mapped.contentMode}, layout=${finalSnapshot.mapped.layoutName || "-"}`);
+
+  // === CHECK: If contentMode is still "unknown", we cannot mark as PERMANENT ===
+  if (finalSnapshot.mapped.contentMode === "unknown") {
+    logs.push(`[ForceLayout] WARNING: Cannot read screen content mode after retry - verify unavailable`);
+    logs.push(`[ForceLayout] Available keys: ${finalSnapshot.topLevelKeys.join(", ")}`);
+    logs.push(`[ForceLayout] Warnings: ${finalSnapshot.warnings.join("; ")}`);
+    return {
+      ok: false,
+      verified: false,
+      verifyUnavailable: true,
+      layoutId,
+      layoutName,
+      beforeLayoutName,
+      afterLayoutName: finalSnapshot.mapped.layoutName || undefined,
+      screenshotTimestamp,
+      error: "VERIFY_UNAVAILABLE: Cannot read screen content mode from Yodeck response (after retry)",
+      logs,
+      rawSnapshots,
+    };
+  }
 
   if (verifyResult.ok && verifyResult.verified) {
     logs.push(`[ForceLayout] SUCCESS on retry`);
@@ -1502,13 +1662,16 @@ export async function ensureScreenUsesElevizionLayout(
       afterLayoutName,
       screenshotTimestamp,
       logs,
+      rawSnapshots,
     };
   }
 
-  // === PERMANENT FAILURE ===
-  logs.push(`[ForceLayout] PERMANENT FAILURE - Screen layout stuck on '${afterLayoutName}'`);
+  // === VERIFIED PERMANENT FAILURE ===
+  // Only mark as PERMANENT if we can actually read the content mode and it's still wrong
+  logs.push(`[ForceLayout] VERIFIED PERMANENT FAILURE - Screen layout stuck on '${afterLayoutName}'`);
   logs.push(`[ForceLayout] beforeLayoutName: ${beforeLayoutName}`);
   logs.push(`[ForceLayout] afterLayoutName: ${afterLayoutName}`);
+  logs.push(`[ForceLayout] Final mode: ${finalSnapshot.mapped.contentMode}`);
   logs.push(`[ForceLayout] screenshotTimestamp: ${screenshotTimestamp}`);
   
   return {
@@ -1519,8 +1682,9 @@ export async function ensureScreenUsesElevizionLayout(
     beforeLayoutName,
     afterLayoutName,
     screenshotTimestamp,
-    error: "SCREEN_LAYOUT_STUCK (PERMANENT)",
+    error: `SCREEN_LAYOUT_STUCK: mode=${finalSnapshot.mapped.contentMode}, layout=${finalSnapshot.mapped.layoutName || "unknown"}`,
     logs,
+    rawSnapshots,
   };
 }
 

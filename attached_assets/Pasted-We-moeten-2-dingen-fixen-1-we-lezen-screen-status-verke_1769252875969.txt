@@ -1,0 +1,48 @@
+We moeten 2 dingen fixen: (1) we lezen screen status verkeerd (mode/layout = unknown), (2) we markeren PERMANENT terwijl verify niet eens betrouwbaar is.
+
+DOEL: /admin/yodeck-debug moet na elke stap de RAW screen JSON tonen + een correcte mapping naar:
+- contentMode (playlist/layout/media/app/schedule)
+- playlistId + playlistName
+- layoutId + layoutName
+- last_seen_online + last_screenshot
+Zonder dit mogen we nooit "STUCK (PERMANENT)" zeggen.
+
+A) Voeg RAW SNAPSHOTS toe aan force flow
+In forceApplyElevizionLayout(screenId, locationId):
+- Na elke stap (BEFORE, after reset push, after apply push, after verify) doe:
+  const raw = await yodeckClient.getScreenRaw(screenId)
+  log "RAW_SCREEN_KEYS: ..." (toon Object.keys + relevante nested keys)
+  bewaar rawSnapshot in response (max 1 level deep of stringify limited)
+- Toon dit in /admin/yodeck-debug onder "RAW JSON (Before/AfterReset/AfterApply/AfterVerify)".
+
+B) Fix screen status mapping (root cause "unknown")
+Maak yodeckScreenMapper.ts:
+- mapScreen(raw) zoekt defensief naar content mode en ids in meerdere mogelijke paden.
+- Log in debug EXACT welk pad gebruikt is, bv:
+  usedPath: "raw.screen_content.type" of "raw.content.type" etc.
+- Als niets gevonden: contentMode="unknown" maar dan MUST loggen welke velden wel bestaan.
+
+C) Fix VERIFY + PERMANENT logic
+- verifyScreenLayout() mag alleen PASS/FAIL geven als contentMode != "unknown".
+- Als contentMode == "unknown":
+  return { ok:false, code:"VERIFY_UNAVAILABLE", reason:"Cannot read screen content mode from Yodeck response", rawKeys:... }
+  => NIET permanent, NIET stuck.
+
+- SCREEN_LAYOUT_STUCK (PERMANENT) mag pas als:
+  1) apply stap is uitgevoerd (we hebben een HTTP 200/204 op update + push)
+  2) we kunnen contentMode lezen (niet unknown)
+  3) na 2 volledige retries staat contentMode nog steeds niet op layout of layoutName niet Elevizion.
+
+D) Check / implementeer de echte "Save & Push" flow
+- Zoek in Yodeck API docs bij "Screens" wat de juiste endpoints zijn voor:
+  1) screen content instellen (playlist/layout)
+  2) push/deploy naar screen (als apart endpoint)
+- Pas yodeckClient aan zodat we exact dezelfde call-sequence doen als de UI.
+- Log altijd: url, method, status, en response body bij errors.
+
+E) Kleine safety: stop met demo layouts overschrijven als we verify niet kunnen lezen
+Als verify_unavailable: toon waarschuwing in UI met raw JSON zodat we direct zien welke velden Yodeck echt teruggeeft.
+
+OPLEVERING:
+- /admin/yodeck-debug toont per run: logs + 4 raw snapshots + mapped status.
+- Force knop eindigt nooit meer met PERMANENT op basis van "unknown".
