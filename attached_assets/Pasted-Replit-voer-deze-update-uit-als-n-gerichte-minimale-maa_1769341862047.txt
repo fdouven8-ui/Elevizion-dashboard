@@ -1,0 +1,135 @@
+Replit — voer deze update uit als één gerichte, minimale maar “definitieve” fix om het Yodeck layout/playlist systeem betrouwbaar te maken. NIET refactoren, NIET hernoemen buiten wat nodig is. Focus: “het voelt werkend” + geen demo/ghost states + dashboard status klopt altijd.
+
+DOEL
+1) Reset is 100% betrouwbaar: nooit meer “null playlist” of “Yodeck blijft demo/auto-playlist hangen”.
+2) Layout apply is 100% betrouwbaar: na force/run staat screen écht op Elevizion layout.
+3) Baseline & Ads zones zijn altijd gevuld/gekoppeld (of duidelijk error met actie).
+4) Dashboard “Schermen” status (online/offline + mode + layout/playlist naam) klopt live met Yodeck.
+5) Debug is 1 knop: Force Fix + Live Sync, met duidelijke logs én links naar Yodeck.
+
+A) MAAK RESET ROBUUST (geen null)
+Probleem: PATCH screen_content {source_type:"playlist", source_id:null} faalt vaak (400) en legacy default_playlist=null werkt niet consistent.
+Fix: introduceer een “Elevizion Empty” playlist per workspace (idempotent) en reset ALTIJD naar die playlist.
+
+Implementatie:
+- Voeg helper toe: ensureEmptyResetPlaylist(workspaceId?) -> playlistId
+  - Naam: "Elevizion | EMPTY (reset)"
+  - Payload moet voldoen aan v2 playlists: { name, description, workspace, items: [], add_gaps:false, shuffle_content:false, default_duration:10 }
+  - Bestaat hij al? hergebruik.
+- Vervang forceResetScreenContent(screenId):
+  1) haal screen op -> bepaal workspace (screen.workspace.id of screen.workspace)
+  2) emptyPlaylistId = ensureEmptyResetPlaylist(workspace)
+  3) PATCH screen met EERST v2 format:
+     { screen_content: { source_type:"playlist", source_id: emptyPlaylistId } }
+     bij 400/422 -> fallback legacy:
+     { default_playlist_type:"playlist", default_playlist: emptyPlaylistId }
+  4) POST /screens/{id}/push
+  5) wacht 2s
+  6) verify dat mode == playlist en source_id == emptyPlaylistId (via mapper)
+  7) als verify niet kan: niet permanent markeren, maar log “RESET_VERIFY_UNAVAILABLE”.
+
+B) LAYOUT APPLY ROBUUST + “HARD VERIFY”
+- applyElevizionLayoutToScreen(screenId, layoutId):
+  1) PATCH v2:
+     { screen_content: { source_type:"layout", source_id: layoutId } }
+     fallback legacy:
+     { default_playlist_type:"layout", default_playlist: layoutId }
+  2) POST push
+  3) verify loop 3 pogingen (3s, 5s, 8s) met mapper:
+     - success als (mode == "layout" AND (layoutId match OR layoutName startsWith "Elevizion"))
+  4) als 3 pogingen fail -> voer 1 volledige retry uit:
+     reset -> apply -> verify (nogmaals)
+  5) als nog fail -> return fout “SCREEN_LAYOUT_APPLY_FAILED” (geen PERMANENT tenzij je echt mode/layout kunt lezen en ziet dat het fout blijft).
+
+C) LAYOUT CREATION FIX: REGIONS STRUCTUUR CORRECT (v2)
+Je had eerder 400 “regions missing required fields”. Maak create layout payload EXACT volgens docs:
+- resolution_width: 1920
+- resolution_height: 1080
+- regions: array met 2 regions, elk met verplichte velden:
+  - name
+  - top, left, width, height
+  - zindex
+  - duration (0 is ok als toegestaan; anders 10)
+  - res_width, res_height
+  - order
+  - playlist: <playlistId> (of items/whatever v2 verlangt) — gebruik playlist id’s voor BASE en ADS
+- BASE region: left=0, top=0, width=576 (30%), height=1080, zindex=1, order=0, res_width=576, res_height=1080
+- ADS region: left=576, top=0, width=1344 (70%), height=1080, zindex=2, order=1, res_width=1344, res_height=1080
+- Zorg dat je layout naam begint met: "Elevizion Standard | <LocatieNaam>"
+
+Let op: Als de layouts endpoint een andere field verwacht (bv. playlist object), implementeer een kleine “payload adapter”:
+- probeer eerst met playlist: <id>
+- als 400 met melding over playlist field -> probeer variant met playlist: { id: <id> }
+Log altijd welke variant succesvol was.
+
+D) BASELINE SEEDING FIX (upload 404)
+In logs: “Uploading baseline placeholder asset… HTTP 404”. Fix dat.
+- Controleer dat uploadBaselineAsset() de juiste v2 media upload flow gebruikt (2-step presigned) en juiste endpoint path.
+- Zorg dat baseline asset upload dezelfde bewezen flow gebruikt als ad video upload (create media -> get upload url -> PUT -> confirm).
+- Tag baseline media met: elevizion:baseline
+- Voeg idempotency: als media met tag elevizion:baseline bestaat -> niet opnieuw uploaden.
+
+Na baseline upload:
+- ensureBaselinePlaylist() moet:
+  - playlist “Baseline | <LocatieNaam>” aanmaken met items:[]
+  - als playlist leeg is -> voeg baseline media item toe via PATCH/PUT playlist items volgens v2 (zoek juiste endpoint: PATCH /playlists/{id} of dedicated items endpoint)
+  - als playlist items endpoint onbekend: fallback: laat playlist leeg maar geef UI waarschuwing “Baseline leeg — voeg handmatig content toe”.
+
+E) ADS PLAYLIST KOPPELING (ZONE)
+- ADS zone moet altijd op de ads playlist staan:
+  - Ofwel tagbased playlist id (27644453 etc)
+  - Ofwel per locatie een “Ads | <LocatieNaam>” playlist die gevuld wordt door tagbased publishing.
+- Zorg dat createPlaylistForTag() altijd items:[] meestuurt (blijft zo).
+
+F) DASHBOARD STATUS: LIVE SYNC + JUISTE VELDEN
+Fix dat “Schermen” soms offline toont terwijl Yodeck online is.
+- Update mapper definitief:
+  - online = state.online (bool) of player_status.online etc; als niet gevonden -> "unknown"
+  - mode = screen_content.source_type ("playlist"|"layout"|…)
+  - sourceId = screen_content.source_id
+  - sourceName = screen_content.source_name
+- In /screens list API: voeg velden toe: yodeckOnline, yodeckMode, yodeckSourceName, yodeckLastSeen (indien beschikbaar), yodeckScreenshotTimestamp (als aanwezig)
+- Maak “Sync status” knop op /Schermen pagina:
+  - roept endpoint POST /api/admin/yodeck/sync (of per screen /sync/:id)
+  - haalt live data op voor alle gekoppelde screens, update DB cache + return timestamp
+  - UI toont “Laatst gesynchroniseerd: …”
+- Zorg dat de UI label “Online/Offline” gebaseerd is op yodeckOnline wanneer beschikbaar, niet op oude cached velden.
+
+G) DEBUG PAGINA: ALTIJD BEREIKBAAR + 2 KNOPPEN
+- Route: /admin/yodeck-debug (server + client routes correct)
+- Dropdown met gekoppelde screens
+- Knoppen:
+  1) “Force Fix (reset → apply layout → verify)” (roept POST /api/admin/yodeck-debug/force?screenId=…)
+  2) “Live Sync” (GET /api/admin/yodeck-debug/status?screenId=…)
+- Toon altijd:
+  - screen_content.source_type/source_id/source_name (GROUND TRUTH)
+  - online status (GROUND TRUTH)
+  - BEFORE/AFTER snapshots (mode/name/id/online)
+  - volledige request payloads en response statuscodes (maar geen secrets)
+  - directe links naar Yodeck resources (screen/layout/playlist/media) via generateResourceUrls()
+
+H) GUARDRAILS (geen rommel / geen regressies)
+- Zet feature flags:
+  - YODECK_V2_WRITE_ENABLED=true default
+  - YODECK_LEGACY_FALLBACK=true
+- Nooit meer PERMANENT op “unknown/verify unavailable”.
+- Alleen PERMANENT als:
+  - mode is leesbaar én != expected na volledige retry
+- Voeg 1 health check toe in Systeemcheck:
+  - “Yodeck screen_content parsing OK” (pakt source_type/source_id/source_name)
+  - “Empty reset playlist exists”
+  - “Elevizion layout naming policy ok”
+
+ACCEPTATIECRITERIA (MOET SLAGEN)
+1) Force Fix op test scherm eindigt met:
+   - Mode = layout
+   - Layout naam begint met “Elevizion”
+   - Online = true (of “unknown” als niet beschikbaar, maar geen false)
+2) In Yodeck zie je bij Screen Content: Layout = “Elevizion Standard | …”
+3) In Dashboard /Schermen staat dezelfde status (layout/online) na 1x “Sync status”.
+4) Geen demo layout meer zichtbaar na force fix.
+5) Geen 400 errors meer voor playlist create (items:[] altijd aanwezig).
+
+Werk in kleine commits maar lever één complete PR/patch. Voeg waar nodig logging toe, maar hou het netjes.
+
+Start met A + F (zodat het meteen “voelt werkend”), daarna B/C/D/E, dan G/H.

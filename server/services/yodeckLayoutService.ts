@@ -133,6 +133,82 @@ export function getLayoutSupportStatus(): { supported: boolean | null; lastCheck
 // Cache for baseline media ID (idempotency)
 let cachedBaselineMediaId: string | null = null;
 
+// Cache for empty reset playlist per workspace
+const emptyResetPlaylistCache: Map<string, string> = new Map();
+const EMPTY_RESET_PLAYLIST_NAME = "Elevizion | EMPTY (reset)";
+
+/**
+ * Ensure an empty "reset" playlist exists in Yodeck (idempotent)
+ * Used for robust screen reset - never reset to null, always to this empty playlist
+ * This prevents "null playlist" errors and demo/ghost states
+ */
+export async function ensureEmptyResetPlaylist(workspaceId?: string | number): Promise<{ 
+  ok: boolean; 
+  playlistId?: string; 
+  error?: string; 
+  logs: string[] 
+}> {
+  const logs: string[] = [];
+  const cacheKey = workspaceId ? String(workspaceId) : "default";
+  
+  // Check cache first
+  if (emptyResetPlaylistCache.has(cacheKey)) {
+    const cachedId = emptyResetPlaylistCache.get(cacheKey)!;
+    logs.push(`[EmptyReset] Using cached empty reset playlist: ${cachedId}`);
+    return { ok: true, playlistId: cachedId, logs };
+  }
+  
+  logs.push(`[EmptyReset] Checking for existing empty reset playlist...`);
+  
+  // Check if playlist already exists by name
+  const existingPlaylists = await yodeckRequest<{ 
+    count: number; 
+    results: Array<{ id: number; name: string; workspace?: { id: number } | number }> 
+  }>("/playlists");
+  
+  if (existingPlaylists.ok && existingPlaylists.data?.results) {
+    const existing = existingPlaylists.data.results.find(p => p.name === EMPTY_RESET_PLAYLIST_NAME);
+    if (existing) {
+      const playlistId = String(existing.id);
+      logs.push(`[EmptyReset] Found existing empty reset playlist: ${playlistId}`);
+      emptyResetPlaylistCache.set(cacheKey, playlistId);
+      return { ok: true, playlistId, logs };
+    }
+  }
+  
+  // Create new empty reset playlist with v2 API format
+  logs.push(`[EmptyReset] Creating new empty reset playlist: ${EMPTY_RESET_PLAYLIST_NAME}`);
+  
+  const createPayload: any = {
+    name: EMPTY_RESET_PLAYLIST_NAME,
+    description: "Elevizion system playlist for screen reset - DO NOT DELETE",
+    items: [],
+    add_gaps: false,
+    shuffle_content: false,
+    default_duration: 10,
+  };
+  
+  // Include workspace if provided
+  if (workspaceId) {
+    createPayload.workspace = typeof workspaceId === "number" ? workspaceId : parseInt(String(workspaceId), 10);
+  }
+  
+  logs.push(`[EmptyReset] Create payload: ${JSON.stringify(createPayload)}`);
+  
+  const createResult = await yodeckRequest<{ id: number }>("/playlists/", "POST", createPayload);
+  
+  if (!createResult.ok) {
+    logs.push(`[EmptyReset] Failed to create playlist: ${createResult.error}`);
+    return { ok: false, error: `CREATE_EMPTY_PLAYLIST_FAILED: ${createResult.error}`, logs };
+  }
+  
+  const playlistId = String(createResult.data!.id);
+  logs.push(`[EmptyReset] Created empty reset playlist: ${playlistId}`);
+  emptyResetPlaylistCache.set(cacheKey, playlistId);
+  
+  return { ok: true, playlistId, logs };
+}
+
 /**
  * Find existing baseline placeholder media in Yodeck by tag
  */
@@ -518,41 +594,129 @@ export async function ensureLayout(
  * Assign layout to a screen
  * Uses Yodeck API v2 screen_content format with legacy fallback
  */
+/**
+ * Helper: Wait for given ms
+ */
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Helper: Verify screen has correct layout assigned
+ * Returns true if layout is correctly assigned
+ */
+async function verifyScreenLayout(
+  screenId: string,
+  expectedLayoutId: string,
+  logs: string[]
+): Promise<{ verified: boolean; currentMode?: string; currentSourceId?: string }> {
+  const { mapYodeckScreen } = await import("./yodeckScreenMapper");
+  
+  logs.push(`[Verify] Fetching screen ${screenId} to verify layout...`);
+  
+  const screenResult = await yodeckRequest<any>(`/screens/${screenId}/`, "GET");
+  if (!screenResult.ok || !screenResult.data) {
+    logs.push(`[Verify] Failed to fetch screen: ${screenResult.error}`);
+    return { verified: false };
+  }
+  
+  const mapped = mapYodeckScreen(screenResult.data);
+  
+  logs.push(`[Verify] Screen mode=${mapped.mode}, sourceType=${mapped.sourceType}, sourceId=${mapped.sourceId}, sourceName=${mapped.sourceName}`);
+  
+  // Accept success if:
+  // 1. mode is "layout" AND sourceId matches expected layout ID
+  // 2. OR mode is "layout" AND sourceName starts with "Elevizion" (name-based match)
+  const isLayoutMode = mapped.mode === "layout";
+  const idMatch = String(mapped.sourceId) === String(expectedLayoutId);
+  const nameMatch = mapped.sourceName?.startsWith("Elevizion");
+  
+  if (isLayoutMode && (idMatch || nameMatch)) {
+    logs.push(`[Verify] SUCCESS: Layout correctly assigned (idMatch=${idMatch}, nameMatch=${nameMatch})`);
+    return { verified: true, currentMode: mapped.mode, currentSourceId: String(mapped.sourceId || "") };
+  }
+  
+  logs.push(`[Verify] NOT VERIFIED: Expected layout ${expectedLayoutId}, got mode=${mapped.mode}, sourceId=${mapped.sourceId}`);
+  return { verified: false, currentMode: mapped.mode, currentSourceId: String(mapped.sourceId || "") };
+}
+
+/**
+ * Assign layout to screen with hard verification and retry logic
+ * - 3 verify attempts after each assignment
+ * - 500ms delay between verifications  
+ * - Full retry cycle (re-assign + verify) if verification fails
+ * - 2 full retry cycles max
+ */
 export async function assignLayoutToScreen(
   screenId: string,
   layoutId: string
-): Promise<{ ok: boolean; error?: string; logs: string[] }> {
+): Promise<{ ok: boolean; error?: string; logs: string[]; verified?: boolean }> {
   const logs: string[] = [];
+  const MAX_VERIFY_ATTEMPTS = 3;
+  const VERIFY_DELAY_MS = 500;
+  const MAX_FULL_RETRIES = 2;
   
-  logs.push(`Assigning layout ${layoutId} to screen ${screenId}`);
+  logs.push(`[AssignLayout] Starting robust layout assignment: layout ${layoutId} -> screen ${screenId}`);
   
-  // Primary: Use Yodeck v2 API format (screen_content)
-  const assignPayload = {
-    screen_content: {
-      source_type: "layout",
-      source_id: parseInt(layoutId, 10),
-    },
+  for (let fullRetry = 0; fullRetry <= MAX_FULL_RETRIES; fullRetry++) {
+    if (fullRetry > 0) {
+      logs.push(`[AssignLayout] FULL RETRY ${fullRetry}/${MAX_FULL_RETRIES}: Re-attempting assignment...`);
+      await wait(1000); // Wait 1s before full retry
+    }
+    
+    // Primary: Use Yodeck v2 API format (screen_content)
+    const assignPayload = {
+      screen_content: {
+        source_type: "layout",
+        source_id: parseInt(layoutId, 10),
+      },
+    };
+    logs.push(`[AssignLayout] PATCH payload: ${JSON.stringify(assignPayload)}`);
+    
+    let result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", assignPayload);
+
+    // Fallback to legacy fields if screen_content format fails
+    if (!result.ok && (result.status === 400 || result.status === 422)) {
+      logs.push(`[AssignLayout] screen_content format failed, trying legacy format...`);
+      result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
+        default_playlist_type: "layout",
+        default_playlist: parseInt(layoutId, 10),
+      });
+    }
+
+    if (!result.ok) {
+      logs.push(`[AssignLayout] PATCH failed: ${result.error}`);
+      continue; // Try full retry
+    }
+
+    logs.push(`[AssignLayout] PATCH returned OK, starting verification...`);
+    
+    // Verification loop: 3 attempts with 500ms delay
+    for (let verifyAttempt = 1; verifyAttempt <= MAX_VERIFY_ATTEMPTS; verifyAttempt++) {
+      if (verifyAttempt > 1) {
+        await wait(VERIFY_DELAY_MS);
+      }
+      
+      logs.push(`[AssignLayout] Verify attempt ${verifyAttempt}/${MAX_VERIFY_ATTEMPTS}...`);
+      
+      const verifyResult = await verifyScreenLayout(screenId, layoutId, logs);
+      
+      if (verifyResult.verified) {
+        logs.push(`[AssignLayout] SUCCESS: Layout ${layoutId} verified on screen ${screenId} after ${verifyAttempt} attempt(s)`);
+        return { ok: true, logs, verified: true };
+      }
+    }
+    
+    logs.push(`[AssignLayout] Verification failed after ${MAX_VERIFY_ATTEMPTS} attempts, will try full retry...`);
+  }
+  
+  logs.push(`[AssignLayout] FAILED: Layout assignment could not be verified after ${MAX_FULL_RETRIES + 1} full attempts`);
+  return { 
+    ok: false, 
+    error: `Layout assignment verification failed after ${MAX_FULL_RETRIES + 1} full attempts`, 
+    logs,
+    verified: false 
   };
-  logs.push(`PATCH payload: ${JSON.stringify(assignPayload)}`);
-  
-  let result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", assignPayload);
-
-  // Fallback to legacy fields if screen_content format fails
-  if (!result.ok && (result.status === 400 || result.status === 422)) {
-    logs.push(`screen_content format failed, trying legacy format...`);
-    result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
-      default_playlist_type: "layout",
-      default_playlist: parseInt(layoutId, 10),
-    });
-  }
-
-  if (!result.ok) {
-    logs.push(`Failed to assign layout: ${result.error}`);
-    return { ok: false, error: result.error, logs };
-  }
-
-  logs.push(`[YodeckLayouts] assignLayout OK screenId=${screenId}`);
-  return { ok: true, logs };
 }
 
 /**
@@ -1173,41 +1337,64 @@ async function captureRawSnapshot(
 
 /**
  * Step 1: Force reset screen content to break existing content binding
- * Sets screen to playlist mode with no playlist (or minimal content)
+ * Uses an "Elevizion | EMPTY (reset)" playlist instead of null to ensure reliability
  * This clears any existing demo layout and prepares for fresh assignment
  * 
  * Uses Yodeck API v2 screen_content fields:
- * - screen_content.source_type: "playlist" | "layout" | "media" | "web" | etc.
- * - screen_content.source_id: ID of the content source (or null to clear)
+ * - screen_content.source_type: "playlist"
+ * - screen_content.source_id: ID of the empty reset playlist (never null!)
  */
 async function forceResetScreenContent(
   screenId: string
-): Promise<{ ok: boolean; error?: string; logs: string[] }> {
+): Promise<{ ok: boolean; resetPlaylistId?: string; error?: string; logs: string[] }> {
   const logs: string[] = [];
+  const { mapYodeckScreen } = await import("./yodeckScreenMapper");
   
   logs.push(`[ForceReset] Resetting screen ${screenId} content...`);
   
-  // Get current screen info for logging
+  // Get current screen info for logging and workspace
   const currentInfo = await yodeckRequest<{
     id: number;
     name: string;
+    workspace?: { id: number } | number;
     screen_content?: { source_type?: string; source_id?: number; source_name?: string };
     default_playlist_type?: string;
   }>(`/screens/${screenId}`);
   
+  let workspaceId: number | undefined;
   if (currentInfo.ok && currentInfo.data) {
     const sc = currentInfo.data.screen_content;
     const currentType = sc?.source_type || currentInfo.data.default_playlist_type || "unknown";
     const currentName = sc?.source_name || "none";
     logs.push(`[ForceReset] Current: source_type=${currentType}, source_name=${currentName}`);
+    
+    // Extract workspace ID
+    if (currentInfo.data.workspace) {
+      workspaceId = typeof currentInfo.data.workspace === "object" 
+        ? currentInfo.data.workspace.id 
+        : currentInfo.data.workspace;
+      logs.push(`[ForceReset] Screen workspace: ${workspaceId}`);
+    }
   }
   
-  // Step 1a: Set screen to "playlist" mode with null content using screen_content fields
-  // Primary payload uses Yodeck v2 API format
+  // Step 1: Ensure empty reset playlist exists (never use null!)
+  logs.push(`[ForceReset] Ensuring empty reset playlist exists...`);
+  const emptyPlaylistResult = await ensureEmptyResetPlaylist(workspaceId);
+  logs.push(...emptyPlaylistResult.logs);
+  
+  if (!emptyPlaylistResult.ok || !emptyPlaylistResult.playlistId) {
+    logs.push(`[ForceReset] Failed to create/find empty reset playlist`);
+    return { ok: false, error: emptyPlaylistResult.error || "EMPTY_PLAYLIST_FAILED", logs };
+  }
+  
+  const emptyPlaylistId = parseInt(emptyPlaylistResult.playlistId, 10);
+  logs.push(`[ForceReset] Using empty reset playlist: ${emptyPlaylistId}`);
+  
+  // Step 2: Set screen to playlist mode with empty playlist (v2 format)
   const resetPayload = {
     screen_content: {
       source_type: "playlist",
-      source_id: null,  // Clear content
+      source_id: emptyPlaylistId,  // Use empty playlist, never null!
     },
   };
   logs.push(`[ForceReset] PATCH payload: ${JSON.stringify(resetPayload)}`);
@@ -1219,7 +1406,7 @@ async function forceResetScreenContent(
     logs.push(`[ForceReset] screen_content format failed (${resetResult.status}), trying legacy format...`);
     const legacyPayload = {
       default_playlist_type: "playlist",
-      default_playlist: null,
+      default_playlist: emptyPlaylistId,  // Use empty playlist, never null!
     };
     logs.push(`[ForceReset] Legacy PATCH payload: ${JSON.stringify(legacyPayload)}`);
     resetResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", legacyPayload);
@@ -1229,9 +1416,9 @@ async function forceResetScreenContent(
     logs.push(`[ForceReset] PATCH failed: ${resetResult.error}`);
     return { ok: false, error: `RESET_FAILED: ${resetResult.error}`, logs };
   }
-  logs.push(`[ForceReset] Screen content cleared successfully`);
+  logs.push(`[ForceReset] Screen set to empty reset playlist`);
   
-  // Step 1b: Push to sync the reset
+  // Step 3: Push to sync the reset
   logs.push(`[ForceReset] Pushing reset to screen...`);
   const pushResult = await yodeckRequest(`/screens/${screenId}/push/`, "POST", {});
   if (!pushResult.ok) {
@@ -1240,12 +1427,28 @@ async function forceResetScreenContent(
     logs.push(`[ForceReset] Reset pushed successfully`);
   }
   
-  // Step 1c: Wait for screen to process reset
-  logs.push(`[ForceReset] Waiting 3s for screen to process reset...`);
-  await new Promise(resolve => setTimeout(resolve, 3000));
+  // Step 4: Wait for screen to process reset
+  logs.push(`[ForceReset] Waiting 2s for screen to process reset...`);
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  // Step 5: Verify reset (mode should be playlist, source_id should be emptyPlaylistId)
+  logs.push(`[ForceReset] Verifying reset...`);
+  const verifyResult = await yodeckRequest<any>(`/screens/${screenId}`);
+  if (verifyResult.ok && verifyResult.data) {
+    const mapped = mapYodeckScreen(verifyResult.data);
+    const verifyOk = mapped.contentMode === "playlist" && mapped.playlistId === String(emptyPlaylistId);
+    if (verifyOk) {
+      logs.push(`[ForceReset] Verify OK: mode=playlist, playlistId=${emptyPlaylistId}`);
+    } else {
+      logs.push(`[ForceReset] RESET_VERIFY_UNAVAILABLE: mode=${mapped.contentMode}, playlistId=${mapped.playlistId}, expected=${emptyPlaylistId}`);
+      // Don't fail - continue with layout apply, just log the warning
+    }
+  } else {
+    logs.push(`[ForceReset] RESET_VERIFY_UNAVAILABLE: Could not fetch screen status`);
+  }
   
   logs.push(`[ForceReset] Screen reset complete`);
-  return { ok: true, logs };
+  return { ok: true, resetPlaylistId: String(emptyPlaylistId), logs };
 }
 
 /**

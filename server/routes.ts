@@ -15721,11 +15721,12 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
-  // Sync endpoint: force refresh from Yodeck API
+  // Sync endpoint: force refresh from Yodeck API and update screen status in DB
   app.post("/api/admin/yodeck-debug/sync", requireAdminAccess, async (req, res) => {
     try {
       const { yodeckPublishService } = await import("./services/yodeckPublishService");
       const { probeLayoutsSupport } = await import("./services/yodeckLayoutService");
+      const { mapYodeckScreen } = await import("./services/yodeckScreenMapper");
       
       console.log("[YodeckDebug] Starting Yodeck sync...");
       
@@ -15735,19 +15736,70 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       // Get fresh screen/playlist counts from Yodeck
       const caps = await yodeckPublishService.getCapabilities();
       
-      // Get screen count
       const token = process.env.YODECK_AUTH_TOKEN;
       let screenCount = 0;
       let layoutCount = 0;
       let playlistCount = 0;
+      let screensUpdated = 0;
       
       if (token) {
+        // Fetch all screens with full data
         const screensRes = await fetch("https://app.yodeck.com/api/v2/screens", {
           headers: { "Authorization": `Token ${token}` },
         });
         if (screensRes.ok) {
-          const data = await screensRes.json() as { count: number };
+          const data = await screensRes.json() as { 
+            count: number; 
+            results: Array<{ 
+              id: number; 
+              name: string;
+              state?: { online?: boolean; last_seen?: string };
+              screen_content?: { source_type?: string; source_id?: number; source_name?: string };
+            }> 
+          };
           screenCount = data.count || 0;
+          
+          // Update each screen in our DB
+          if (data.results) {
+            const dbScreens = await storage.getScreens();
+            
+            for (const yodeckScreen of data.results) {
+              const yodeckId = String(yodeckScreen.id);
+              
+              // Find matching screen in our DB
+              const dbScreen = dbScreens.find(s => 
+                s.yodeckPlayerId === yodeckId || 
+                String(s.yodeckPlayerId) === yodeckId
+              );
+              
+              if (dbScreen) {
+                // Map Yodeck screen to get parsed status
+                const mapped = mapYodeckScreen(yodeckScreen);
+                
+                // Determine online status
+                const newStatus = mapped.isOnline === true ? "online" 
+                  : mapped.isOnline === false ? "offline" 
+                  : "unknown";
+                
+                // Parse lastSeen
+                let lastSeenAt: Date | null = null;
+                if (mapped.lastSeenOnline) {
+                  try {
+                    lastSeenAt = new Date(mapped.lastSeenOnline);
+                  } catch {}
+                }
+                
+                // Update screen in DB
+                await storage.updateScreen(dbScreen.id, {
+                  status: newStatus,
+                  lastSeenAt: lastSeenAt || undefined,
+                });
+                screensUpdated++;
+                
+                console.log(`[YodeckDebug] Updated ${dbScreen.screenId}: status=${newStatus}, lastSeen=${lastSeenAt?.toISOString() || "-"}`);
+              }
+            }
+          }
         }
         
         const layoutsRes = await fetch("https://app.yodeck.com/api/v2/layouts", {
@@ -15768,11 +15820,12 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       }
       
       const syncedAt = new Date().toISOString();
-      console.log(`[YodeckDebug] Sync complete: ${screenCount} screens, ${layoutCount} layouts, ${playlistCount} playlists`);
+      console.log(`[YodeckDebug] Sync complete: ${screenCount} screens (${screensUpdated} updated), ${layoutCount} layouts, ${playlistCount} playlists`);
       
       res.json({
         syncedAt,
         screenCount,
+        screensUpdated,
         layoutCount,
         playlistCount,
         capabilities: caps,
