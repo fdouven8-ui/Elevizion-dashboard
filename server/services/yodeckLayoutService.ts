@@ -516,6 +516,7 @@ export async function ensureLayout(
 
 /**
  * Assign layout to a screen
+ * Uses Yodeck API v2 screen_content format with legacy fallback
  */
 export async function assignLayoutToScreen(
   screenId: string,
@@ -525,11 +526,25 @@ export async function assignLayoutToScreen(
   
   logs.push(`Assigning layout ${layoutId} to screen ${screenId}`);
   
-  // Update screen with layout assignment
-  const result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
-    default_playlist_type: "layout",
-    default_playlist: parseInt(layoutId, 10),
-  });
+  // Primary: Use Yodeck v2 API format (screen_content)
+  const assignPayload = {
+    screen_content: {
+      source_type: "layout",
+      source_id: parseInt(layoutId, 10),
+    },
+  };
+  logs.push(`PATCH payload: ${JSON.stringify(assignPayload)}`);
+  
+  let result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", assignPayload);
+
+  // Fallback to legacy fields if screen_content format fails
+  if (!result.ok && (result.status === 400 || result.status === 422)) {
+    logs.push(`screen_content format failed, trying legacy format...`);
+    result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
+      default_playlist_type: "layout",
+      default_playlist: parseInt(layoutId, 10),
+    });
+  }
 
   if (!result.ok) {
     logs.push(`Failed to assign layout: ${result.error}`);
@@ -543,6 +558,7 @@ export async function assignLayoutToScreen(
 /**
  * Fallback: assign playlists directly to screen schedule
  * Used when layouts are not supported
+ * Uses Yodeck API v2 screen_content format with legacy fallback
  */
 export async function applyFallbackSchedule(
   locationId: string,
@@ -556,14 +572,25 @@ export async function applyFallbackSchedule(
   logs.push(`Screen: ${screenId}, Baseline: ${baselinePlaylistId}, Ads: ${adsPlaylistId}`);
   
   // For fallback mode, we just assign the ads tagbased playlist
-  // The baseline playlist would need to be manually added to the schedule
-  // or we interleave them in a single playlist
+  // Primary: Use Yodeck v2 API format (screen_content)
+  const assignPayload = {
+    screen_content: {
+      source_type: "playlist",
+      source_id: parseInt(adsPlaylistId, 10),
+    },
+  };
+  logs.push(`PATCH payload: ${JSON.stringify(assignPayload)}`);
   
-  // Simple approach: assign ads playlist as default
-  const result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
-    default_playlist_type: "playlist",
-    default_playlist: parseInt(adsPlaylistId, 10),
-  });
+  let result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", assignPayload);
+
+  // Fallback to legacy fields if screen_content format fails
+  if (!result.ok && (result.status === 400 || result.status === 422)) {
+    logs.push(`screen_content format failed, trying legacy format...`);
+    result = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
+      default_playlist_type: "playlist",
+      default_playlist: parseInt(adsPlaylistId, 10),
+    });
+  }
 
   if (!result.ok) {
     logs.push(`Failed to assign ads playlist: ${result.error}`);
@@ -1148,6 +1175,10 @@ async function captureRawSnapshot(
  * Step 1: Force reset screen content to break existing content binding
  * Sets screen to playlist mode with no playlist (or minimal content)
  * This clears any existing demo layout and prepares for fresh assignment
+ * 
+ * Uses Yodeck API v2 screen_content fields:
+ * - screen_content.source_type: "playlist" | "layout" | "media" | "web" | etc.
+ * - screen_content.source_id: ID of the content source (or null to clear)
  */
 async function forceResetScreenContent(
   screenId: string
@@ -1160,29 +1191,45 @@ async function forceResetScreenContent(
   const currentInfo = await yodeckRequest<{
     id: number;
     name: string;
-    default_playlist_type: string;
-    default_playlist?: number;
-    current_layout?: { id: number; name: string };
+    screen_content?: { source_type?: string; source_id?: number; source_name?: string };
+    default_playlist_type?: string;
   }>(`/screens/${screenId}`);
   
   if (currentInfo.ok && currentInfo.data) {
-    const currentType = currentInfo.data.default_playlist_type;
-    const currentLayout = currentInfo.data.current_layout?.name || "none";
-    logs.push(`[ForceReset] Current: type=${currentType}, layout=${currentLayout}`);
+    const sc = currentInfo.data.screen_content;
+    const currentType = sc?.source_type || currentInfo.data.default_playlist_type || "unknown";
+    const currentName = sc?.source_name || "none";
+    logs.push(`[ForceReset] Current: source_type=${currentType}, source_name=${currentName}`);
   }
   
-  // Step 1a: Set screen to "playlist" mode with null/empty content
-  // This breaks the existing layout/playlist binding
-  const resetResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", {
-    default_playlist_type: "playlist",
-    default_playlist: null,  // Clear content
-  });
+  // Step 1a: Set screen to "playlist" mode with null content using screen_content fields
+  // Primary payload uses Yodeck v2 API format
+  const resetPayload = {
+    screen_content: {
+      source_type: "playlist",
+      source_id: null,  // Clear content
+    },
+  };
+  logs.push(`[ForceReset] PATCH payload: ${JSON.stringify(resetPayload)}`);
+  
+  let resetResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", resetPayload);
+  
+  // Fallback to legacy fields if screen_content format fails
+  if (!resetResult.ok && (resetResult.status === 400 || resetResult.status === 422)) {
+    logs.push(`[ForceReset] screen_content format failed (${resetResult.status}), trying legacy format...`);
+    const legacyPayload = {
+      default_playlist_type: "playlist",
+      default_playlist: null,
+    };
+    logs.push(`[ForceReset] Legacy PATCH payload: ${JSON.stringify(legacyPayload)}`);
+    resetResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", legacyPayload);
+  }
   
   if (!resetResult.ok) {
     logs.push(`[ForceReset] PATCH failed: ${resetResult.error}`);
     return { ok: false, error: `RESET_FAILED: ${resetResult.error}`, logs };
   }
-  logs.push(`[ForceReset] Screen content cleared (mode=playlist, playlist=null)`);
+  logs.push(`[ForceReset] Screen content cleared successfully`);
   
   // Step 1b: Push to sync the reset
   logs.push(`[ForceReset] Pushing reset to screen...`);
@@ -1204,6 +1251,11 @@ async function forceResetScreenContent(
 /**
  * Step 2: Apply Elevizion layout to screen (after reset)
  * Sets screen mode to LAYOUT with proper layoutId
+ * 
+ * Uses Yodeck API v2 screen_content fields:
+ * - screen_content.source_type: "layout"
+ * - screen_content.source_id: layoutId
+ * 
  * Endpoints used:
  *   - PATCH /screens/{id}/ for assignment
  *   - POST /screens/{id}/push/ for push
@@ -1220,15 +1272,28 @@ async function applyElevizionLayoutToScreen(
   logs.push(`[ApplyLayout] Layout ID: ${layoutId}`);
   logs.push(`[ApplyLayout] Layout Name: ${layoutName}`);
   
-  // Set screen to layout mode with Elevizion layout
+  // Set screen to layout mode using Yodeck v2 API format (screen_content)
   const assignPayload = {
-    default_playlist_type: "layout",
-    default_playlist: parseInt(layoutId, 10),
+    screen_content: {
+      source_type: "layout",
+      source_id: parseInt(layoutId, 10),
+    },
   };
   logs.push(`[ApplyLayout] Endpoint: PATCH /screens/${screenId}/`);
   logs.push(`[ApplyLayout] Payload: ${JSON.stringify(assignPayload)}`);
   
-  const assignResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", assignPayload);
+  let assignResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", assignPayload);
+  
+  // Fallback to legacy fields if screen_content format fails
+  if (!assignResult.ok && (assignResult.status === 400 || assignResult.status === 422)) {
+    logs.push(`[ApplyLayout] screen_content format failed (${assignResult.status}), trying legacy format...`);
+    const legacyPayload = {
+      default_playlist_type: "layout",
+      default_playlist: parseInt(layoutId, 10),
+    };
+    logs.push(`[ApplyLayout] Legacy Payload: ${JSON.stringify(legacyPayload)}`);
+    assignResult = await yodeckRequest(`/screens/${screenId}/`, "PATCH", legacyPayload);
+  }
   
   if (!assignResult.ok) {
     logs.push(`[ApplyLayout] Assignment FAILED: ${assignResult.error}`);
@@ -1294,11 +1359,20 @@ async function verifyScreenLayout(
       continue;
     }
     
-    logs.push(`[Verify] Attempt ${attempt + 1}: rawContentType="${lastScreenStatus.rawContentType}", mode="${lastScreenStatus.mode}", layout="${lastScreenStatus.layoutName || "-"}", isElevizion=${lastScreenStatus.isElevizionLayout}, online=${lastScreenStatus.isOnline}`);
+    logs.push(`[Verify] Attempt ${attempt + 1}: rawContentType="${lastScreenStatus.rawContentType}", mode="${lastScreenStatus.mode}", layoutId="${lastScreenStatus.layoutId || "-"}", layout="${lastScreenStatus.layoutName || "-"}", isElevizion=${lastScreenStatus.isElevizionLayout}, online=${lastScreenStatus.isOnline}`);
     
-    // Check if verification passed
-    if (lastScreenStatus.mode === "layout" && lastScreenStatus.isElevizionLayout) {
-      logs.push(`[Verify] SUCCESS on attempt ${attempt + 1}: Screen is on Elevizion layout '${lastScreenStatus.layoutName}'`);
+    // Check if verification passed (multiple success conditions)
+    // 1. Mode is layout AND name starts with "Elevizion"
+    // 2. Mode is layout AND layoutId matches expected
+    const isLayoutMode = lastScreenStatus.mode === "layout";
+    const isNameMatch = lastScreenStatus.isElevizionLayout;
+    const isIdMatch = lastScreenStatus.layoutId === expectedLayoutId;
+    
+    if (isLayoutMode && (isNameMatch || isIdMatch)) {
+      const reason = isNameMatch 
+        ? `name '${lastScreenStatus.layoutName}' starts with Elevizion` 
+        : `layoutId ${lastScreenStatus.layoutId} matches expected ${expectedLayoutId}`;
+      logs.push(`[Verify] SUCCESS on attempt ${attempt + 1}: Screen is on Elevizion layout (${reason})`);
       return {
         ok: true,
         verified: true,
@@ -1311,7 +1385,7 @@ async function verifyScreenLayout(
       };
     }
     
-    logs.push(`[Verify] Attempt ${attempt + 1}: Not yet on Elevizion layout, will retry...`);
+    logs.push(`[Verify] Attempt ${attempt + 1}: Not yet on Elevizion layout (isLayoutMode=${isLayoutMode}, isNameMatch=${isNameMatch}, isIdMatch=${isIdMatch}), will retry...`);
   }
   
   // All attempts failed

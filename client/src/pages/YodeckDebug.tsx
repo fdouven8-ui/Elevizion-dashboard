@@ -365,11 +365,32 @@ export default function YodeckDebug() {
               {/* Raw Keys Used - debugging info */}
               {statusData.rawKeysUsed && (
                 <div className="mt-4 p-3 bg-slate-100 rounded text-xs font-mono" data-testid="raw-keys-used">
-                  <p className="font-semibold mb-1">Parsed Fields:</p>
-                  <p>Mode: {statusData.rawKeysUsed.contentModeField || "-"} = "{statusData.rawKeysUsed.contentModeValue || "-"}"</p>
-                  <p>Online: {statusData.rawKeysUsed.onlineField || "-"}</p>
-                  <p>Layout ID: {statusData.rawKeysUsed.layoutIdField || "-"}</p>
-                  <p>Layout Name: {statusData.rawKeysUsed.layoutNameField || "-"}</p>
+                  <p className="font-semibold mb-1">Parsed Fields (from API):</p>
+                  <p>Mode: <span className="text-blue-600">{statusData.rawKeysUsed.contentModeField || "-"}</span> = "<span className="text-green-600">{statusData.rawKeysUsed.contentModeValue || "-"}</span>"</p>
+                  <p>Online: <span className="text-blue-600">{statusData.rawKeysUsed.onlineField || "-"}</span></p>
+                  <p>Layout/Playlist ID: <span className="text-blue-600">{statusData.rawKeysUsed.layoutIdField || statusData.rawKeysUsed.playlistIdField || "-"}</span></p>
+                  <p>Layout/Playlist Name: <span className="text-blue-600">{statusData.rawKeysUsed.layoutNameField || "-"}</span></p>
+                </div>
+              )}
+              
+              {/* Yodeck API v2 screen_content fields (most important for debugging) */}
+              {rawData?.raw?.screen_content && (
+                <div className="mt-2 p-3 bg-blue-50 border border-blue-200 rounded text-xs font-mono" data-testid="screen-content-fields">
+                  <p className="font-semibold mb-1 text-blue-700">screen_content Fields (GROUND TRUTH):</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <p className="text-slate-500">source_type:</p>
+                      <p className="font-bold" data-testid="source-type">{rawData.raw.screen_content.source_type || "null"}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500">source_id:</p>
+                      <p className="font-bold" data-testid="source-id">{rawData.raw.screen_content.source_id ?? "null"}</p>
+                    </div>
+                    <div>
+                      <p className="text-slate-500">source_name:</p>
+                      <p className="font-bold" data-testid="source-name">{rawData.raw.screen_content.source_name || "null"}</p>
+                    </div>
+                  </div>
                 </div>
               )}
 
