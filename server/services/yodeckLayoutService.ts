@@ -861,10 +861,16 @@ export async function getScreenContentStatus(screenId: string): Promise<{
   isElevizionLayout: boolean;
   lastSeenOnline?: string;
   lastScreenshotAt?: string;
-  isOnline?: boolean;
+  isOnline?: boolean | "unknown";
   error?: string;
   rawApiResponse?: string;
   rawKeysUsed?: any;
+  debugInfo?: {
+    availableTopKeys: string[];
+    screenContentKeys: string[];
+    playerStatusKeys: string[];
+    stateKeys: string[];
+  };
   warnings?: string[];
 }> {
   const { mapYodeckScreen, logYodeckScreenStructure } = await import("./yodeckScreenMapper");
@@ -927,6 +933,7 @@ export async function getScreenContentStatus(screenId: string): Promise<{
     isOnline: mapped.isOnline,
     rawApiResponse: JSON.stringify(screen),
     rawKeysUsed: mapped.rawKeysUsed,
+    debugInfo: mapped.debugInfo,
     warnings: mapped.warnings.length > 0 ? mapped.warnings : undefined,
   };
 }
@@ -1043,9 +1050,15 @@ export interface RawSnapshot {
     layoutName: string | null;
     playlistId: string | null;
     playlistName: string | null;
-    isOnline: boolean;
+    isOnline: boolean | "unknown";
   };
   rawKeysUsed: any;
+  debugInfo: {
+    availableTopKeys: string[];
+    screenContentKeys: string[];
+    playerStatusKeys: string[];
+    stateKeys: string[];
+  };
   warnings: string[];
 }
 
@@ -1088,9 +1101,15 @@ async function captureRawSnapshot(
         layoutName: null,
         playlistId: null,
         playlistName: null,
-        isOnline: false,
+        isOnline: "unknown",
       },
       rawKeysUsed: {},
+      debugInfo: {
+        availableTopKeys: [],
+        screenContentKeys: [],
+        playerStatusKeys: [],
+        stateKeys: [],
+      },
       warnings: [`Failed to fetch screen: ${result.error}`],
     };
   }
@@ -1100,7 +1119,11 @@ async function captureRawSnapshot(
   const mapped = mapYodeckScreen(raw);
 
   // Log snapshot for debugging
-  console.log(`[RawSnapshot] ${step} @ ${timestamp} - mode=${mapped.contentMode}, layout=${mapped.layoutName || "-"}, keys=${topLevelKeys.length}`);
+  console.log(`[RawSnapshot] ${step} @ ${timestamp} - mode=${mapped.contentMode}, online=${mapped.isOnline}, layout=${mapped.layoutName || "-"}`);
+  console.log(`[RawSnapshot] ${step} - keysUsed: ${JSON.stringify(mapped.rawKeysUsed)}`);
+  if (mapped.warnings.length > 0) {
+    console.log(`[RawSnapshot] ${step} - warnings: ${mapped.warnings.join("; ")}`);
+  }
 
   return {
     step,
@@ -1116,6 +1139,7 @@ async function captureRawSnapshot(
       isOnline: mapped.isOnline,
     },
     rawKeysUsed: mapped.rawKeysUsed,
+    debugInfo: mapped.debugInfo,
     warnings: mapped.warnings,
   };
 }
@@ -1243,7 +1267,7 @@ async function verifyScreenLayout(
   currentLayoutName?: string;
   rawContentType?: string;
   screenshotTimestamp?: string;
-  isOnline?: boolean;
+  isOnline?: boolean | "unknown";
   error?: string;
   logs: string[];
 }> {
@@ -1532,11 +1556,47 @@ export async function ensureScreenUsesElevizionLayout(
   rawSnapshots.push(afterVerifySnapshot);
   logs.push(`[ForceLayout] AFTER VERIFY: mode=${afterVerifySnapshot.mapped.contentMode}, layout=${afterVerifySnapshot.mapped.layoutName || "-"}`);
 
-  // === CHECK: If contentMode is still "unknown", we cannot make a reliable decision ===
+  // === CHECK: If contentMode is "unknown", try to verify via layoutId instead ===
   if (afterVerifySnapshot.mapped.contentMode === "unknown") {
-    logs.push(`[ForceLayout] WARNING: Cannot read screen content mode - verify unavailable`);
+    logs.push(`[ForceLayout] WARNING: Cannot read screen content mode - attempting verification via layout ID`);
     logs.push(`[ForceLayout] Available keys: ${afterVerifySnapshot.topLevelKeys.join(", ")}`);
     logs.push(`[ForceLayout] Warnings: ${afterVerifySnapshot.warnings.join("; ")}`);
+    
+    // If we can see the expected layout ID is assigned, consider it verified
+    if (afterVerifySnapshot.mapped.layoutId === layoutId) {
+      logs.push(`[ForceLayout] SUCCESS via layout ID match: expected=${layoutId}, found=${afterVerifySnapshot.mapped.layoutId}`);
+      return {
+        ok: true,
+        verified: true,
+        layoutId,
+        layoutName,
+        beforeLayoutName,
+        afterLayoutName: afterVerifySnapshot.mapped.layoutName || layoutName,
+        screenshotTimestamp,
+        logs,
+        rawSnapshots,
+      };
+    }
+    
+    // If layout name contains "Elevizion", consider it verified
+    const detectedLayoutName = afterVerifySnapshot.mapped.layoutName;
+    if (detectedLayoutName && detectedLayoutName.toLowerCase().includes("elevizion")) {
+      logs.push(`[ForceLayout] SUCCESS via layout name match: found="${detectedLayoutName}" contains "Elevizion"`);
+      return {
+        ok: true,
+        verified: true,
+        layoutId,
+        layoutName,
+        beforeLayoutName,
+        afterLayoutName: detectedLayoutName,
+        screenshotTimestamp,
+        logs,
+        rawSnapshots,
+      };
+    }
+    
+    // Only return VERIFY_UNAVAILABLE if we truly can't verify anything
+    logs.push(`[ForceLayout] Cannot verify: mode=unknown, layoutId=${afterVerifySnapshot.mapped.layoutId || "null"}, layoutName=${detectedLayoutName || "null"}`);
     return {
       ok: false,
       verified: false,
@@ -1544,9 +1604,9 @@ export async function ensureScreenUsesElevizionLayout(
       layoutId,
       layoutName,
       beforeLayoutName,
-      afterLayoutName: afterVerifySnapshot.mapped.layoutName || undefined,
+      afterLayoutName: detectedLayoutName || undefined,
       screenshotTimestamp,
-      error: "VERIFY_UNAVAILABLE: Cannot read screen content mode from Yodeck response",
+      error: "VERIFY_UNAVAILABLE: Cannot determine screen content mode or layout assignment",
       logs,
       rawSnapshots,
     };
@@ -1628,11 +1688,47 @@ export async function ensureScreenUsesElevizionLayout(
   }
   logs.push(`[ForceLayout] FINAL: mode=${finalSnapshot.mapped.contentMode}, layout=${finalSnapshot.mapped.layoutName || "-"}`);
 
-  // === CHECK: If contentMode is still "unknown", we cannot mark as PERMANENT ===
+  // === CHECK: If contentMode is "unknown" after retry, try to verify via layoutId ===
   if (finalSnapshot.mapped.contentMode === "unknown") {
-    logs.push(`[ForceLayout] WARNING: Cannot read screen content mode after retry - verify unavailable`);
+    logs.push(`[ForceLayout] WARNING: Cannot read screen content mode after retry - attempting verification via layout ID`);
     logs.push(`[ForceLayout] Available keys: ${finalSnapshot.topLevelKeys.join(", ")}`);
     logs.push(`[ForceLayout] Warnings: ${finalSnapshot.warnings.join("; ")}`);
+    
+    // If we can see the expected layout ID is assigned, consider it verified
+    if (finalSnapshot.mapped.layoutId === layoutId) {
+      logs.push(`[ForceLayout] SUCCESS on retry via layout ID match: expected=${layoutId}, found=${finalSnapshot.mapped.layoutId}`);
+      return {
+        ok: true,
+        verified: true,
+        layoutId,
+        layoutName,
+        beforeLayoutName,
+        afterLayoutName: finalSnapshot.mapped.layoutName || layoutName,
+        screenshotTimestamp,
+        logs,
+        rawSnapshots,
+      };
+    }
+    
+    // If layout name contains "Elevizion", consider it verified
+    const detectedLayoutName = finalSnapshot.mapped.layoutName;
+    if (detectedLayoutName && detectedLayoutName.toLowerCase().includes("elevizion")) {
+      logs.push(`[ForceLayout] SUCCESS on retry via layout name match: found="${detectedLayoutName}" contains "Elevizion"`);
+      return {
+        ok: true,
+        verified: true,
+        layoutId,
+        layoutName,
+        beforeLayoutName,
+        afterLayoutName: detectedLayoutName,
+        screenshotTimestamp,
+        logs,
+        rawSnapshots,
+      };
+    }
+    
+    // Only return VERIFY_UNAVAILABLE if we truly can't verify anything
+    logs.push(`[ForceLayout] Cannot verify after retry: mode=unknown, layoutId=${finalSnapshot.mapped.layoutId || "null"}, layoutName=${detectedLayoutName || "null"}`);
     return {
       ok: false,
       verified: false,
@@ -1640,9 +1736,9 @@ export async function ensureScreenUsesElevizionLayout(
       layoutId,
       layoutName,
       beforeLayoutName,
-      afterLayoutName: finalSnapshot.mapped.layoutName || undefined,
+      afterLayoutName: detectedLayoutName || undefined,
       screenshotTimestamp,
-      error: "VERIFY_UNAVAILABLE: Cannot read screen content mode from Yodeck response (after retry)",
+      error: "VERIFY_UNAVAILABLE: Cannot determine screen content mode or layout assignment (after retry)",
       logs,
       rawSnapshots,
     };

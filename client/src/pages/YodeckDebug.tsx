@@ -25,7 +25,7 @@ interface ScreenStatus {
   isElevizionLayout: boolean;
   lastSeenOnline?: string;
   lastScreenshotAt?: string;
-  isOnline?: boolean;
+  isOnline?: boolean | "unknown";
   error?: string;
   rawKeysUsed?: {
     contentModeField: string | null;
@@ -34,6 +34,12 @@ interface ScreenStatus {
     layoutIdField: string | null;
     layoutNameField: string | null;
     onlineField: string | null;
+  };
+  debugInfo?: {
+    availableTopKeys: string[];
+    screenContentKeys: string[];
+    playerStatusKeys: string[];
+    stateKeys: string[];
   };
   warnings?: string[];
   fetchedAt?: string;
@@ -255,13 +261,17 @@ export default function YodeckDebug() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Online Status</p>
-                  {statusData.isOnline ? (
+                  {statusData.isOnline === true ? (
                     <Badge variant="default" className="bg-green-600" data-testid="status-online">
                       <CheckCircle className="h-3 w-3 mr-1" /> Online
                     </Badge>
+                  ) : statusData.isOnline === false ? (
+                    <Badge variant="destructive" data-testid="status-online">
+                      Offline
+                    </Badge>
                   ) : (
                     <Badge variant="secondary" data-testid="status-online">
-                      Offline/Onbekend
+                      Onbekend
                     </Badge>
                   )}
                 </div>
@@ -360,6 +370,16 @@ export default function YodeckDebug() {
                   <p>Online: {statusData.rawKeysUsed.onlineField || "-"}</p>
                   <p>Layout ID: {statusData.rawKeysUsed.layoutIdField || "-"}</p>
                   <p>Layout Name: {statusData.rawKeysUsed.layoutNameField || "-"}</p>
+                </div>
+              )}
+
+              {statusData.debugInfo && (
+                <div className="mt-2 p-3 bg-slate-50 rounded text-xs font-mono" data-testid="debug-info">
+                  <p className="font-semibold mb-1">Available Keys:</p>
+                  <p>Top-level: {statusData.debugInfo.availableTopKeys.slice(0, 10).join(", ")}{statusData.debugInfo.availableTopKeys.length > 10 ? "..." : ""}</p>
+                  <p>screen_content: {statusData.debugInfo.screenContentKeys.join(", ") || "(none)"}</p>
+                  <p>player_status: {statusData.debugInfo.playerStatusKeys.join(", ") || "(none)"}</p>
+                  <p>state: {statusData.debugInfo.stateKeys.join(", ") || "(none)"}</p>
                 </div>
               )}
 

@@ -1,0 +1,58 @@
+We have a VERIFY_UNAVAILABLE bug: our Yodeck screen status parser is looking for top-level fields (status/is_online/online and default_playlist_type/content_type/mode), but in our real Yodeck response these fields are NOT present top-level. The response contains keys like: player_status, state, screen_content, screenshot_url, last_pushed, etc. Because of this, verification always returns mode=unknown and online=false even when the screen is online and PATCH+PUSH succeeded.
+
+TASK: Fix ONLY the screen status parsing + verification to correctly read content mode (playlist/layout) and online status from the actual response structure. Do NOT add new features.
+
+Acceptance criteria:
+1) /admin/yodeck-debug shows correct:
+   - Online = true when Yodeck UI shows Online
+   - Mode = "playlist" or "layout" correctly
+   - Layout name/id when layout is applied
+2) Force Elevizion Layout no longer fails with VERIFY_UNAVAILABLE on this account.
+3) The parser must be robust: handle both top-level fields AND nested fields.
+4) Add clear debug logging of which keys were used (keysUsed) and warnings only if truly missing.
+
+Implementation details:
+A) Update the function that maps Yodeck screen JSON -> { online, contentMode, layoutId, playlistId, layoutName }.
+   - First, keep current top-level checks as fallback.
+   - Then ADD nested parsing:
+     - Prefer reading content mode from:
+       screen.screen_content.default_playlist_type
+       OR screen.screen_content.content_type
+       OR screen.screen_content.type
+       OR screen.screen_content.mode
+     - Prefer reading the assigned content object/id from:
+       screen.screen_content.default_playlist
+       OR screen.screen_content.playlist
+       OR screen.screen_content.layout
+       OR screen.screen_content.item / screen.screen_content.content
+     - If the value is an object, extract .id
+   - Online detection:
+     - Check these in order:
+       screen.player_status.is_online
+       screen.player_status.online
+       screen.player_status.status == "online"
+       screen.state.is_online
+       screen.state.status == "online"
+       screen.state.status_text contains "Online"
+     - If none exist, online should be "unknown" (not false) and warning should mention keys checked.
+
+B) Update verifyScreenLayout() to treat online/contentMode as:
+   - If contentMode cannot be determined -> VERIFY_UNAVAILABLE (as now)
+   - But ONLY after we have attempted nested parsing (screen_content) and both top-level + nested failed.
+   - If online is unknown, do NOT force online=false; show "unknown" in debug UI.
+
+C) Improve snapshots:
+   - In each snapshot store:
+     - availableTopKeys (Object.keys(screen))
+     - screenContentKeys (Object.keys(screen.screen_content||{}))
+     - playerStatusKeys (Object.keys(screen.player_status||{}))
+     - stateKeys (Object.keys(screen.state||{}))
+     - keysUsed array (strings) indicating exactly which path produced the value.
+   - This makes it impossible to mis-diagnose again.
+
+D) Wherever getScreenContentStatus() currently fetches the screen, keep the same endpoint, but ensure we pass the raw response into the new parser.
+
+After implementing:
+- Run Force Elevizion Layout on screenId 591896 and confirm in debug UI:
+  online=true (or unknown if truly not available), mode switches to layout, and layoutName starts with "Elevizion".
+- If layout is applied but name cannot be fetched, also attempt to resolve layout name via a secondary lookup (GET /layouts/{id}) ONLY when layoutId exists and layoutName missing (cache for 5 minutes).
