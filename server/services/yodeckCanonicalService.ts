@@ -955,17 +955,27 @@ export async function findApprovedAdsForLocation(locationId: string): Promise<{
   }
   
   // Find screens linked to this location
-  const linkedScreens = await db.select().from(screens)
+  let linkedScreens = await db.select().from(screens)
     .where(eq(screens.locationId, locationId));
   
   if (linkedScreens.length === 0) {
-    logs.push(`[ApprovedAds] Geen schermen gekoppeld aan locatie`);
-    // Try alternate: find via yodeckDeviceId
+    logs.push(`[ApprovedAds] Geen schermen via locationId - probeer yodeckDeviceId...`);
+    
+    // Fallback: find via yodeckDeviceId match
+    if (location.yodeckDeviceId) {
+      const yodeckIdStr = String(location.yodeckDeviceId);
+      linkedScreens = await db.select().from(screens)
+        .where(eq(screens.yodeckDeviceId, yodeckIdStr));
+      
+      if (linkedScreens.length > 0) {
+        logs.push(`[ApprovedAds] ${linkedScreens.length} schermen gevonden via yodeckDeviceId`);
+      }
+    }
   }
   
-  // Get all screen IDs including by yodeckDeviceId match
+  // Get all screen IDs
   const screenIds = linkedScreens.map(s => s.id);
-  logs.push(`[ApprovedAds] ${screenIds.length} schermen gevonden`);
+  logs.push(`[ApprovedAds] ${screenIds.length} schermen gevonden totaal`);
   
   if (screenIds.length === 0) {
     return { ok: true, ads: [], logs };

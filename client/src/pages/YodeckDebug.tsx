@@ -549,6 +549,12 @@ export default function YodeckDebug() {
                   )}
                   Koppel laatste goedgekeurde advertentie
                 </Button>
+                
+                {linkAdMutation.isError && (
+                  <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                    Koppelen mislukt: {(linkAdMutation.error as Error)?.message || "Onbekende fout"}
+                  </div>
+                )}
               </>
             ) : (
               <div className="text-center py-6 text-muted-foreground">
