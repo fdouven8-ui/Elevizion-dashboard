@@ -70,6 +70,13 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
   - **Playlist Mode** (`yodeckPublishService.ts`): Single playlist assignment for screens not using layouts. Function: `ensureScreenPlaylistAssignment`.
 - **FAIL FAST Principle**: If `screen_content` cannot be read, `sourceType = "unknown"`. Never guess, never infer, never fall back silently.
 - **Playlist Items Service**: `yodeckPlaylistItemsService.ts` manages playlist content with idempotent operations. Functions: `getPlaylistById`, `appendMediaToPlaylist`, `ensureMediaUsedByLocation`, `pushScreen`, `verifyMediaInPlaylist`, `getLocationPlaylistsSummary`. Safely handles both Yodeck item formats (Shape A: object, Shape B: number) via shared extractors.
+- **Canonical Playlist Management**: `yodeckCanonicalService.ts` provides the single control path for screen content operations:
+  - **Canonical Naming**: "Baseline | <name>" for BASE, "Ads | <name>" for ADS playlists. DB stores IDs in `yodeckBaselinePlaylistId` and `yodeckPlaylistId`.
+  - **Duplicate Handling**: Deterministically picks lowest ID when duplicates exist, logs warnings.
+  - **Playlist Seeding**: BASE auto-seeds with "Elevizion Baseline" media, ADS with "Elevizion Self-Ad" placeholder (never empty/Test).
+  - **Layout Binding**: `verifyLayoutBindings()` checks and `fixLayoutBindings()` auto-corrects BASE/ADS region assignments.
+  - **ensureLocationCompliance()**: Single function that creates playlists, seeds content, verifies layout, assigns to screen, pushes, and updates DB.
+  - **API Endpoints**: `POST /api/admin/locations/:id/ensure-compliance`, `GET /api/admin/locations/:id/playlist-items`, `POST /api/admin/yodeck/migrate-canonical`.
 - **ELEVIZION_LAYOUT_SPEC**: Deterministic layout dimensions constant (BASE: 576px/30%, ADS: 1344px/70% = 1920px total). Helper functions: `buildElevizionLayoutPayload`, `verifyLayoutDimensions`, `fixLayoutDimensions`.
 - **Feature Flags for Legacy Cleanup**: `DISABLE_LEGACY_SCREEN_CONTENT_UI`, `DISABLE_DB_STATUS_FIELDS`, `CANONICAL_ONLY_LOGGING` control deprecated features and log when non-canonical data is used.
 
