@@ -191,6 +191,9 @@ export const adAssets = pgTable("ad_assets", {
   rejectedBy: varchar("rejected_by"), // Admin user ID who rejected
   rejectedReason: text("rejected_reason"), // Reason category: quality | duration | content | other
   rejectedDetails: text("rejected_details"), // Optional detailed rejection notes
+  // Yodeck integration - tracks when video is uploaded to Yodeck
+  yodeckMediaId: integer("yodeck_media_id"), // Yodeck media ID after upload (null until uploaded)
+  yodeckUploadedAt: timestamp("yodeck_uploaded_at"), // When uploaded to Yodeck
   // Timestamps
   uploadedAt: timestamp("uploaded_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),

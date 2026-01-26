@@ -1,6 +1,6 @@
 /**
  * Scherm Beheer - Vereenvoudigde Nederlandse versie
- * Één waarheid: Canonical live status + playlists + layout
+ * Één waarheid: Canonical live status + playlists + layout + approved ads
  */
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { RefreshCw, CheckCircle, XCircle, AlertCircle, Monitor, ExternalLink, Wrench, RotateCcw, Tv, HelpCircle, Info } from "lucide-react";
+import { RefreshCw, CheckCircle, XCircle, AlertCircle, Monitor, ExternalLink, Wrench, RotateCcw, Tv, HelpCircle, Info, Link as LinkIcon, PlayCircle } from "lucide-react";
 import { useCanonicalScreens } from "@/hooks/useCanonicalScreens";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -20,6 +20,18 @@ interface NormalizedItem {
   type: string;
   duration: number;
   order: number;
+}
+
+interface ApprovedAd {
+  id: string;
+  advertiserId: string;
+  advertiserName: string;
+  filename: string;
+  storedFilename: string | null;
+  storageUrl: string | null;
+  yodeckMediaId: number | null;
+  approvalStatus: string;
+  approvedAt: string | null;
 }
 
 interface PlaylistItemsResponse {
@@ -51,23 +63,35 @@ interface RepareerResult {
     id: string | null;
     name: string | null;
     itemCount: number;
-    isNew: boolean;
+    appsFromLegacy?: number;
+    hasBaselineMedia?: boolean;
+    isNew?: boolean;
   };
   adsPlaylist: {
     id: string | null;
     name: string | null;
     itemCount: number;
-    isNew: boolean;
+    approvedAdsLinked?: number;
+    hasSelfAd?: boolean;
+    isNew?: boolean;
   };
+  approvedAds?: ApprovedAd[];
   layout: {
     id: string | null;
-    isNew: boolean;
-    bindingsVerified: boolean;
+    isNew?: boolean;
+    bound?: boolean;
+    bindingsVerified?: boolean;
   };
   pushed: boolean;
-  verified: boolean;
+  verified?: boolean;
   logs: string[];
   error?: string;
+}
+
+interface ApprovedAdsResponse {
+  ok: boolean;
+  ads: ApprovedAd[];
+  logs: string[];
 }
 
 export default function YodeckDebug() {
@@ -100,15 +124,31 @@ export default function YodeckDebug() {
     refetchInterval: false,
   });
 
-  // Repareer scherm - hoofdactie
+  // Goedgekeurde ads ophalen
+  const { data: approvedAdsData, refetch: refetchApprovedAds } = useQuery<ApprovedAdsResponse>({
+    queryKey: ["/api/admin/locations/approved-ads", selectedLocation],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/locations/${selectedLocation}/approved-ads`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: !!selectedLocation,
+    refetchInterval: false,
+  });
+
+  // Repareer scherm - hoofdactie (nu met volledige content pipeline)
   const repareerMutation = useMutation({
     mutationFn: async (locationId: string) => {
-      const res = await apiRequest("POST", `/api/admin/locations/${locationId}/ensure-compliance`, {});
+      // Gebruik de nieuwe ensure-content endpoint die approved ads koppelt
+      const res = await apiRequest("POST", `/api/admin/locations/${locationId}/ensure-content`, {});
       return await res.json() as RepareerResult;
     },
     onSuccess: (data) => {
       setRepareerResult(data);
       refetchPlaylist();
+      refetchApprovedAds();
       refresh();
     },
   });
@@ -119,13 +159,14 @@ export default function YodeckDebug() {
       // Eerst resetten naar leeg, dan opnieuw canonical instellen
       const resetRes = await apiRequest("POST", `/api/admin/locations/${locationId}/force-reset`, {});
       await resetRes.json();
-      // Direct daarna weer repareren
-      const repairRes = await apiRequest("POST", `/api/admin/locations/${locationId}/ensure-compliance`, {});
+      // Direct daarna weer repareren met volledige content pipeline
+      const repairRes = await apiRequest("POST", `/api/admin/locations/${locationId}/ensure-content`, {});
       return await repairRes.json() as RepareerResult;
     },
     onSuccess: (data) => {
       setRepareerResult(data);
       refetchPlaylist();
+      refetchApprovedAds();
       refresh();
     },
   });
@@ -139,6 +180,19 @@ export default function YodeckDebug() {
     onSuccess: () => {
       refresh();
       refetchPlaylist();
+    },
+  });
+
+  // Koppel laatste goedgekeurde advertentie
+  const linkAdMutation = useMutation({
+    mutationFn: async (locationId: string) => {
+      const res = await apiRequest("POST", `/api/admin/locations/${locationId}/link-latest-ad`, {});
+      return await res.json();
+    },
+    onSuccess: () => {
+      refetchPlaylist();
+      refetchApprovedAds();
+      refresh();
     },
   });
 
@@ -165,7 +219,12 @@ export default function YodeckDebug() {
     pushMutation.mutate(selectedLocation);
   };
 
-  const isAnyLoading = repareerMutation.isPending || resetMutation.isPending || pushMutation.isPending;
+  const handleLinkAd = () => {
+    if (!selectedLocation) return;
+    linkAdMutation.mutate(selectedLocation);
+  };
+
+  const isAnyLoading = repareerMutation.isPending || resetMutation.isPending || pushMutation.isPending || linkAdMutation.isPending;
 
   return (
     <div className="space-y-6" data-testid="scherm-beheer-page">
@@ -432,6 +491,77 @@ export default function YodeckDebug() {
         </Card>
       )}
 
+      {/* Goedgekeurde ads uit database */}
+      {selectedLocation && approvedAdsData && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <PlayCircle className="h-5 w-5" />
+              Goedgekeurde advertenties in database
+            </CardTitle>
+            <CardDescription>
+              Ads die via het upload portaal zijn goedgekeurd voor deze locatie
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {approvedAdsData.ads.length > 0 ? (
+              <>
+                <div className="space-y-2">
+                  {approvedAdsData.ads.map((ad) => (
+                    <div key={ad.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div>
+                          <p className="font-medium text-sm">{ad.advertiserName}</p>
+                          <p className="text-xs text-muted-foreground">{ad.filename}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant={ad.approvalStatus === "PUBLISHED" ? "default" : "secondary"}>
+                          {ad.approvalStatus === "APPROVED" ? "Goedgekeurd" : 
+                           ad.approvalStatus === "PUBLISHED" ? "Gepubliceerd" : ad.approvalStatus}
+                        </Badge>
+                        {ad.yodeckMediaId ? (
+                          <Badge variant="outline" className="bg-green-50 text-green-700">
+                            <LinkIcon className="h-3 w-3 mr-1" />
+                            Gekoppeld #{ad.yodeckMediaId}
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="bg-orange-50 text-orange-700">
+                            Niet gekoppeld
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={isAnyLoading}
+                  onClick={handleLinkAd}
+                  data-testid="link-ad-button"
+                >
+                  {linkAdMutation.isPending ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <LinkIcon className="h-4 w-4 mr-2" />
+                  )}
+                  Koppel laatste goedgekeurde advertentie
+                </Button>
+              </>
+            ) : (
+              <div className="text-center py-6 text-muted-foreground">
+                <p>Geen goedgekeurde advertenties gevonden</p>
+                <p className="text-xs mt-1">
+                  Advertenties worden hier getoond nadat ze via het upload portaal zijn goedgekeurd.
+                </p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Resultaat melding */}
       {repareerResult && (
         <Card className={repareerResult.ok ? "border-green-500" : "border-red-500"}>
@@ -449,9 +579,17 @@ export default function YodeckDebug() {
           <CardContent className="space-y-4">
             {repareerResult.ok ? (
               <div className="space-y-2 text-sm">
-                <p>✓ Basis content: {repareerResult.basePlaylist.itemCount} items</p>
-                <p>✓ Advertenties: {repareerResult.adsPlaylist.itemCount} items</p>
-                <p>✓ Layout: {repareerResult.layout.bindingsVerified ? "Correct ingesteld" : "Ingesteld"}</p>
+                <p>✓ Basis content: {repareerResult.basePlaylist.itemCount} items
+                  {repareerResult.basePlaylist.appsFromLegacy && repareerResult.basePlaylist.appsFromLegacy > 0 && (
+                    <span className="text-muted-foreground"> ({repareerResult.basePlaylist.appsFromLegacy} apps uit oude playlist)</span>
+                  )}
+                </p>
+                <p>✓ Advertenties: {repareerResult.adsPlaylist.itemCount} items
+                  {repareerResult.adsPlaylist.approvedAdsLinked && repareerResult.adsPlaylist.approvedAdsLinked > 0 && (
+                    <span className="text-green-600 font-medium"> ({repareerResult.adsPlaylist.approvedAdsLinked} nieuwe ads gekoppeld)</span>
+                  )}
+                </p>
+                <p>✓ Layout: {repareerResult.layout.bindingsVerified || repareerResult.layout.bound ? "Correct ingesteld" : "Ingesteld"}</p>
                 {repareerResult.pushed && <p>✓ Ververs naar TV gestuurd</p>}
               </div>
             ) : (

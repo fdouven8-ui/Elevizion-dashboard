@@ -16169,6 +16169,67 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
   
   /**
+   * POST /api/admin/locations/:locationId/ensure-content
+   * MAIN CONTENT PIPELINE - ensures complete content including approved ads
+   */
+  app.post("/api/admin/locations/:locationId/ensure-content", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { ensureLocationContent } = await import("./services/yodeckCanonicalService");
+      
+      console.log(`[EnsureContent] Starting for location: ${locationId}`);
+      const result = await ensureLocationContent(locationId);
+      
+      console.log(`[EnsureContent] Result: ok=${result.ok}`);
+      result.logs.forEach(log => console.log(log));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[EnsureContent] Error:", error);
+      res.status(500).json({ ok: false, error: error.message, logs: [] });
+    }
+  });
+  
+  /**
+   * POST /api/admin/locations/:locationId/link-latest-ad
+   * Force link the most recent approved ad to ADS playlist
+   */
+  app.post("/api/admin/locations/:locationId/link-latest-ad", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { forceAppendLatestApprovedAd } = await import("./services/yodeckCanonicalService");
+      
+      console.log(`[LinkLatestAd] Starting for location: ${locationId}`);
+      const result = await forceAppendLatestApprovedAd(locationId);
+      
+      console.log(`[LinkLatestAd] Result: ok=${result.ok}, added=${result.added}`);
+      result.logs.forEach(log => console.log(log));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[LinkLatestAd] Error:", error);
+      res.status(500).json({ ok: false, error: error.message, logs: [] });
+    }
+  });
+  
+  /**
+   * GET /api/admin/locations/:locationId/approved-ads
+   * Get list of approved ads for a location
+   */
+  app.get("/api/admin/locations/:locationId/approved-ads", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { findApprovedAdsForLocation } = await import("./services/yodeckCanonicalService");
+      
+      const result = await findApprovedAdsForLocation(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ApprovedAds] Error:", error);
+      res.status(500).json({ ok: false, ads: [], error: error.message, logs: [] });
+    }
+  });
+  
+  /**
    * POST /api/admin/yodeck/migrate-canonical
    * Migrate all linked locations to canonical model
    */
