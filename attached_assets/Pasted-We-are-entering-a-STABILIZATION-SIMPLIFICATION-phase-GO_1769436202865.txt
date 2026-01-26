@@ -1,0 +1,83 @@
+We are entering a STABILIZATION & SIMPLIFICATION phase.
+
+GOAL
+There must be exactly ONE source of truth for screen state, layout state, and playlist state.
+No duplicate logic, no parallel flows, no legacy inputs, no alternative paths.
+
+RULES (HARD)
+1. screen_content (Yodeck v2) is the ONLY valid source of truth.
+2. Legacy fields (default_playlist, default_playlist_type, mode flags, etc.) must NOT be used anywhere except as fallback inside low-level Yodeck API adapters.
+3. UI, DB, Admin pages, Debug pages, and background jobs must ALL reflect the same truth.
+
+TASKS
+
+A) INVENTORY & REMOVE
+- Scan the entire codebase and identify:
+  - Duplicate screen state logic
+  - Legacy playlist/layout detection
+  - Multiple ways of determining "mode", "layout", or "playlist"
+- REMOVE any logic that:
+  - Is not using screen_content.source_type / source_id / source_name
+  - Is only used by old flows or debug experiments
+- If a feature/page does not add operational value → delete it.
+
+B) DEFINE SINGLE CANONICAL MODEL
+Create ONE canonical screen status model, e.g.:
+
+{
+  screenId,
+  sourceType: "layout" | "playlist" | "unknown",
+  sourceId,
+  sourceName,
+  isElevizion,
+  onlineStatus
+}
+
+- All pages must consume THIS model.
+- No page may re-interpret Yodeck responses on its own.
+
+C) MENU & PAGE CLEANUP
+Based on the sidebar (Home, Onboarding, Schermen, Adverteerders, Plaatsingen, Financieel, Admin items):
+
+- Remove pages that:
+  - Duplicate functionality of Yodeck Debug
+  - Show partial or derived state that can go out of sync
+- Ensure:
+  - Schermen shows EXACTLY what Yodeck Debug shows (same data source)
+  - Layouts page is READ-ONLY (creation is system-managed)
+  - No menu item performs destructive actions except via controlled flows
+
+D) LOCK FLOWS
+- There must be exactly ONE way to:
+  - Reset a screen
+  - Apply an Elevizion layout
+  - Verify screen state
+- That way = the hardened Force Elevizion Layout flow.
+- All other buttons/paths must be removed or disabled.
+
+E) CONSISTENCY GUARANTEE
+- If two pages show the same concept (e.g. screen mode), they must:
+  - Use the same backend function
+  - Use the same DTO
+  - Show the same value or the page should not exist
+
+F) FAIL FAST
+- If screen_content cannot be read → show "UNKNOWN" everywhere.
+- NEVER guess.
+- NEVER infer.
+- NEVER silently fall back.
+
+DELIVERABLE
+- A cleaner codebase with fewer files, fewer flags, fewer conditionals.
+- Sidebar only contains pages that reflect operational reality.
+- No feature should be explainable as "debug-only" or "legacy".
+- The system should feel boring, predictable, and impossible to misuse.
+
+IMPORTANT
+If something is not clearly needed for:
+- onboarding a location
+- publishing ads
+- verifying screens
+THEN IT MUST GO.
+
+Proceed carefully, delete aggressively, and keep the system minimal.

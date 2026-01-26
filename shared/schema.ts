@@ -684,6 +684,49 @@ export const screens = pgTable("screens", {
 });
 
 // ============================================================================
+// CANONICAL SCREEN STATUS (Single source of truth for UI)
+// ============================================================================
+
+/**
+ * CanonicalScreenStatus - THE ONLY interface for screen state in the UI.
+ * All pages MUST use this type. No exceptions.
+ * 
+ * This maps directly from Yodeck API v2 screen_content fields:
+ * - sourceType: screen_content.source_type
+ * - sourceId: screen_content.source_id  
+ * - sourceName: screen_content.source_name
+ * 
+ * Rules:
+ * 1. If screen_content cannot be read → sourceType = "unknown"
+ * 2. Never guess, never infer, never fall back silently
+ * 3. isElevizion is true ONLY if sourceName starts with "Elevizion"
+ */
+export interface CanonicalScreenStatus {
+  // Screen identification
+  screenId: string;          // EVZ-001 format
+  yodeckDeviceId: string;    // Yodeck numeric ID
+  screenName: string;        // Display name
+  
+  // Content assignment (from screen_content)
+  sourceType: "layout" | "playlist" | "media" | "schedule" | "app" | "unknown";
+  sourceId: string | null;
+  sourceName: string | null;
+  
+  // Elevizion management status
+  isElevizion: boolean;      // true if sourceName starts with "Elevizion"
+  
+  // Online status
+  onlineStatus: "online" | "offline" | "unknown";
+  lastSeenAt: string | null;
+  
+  // For debugging only (not for business logic)
+  _debug?: {
+    rawContentModeField?: string;
+    warnings?: string[];
+  };
+}
+
+// ============================================================================
 // COMMERCIAL ENTITIES (What is sold, who bought it)
 // ============================================================================
 
