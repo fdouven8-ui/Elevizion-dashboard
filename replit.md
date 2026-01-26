@@ -62,6 +62,11 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **Layout-Based Content Separation**: 2-zone layout system with 30% BASE (left) for baseline content and 70% ADS (right) for advertisements. Admin page at `/layouts` manages layout configuration per location. Includes API probing with cached status, idempotent playlist/layout creation, and fallback schedule mode when Yodeck layouts API is unavailable.
 - **Yodeck Screen Mapper**: Centralized `yodeckScreenMapper.ts` as single source of truth for interpreting Yodeck screen status. Handles all known API field variants (`default_playlist_type`, `content_type`, `layout`, `current_layout`, etc.) with robust fallbacks and logging.
 - **Yodeck Debug Tools**: Admin page at `/admin/yodeck-debug` with raw JSON display, status mapping info, Yodeck links, and force layout tools. Raw debug endpoints at `/api/admin/yodeck/raw/screens/:id`, `/api/admin/yodeck/raw/layouts/:id`, `/api/admin/yodeck/raw/playlists/:id`.
+- **Canonical Screen Status Model**: `CanonicalScreenStatus` interface in `shared/schema.ts` defines the standard for LIVE screen state from Yodeck API. Maps from Yodeck API v2 `screen_content` fields via `yodeckScreenMapper`. Endpoint `/api/admin/canonical-screens` returns this model. For cached DB data, use `/api/screens/with-business`.
+- **Screen Content Operations**: Two distinct paths for screen content assignment:
+  - **Layout Mode** (`yodeckLayoutService.ts`): Uses 2-zone layouts with BASE/ADS playlists. Functions: `assignLayoutToScreen`, `forceResetScreenContent`, `ensureEmptyResetPlaylist`.
+  - **Playlist Mode** (`yodeckPublishService.ts`): Single playlist assignment for screens not using layouts. Function: `ensureScreenPlaylistAssignment`.
+- **FAIL FAST Principle**: If `screen_content` cannot be read, `sourceType = "unknown"`. Never guess, never infer, never fall back silently.
 
 ## External Dependencies
 

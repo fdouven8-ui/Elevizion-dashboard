@@ -688,34 +688,43 @@ export const screens = pgTable("screens", {
 // ============================================================================
 
 /**
- * CanonicalScreenStatus - THE ONLY interface for screen state in the UI.
- * All pages MUST use this type. No exceptions.
+ * CanonicalScreenStatus - Standard interface for live Yodeck screen state.
  * 
- * This maps directly from Yodeck API v2 screen_content fields:
- * - sourceType: screen_content.source_type
- * - sourceId: screen_content.source_id  
- * - sourceName: screen_content.source_name
+ * IDENTIFIER SEMANTICS:
+ * - locationId: Elevizion's internal location UUID (from locations table) OR "YODECK-{id}" if unlinked
+ * - yodeckDeviceId: The numeric Yodeck screen ID (e.g., "591895")
+ * - screenName: Display name from Yodeck or Elevizion
  * 
- * Rules:
+ * This maps from Yodeck API v2 screen_content fields via yodeckScreenMapper:
+ * - sourceType: mapped from screen_content.source_type
+ * - sourceId: mapped from screen_content.source_id  
+ * - sourceName: mapped from screen_content.source_name
+ * 
+ * FAIL FAST Rules:
  * 1. If screen_content cannot be read → sourceType = "unknown"
  * 2. Never guess, never infer, never fall back silently
  * 3. isElevizion is true ONLY if sourceName starts with "Elevizion"
+ * 
+ * USAGE NOTE: This is for LIVE data from Yodeck API.
+ * For cached/DB data, use ScreenWithBusiness from /api/screens/with-business.
  */
 export interface CanonicalScreenStatus {
-  // Screen identification
-  screenId: string;          // EVZ-001 format
-  yodeckDeviceId: string;    // Yodeck numeric ID
-  screenName: string;        // Display name
+  // Identifier - Elevizion location ID or "YODECK-{yodeckId}" if not linked
+  locationId: string;
+  // Yodeck's numeric screen ID (e.g., "591895")
+  yodeckDeviceId: string;
+  // Display name (from Yodeck or Elevizion)
+  screenName: string;
   
-  // Content assignment (from screen_content)
+  // Content assignment (from screen_content via yodeckScreenMapper)
   sourceType: "layout" | "playlist" | "media" | "schedule" | "app" | "unknown";
   sourceId: string | null;
   sourceName: string | null;
   
-  // Elevizion management status
-  isElevizion: boolean;      // true if sourceName starts with "Elevizion"
+  // Elevizion management status - true if sourceName starts with "Elevizion"
+  isElevizion: boolean;
   
-  // Online status
+  // Online status from Yodeck
   onlineStatus: "online" | "offline" | "unknown";
   lastSeenAt: string | null;
   

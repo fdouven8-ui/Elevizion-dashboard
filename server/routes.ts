@@ -15847,6 +15847,108 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // CANONICAL SCREEN STATUS ENDPOINT - Single source of truth for all UI pages
+  // ============================================================================
+  
+  /**
+   * GET /api/admin/canonical-screens
+   * Returns live CanonicalScreenStatus for all screens from Yodeck API.
+   * For cached DB data, UI pages should use /api/screens/with-business instead.
+   */
+  app.get("/api/admin/canonical-screens", requireAdminAccess, async (req, res) => {
+    try {
+      const { mapYodeckScreen } = await import("./services/yodeckScreenMapper");
+      // Uses CanonicalScreenStatus interface from @shared/schema
+      
+      // Get all locations with Yodeck device IDs
+      const locs = await db.select({
+        id: locations.id,
+        name: locations.name,
+        yodeckDeviceId: locations.yodeckDeviceId,
+      }).from(locations).where(sql`yodeck_device_id IS NOT NULL`);
+      
+      const token = process.env.YODECK_AUTH_TOKEN;
+      if (!token) {
+        return res.status(500).json({ error: "No Yodeck token configured" });
+      }
+      
+      // Fetch all screens from Yodeck
+      const screensRes = await fetch("https://app.yodeck.com/api/v2/screens", {
+        headers: { "Authorization": `Token ${token}` },
+      });
+      
+      if (!screensRes.ok) {
+        return res.status(500).json({ error: "Failed to fetch screens from Yodeck" });
+      }
+      
+      const screensData = await screensRes.json();
+      const yodeckScreens = Array.isArray(screensData) ? screensData : (screensData.results || []);
+      
+      // Create lookup from yodeck ID to location
+      const yodeckIdToLocation = new Map<string, { id: string; name: string }>();
+      for (const loc of locs) {
+        if (loc.yodeckDeviceId) {
+          yodeckIdToLocation.set(String(loc.yodeckDeviceId), { id: loc.id, name: loc.name });
+        }
+      }
+      
+      // Convert each screen to CanonicalScreenStatus
+      // Type import for documentation - actual validation is structural
+      type CanonicalScreenStatus = import("@shared/schema").CanonicalScreenStatus;
+      const canonicalScreens: CanonicalScreenStatus[] = [];
+      
+      for (const raw of yodeckScreens) {
+        const mapped = mapYodeckScreen(raw);
+        const loc = yodeckIdToLocation.get(mapped.screenId);
+        
+        // Determine isElevizion based on sourceName
+        const sourceName = mapped.layoutName || mapped.playlistName || null;
+        const isElevizion = sourceName?.startsWith("Elevizion") || false;
+        
+        // Convert online status
+        let onlineStatus: "online" | "offline" | "unknown" = "unknown";
+        if (mapped.isOnline === true) onlineStatus = "online";
+        else if (mapped.isOnline === false) onlineStatus = "offline";
+        
+        // Determine sourceId based on content mode
+        let sourceId: string | null = null;
+        if (mapped.contentMode === "layout") {
+          sourceId = mapped.layoutId;
+        } else if (mapped.contentMode === "playlist") {
+          sourceId = mapped.playlistId;
+        }
+        
+        canonicalScreens.push({
+          // locationId: Elevizion's location UUID or YODECK-{id} if not linked
+          locationId: loc?.id || `YODECK-${mapped.screenId}`,
+          // yodeckDeviceId: The numeric Yodeck screen ID
+          yodeckDeviceId: mapped.screenId,
+          screenName: loc?.name || mapped.screenName,
+          sourceType: mapped.contentMode,
+          sourceId,
+          sourceName,
+          isElevizion,
+          onlineStatus,
+          lastSeenAt: mapped.lastSeenOnline,
+          _debug: {
+            rawContentModeField: mapped.rawKeysUsed.contentModeValue || undefined,
+            warnings: mapped.warnings.length > 0 ? mapped.warnings : undefined,
+          },
+        });
+      }
+      
+      res.json({
+        screens: canonicalScreens,
+        total: canonicalScreens.length,
+        generatedAt: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error("[CanonicalScreens] Error:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ============================================================================
   // RAW YODECK DEBUG ENDPOINTS - Direct API response for debugging
   // ============================================================================
   

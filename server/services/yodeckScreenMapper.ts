@@ -136,8 +136,21 @@ export function mapYodeckScreen(raw: any): MappedScreen {
   debugInfo.playerStatusKeys = raw.player_status ? Object.keys(raw.player_status) : [];
   debugInfo.stateKeys = raw.state ? Object.keys(raw.state) : [];
 
-  // Screen ID - try multiple fields
-  const screenId = String(raw.id || raw.screen_id || raw.uuid || "unknown");
+  // Screen ID - MUST be the Yodeck numeric ID (e.g., "591895")
+  // Priority: raw.id (standard) > raw.screen_id (legacy) > raw.uuid (fallback, will log warning)
+  let screenId: string;
+  if (raw.id !== undefined && raw.id !== null) {
+    screenId = String(raw.id);
+  } else if (raw.screen_id !== undefined && raw.screen_id !== null) {
+    screenId = String(raw.screen_id);
+    warnings.push(`[ScreenId] Using legacy screen_id field: ${screenId}`);
+  } else if (raw.uuid !== undefined && raw.uuid !== null) {
+    screenId = String(raw.uuid);
+    warnings.push(`[ScreenId] FALLBACK: Using uuid instead of numeric id: ${screenId}`);
+  } else {
+    screenId = "unknown";
+    warnings.push(`[ScreenId] ERROR: No valid screen identifier found`);
+  }
   const screenName = raw.name || raw.screen_name || "Unknown Screen";
 
   // ========== ONLINE STATUS ==========
