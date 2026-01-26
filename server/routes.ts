@@ -16014,6 +16014,73 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // PLAYLIST ITEMS MANAGEMENT - Make videos visible on screens
+  // ============================================================================
+  
+  /**
+   * GET /api/admin/locations/:locationId/playlist-summary
+   * Get summary of BASE and ADS playlist items for a location
+   */
+  app.get("/api/admin/locations/:locationId/playlist-summary", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { getLocationPlaylistsSummary } = await import("./services/yodeckPlaylistItemsService");
+      
+      const result = await getLocationPlaylistsSummary(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PlaylistSummary] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+  
+  /**
+   * POST /api/admin/locations/:locationId/attach-media
+   * Attach media to the ADS playlist for a location (makes video visible)
+   */
+  app.post("/api/admin/locations/:locationId/attach-media", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { mediaId } = req.body;
+      
+      if (!mediaId) {
+        return res.status(400).json({ ok: false, error: "mediaId is required" });
+      }
+      
+      const { ensureMediaUsedByLocation } = await import("./services/yodeckPlaylistItemsService");
+      const result = await ensureMediaUsedByLocation(locationId, mediaId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[AttachMedia] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+  
+  /**
+   * POST /api/admin/screens/:locationId/push
+   * Push screen content (trigger reload)
+   */
+  app.post("/api/admin/screens/:locationId/push", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      
+      // Get location to find yodeckDeviceId
+      const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+      
+      if (!location || !location.yodeckDeviceId) {
+        return res.status(404).json({ ok: false, error: "Location or device not found" });
+      }
+      
+      const { pushScreen } = await import("./services/yodeckPlaylistItemsService");
+      const result = await pushScreen(location.yodeckDeviceId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PushScreen] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
   // RAW YODECK DEBUG ENDPOINTS - Direct API response for debugging
   // ============================================================================
   

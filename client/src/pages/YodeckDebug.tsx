@@ -1,16 +1,19 @@
 /**
- * Yodeck Debug Page - UNIFIED VERSION
+ * Yodeck Debug Page - UNIFIED VERSION with Playlist Items
  * Uses ONLY useCanonicalScreens hook for live data (per HARDEN+UNIFY spec)
  */
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { RefreshCw, Zap, CheckCircle, XCircle, AlertCircle, Monitor, ExternalLink, Code, Shield } from "lucide-react";
+import { RefreshCw, Zap, CheckCircle, XCircle, AlertCircle, Monitor, ExternalLink, Code, Shield, Play, Upload, List } from "lucide-react";
 import { useCanonicalScreens } from "@/hooks/useCanonicalScreens";
+import { apiRequest } from "@/lib/queryClient";
 
 interface RawScreenData {
   ok: boolean;
@@ -18,6 +21,25 @@ interface RawScreenData {
   urlUsed: string;
   raw: any;
   mapped: any;
+  error?: string;
+}
+
+interface PlaylistSummary {
+  ok: boolean;
+  locationId: string;
+  locationName: string;
+  base: {
+    playlistId: string | null;
+    playlistName: string | null;
+    itemCount: number;
+    items: { id: number; name: string; type: string }[];
+  };
+  ads: {
+    playlistId: string | null;
+    playlistName: string | null;
+    itemCount: number;
+    items: { id: number; name: string; type: string }[];
+  };
   error?: string;
 }
 
@@ -42,15 +64,28 @@ interface ComplianceResult {
   error?: string;
 }
 
+interface AttachMediaResult {
+  ok: boolean;
+  locationId: string;
+  locationName: string;
+  adsPlaylistId: string | null;
+  mediaId: string;
+  appended: boolean;
+  pushed: boolean;
+  verified: boolean;
+  logs: string[];
+  error?: string;
+}
+
 export default function YodeckDebug() {
   const queryClient = useQueryClient();
   const [selectedLocation, setSelectedLocation] = useState<string>("");
   const [lastResult, setLastResult] = useState<ComplianceResult | null>(null);
+  const [mediaIdInput, setMediaIdInput] = useState<string>("");
+  const [lastAttachResult, setLastAttachResult] = useState<AttachMediaResult | null>(null);
 
-  // DEV ASSERTION: Using canonical hook
   console.debug("[YodeckDebug] Using unified canonical screens hook");
 
-  // UNIFIED: Use canonical screens hook for ALL live data
   const { 
     screens, 
     isLoading: screensLoading, 
@@ -61,13 +96,26 @@ export default function YodeckDebug() {
     isEnsuringCompliance,
     isResetting,
     generatedAt,
-    getScreenByLocationId,
   } = useCanonicalScreens();
 
   const selectedScreen = screens.find(s => s.locationId === selectedLocation);
 
-  // Raw data query (for debug view only)
-  const { data: rawData, isLoading: rawLoading, refetch: refetchRaw } = useQuery<RawScreenData>({
+  // Playlist summary query
+  const { data: playlistSummary, refetch: refetchPlaylist } = useQuery<PlaylistSummary>({
+    queryKey: ["/api/admin/locations/playlist-summary", selectedLocation],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/locations/${selectedLocation}/playlist-summary`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: !!selectedLocation,
+    refetchInterval: false,
+  });
+
+  // Raw data query
+  const { data: rawData } = useQuery<RawScreenData>({
     queryKey: ["/api/admin/yodeck/raw/screens", selectedScreen?.yodeckDeviceId],
     queryFn: async () => {
       const res = await fetch(`/api/admin/yodeck/raw/screens/${selectedScreen?.yodeckDeviceId}`, {
@@ -78,6 +126,30 @@ export default function YodeckDebug() {
     },
     enabled: !!selectedScreen?.yodeckDeviceId,
     refetchInterval: false,
+  });
+
+  // Attach media mutation
+  const attachMediaMutation = useMutation({
+    mutationFn: async ({ locationId, mediaId }: { locationId: string; mediaId: string }) => {
+      const res = await apiRequest("POST", `/api/admin/locations/${locationId}/attach-media`, { mediaId });
+      return await res.json() as AttachMediaResult;
+    },
+    onSuccess: (data) => {
+      setLastAttachResult(data);
+      refetchPlaylist();
+      refresh();
+    },
+  });
+
+  // Push screen mutation
+  const pushScreenMutation = useMutation({
+    mutationFn: async (locationId: string) => {
+      const res = await apiRequest("POST", `/api/admin/screens/${locationId}/push`, {});
+      return await res.json();
+    },
+    onSuccess: () => {
+      refresh();
+    },
   });
 
   const handleEnsureCompliance = async () => {
@@ -122,6 +194,11 @@ export default function YodeckDebug() {
         error: error.message,
       });
     }
+  };
+
+  const handleAttachMedia = () => {
+    if (!selectedLocation || !mediaIdInput.trim()) return;
+    attachMediaMutation.mutate({ locationId: selectedLocation, mediaId: mediaIdInput.trim() });
   };
 
   return (
@@ -204,6 +281,21 @@ export default function YodeckDebug() {
               )}
               Force Reset
             </Button>
+
+            <Button
+              size="lg"
+              variant="secondary"
+              disabled={!selectedLocation || pushScreenMutation.isPending}
+              onClick={() => selectedLocation && pushScreenMutation.mutate(selectedLocation)}
+              data-testid="push-screen-button"
+            >
+              {pushScreenMutation.isPending ? (
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Play className="h-4 w-4 mr-2" />
+              )}
+              Push Now
+            </Button>
           </div>
         </CardContent>
       </Card>
@@ -252,33 +344,7 @@ export default function YodeckDebug() {
                 <span className="font-medium">Source ID:</span>
                 <span className="ml-2">{selectedScreen.sourceId || "—"}</span>
               </div>
-              <div>
-                <span className="font-medium">Yodeck Device ID:</span>
-                <span className="ml-2">{selectedScreen.yodeckDeviceId}</span>
-              </div>
-              <div>
-                <span className="font-medium">Last Seen:</span>
-                <span className="ml-2">
-                  {selectedScreen.lastSeenAt 
-                    ? new Date(selectedScreen.lastSeenAt).toLocaleString() 
-                    : "—"}
-                </span>
-              </div>
             </div>
-
-            {selectedScreen._debug?.warnings && selectedScreen._debug.warnings.length > 0 && (
-              <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
-                <p className="font-medium text-yellow-800 flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4" />
-                  Warnings:
-                </p>
-                <ul className="list-disc list-inside text-sm text-yellow-700 mt-1">
-                  {selectedScreen._debug.warnings.map((w, i) => (
-                    <li key={i}>{w}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
 
             <div className="flex gap-2 pt-4">
               <a
@@ -290,6 +356,125 @@ export default function YodeckDebug() {
                 <ExternalLink className="h-3 w-3" />
                 Open in Yodeck
               </a>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {playlistSummary && playlistSummary.ok && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <List className="h-5 w-5" />
+              Playlist Items
+            </CardTitle>
+            <CardDescription>
+              Content in BASE en ADS playlists voor {playlistSummary.locationName}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <h4 className="font-medium mb-2 flex items-center gap-2">
+                  BASE Playlist
+                  <Badge variant="outline">{playlistSummary.base.itemCount} items</Badge>
+                </h4>
+                {playlistSummary.base.playlistId ? (
+                  <>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      ID: {playlistSummary.base.playlistId} • {playlistSummary.base.playlistName}
+                    </p>
+                    {playlistSummary.base.items.length > 0 ? (
+                      <ul className="text-xs space-y-1">
+                        {playlistSummary.base.items.slice(0, 5).map((item, i) => (
+                          <li key={i} className="flex items-center gap-2">
+                            <Badge variant="secondary" className="text-[10px]">{item.type}</Badge>
+                            <span className="truncate">{item.name}</span>
+                          </li>
+                        ))}
+                        {playlistSummary.base.items.length > 5 && (
+                          <li className="text-muted-foreground">... en {playlistSummary.base.items.length - 5} meer</li>
+                        )}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Geen items</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Geen BASE playlist geconfigureerd</p>
+                )}
+              </div>
+
+              <div className="p-4 bg-blue-50 rounded-lg">
+                <h4 className="font-medium mb-2 flex items-center gap-2">
+                  ADS Playlist
+                  <Badge variant="default">{playlistSummary.ads.itemCount} items</Badge>
+                </h4>
+                {playlistSummary.ads.playlistId ? (
+                  <>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      ID: {playlistSummary.ads.playlistId} • {playlistSummary.ads.playlistName}
+                    </p>
+                    {playlistSummary.ads.items.length > 0 ? (
+                      <ul className="text-xs space-y-1">
+                        {playlistSummary.ads.items.slice(0, 5).map((item, i) => (
+                          <li key={i} className="flex items-center gap-2">
+                            <Badge variant="secondary" className="text-[10px]">{item.type}</Badge>
+                            <span className="truncate">{item.name}</span>
+                          </li>
+                        ))}
+                        {playlistSummary.ads.items.length > 5 && (
+                          <li className="text-muted-foreground">... en {playlistSummary.ads.items.length - 5} meer</li>
+                        )}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Geen items</p>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Geen ADS playlist geconfigureerd</p>
+                )}
+              </div>
+            </div>
+
+            <div className="border-t pt-4 mt-4">
+              <h4 className="font-medium mb-3 flex items-center gap-2">
+                <Upload className="h-4 w-4" />
+                Attach Media to ADS Playlist
+              </h4>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <Label htmlFor="mediaId" className="sr-only">Media ID</Label>
+                  <Input
+                    id="mediaId"
+                    placeholder="Yodeck Media ID (bijv. 123456)"
+                    value={mediaIdInput}
+                    onChange={(e) => setMediaIdInput(e.target.value)}
+                    data-testid="media-id-input"
+                  />
+                </div>
+                <Button
+                  onClick={handleAttachMedia}
+                  disabled={!selectedLocation || !mediaIdInput.trim() || attachMediaMutation.isPending}
+                  data-testid="attach-media-button"
+                >
+                  {attachMediaMutation.isPending ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4 mr-2" />
+                  )}
+                  Attach & Push
+                </Button>
+              </div>
+              {lastAttachResult && (
+                <div className={`mt-3 p-3 rounded text-sm ${lastAttachResult.ok ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+                  {lastAttachResult.ok ? (
+                    <p><CheckCircle className="h-4 w-4 inline mr-1" /> Media toegevoegd aan ADS playlist!</p>
+                  ) : (
+                    <p><XCircle className="h-4 w-4 inline mr-1" /> Fout: {lastAttachResult.error}</p>
+                  )}
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

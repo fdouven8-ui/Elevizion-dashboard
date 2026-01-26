@@ -1,0 +1,89 @@
+We have HARDEN+UNIFY done (canonical status + unified control path). Now we must PERFECT the end-to-end outcome:
+
+THE REAL ISSUES TO FIX
+1) Uploaded video exists in Yodeck Media but is “not used anywhere” and not visible on TV.
+2) Screen is in Layout mode, but dashboard still has confusing content visibility (click screen -> content not shown).
+3) Layout output looks wrong on TV (zone sizing/scaling).
+4) We must remove legacy/duplicate “content assignment” paths from UI so there is ONE truth.
+
+NON-NEGOTIABLE RULES
+- If screen sourceType == "layout", the only “content” is in layout regions (BASE playlist + ADS playlist).
+- “Used” = mediaId is present as an item in the ADS playlist for that location.
+- After publish/approve, media MUST be inserted into ADS playlist items, then screen pushed, then verified.
+
+A) IMPLEMENT PLAYLIST ITEM MANAGEMENT (THIS IS WHY VIDEO IS NOT VISIBLE)
+Create server/services/yodeckPlaylistItemsService.ts with functions:
+- getPlaylistById(playlistId) -> returns playlist including items[]
+- appendMediaToPlaylist(playlistId, mediaId, opts) -> idempotent
+- ensureMediaUsedByLocation(locationId, mediaId) -> adds to ADS playlist for that location
+
+IMPORTANT: Yodeck requires items[] for playlist update. Use the v2 format used in docs:
+- GET /api/v2/playlists/{id}/ to fetch current playlist with items
+- PATCH /api/v2/playlists/{id}/ with FULL items array (existing + new item)
+The new item object must match Yodeck’s expected structure for media items.
+Implement robust mapping:
+- Try item shape A: { "item": { "id": mediaId } }
+- If 400, log response body and retry shape B: { "item": mediaId }
+- If still 400, log response body and fail with PLAYLIST_ITEM_FORMAT_UNKNOWN (do NOT silently succeed)
+
+Idempotency:
+- If playlist items already reference mediaId, do nothing.
+
+Integration:
+- In publish flow (after media upload success), call ensureMediaUsedByLocation(locationId, mediaId)
+- In approve video action, also call ensureMediaUsedByLocation for the planned targets (or at least for test screen) when in TESTMODE
+- After insert, call POST /screens/{screenId}/push/
+
+Verification:
+- After insert, re-fetch playlist and confirm mediaId exists in items
+- On screen, verify canonical sourceType=="layout" and isElevizion==true and onlineStatus==true OR unknown (don’t block if unknown, but log)
+
+B) FIX LAYOUT OUTPUT (TV LOOKS WRONG)
+Make layout creation deterministic and correct:
+- resolution_width=1920, resolution_height=1080, screen_type="landscape"
+- Regions:
+  BASE: left=0 top=0 width=576 height=1080 zindex=1 order=0 duration=0 res_width=576 res_height=1080
+  ADS:  left=576 top=0 width=1344 height=1080 zindex=2 order=1 duration=0 res_width=1344 res_height=1080
+- BASE region must use baselinePlaylistId
+- ADS region must use adsPlaylistId
+Implement helper buildElevizionLayoutPayload(name, baselinePlaylistId, adsPlaylistId)
+When existing Elevizion layout is found, verify its regions match these dimensions; if not, PATCH it to match.
+
+C) UI: REMOVE CONFUSION (ONE TRUTH)
+Schermen page:
+- Show only canonical data + derived:
+  - sourceType/sourceName/sourceId
+  - layoutName (if layout)
+  - BASE playlistId + itemCount
+  - ADS playlistId + itemCount
+- Add 2 buttons only:
+  1) Ensure Compliance (calls unified ensureCompliance)
+  2) Push Now (POST push)
+- Remove/hide any UI that suggests choosing “Playlist/Media/Layout/App/Schedule” manually from dashboard.
+
+Yodeck Debug page:
+- Must show:
+  - screen_content source_type/id/name (ground truth)
+  - layout id/name
+  - BASE playlist items (count + first 5 names/ids)
+  - ADS playlist items (count + first 5 names/ids)
+  - Last screenshot timestamp + online status
+- Actions only:
+  - Ensure Compliance
+  - Force Reset
+  - Attach Latest Uploaded Media to ADS (input mediaId OR pick latest approved ad)
+This button is critical for manual recovery testing.
+
+D) CLEANUP / GUARDRAILS
+- Add FEATURE_FLAGS to disable legacy assignment paths:
+  DISABLE_LEGACY_SCREEN_CONTENT_UI=true
+  DISABLE_DB_STATUS_FIELDS=true
+- Remove unused endpoints/buttons that manipulate screen content outside yodeckScreenContentService.
+- Add server log “CANONICAL_ONLY” when a page is reading anything besides canonical.
+
+DELIVERABLE CHECKLIST
+1) Upload approved -> media is appended to ADS playlist -> push -> visible on TV.
+2) Dashboard shows where media is “used” by checking ADS playlist items (not Yodeck “Used by” UI).
+3) Layout output correct 30/70 on 1920x1080 and fixes existing layouts if wrong.
+4) No more multiple content inputs in dashboard UI.
+Implement now and list files changed + endpoints used.

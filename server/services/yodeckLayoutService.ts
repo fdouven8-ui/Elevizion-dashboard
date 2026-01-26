@@ -35,7 +35,27 @@ export const FEATURE_FLAGS = {
   MAX_API_RETRIES: 3,
   /** Require online screen for permanent operations */
   REQUIRE_ONLINE_FOR_PERMANENT: false,
+  
+  // ============================================================================
+  // LEGACY CLEANUP FLAGS - Control deprecated features
+  // ============================================================================
+  
+  /** Disable legacy screen content UI (manual playlist/media/layout/app/schedule selection) */
+  DISABLE_LEGACY_SCREEN_CONTENT_UI: true,
+  /** Disable DB status fields (use canonical API only) */
+  DISABLE_DB_STATUS_FIELDS: true,
+  /** Enable canonical-only mode (log when non-canonical data is used) */
+  CANONICAL_ONLY_LOGGING: true,
 };
+
+/**
+ * Log CANONICAL_ONLY warning when non-canonical data is being used
+ */
+export function logCanonicalOnlyWarning(source: string, detail?: string): void {
+  if (FEATURE_FLAGS.CANONICAL_ONLY_LOGGING) {
+    console.warn(`[CANONICAL_ONLY] WARNING: Non-canonical data used from ${source}${detail ? `: ${detail}` : ''}`);
+  }
+}
 
 /**
  * Safety check: Should we proceed with layout operation on this screen?
@@ -179,6 +199,194 @@ export async function probeLayoutsSupport(forceRefresh = false): Promise<boolean
  */
 export function getLayoutSupportStatus(): { supported: boolean | null; lastCheck: Date | null } {
   return { supported: layoutsSupported, lastCheck: layoutsProbeLastCheck };
+}
+
+// ============================================================================
+// ELEVIZION LAYOUT SPECIFICATION - DETERMINISTIC DIMENSIONS
+// ============================================================================
+
+/**
+ * Canonical Elevizion layout dimensions for 1920x1080 screens:
+ * - BASE zone: 30% width (576px) on left
+ * - ADS zone: 70% width (1344px) on right
+ * Total: 576 + 1344 = 1920px
+ */
+export const ELEVIZION_LAYOUT_SPEC = {
+  resolution_width: 1920,
+  resolution_height: 1080,
+  screen_type: "landscape",
+  base: {
+    name: "BASE",
+    left: 0,
+    top: 0,
+    width: 576,   // 30% of 1920
+    height: 1080,
+    zindex: 1,
+    order: 0,
+    duration: 0,
+    res_width: 576,
+    res_height: 1080,
+  },
+  ads: {
+    name: "ADS",
+    left: 576,
+    top: 0,
+    width: 1344,  // 70% of 1920
+    height: 1080,
+    zindex: 2,    // Higher z-index for ADS
+    order: 1,
+    duration: 0,
+    res_width: 1344,
+    res_height: 1080,
+  },
+};
+
+/**
+ * Build the Elevizion layout payload for Yodeck API
+ * This ensures deterministic, correct layout creation every time.
+ */
+export function buildElevizionLayoutPayload(
+  name: string,
+  baselinePlaylistId: string,
+  adsPlaylistId: string
+): any {
+  return {
+    name,
+    description: "Elevizion 2-zone layout (30% Baseline + 70% Ads)",
+    screen_type: ELEVIZION_LAYOUT_SPEC.screen_type,
+    res_width: ELEVIZION_LAYOUT_SPEC.resolution_width,
+    res_height: ELEVIZION_LAYOUT_SPEC.resolution_height,
+    regions: [
+      {
+        ...ELEVIZION_LAYOUT_SPEC.base,
+        playlist: parseInt(baselinePlaylistId, 10),
+      },
+      {
+        ...ELEVIZION_LAYOUT_SPEC.ads,
+        playlist: parseInt(adsPlaylistId, 10),
+      },
+    ],
+  };
+}
+
+/**
+ * Verify that an existing layout has correct Elevizion dimensions
+ * Returns corrections needed if dimensions are wrong
+ */
+export async function verifyLayoutDimensions(layoutId: string): Promise<{
+  ok: boolean;
+  needsCorrection: boolean;
+  issues: string[];
+  layout?: any;
+  error?: string;
+}> {
+  const result = await yodeckRequest<any>(`/layouts/${layoutId}/`);
+  
+  if (!result.ok || !result.data) {
+    return { ok: false, needsCorrection: false, issues: [], error: result.error };
+  }
+  
+  const layout = result.data;
+  const issues: string[] = [];
+  
+  // Check resolution
+  if (layout.res_width !== ELEVIZION_LAYOUT_SPEC.resolution_width) {
+    issues.push(`Wrong res_width: ${layout.res_width} (expected ${ELEVIZION_LAYOUT_SPEC.resolution_width})`);
+  }
+  if (layout.res_height !== ELEVIZION_LAYOUT_SPEC.resolution_height) {
+    issues.push(`Wrong res_height: ${layout.res_height} (expected ${ELEVIZION_LAYOUT_SPEC.resolution_height})`);
+  }
+  
+  // Check regions
+  const regions = layout.regions || [];
+  const baseRegion = regions.find((r: any) => r.name === "BASE");
+  const adsRegion = regions.find((r: any) => r.name === "ADS");
+  
+  if (!baseRegion) {
+    issues.push("Missing BASE region");
+  } else {
+    if (baseRegion.width !== ELEVIZION_LAYOUT_SPEC.base.width) {
+      issues.push(`BASE width: ${baseRegion.width} (expected ${ELEVIZION_LAYOUT_SPEC.base.width})`);
+    }
+    if (baseRegion.left !== ELEVIZION_LAYOUT_SPEC.base.left) {
+      issues.push(`BASE left: ${baseRegion.left} (expected ${ELEVIZION_LAYOUT_SPEC.base.left})`);
+    }
+  }
+  
+  if (!adsRegion) {
+    issues.push("Missing ADS region");
+  } else {
+    if (adsRegion.width !== ELEVIZION_LAYOUT_SPEC.ads.width) {
+      issues.push(`ADS width: ${adsRegion.width} (expected ${ELEVIZION_LAYOUT_SPEC.ads.width})`);
+    }
+    if (adsRegion.left !== ELEVIZION_LAYOUT_SPEC.ads.left) {
+      issues.push(`ADS left: ${adsRegion.left} (expected ${ELEVIZION_LAYOUT_SPEC.ads.left})`);
+    }
+  }
+  
+  return {
+    ok: true,
+    needsCorrection: issues.length > 0,
+    issues,
+    layout,
+  };
+}
+
+/**
+ * Fix layout dimensions if they're wrong
+ * Returns true if layout was corrected, false if already correct or error
+ */
+export async function fixLayoutDimensions(
+  layoutId: string,
+  baselinePlaylistId: string,
+  adsPlaylistId: string
+): Promise<{
+  ok: boolean;
+  corrected: boolean;
+  issues: string[];
+  error?: string;
+}> {
+  const verification = await verifyLayoutDimensions(layoutId);
+  
+  if (!verification.ok) {
+    return { ok: false, corrected: false, issues: [], error: verification.error };
+  }
+  
+  if (!verification.needsCorrection) {
+    return { ok: true, corrected: false, issues: [] };
+  }
+  
+  console.log(`[LayoutFix] Correcting layout ${layoutId}: ${verification.issues.join(", ")}`);
+  
+  // PATCH layout with correct dimensions
+  const patchPayload = {
+    res_width: ELEVIZION_LAYOUT_SPEC.resolution_width,
+    res_height: ELEVIZION_LAYOUT_SPEC.resolution_height,
+    regions: [
+      {
+        ...ELEVIZION_LAYOUT_SPEC.base,
+        playlist: parseInt(baselinePlaylistId, 10),
+      },
+      {
+        ...ELEVIZION_LAYOUT_SPEC.ads,
+        playlist: parseInt(adsPlaylistId, 10),
+      },
+    ],
+  };
+  
+  const patchResult = await yodeckRequest<any>(`/layouts/${layoutId}/`, "PATCH", patchPayload);
+  
+  if (!patchResult.ok) {
+    return { 
+      ok: false, 
+      corrected: false, 
+      issues: verification.issues, 
+      error: `PATCH failed: ${patchResult.error}` 
+    };
+  }
+  
+  console.log(`[LayoutFix] Layout ${layoutId} corrected successfully`);
+  return { ok: true, corrected: true, issues: verification.issues };
 }
 
 // Cache for baseline media ID (idempotency)
@@ -1836,7 +2044,7 @@ export async function ensureScreenUsesElevizionLayout(
           top: 0,
           width: 1344,  // 70% of 1920
           height: 1080,
-          zindex: 1,
+          zindex: 2,  // Higher z-index for ADS zone
           order: 1,
           duration: 0,
           res_width: 1344,
