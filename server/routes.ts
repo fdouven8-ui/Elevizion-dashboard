@@ -16149,6 +16149,26 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
   
   /**
+   * POST /api/admin/locations/:locationId/force-reset
+   * Reset screen to empty, then restore to canonical settings
+   */
+  app.post("/api/admin/locations/:locationId/force-reset", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { forceResetScreen } = await import("./services/yodeckScreenContentService");
+      
+      console.log(`[ForceReset] Starting for location: ${locationId}`);
+      const result = await forceResetScreen(locationId);
+      
+      console.log(`[ForceReset] Result: ${result.finalStatus}`);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ForceReset] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+  
+  /**
    * POST /api/admin/yodeck/migrate-canonical
    * Migrate all linked locations to canonical model
    */

@@ -1,0 +1,91 @@
+DOEL: Maak Yodeck Debug en scherm-aansturing simpel, 100% Nederlands, en zorg dat elk scherm altijd basis+ads content heeft (nooit leeg). Verwijder/disable alle legacy paden en technische termen uit de UI.
+
+CONTEXT:
+- Live status laat zien dat het scherm in LAYOUT mode staat (Elevizion layout) maar BASE en ADS playlists staan op 0 items.
+- Hierdoor verandert er niets op TV: er is geen content in de playlists om af te spelen.
+- Ik wil 1 waarheid: Canonical live status + canonical playlists + canonical layout. Alles anders blokkeren.
+
+TAKEN (MOET ALLEMAAL):
+
+A) UI SIMPLIFICATIE (NEDERLANDS)
+1) Hernoem knoppen/labels:
+- "Ensure Compliance" -> "Repareer scherm (standaard instellingen)"
+- "Force Reset" -> "Scherm resetten (leeg maken + opnieuw instellen)"
+- "Push Now" -> "Nu verversen op TV"
+- Verwijder knop "Canonical Compliance" OF maak het een kleine tekstlink "Wat gebeurt er?" met uitleg.
+2) Verwijder alle technische woorden uit de page:
+- Verberg termen als "source_type", "source_id", "normalized", "canonical", "layoutId".
+- Toon alleen: Online/Offline, Wat draait er nu (Layout/Playlist), Naam van lay-out, BASE playlist items (aantal + namen), ADS playlist items (aantal + namen).
+3) Voeg bovenaan een duidelijke status-melding toe:
+- Als BASE of ADS leeg is: rood blok "Scherm heeft geen content. Klik op 'Repareer scherm' om standaard content te plaatsen."
+- Als alles goed is: groen blok "Scherm is goed ingesteld."
+
+B) FUNCTIONEEL: BASE + ADS NOOIT LEEG (AUTOMATISCH SEEDEN)
+Maak 1 server-functie: ensureLocationCompliance(locationId, yodeckScreenId) die ALLES canonical doet in deze volgorde:
+
+1) Zorg dat er EXACT 2 playlists zijn per locatie:
+- BASE: "Baseline | <locatieNaam>"
+- ADS: "Ads | <locatieNaam>"
+- Als duplicates bestaan: kies laagste id, log warning, sla gekozen id’s op in DB.
+2) Seed BASE playlist als leeg:
+- Zoek in Yodeck Media naar een vast baseline item (bijv. naam begint met "Elevizion Baseline" of "Elevizion - Baseline").
+- Als niet gevonden: upload 1 placeholder baseline asset (een simpele afbeelding of mp4 uit /public of assets folder) naar Yodeck Media en gebruik die.
+- Voeg minimaal 1 item toe aan BASE playlist.
+3) Seed ADS playlist als leeg:
+- Zoek in Yodeck Media naar "Elevizion Self-Ad" (of "Elevizion - Self Ad").
+- Als niet gevonden: upload 1 self-ad placeholder asset.
+- Voeg minimaal 1 item toe aan ADS playlist.
+4) Zorg dat Elevizion layout bestaat en correct is:
+- Layout naam: "Elevizion Standard | <locatieNaam>"
+- 2 zones:
+  - BASE links 30% (576 breed bij 1920x1080)
+  - ADS rechts 70% (1344 breed)
+  - ADS zindex hoger dan BASE.
+- Bind BASE zone aan BASE playlist id, ADS zone aan ADS playlist id.
+5) Zet screen content op LAYOUT via v2 format:
+PATCH /screens/{id}/ met payload:
+{ "screen_content": { "source_type": "layout", "source_id": <layoutId> } }
+6) Push naar scherm: POST /screens/{id}/push/
+7) Verifieer na max 3 pogingen met delays (3s/5s/8s):
+- Lees state.online en screen_content.source_type/source_name.
+- Succes als source_type=="layout" EN source_name begint met "Elevizion".
+8) Return een simpele response voor UI:
+- ok: true/false
+- online: true/false/unknown
+- contentType: "Layout" of "Playlist"
+- layoutName
+- baseItems: [{id,name,type}]
+- adsItems: [{id,name,type}]
+- acties die uitgevoerd zijn (korte NL tekst), geen technische details.
+
+C) KNOPPEN GEDRAG (SLECHTS 3 ACTIES)
+- "Repareer scherm": roept ensureLocationCompliance aan en toont daarna direct vernieuwde status.
+- "Scherm resetten": zet tijdelijk naar een speciale reset playlist ("Elevizion | EMPTY (reset)" met 1 leeg placeholder item), push, en roept daarna ensureLocationCompliance aan.
+- "Nu verversen op TV": alleen push endpoint + daarna status refresh.
+
+D) LEGACY ROTZOOI WEGHALEN / BLOKKEREN
+1) Zoek alle plekken waar screen content wordt gezet buiten ensureLocationCompliance (oude PATCH payloads, old UI dropdowns, etc).
+2) Blokkeer deze writes:
+- Als iemand een screen content write probeert buiten de canonical service: throw "NON_CANONICAL_WRITE_BLOCKED".
+3) Verberg/disable oude UI componenten waar je "Playlist/Media/App/Schedule" rechtstreeks aan een scherm kunt koppelen voor linked screens.
+
+E) FIX: "Playlist Items (Normalized) toont 0 maar er zouden items moeten zijn"
+- Controleer playlist items parsing voor beide shapes:
+  - item.item = {id,name,type}
+  - item.item = number (id)
+- Als item.item alleen number is: fetch media details om name/type te tonen.
+- Zorg dat item count echt klopt.
+
+ACCEPTATIECRITERIA (MOET):
+1) Op /admin/yodeck-debug zie ik alleen NL termen + 3 knoppen.
+2) Als BASE/ADS leeg is, klik ik 1x op "Repareer scherm" en daarna:
+- BASE items >= 1 en ADS items >= 1
+- scherm staat op Layout "Elevizion Standard | <locatie>"
+- push gedaan
+3) Op TV verandert het (na push) en ik zie geen demo rommel meer.
+4) Nergens in het dashboard kan ik nog per ongeluk via een andere route het scherm naar playlist/media/app zetten (legacy geblokkeerd).
+
+Werk in kleine commits en laat aan het eind exact zien:
+- welke files aangepast
+- welke endpoints gebruikt
+- welke placeholders assets je hebt toegevoegd (pad + naam)

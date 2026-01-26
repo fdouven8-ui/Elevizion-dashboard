@@ -34,6 +34,34 @@ export const CANONICAL_PLAYLIST_PREFIXES = {
 export const BASELINE_MEDIA_NAME = "Elevizion Baseline";
 export const SELF_AD_MEDIA_NAME = "Elevizion Self-Ad";
 
+// Feature flag to block non-canonical writes (enable when ready)
+export const BLOCK_LEGACY_WRITES = process.env.BLOCK_LEGACY_WRITES === "true";
+
+/**
+ * Guard function to block non-canonical screen content writes
+ * Call this before any PATCH /screens/:id that modifies screen_content outside canonical flow
+ * @param context Description of where the write is happening
+ * @param isCanonicalFlow Set to true if this is being called from within ensureLocationCompliance
+ */
+export function guardCanonicalWrite(context: string, isCanonicalFlow: boolean = false): void {
+  if (isCanonicalFlow) {
+    return; // Allow writes from canonical flow
+  }
+  if (BLOCK_LEGACY_WRITES) {
+    const error = new Error(`NON_CANONICAL_WRITE_BLOCKED: ${context}. All screen content changes must go through ensureLocationCompliance().`);
+    console.error(`[CanonicalGuard] ${error.message}`);
+    throw error;
+  }
+  // Only log at debug level when flag is off (reduces noise)
+}
+
+/**
+ * Check if a location is using canonical model
+ */
+export function isCanonicalLocation(location: { yodeckBaselinePlaylistId?: string | null; yodeckPlaylistId?: string | null; layoutMode?: string | null }): boolean {
+  return !!(location.yodeckBaselinePlaylistId && location.yodeckPlaylistId && location.layoutMode === "LAYOUT");
+}
+
 // ============================================================================
 // TYPES
 // ============================================================================

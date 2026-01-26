@@ -23,6 +23,7 @@ import {
   probeLayoutsSupport 
 } from "./yodeckLayoutService";
 import { mapYodeckScreen } from "./yodeckScreenMapper";
+import { guardCanonicalWrite } from "./yodeckCanonicalService";
 
 export interface ComplianceResult {
   ok: boolean;
@@ -79,10 +80,14 @@ async function getCurrentScreenState(yodeckDeviceId: string): Promise<{
 /**
  * ensureComplianceForLocation
  * Main compliance function: ensures baseline + ads + Elevizion layout
+ * NOTE: This is a LEGACY path - use yodeckCanonicalService.ensureLocationCompliance instead
  */
 export async function ensureComplianceForLocation(locationId: string): Promise<ComplianceResult> {
   const logs: string[] = [];
   let fallbackUsed = false;
+  
+  // Guard against legacy writes - use ensureLocationCompliance from yodeckCanonicalService instead
+  guardCanonicalWrite(`ensureComplianceForLocation for location ${locationId} (legacy path)`);
   
   logs.push(`[Compliance] Starting for location: ${locationId}`);
   
@@ -190,10 +195,15 @@ export async function ensureComplianceForLocation(locationId: string): Promise<C
 /**
  * forceResetScreen
  * Reset screen to empty playlist
+ * NOTE: This is an intentional reset path - allowed before canonical repair
  */
 export async function forceResetScreen(locationId: string): Promise<ComplianceResult> {
   const logs: string[] = [];
   let fallbackUsed = false;
+  
+  // Note: forceReset is allowed because it's called as part of the reset-then-repair flow
+  // The guard is here to log when it's called outside canonical context
+  guardCanonicalWrite(`forceResetScreen for location ${locationId}`);
   
   logs.push(`[ForceReset] Starting for location: ${locationId}`);
   

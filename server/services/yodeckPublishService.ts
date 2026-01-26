@@ -15,6 +15,7 @@ import crypto from "crypto";
 import { ObjectStorageService } from "../objectStorage";
 import { dispatchMailEvent } from "./mailEventService";
 import { logAudit } from "./auditService";
+import { guardCanonicalWrite } from "./yodeckCanonicalService";
 import axios from "axios";
 import FormData from "form-data";
 
@@ -518,10 +519,14 @@ class YodeckPublishService {
 
   /**
    * Ensure a playlist is assigned to the location's screen
+   * NOTE: This is a legacy path - use ensureLocationCompliance instead
    */
   private async ensurePlaylistAssignedToScreen(
     location: any
   ): Promise<{ ok: boolean; screenId?: number; error?: string }> {
+    // Guard against legacy writes when canonical mode is enforced
+    guardCanonicalWrite(`ensurePlaylistAssignedToScreen for location ${location.id}`);
+    
     if (!location.yodeckScreenId && !location.yodeckDeviceId) {
       console.log(`[YodeckPublish] ENSURE_ASSIGN: No screen ID for location ${location.id}`);
       return { ok: true }; // Not a failure, just no screen to assign

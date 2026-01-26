@@ -18,6 +18,7 @@ import { locations } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
+import { guardCanonicalWrite, BLOCK_LEGACY_WRITES } from "./yodeckCanonicalService";
 
 // ============================================================================
 // FEATURE FLAGS - Control experimental/risky features
@@ -910,13 +911,16 @@ async function quickVerifyScreenLayout(
 export async function assignLayoutToScreen(
   screenId: string,
   layoutId: string,
-  options?: { operationType?: "temporary" | "permanent"; skipGuardrails?: boolean }
+  options?: { operationType?: "temporary" | "permanent"; skipGuardrails?: boolean; isCanonicalFlow?: boolean }
 ): Promise<{ ok: boolean; error?: string; logs: string[]; verified?: boolean }> {
   const logs: string[] = [];
   const MAX_VERIFY_ATTEMPTS = 3;
   const VERIFY_DELAY_MS = 500;
   const MAX_FULL_RETRIES = 2;
   const operationType = options?.operationType || "permanent";
+  
+  // Guard against legacy writes (unless called from canonical flow)
+  guardCanonicalWrite(`assignLayoutToScreen for screen ${screenId}`, options?.isCanonicalFlow);
   
   logs.push(`[AssignLayout] Starting robust layout assignment: layout ${layoutId} -> screen ${screenId}`);
   
@@ -1015,6 +1019,9 @@ export async function applyFallbackSchedule(
 ): Promise<{ ok: boolean; error?: string; logs: string[] }> {
   const logs: string[] = [];
   
+  // Guard against legacy writes when canonical mode is enforced
+  guardCanonicalWrite(`applyFallbackSchedule for screen ${screenId}`);
+  
   logs.push(`Applying fallback schedule (layouts not supported)`);
   logs.push(`Screen: ${screenId}, Baseline: ${baselinePlaylistId}, Ads: ${adsPlaylistId}`);
   
@@ -1060,6 +1067,9 @@ export async function applyFallbackSchedule(
  */
 export async function applyLayoutToLocation(locationId: string): Promise<LayoutApplyResult> {
   const logs: string[] = [];
+  
+  // Guard against legacy writes when canonical mode is enforced
+  guardCanonicalWrite(`applyLayoutToLocation for location ${locationId}`);
   
   // Get location
   const location = await db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
@@ -1158,6 +1168,9 @@ export async function ensureAdsSurfaceActive(params: {
 }): Promise<{ ok: boolean; surfaceActive: boolean; mode?: LayoutMode; error?: string; logs: string[] }> {
   const { locationId, screenId, adsPlaylistId } = params;
   const logs: string[] = [];
+  
+  // Guard against legacy writes when canonical mode is enforced
+  guardCanonicalWrite(`ensureAdsSurfaceActive for screen ${screenId}`);
   
   logs.push(`[AutoSurface] Checking ads surface for location ${locationId}, screen ${screenId}`);
   
@@ -1752,6 +1765,9 @@ async function applyElevizionLayoutToScreen(
   layoutName: string
 ): Promise<{ ok: boolean; error?: string; logs: string[] }> {
   const logs: string[] = [];
+  
+  // Guard against legacy writes when canonical mode is enforced
+  guardCanonicalWrite(`applyElevizionLayoutToScreen for screen ${screenId}`);
   
   logs.push(`[ApplyLayout] === Assigning layout to screen ===`);
   logs.push(`[ApplyLayout] Screen ID: ${screenId}`);
