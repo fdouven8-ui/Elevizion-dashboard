@@ -76,7 +76,9 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
   - **Playlist Seeding**: BASE auto-seeds with "Elevizion Baseline" media, ADS with "Elevizion Self-Ad" placeholder (never empty/Test).
   - **Layout Binding**: `verifyLayoutBindings()` checks and `fixLayoutBindings()` auto-corrects BASE/ADS region assignments.
   - **ensureLocationCompliance()**: Single function that creates playlists, seeds content, verifies layout, assigns to screen, pushes, and updates DB.
-  - **API Endpoints**: `POST /api/admin/locations/:id/ensure-compliance`, `GET /api/admin/locations/:id/playlist-items`, `POST /api/admin/yodeck/migrate-canonical`.
+  - **ensureLocationContent()**: Full content pipeline that also finds/links approved ads: (1) Creates BASE/ADS playlists, (2) Extracts legacy apps (news/weather) from old playlists, (3) Finds approved ads via advertiser chain (location → screens → placements → contracts → advertisers → adAssets), (4) Links approved ads to Yodeck media by filename search, (5) Seeds content, (6) Binds layout and pushes to screen.
+  - **Approved Ads Pipeline**: `findApprovedAdsForLocation()` follows advertiser chain with yodeckDeviceId fallback. `linkApprovedAdToYodeck()` searches Yodeck by storedFilename (ADV-...) or original filename. `adAssets.yodeckMediaId` tracks linked media.
+  - **API Endpoints**: `POST /api/admin/locations/:id/ensure-compliance`, `POST /api/admin/locations/:id/ensure-content`, `POST /api/admin/locations/:id/link-latest-ad`, `GET /api/admin/locations/:id/approved-ads`, `GET /api/admin/locations/:id/playlist-items`, `POST /api/admin/yodeck/migrate-canonical`.
 - **ELEVIZION_LAYOUT_SPEC**: Deterministic layout dimensions constant (BASE: 576px/30%, ADS: 1344px/70% = 1920px total). Helper functions: `buildElevizionLayoutPayload`, `verifyLayoutDimensions`, `fixLayoutDimensions`.
 - **Feature Flags for Legacy Cleanup**: `DISABLE_LEGACY_SCREEN_CONTENT_UI`, `DISABLE_DB_STATUS_FIELDS`, `CANONICAL_ONLY_LOGGING` control deprecated features and log when non-canonical data is used.
 
