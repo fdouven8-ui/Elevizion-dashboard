@@ -1,0 +1,85 @@
+DOEL: Maak 1 canonical “content pipeline” voor screens:
+- BASE playlist bevat altijd Nieuws/Weer (Yodeck Apps) + evt. Elevizion baseline.
+- ADS playlist bevat altijd: (a) goedgekeurde upload-ads uit het upload portaal + (b) Elevizion self-ad fallback.
+- Test-video’s die ik handmatig in Yodeck heb gezet mogen NIET automatisch mee.
+- Na approval van een upload moet die advertentie zichtbaar worden op het scherm (via ADS playlist + layout).
+
+HUIDIGE SITUATIE:
+- Er is minstens 1 video geupload via upload portaal en “approved”, maar daarna nergens zichtbaar.
+- Oude playlist bevat nieuws/weer apps via Yodeck plugins + test media (handmatig geupload).
+- Scherm staat nu op Elevizion layout, maar BASE/ADS playlists zijn soms leeg of verkeerd gevuld.
+
+EISEN (MOET):
+
+A) SINGLE SOURCE OF TRUTH
+Maak 1 serverfunctie: ensureLocationContent(locationId) die de ENIGE write-route is naar Yodeck (layout/playlist/items/push).
+Blokkeer alle andere legacy writes (throw NON_CANONICAL_WRITE_BLOCKED).
+
+B) VIND & KOPPEL APPROVED UPLOAD ADS (BELANGRIJKSTE FIX)
+1) Zoek in onze DB welke “approved” ads er zijn voor locationId:
+- Neem de advertentie(s) met status APPROVED / PUBLISHED_READY (wat jullie status ook heet).
+- Elke ad heeft óf yodeckMediaId in DB, óf fileKey/path die ooit geupload is.
+2) Zorg dat elke approved ad een geldige yodeckMediaId heeft:
+- Als yodeckMediaId ontbreekt: zoek in Yodeck /medias op naam (bv. ADV-..., of originele bestandsnaam) EN/OF op metadata die jullie meegeven.
+- Als gevonden: schrijf yodeckMediaId terug naar DB (idempotent).
+3) Voeg daarna die yodeckMediaId toe aan de ADS playlist (idempotent):
+- Als item al bestaat: skip.
+- Als niet bestaat: append.
+4) Push screen na wijziging.
+
+C) HERGEBRUIK ALLEEN NIEUWS/WEER UIT OUDE PLAYLIST (NIET TEST VIDEO’S)
+1) Detecteer “legacy playlist” per location:
+- Als er een playlist bestaat die momenteel op dat screen stond vóór layout (of de playlist die in Yodeck bij dat screen gekoppeld was), haal playlist items op.
+2) Split legacy items:
+- Keep: items met type == "app" (Yodeck Apps zoals News/Weather)
+- Keep optionally: items met type == "layout" of "playlist" alleen als het app containers zijn (maar in principe: alleen "app")
+- Drop: items met type == "media" (dit zijn die test-video’s die ik handmatig heb geplaatst)
+3) Zorg dat BASE playlist de apps bevat:
+- Als BASE nog geen apps heeft, kopieer de gevonden app-items (nieuws/weer) naar BASE.
+- Als er geen apps gevonden zijn: zet BASE op fallback:
+  - voeg minimaal 1 baseline item toe (kan Elevizion baseline media zijn) zodat hij niet leeg is.
+NB: Het doel is dat BASE standaard Nieuws/Weer blijft leveren zonder dat Replit “zelf nieuws moet bouwen”.
+
+D) PLAYLISTS CANONICAL + NOOIT LEEG
+Per locatie exact 2 playlists:
+- BASE: "Baseline | <locatieNaam>"
+- ADS: "Ads | <locatieNaam>"
+Regels:
+- BASE mag niet leeg zijn. Idealiter bevat BASE: News/Weather apps (uit legacy) + evt. 1 baseline media als filler.
+- ADS mag niet leeg zijn. Als er nog geen approved ads zijn: voeg "Elevizion Self-Ad" toe.
+
+E) LAYOUT BINDING
+Zorg dat Elevizion layout bestaat en correct gebonden is:
+- BASE zone -> BASE playlist ID
+- ADS zone -> ADS playlist ID
+1920x1080, BASE 576px, ADS 1344px, ADS zindex hoger.
+Assign screen_content v2:
+{ "screen_content": { "source_type": "layout", "source_id": layoutId } }
+Daarna push.
+
+F) DEBUG/ADMIN UI (MAKKELIJK, NEDERLANDS)
+Op /admin/yodeck-debug toon alleen:
+- Online/Offline
+- Wat draait er: Layout/Playlist + naam
+- BASE items: lijst met (type + naam)
+- ADS items: lijst met (type + naam)
+- “Approved ads gevonden in DB”: lijst met (adId + yodeckMediaId + filename)
+Knoppen:
+1) “Repareer scherm” -> ensureLocationContent(locationId)
+2) “Nu verversen op TV” -> push
+3) “Koppel laatste goedgekeurde advertentie” -> pakt meest recente APPROVED ad en force-append naar ADS (idempotent)
+
+G) TECHNISCH (BELANGRIJK)
+- Playlist items API: support beide shapes (item.item object of item.item number). Als number: fetch media details en toon naam/type.
+- Alle calls idempotent.
+- Logging kort maar duidelijk (NL): “Approved ad gekoppeld aan ADS playlist”, “Nieuws/Weer apps gekopieerd naar BASE”, “Test media overgeslagen”.
+
+ACCEPTATIE:
+1) Ik keur een upload-ad goed -> binnen 1 run van ensureLocationContent staat hij in ADS playlist en na push zie ik hem op TV.
+2) Nieuws/weer blijft in BASE (uit de oude playlist) en test-video’s komen niet automatisch terug.
+3) UI is Nederlands en begrijpelijk; geen “canonical/normalized/source_type” woorden zichtbaar.
+4) Elk nieuw scherm dat toegevoegd wordt krijgt automatisch dezelfde structuur.
+Laat na implementatie zien:
+- welke DB velden gebruikt/gevuld zijn voor yodeckMediaId
+- welke endpoints naar Yodeck gebruikt zijn
+- voorbeeld output van debug (BASE items en ADS items)
