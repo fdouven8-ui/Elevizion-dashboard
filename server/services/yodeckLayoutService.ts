@@ -6,6 +6,11 @@
  * - Baseline playlist creation (news/weather/placeholder)
  * - Layout creation with 2 zones (BASE + ADS)
  * - Fallback schedule assignment when layouts not supported
+ * 
+ * Guardrails:
+ * - Feature flags control experimental features
+ * - No PERMANENT operations on screens with unknown status
+ * - Health checks before destructive operations
  */
 
 import { db } from "../db";
@@ -13,6 +18,52 @@ import { locations } from "@shared/schema";
 import { eq, sql } from "drizzle-orm";
 import * as fs from "fs";
 import * as path from "path";
+
+// ============================================================================
+// FEATURE FLAGS - Control experimental/risky features
+// ============================================================================
+export const FEATURE_FLAGS = {
+  /** Allow layout operations on screens with contentMode=unknown */
+  ALLOW_LAYOUT_ON_UNKNOWN: false,
+  /** Enable aggressive retry logic (more API calls) */
+  AGGRESSIVE_RETRY: true,
+  /** Skip verification step (faster but less reliable) */
+  SKIP_VERIFICATION: false,
+  /** Enable auto-baseline seeding (create placeholder content) */
+  AUTO_BASELINE_SEED: true,
+  /** Maximum retries for API operations */
+  MAX_API_RETRIES: 3,
+  /** Require online screen for permanent operations */
+  REQUIRE_ONLINE_FOR_PERMANENT: false,
+};
+
+/**
+ * Safety check: Should we proceed with layout operation on this screen?
+ * Returns false if the screen status is unknown and ALLOW_LAYOUT_ON_UNKNOWN is false
+ */
+export function shouldProceedWithLayoutOperation(
+  contentMode: string, 
+  isOnline: boolean | "unknown",
+  operationType: "temporary" | "permanent"
+): { proceed: boolean; reason?: string } {
+  // Guardrail 1: No PERMANENT operations on unknown content mode
+  if (contentMode === "unknown" && operationType === "permanent" && !FEATURE_FLAGS.ALLOW_LAYOUT_ON_UNKNOWN) {
+    return { 
+      proceed: false, 
+      reason: `GUARDRAIL: Cannot perform ${operationType} operation on screen with contentMode=unknown. Enable ALLOW_LAYOUT_ON_UNKNOWN flag to override.` 
+    };
+  }
+  
+  // Guardrail 2: Warn but proceed if screen is offline (for permanent ops only)
+  if (isOnline === false && operationType === "permanent" && FEATURE_FLAGS.REQUIRE_ONLINE_FOR_PERMANENT) {
+    return { 
+      proceed: false, 
+      reason: `GUARDRAIL: Cannot perform ${operationType} operation on offline screen. Enable REQUIRE_ONLINE_FOR_PERMANENT=false to override.` 
+    };
+  }
+  
+  return { proceed: true };
+}
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const BASELINE_ASSET_PATH = path.join(process.cwd(), "assets/baseline/elevizion-baseline-1080p.png");
@@ -602,14 +653,14 @@ function wait(ms: number): Promise<void> {
 }
 
 /**
- * Helper: Verify screen has correct layout assigned
+ * Helper: Quick verification that screen has correct layout assigned (single check)
  * Returns true if layout is correctly assigned
  */
-async function verifyScreenLayout(
+async function quickVerifyScreenLayout(
   screenId: string,
   expectedLayoutId: string,
   logs: string[]
-): Promise<{ verified: boolean; currentMode?: string; currentSourceId?: string }> {
+): Promise<{ verified: boolean; currentMode?: string; currentLayoutId?: string }> {
   const { mapYodeckScreen } = await import("./yodeckScreenMapper");
   
   logs.push(`[Verify] Fetching screen ${screenId} to verify layout...`);
@@ -622,22 +673,22 @@ async function verifyScreenLayout(
   
   const mapped = mapYodeckScreen(screenResult.data);
   
-  logs.push(`[Verify] Screen mode=${mapped.mode}, sourceType=${mapped.sourceType}, sourceId=${mapped.sourceId}, sourceName=${mapped.sourceName}`);
+  logs.push(`[Verify] Screen contentMode=${mapped.contentMode}, layoutId=${mapped.layoutId}, layoutName=${mapped.layoutName}`);
   
   // Accept success if:
-  // 1. mode is "layout" AND sourceId matches expected layout ID
-  // 2. OR mode is "layout" AND sourceName starts with "Elevizion" (name-based match)
-  const isLayoutMode = mapped.mode === "layout";
-  const idMatch = String(mapped.sourceId) === String(expectedLayoutId);
-  const nameMatch = mapped.sourceName?.startsWith("Elevizion");
+  // 1. contentMode is "layout" AND layoutId matches expected layout ID
+  // 2. OR contentMode is "layout" AND layoutName starts with "Elevizion" (name-based match)
+  const isLayoutMode = mapped.contentMode === "layout";
+  const idMatch = String(mapped.layoutId) === String(expectedLayoutId);
+  const nameMatch = mapped.layoutName?.startsWith("Elevizion");
   
   if (isLayoutMode && (idMatch || nameMatch)) {
     logs.push(`[Verify] SUCCESS: Layout correctly assigned (idMatch=${idMatch}, nameMatch=${nameMatch})`);
-    return { verified: true, currentMode: mapped.mode, currentSourceId: String(mapped.sourceId || "") };
+    return { verified: true, currentMode: mapped.contentMode, currentLayoutId: String(mapped.layoutId || "") };
   }
   
-  logs.push(`[Verify] NOT VERIFIED: Expected layout ${expectedLayoutId}, got mode=${mapped.mode}, sourceId=${mapped.sourceId}`);
-  return { verified: false, currentMode: mapped.mode, currentSourceId: String(mapped.sourceId || "") };
+  logs.push(`[Verify] NOT VERIFIED: Expected layout ${expectedLayoutId}, got contentMode=${mapped.contentMode}, layoutId=${mapped.layoutId}`);
+  return { verified: false, currentMode: mapped.contentMode, currentLayoutId: String(mapped.layoutId || "") };
 }
 
 /**
@@ -646,17 +697,41 @@ async function verifyScreenLayout(
  * - 500ms delay between verifications  
  * - Full retry cycle (re-assign + verify) if verification fails
  * - 2 full retry cycles max
+ * - Guardrail: Checks screen status before permanent operations
  */
 export async function assignLayoutToScreen(
   screenId: string,
-  layoutId: string
+  layoutId: string,
+  options?: { operationType?: "temporary" | "permanent"; skipGuardrails?: boolean }
 ): Promise<{ ok: boolean; error?: string; logs: string[]; verified?: boolean }> {
   const logs: string[] = [];
   const MAX_VERIFY_ATTEMPTS = 3;
   const VERIFY_DELAY_MS = 500;
   const MAX_FULL_RETRIES = 2;
+  const operationType = options?.operationType || "permanent";
   
   logs.push(`[AssignLayout] Starting robust layout assignment: layout ${layoutId} -> screen ${screenId}`);
+  
+  // === GUARDRAIL: Check screen status before proceeding ===
+  if (!options?.skipGuardrails) {
+    const { mapYodeckScreen } = await import("./yodeckScreenMapper");
+    
+    logs.push(`[AssignLayout] Checking screen status for guardrails...`);
+    const preCheckResult = await yodeckRequest<any>(`/screens/${screenId}/`, "GET");
+    
+    if (preCheckResult.ok && preCheckResult.data) {
+      const mapped = mapYodeckScreen(preCheckResult.data);
+      const safetyCheck = shouldProceedWithLayoutOperation(mapped.contentMode, mapped.isOnline, operationType);
+      
+      if (!safetyCheck.proceed) {
+        logs.push(`[AssignLayout] ${safetyCheck.reason}`);
+        return { ok: false, error: safetyCheck.reason, logs, verified: false };
+      }
+      logs.push(`[AssignLayout] Guardrail check passed: contentMode=${mapped.contentMode}, isOnline=${mapped.isOnline}`);
+    } else {
+      logs.push(`[AssignLayout] Warning: Could not verify screen status for guardrails, proceeding with caution`);
+    }
+  }
   
   for (let fullRetry = 0; fullRetry <= MAX_FULL_RETRIES; fullRetry++) {
     if (fullRetry > 0) {
@@ -699,7 +774,7 @@ export async function assignLayoutToScreen(
       
       logs.push(`[AssignLayout] Verify attempt ${verifyAttempt}/${MAX_VERIFY_ATTEMPTS}...`);
       
-      const verifyResult = await verifyScreenLayout(screenId, layoutId, logs);
+      const verifyResult = await quickVerifyScreenLayout(screenId, layoutId, logs);
       
       if (verifyResult.verified) {
         logs.push(`[AssignLayout] SUCCESS: Layout ${layoutId} verified on screen ${screenId} after ${verifyAttempt} attempt(s)`);

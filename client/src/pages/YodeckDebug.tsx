@@ -83,6 +83,7 @@ interface ForceFixResult {
 interface SyncResult {
   syncedAt: string;
   screenCount: number;
+  screensUpdated?: number;
   layoutCount: number;
   playlistCount: number;
 }
@@ -217,7 +218,7 @@ export default function YodeckDebug() {
           {sync.data && (
             <p className="text-sm text-muted-foreground" data-testid="sync-result">
               Laatste sync: {new Date(sync.data.syncedAt).toLocaleString("nl-NL")} — 
-              {sync.data.screenCount} screens, {sync.data.layoutCount} layouts, {sync.data.playlistCount} playlists
+              {sync.data.screenCount} screens ({sync.data.screensUpdated ?? 0} DB-bijgewerkt), {sync.data.layoutCount} layouts, {sync.data.playlistCount} playlists
             </p>
           )}
         </CardContent>
