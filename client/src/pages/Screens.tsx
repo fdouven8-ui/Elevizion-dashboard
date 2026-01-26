@@ -1,10 +1,11 @@
 import { useAppData } from "@/hooks/use-app-data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink, AlertCircle, AlertTriangle, CheckCircle, Link2, RefreshCw } from "lucide-react";
+import { Plus, Monitor, Filter, X, Rows3, Rows4, LayoutGrid, Search, ExternalLink, AlertCircle, AlertTriangle, CheckCircle, Link2, RefreshCw, Shield } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useCanonicalScreens } from "@/hooks/useCanonicalScreens";
 import {
   Table,
   TableBody,
@@ -134,7 +135,19 @@ export default function Screens() {
   const initialStatus = urlParams.get('status');
   const initialMoneybirdFilter = urlParams.get('moneybird') === 'missing';
 
-  // Fetch screens with business data (consolidated endpoint)
+  // UNIFIED: Canonical hook for LIVE Yodeck status
+  const { 
+    screens: canonicalScreens, 
+    refresh: refreshCanonical, 
+    isRefetching: isRefetchingCanonical,
+    isError: isCanonicalError,
+    isStale: isCanonicalStale,
+    ensureCompliance,
+    isEnsuringCompliance,
+    getScreenByYodeckId,
+  } = useCanonicalScreens();
+
+  // Fetch screens with business data (consolidated endpoint for DB/Moneybird info)
   const { data: screensWithBusiness = [] } = useQuery<ScreenWithBusiness[]>({
     queryKey: ["/api/screens/with-business"],
   });
@@ -345,18 +358,21 @@ export default function Screens() {
             <span>Monitor en beheer je digital signage displays</span>
             {lastSyncAt && (
               <span className="text-xs" data-testid="last-sync-timestamp">
-                Laatste Yodeck sync: {new Date(lastSyncAt).toLocaleString("nl-NL")}
+                Laatste sync: {new Date(lastSyncAt).toLocaleString("nl-NL")}
               </span>
             )}
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => syncYodeck.mutate()}
-              disabled={syncYodeck.isPending}
+              onClick={() => {
+                syncYodeck.mutate();
+                refreshCanonical();
+              }}
+              disabled={syncYodeck.isPending || isRefetchingCanonical}
               data-testid="sync-yodeck-button"
             >
-              <RefreshCw className={`h-4 w-4 mr-1 ${syncYodeck.isPending ? 'animate-spin' : ''}`} />
-              Sync
+              <RefreshCw className={`h-4 w-4 mr-1 ${syncYodeck.isPending || isRefetchingCanonical ? 'animate-spin' : ''}`} />
+              Ververs
             </Button>
           </div>
         </div>
@@ -374,6 +390,32 @@ export default function Screens() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* Canonical live status warning banner */}
+      {isCanonicalError && (
+        <div 
+          className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 flex items-center justify-between"
+          data-testid="canonical-error-banner"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-red-500" />
+            <span className="text-sm text-red-700">
+              Yodeck live status onbeschikbaar - status is mogelijk verouderd
+            </span>
+          </div>
+          <Button 
+            variant="outline" 
+            size="sm"
+            className="border-red-300 text-red-700 hover:bg-red-100"
+            onClick={() => refreshCanonical()}
+            disabled={isRefetchingCanonical}
+            data-testid="button-retry-canonical"
+          >
+            <RefreshCw className={`h-3 w-3 mr-1 ${isRefetchingCanonical ? 'animate-spin' : ''}`} />
+            Opnieuw proberen
+          </Button>
+        </div>
+      )}
 
       {/* Moneybird koppeling banner */}
       {screensWithoutMoneybirdCount > 0 && !moneybirdMissingFilter && (
@@ -669,6 +711,13 @@ export default function Screens() {
               const cityName = scr.locationLabel !== "—" ? scr.locationLabel : null;
               const addressInfo = scr.locationSubLabel; // straat • postcode
               
+              // UNIFIED: Get LIVE status from canonical data
+              const liveScreen = scr.yodeck.deviceId 
+                ? getScreenByYodeckId(scr.yodeck.deviceId) 
+                : undefined;
+              const liveStatus = liveScreen?.onlineStatus || scr.yodeck.status;
+              const isElevizion = liveScreen?.isElevizion ?? false;
+              
               return (
                 <TableRow 
                   key={scr.id} 
@@ -808,16 +857,26 @@ export default function Screens() {
                     </div>
                   </TableCell>
                   
-                  {/* Status kolom: Yodeck online/offline */}
+                  {/* Status kolom: LIVE Yodeck status from canonical hook */}
                   <TableCell className={getCellPadding()}>
                     <div className="flex flex-col gap-1">
                       {scr.yodeck.deviceId ? (
-                        <Badge 
-                          variant={scr.yodeck.status === "online" ? "default" : "destructive"}
-                          className="font-medium w-fit"
-                        >
-                          {scr.yodeck.status === "online" ? "Online" : "Offline"}
-                        </Badge>
+                        <>
+                          <Badge 
+                            variant={liveStatus === "online" ? "default" : "destructive"}
+                            className="font-medium w-fit"
+                          >
+                            {liveStatus === "online" ? "Online" : liveStatus === "offline" ? "Offline" : "Onbekend"}
+                          </Badge>
+                          {liveScreen && (
+                            <Badge 
+                              variant={isElevizion ? "outline" : "destructive"}
+                              className={`text-xs w-fit ${isElevizion ? "text-green-600 border-green-400" : ""}`}
+                            >
+                              {isElevizion ? "Elevizion" : "Niet EVZ"}
+                            </Badge>
+                          )}
+                        </>
                       ) : (
                         <Badge 
                           variant="outline"

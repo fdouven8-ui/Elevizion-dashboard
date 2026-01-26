@@ -15949,6 +15949,71 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // UNIFIED SCREEN CONTROL ENDPOINTS (Single control path)
+  // ============================================================================
+  
+  /**
+   * POST /api/admin/screens/:locationId/ensure-compliance
+   * Ensures baseline + ads + Elevizion layout for a location
+   */
+  app.post("/api/admin/screens/:locationId/ensure-compliance", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { ensureComplianceForLocation } = await import("./services/yodeckScreenContentService");
+      
+      console.log(`[EnsureCompliance] Starting for location: ${locationId}`);
+      const result = await ensureComplianceForLocation(locationId);
+      
+      console.log(`[EnsureCompliance] Result: ${result.finalStatus}, fallbackUsed: ${result.fallbackUsed}`);
+      result.logs.forEach(log => console.log(log));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[EnsureCompliance] Error:", error);
+      res.status(500).json({ ok: false, error: error.message, logs: [] });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/:locationId/force-reset
+   * Resets screen to empty playlist
+   */
+  app.post("/api/admin/screens/:locationId/force-reset", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { forceResetScreen } = await import("./services/yodeckScreenContentService");
+      
+      console.log(`[ForceReset] Starting for location: ${locationId}`);
+      const result = await forceResetScreen(locationId);
+      
+      console.log(`[ForceReset] Result: ${result.finalStatus}, fallbackUsed: ${result.fallbackUsed}`);
+      result.logs.forEach(log => console.log(log));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ForceReset] Error:", error);
+      res.status(500).json({ ok: false, error: error.message, logs: [] });
+    }
+  });
+
+  /**
+   * GET /api/admin/screens/:locationId/verify
+   * Verify current screen state
+   */
+  app.get("/api/admin/screens/:locationId/verify", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { verifyLocation } = await import("./services/yodeckScreenContentService");
+      
+      const result = await verifyLocation(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Verify] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
   // RAW YODECK DEBUG ENDPOINTS - Direct API response for debugging
   // ============================================================================
   

@@ -1,0 +1,87 @@
+We are entering HARDEN + UNIFY phase. No new features. Only unify control paths, remove duplicates, and make all screens (existing + new) controlled the same way.
+
+NON-NEGOTIABLE RULES
+1) There is exactly ONE “truth” for live status and current content: /api/admin/canonical-screens (live Yodeck API).
+2) There is exactly ONE “write/control” path to set screen content (layout/playlist/reset): yodeckScreenContentService (single module).
+3) UI may never use cached DB fields as authoritative truth. DB can store references (ids, mappings), not live status.
+4) New screens must automatically become compliant (baseline + ads + Elevizion layout) via the same pipeline.
+
+SCOPE
+- Update frontend pages: Schermen, Yodeck Debug, Layouts (if kept).
+- Update backend: unify all screen operations and remove legacy write formats except as fallback inside the single service.
+- Remove/disable redundant endpoints and UI buttons causing conflicting behavior.
+
+A) CANONICAL EVERYWHERE (READ)
+1. Create frontend service + hook:
+   - src/lib/canonicalScreens.ts: fetchCanonicalScreens(), refreshCanonicalScreens()
+   - src/hooks/useCanonicalScreens.ts: shared state, polling optional (OFF by default), manual refresh.
+2. Schermen page must use ONLY canonical screens for:
+   - online/offline
+   - last seen / screenshot timestamp if available
+   - source_type, source_id, source_name
+   - isElevizionLayout
+3. Yodeck Debug page must use the same hook (no separate fetching).
+4. Layouts page (if still needed) must not compute “is on layout” itself; it must display from canonical state or show “N/A” if not relevant.
+
+B) ONE CONTROL PATH (WRITE)
+1. Create backend module: server/services/yodeckScreenContentService.ts (or consolidate into existing)
+   Expose ONLY these functions used everywhere:
+   - ensureComplianceForLocation(locationId): baseline playlist exists, ads playlist exists, Elevizion layout exists, assign layout to screen, push, verify
+   - forceReset(locationId): set EMPTY reset playlist, push, verify
+   - applyLayout(locationId, layoutId): assign layout via v2 screen_content format, push, verify
+   - applyPlaylist(locationId, playlistId): assign playlist via v2 screen_content format, push, verify
+   - verify(locationId): reads from canonical mapper (screen_content.source_* + state.online)
+2. All other code paths that PATCH /screens must be removed or routed through this module.
+3. Legacy PATCH formats (default_playlist_type/default_playlist) are allowed ONLY as internal fallback inside this module if v2 returns 400/422, and must be logged as FALLBACK_USED.
+
+C) NEW SCREENS ONBOARDING (CRITICAL)
+1. When adding/linking a new Yodeck screen to a location:
+   - Immediately call ensureComplianceForLocation(locationId)
+   - Store only mappings in DB:
+     - yodeckDeviceId
+     - baselinePlaylistId
+     - adsPlaylistId (tagbased or normal)
+     - elevizionLayoutId
+   - Do NOT store live status fields (online/offline, current mode/name) in DB except optionally lastCanonicalSyncAt timestamp.
+2. Add an idempotent “Auto-Compliance” step:
+   - If a screen is linked and missing any of (baseline/ads/layout), automatically create them.
+   - If already exists, do nothing.
+3. The default state for every new screen must end as:
+   - screen_content.source_type = "layout"
+   - source_name starts with "Elevizion"
+   - baseline and ads playlists exist and are bound to the layout regions.
+
+D) CLEANUP DUPLICATES + UI CONSISTENCY
+1. Remove/disable any UI buttons that do separate “sync” or separate “push” not using the unified control path.
+   - There must be exactly ONE refresh button that refetches canonical screens.
+   - There must be exactly ONE “Force Elevizion Layout” action (in Yodeck Debug and optionally a single place in Schermen row actions) that calls ensureComplianceForLocation().
+2. Fix sidebar routes: if a page is removed, remove its menu item. No dead links / 404.
+3. Ensure labels are consistent everywhere:
+   - “Online / Offline”
+   - “Content: Layout / Playlist”
+   - “Bron: <source_name>”
+   - “Elevizion: Ja/Nee”
+
+E) BACKEND ENDPOINTS (PUBLIC CONTRACT)
+1. Keep:
+   - GET /api/admin/canonical-screens (live truth)
+   - POST /api/admin/screens/:locationId/ensure-compliance (calls ensureComplianceForLocation)
+   - POST /api/admin/screens/:locationId/force-reset (calls forceReset)
+2. Deprecate/remove:
+   - any “sync status” endpoint that writes live truth into DB for UI rendering
+   - any older admin endpoints duplicating the above actions
+3. Ensure all endpoints require admin auth.
+
+F) VERIFICATION / FAIL-FAST
+1. Add a dev-only assertion: when Schermen and Yodeck Debug load, log a warning if they are not using canonical hook.
+2. Add server logs for every compliance run:
+   - before source_type/source_name
+   - after source_type/source_name
+   - verify attempts + final PASS/FAIL
+   - note if FALLBACK_USED
+
+DELIVERABLES
+- Schermen page and Yodeck Debug always show identical live status from canonical endpoint.
+- All screens (existing + new) are controlled via the same ensureCompliance pipeline.
+- No conflicting inputs, no duplicated sync/push buttons, no dead admin routes.
+Proceed with implementation now, edit the codebase directly, and list exactly which files were changed and which routes/buttons were removed.
