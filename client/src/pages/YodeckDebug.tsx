@@ -24,22 +24,60 @@ interface RawScreenData {
   error?: string;
 }
 
-interface PlaylistSummary {
+interface NormalizedItem {
+  id: number;
+  mediaId: number;
+  name: string;
+  type: string;
+  duration: number;
+  order: number;
+}
+
+interface PlaylistItemsResponse {
   ok: boolean;
   locationId: string;
   locationName: string;
   base: {
     playlistId: string | null;
-    playlistName: string | null;
+    ok: boolean;
+    items: NormalizedItem[];
     itemCount: number;
-    items: { id: number; name: string; type: string }[];
+    error?: string;
   };
   ads: {
     playlistId: string | null;
-    playlistName: string | null;
+    ok: boolean;
+    items: NormalizedItem[];
     itemCount: number;
-    items: { id: number; name: string; type: string }[];
+    error?: string;
   };
+  error?: string;
+}
+
+interface CanonicalComplianceResult {
+  ok: boolean;
+  locationId: string;
+  locationName: string;
+  basePlaylist: {
+    id: string | null;
+    name: string | null;
+    itemCount: number;
+    isNew: boolean;
+  };
+  adsPlaylist: {
+    id: string | null;
+    name: string | null;
+    itemCount: number;
+    isNew: boolean;
+  };
+  layout: {
+    id: string | null;
+    isNew: boolean;
+    bindingsVerified: boolean;
+  };
+  pushed: boolean;
+  verified: boolean;
+  logs: string[];
   error?: string;
 }
 
@@ -99,12 +137,13 @@ export default function YodeckDebug() {
   } = useCanonicalScreens();
 
   const selectedScreen = screens.find(s => s.locationId === selectedLocation);
+  const [canonicalResult, setCanonicalResult] = useState<CanonicalComplianceResult | null>(null);
 
-  // Playlist summary query
-  const { data: playlistSummary, refetch: refetchPlaylist } = useQuery<PlaylistSummary>({
-    queryKey: ["/api/admin/locations/playlist-summary", selectedLocation],
+  // Normalized playlist items query - uses the new endpoint that guarantees count === items.length
+  const { data: playlistItems, refetch: refetchPlaylist, isError: playlistError, error: playlistFetchError } = useQuery<PlaylistItemsResponse>({
+    queryKey: ["/api/admin/locations/playlist-items", selectedLocation],
     queryFn: async () => {
-      const res = await fetch(`/api/admin/locations/${selectedLocation}/playlist-summary`, {
+      const res = await fetch(`/api/admin/locations/${selectedLocation}/playlist-items`, {
         credentials: "include",
       });
       if (!res.ok) throw new Error(await res.text());
@@ -151,6 +190,24 @@ export default function YodeckDebug() {
       refresh();
     },
   });
+
+  // Canonical compliance mutation - creates/seeds playlists, verifies layout bindings
+  const canonicalComplianceMutation = useMutation({
+    mutationFn: async (locationId: string) => {
+      const res = await apiRequest("POST", `/api/admin/locations/${locationId}/ensure-compliance`, {});
+      return await res.json() as CanonicalComplianceResult;
+    },
+    onSuccess: (data) => {
+      setCanonicalResult(data);
+      refetchPlaylist();
+      refresh();
+    },
+  });
+
+  const handleEnsureCanonicalCompliance = () => {
+    if (!selectedLocation) return;
+    canonicalComplianceMutation.mutate(selectedLocation);
+  };
 
   const handleEnsureCompliance = async () => {
     if (!selectedLocation) return;
@@ -284,6 +341,22 @@ export default function YodeckDebug() {
 
             <Button
               size="lg"
+              variant="default"
+              className="bg-purple-600 hover:bg-purple-700"
+              disabled={!selectedLocation || canonicalComplianceMutation.isPending}
+              onClick={handleEnsureCanonicalCompliance}
+              data-testid="canonical-compliance-button"
+            >
+              {canonicalComplianceMutation.isPending ? (
+                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <CheckCircle className="h-4 w-4 mr-2" />
+              )}
+              Canonical Compliance
+            </Button>
+
+            <Button
+              size="lg"
               variant="secondary"
               disabled={!selectedLocation || pushScreenMutation.isPending}
               onClick={() => selectedLocation && pushScreenMutation.mutate(selectedLocation)}
@@ -361,78 +434,106 @@ export default function YodeckDebug() {
         </Card>
       )}
 
-      {playlistSummary && playlistSummary.ok && (
+      {/* Playlist Error Banner */}
+      {playlistError && (
+        <Card className="border-red-500 bg-red-50">
+          <CardContent className="pt-4">
+            <p className="text-red-700 flex items-center gap-2">
+              <XCircle className="h-4 w-4" />
+              Playlist items konden niet worden opgehaald: {(playlistFetchError as Error)?.message || "Onbekende fout"}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Normalized Playlist Items - count is ALWAYS derived from items.length */}
+      {playlistItems && playlistItems.ok && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <List className="h-5 w-5" />
-              Playlist Items
+              Playlist Items (Normalized)
             </CardTitle>
             <CardDescription>
-              Content in BASE en ADS playlists voor {playlistSummary.locationName}
+              Content in BASE en ADS playlists voor {playlistItems.locationName}
+              <span className="ml-2 text-xs">(count = items.length)</span>
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
+              {/* BASE Playlist */}
               <div className="p-4 bg-gray-50 rounded-lg">
                 <h4 className="font-medium mb-2 flex items-center gap-2">
                   BASE Playlist
-                  <Badge variant="outline">{playlistSummary.base.itemCount} items</Badge>
+                  <Badge variant={playlistItems.base.items.length > 0 ? "outline" : "destructive"}>
+                    {playlistItems.base.items.length} items
+                  </Badge>
                 </h4>
-                {playlistSummary.base.playlistId ? (
+                {playlistItems.base.playlistId ? (
                   <>
                     <p className="text-xs text-muted-foreground mb-2">
-                      ID: {playlistSummary.base.playlistId} • {playlistSummary.base.playlistName}
+                      ID: {playlistItems.base.playlistId}
                     </p>
-                    {playlistSummary.base.items.length > 0 ? (
+                    {!playlistItems.base.ok && (
+                      <p className="text-xs text-red-600 mb-2">Fout: {playlistItems.base.error}</p>
+                    )}
+                    {playlistItems.base.items.length > 0 ? (
                       <ul className="text-xs space-y-1">
-                        {playlistSummary.base.items.slice(0, 5).map((item, i) => (
-                          <li key={i} className="flex items-center gap-2">
+                        {playlistItems.base.items.slice(0, 5).map((item) => (
+                          <li key={item.id} className="flex items-center gap-2">
                             <Badge variant="secondary" className="text-[10px]">{item.type}</Badge>
                             <span className="truncate">{item.name}</span>
+                            <span className="text-muted-foreground">({item.duration}s)</span>
                           </li>
                         ))}
-                        {playlistSummary.base.items.length > 5 && (
-                          <li className="text-muted-foreground">... en {playlistSummary.base.items.length - 5} meer</li>
+                        {playlistItems.base.items.length > 5 && (
+                          <li className="text-muted-foreground">... en {playlistItems.base.items.length - 5} meer</li>
                         )}
                       </ul>
                     ) : (
-                      <p className="text-xs text-muted-foreground">Geen items</p>
+                      <p className="text-xs text-orange-600 font-medium">⚠️ Geen items - BASE mag niet leeg zijn!</p>
                     )}
                   </>
                 ) : (
-                  <p className="text-xs text-muted-foreground">Geen BASE playlist geconfigureerd</p>
+                  <p className="text-xs text-red-600">❌ Geen BASE playlist geconfigureerd</p>
                 )}
               </div>
 
+              {/* ADS Playlist */}
               <div className="p-4 bg-blue-50 rounded-lg">
                 <h4 className="font-medium mb-2 flex items-center gap-2">
                   ADS Playlist
-                  <Badge variant="default">{playlistSummary.ads.itemCount} items</Badge>
+                  <Badge variant={playlistItems.ads.items.length > 0 ? "default" : "destructive"}>
+                    {playlistItems.ads.items.length} items
+                  </Badge>
                 </h4>
-                {playlistSummary.ads.playlistId ? (
+                {playlistItems.ads.playlistId ? (
                   <>
                     <p className="text-xs text-muted-foreground mb-2">
-                      ID: {playlistSummary.ads.playlistId} • {playlistSummary.ads.playlistName}
+                      ID: {playlistItems.ads.playlistId}
                     </p>
-                    {playlistSummary.ads.items.length > 0 ? (
+                    {!playlistItems.ads.ok && (
+                      <p className="text-xs text-red-600 mb-2">Fout: {playlistItems.ads.error}</p>
+                    )}
+                    {playlistItems.ads.items.length > 0 ? (
                       <ul className="text-xs space-y-1">
-                        {playlistSummary.ads.items.slice(0, 5).map((item, i) => (
-                          <li key={i} className="flex items-center gap-2">
+                        {playlistItems.ads.items.slice(0, 5).map((item) => (
+                          <li key={item.id} className="flex items-center gap-2">
                             <Badge variant="secondary" className="text-[10px]">{item.type}</Badge>
                             <span className="truncate">{item.name}</span>
+                            <span className="text-muted-foreground">({item.duration}s)</span>
                           </li>
                         ))}
-                        {playlistSummary.ads.items.length > 5 && (
-                          <li className="text-muted-foreground">... en {playlistSummary.ads.items.length - 5} meer</li>
+                        {playlistItems.ads.items.length > 5 && (
+                          <li className="text-muted-foreground">... en {playlistItems.ads.items.length - 5} meer</li>
                         )}
                       </ul>
                     ) : (
-                      <p className="text-xs text-muted-foreground">Geen items</p>
+                      <p className="text-xs text-orange-600 font-medium">⚠️ Geen items - ADS mag niet leeg zijn!</p>
                     )}
                   </>
                 ) : (
-                  <p className="text-xs text-muted-foreground">Geen ADS playlist geconfigureerd</p>
+                  <p className="text-xs text-red-600">❌ Geen ADS playlist geconfigureerd</p>
                 )}
               </div>
             </div>
@@ -476,6 +577,77 @@ export default function YodeckDebug() {
                 </div>
               )}
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Canonical Compliance Result */}
+      {canonicalResult && (
+        <Card className={canonicalResult.ok ? "border-purple-500" : "border-red-500"}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              {canonicalResult.ok ? (
+                <CheckCircle className="h-5 w-5 text-purple-600" />
+              ) : (
+                <XCircle className="h-5 w-5 text-red-600" />
+              )}
+              Canonical Compliance: {canonicalResult.ok ? "GESLAAGD" : "MISLUKT"}
+            </CardTitle>
+            <CardDescription>{canonicalResult.locationName}</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-3 gap-4 text-sm">
+              <div className="p-3 bg-gray-50 rounded">
+                <p className="font-medium mb-2">BASE Playlist</p>
+                <p className="text-xs">ID: {canonicalResult.basePlaylist.id || "—"}</p>
+                <p className="text-xs">Name: {canonicalResult.basePlaylist.name || "—"}</p>
+                <p className="text-xs">Items: {canonicalResult.basePlaylist.itemCount}</p>
+                {canonicalResult.basePlaylist.isNew && (
+                  <Badge variant="outline" className="mt-1 text-green-600">NIEUW</Badge>
+                )}
+              </div>
+              <div className="p-3 bg-blue-50 rounded">
+                <p className="font-medium mb-2">ADS Playlist</p>
+                <p className="text-xs">ID: {canonicalResult.adsPlaylist.id || "—"}</p>
+                <p className="text-xs">Name: {canonicalResult.adsPlaylist.name || "—"}</p>
+                <p className="text-xs">Items: {canonicalResult.adsPlaylist.itemCount}</p>
+                {canonicalResult.adsPlaylist.isNew && (
+                  <Badge variant="outline" className="mt-1 text-green-600">NIEUW</Badge>
+                )}
+              </div>
+              <div className="p-3 bg-purple-50 rounded">
+                <p className="font-medium mb-2">Layout</p>
+                <p className="text-xs">ID: {canonicalResult.layout.id || "—"}</p>
+                <p className="text-xs">Bindings: {canonicalResult.layout.bindingsVerified ? "✓" : "✗"}</p>
+                <p className="text-xs">Pushed: {canonicalResult.pushed ? "✓" : "✗"}</p>
+                {canonicalResult.layout.isNew && (
+                  <Badge variant="outline" className="mt-1 text-green-600">NIEUW</Badge>
+                )}
+              </div>
+            </div>
+
+            {canonicalResult.error && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded">
+                <p className="font-medium text-red-800">Error:</p>
+                <p className="text-sm text-red-700">{canonicalResult.error}</p>
+              </div>
+            )}
+
+            <Accordion type="single" collapsible>
+              <AccordionItem value="logs">
+                <AccordionTrigger>
+                  <span className="flex items-center gap-2">
+                    <Code className="h-4 w-4" />
+                    Canonical Logs ({canonicalResult.logs.length})
+                  </span>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <pre className="text-xs bg-gray-900 text-gray-100 p-3 rounded overflow-x-auto max-h-64">
+                    {canonicalResult.logs.join("\n")}
+                  </pre>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
           </CardContent>
         </Card>
       )}

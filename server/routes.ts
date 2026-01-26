@@ -16081,6 +16081,89 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // CANONICAL COMPLIANCE ENDPOINTS
+  // ============================================================================
+  
+  /**
+   * POST /api/admin/locations/:locationId/ensure-compliance
+   * Ensure location is fully compliant with canonical model
+   */
+  app.post("/api/admin/locations/:locationId/ensure-compliance", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { ensureLocationCompliance } = await import("./services/yodeckCanonicalService");
+      const result = await ensureLocationCompliance(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[EnsureCompliance] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+  
+  /**
+   * GET /api/admin/locations/:locationId/playlist-items
+   * Get normalized playlist items for a location's playlists
+   */
+  app.get("/api/admin/locations/:locationId/playlist-items", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      
+      const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+      if (!location) {
+        return res.status(404).json({ ok: false, error: "Location not found" });
+      }
+      
+      const { getPlaylistItems } = await import("./services/yodeckCanonicalService");
+      
+      const baseItems = location.yodeckBaselinePlaylistId 
+        ? await getPlaylistItems(location.yodeckBaselinePlaylistId)
+        : { ok: false, items: [], error: "No BASE playlist" };
+      
+      const adsItems = location.yodeckPlaylistId
+        ? await getPlaylistItems(location.yodeckPlaylistId)
+        : { ok: false, items: [], error: "No ADS playlist" };
+      
+      res.json({
+        ok: true,
+        locationId,
+        locationName: location.name,
+        base: {
+          playlistId: location.yodeckBaselinePlaylistId,
+          ok: baseItems.ok,
+          items: baseItems.items,
+          itemCount: baseItems.items.length,
+          error: baseItems.error,
+        },
+        ads: {
+          playlistId: location.yodeckPlaylistId,
+          ok: adsItems.ok,
+          items: adsItems.items,
+          itemCount: adsItems.items.length,
+          error: adsItems.error,
+        },
+      });
+    } catch (error: any) {
+      console.error("[PlaylistItems] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+  
+  /**
+   * POST /api/admin/yodeck/migrate-canonical
+   * Migrate all linked locations to canonical model
+   */
+  app.post("/api/admin/yodeck/migrate-canonical", requireAdminAccess, async (req, res) => {
+    try {
+      const { migrateAllToCanonical } = await import("./services/yodeckCanonicalService");
+      const result = await migrateAllToCanonical();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[MigrateCanonical] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+  
+  // ============================================================================
   // RAW YODECK DEBUG ENDPOINTS - Direct API response for debugging
   // ============================================================================
   

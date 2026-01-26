@@ -1,0 +1,83 @@
+We need to CLEAN UP and UNIFY Yodeck screen content control so every screen is driven the same way and the UI shows one truth.
+
+GOAL (Canonical Model)
+Each location must always have exactly:
+- BASE playlist (always-on): news/weather/clock + elevizion baseline media (never empty)
+- ADS playlist: elevizion self-ad + paid ads (never "Test", never empty in production)
+Each screen must use the Elevizion 2-zone layout:
+- BASE zone uses BASE playlist
+- ADS zone uses ADS playlist
+Only these two playlists matter. Remove/disable all legacy inputs that can change screen content in other ways.
+
+PROBLEMS OBSERVED
+- Screen is on Elevizion layout, but BASE playlist has 0 items and ADS playlist is still old "Test".
+- Debug UI shows inconsistent playlist item count (badge says 6, list shows "Geen items") => mapper/UI is out of sync.
+- Some screens show old demo content because playlists behind the layout are wrong or empty.
+
+TASKS (Implement all):
+
+A) Canonical playlist naming + ownership
+For every location, enforce deterministic names and store IDs in DB:
+- basePlaylistName = `Baseline | <locationName>`
+- adsPlaylistName  = `Ads | <locationName>`
+If an existing playlist is named "Test" or contains "auto-playlist" for a linked location, it is NOT canonical.
+Create/fetch canonical playlists and update DB to point to them.
+
+B) Playlist creation + items (Yodeck API v2)
+Ensure POST /api/v2/playlists includes required `items: []` always.
+Implement a robust playlist items layer:
+- getPlaylistItems(playlistId) -> returns normalized items array (supports both Yodeck item shapes)
+- setPlaylistItems(playlistId, items) -> replaces playlist items with exact list (idempotent)
+- appendPlaylistItemIfMissing(playlistId, mediaId, duration?) -> idempotent
+Also add `POST /screens/:id/push/` after changes.
+
+C) Baseline seeding (BASE must never be empty)
+Make BASE playlist always contain at minimum:
+1) baseline placeholder media (elevizion-baseline-1080p.png) OR fallback to an existing "Elevizion Baseline" media if already uploaded.
+2) If we want dynamic news/weather later, keep it optional behind a feature flag, but BASE must have at least 1 item always.
+If baseline media upload fails, log the exact endpoint used and error body.
+
+D) Ads seeding (ADS must never be "Test")
+For ADS playlist, ensure at minimum:
+1) Elevizion self-ad media item (use existing media by tag or name, otherwise create a placeholder "Elevizion Ad Placeholder" image/video)
+Paid ads are added later by placement engine, but ADS must not be empty.
+
+E) Layout binding must use the canonical playlists
+When creating or verifying the Elevizion layout regions, ensure:
+- BASE region is bound to basePlaylistId
+- ADS region is bound to adsPlaylistId
+Fix region payload to include all required v2 fields (top, left, zindex, duration, res_width, res_height, order, etc.)
+Add verifyLayoutBindings(layoutId, basePlaylistId, adsPlaylistId) and auto-fix if mismatch.
+
+F) One single control path (remove legacy paths)
+Audit UI + API:
+- Remove/hide any UI controls that allow choosing Playlist/Media/App/Schedule directly for a linked screen.
+- DISABLE_LEGACY_SCREEN_CONTENT_UI = true by default for admins too, except yodeck-debug.
+All screen operations must go through yodeckScreenContentService canonical functions:
+- ensureCompliance(locationId) => creates playlists, seeds items, ensures layout exists + correct bindings, assigns layout to screen, pushes, verifies.
+- forceReset(locationId) => assigns a dedicated reset playlist "Elevizion | EMPTY (reset)" and pushes.
+- pushNow(locationId)
+
+G) Fix Debug UI inconsistency
+The debug page currently shows ADS playlist badge "6 items" but list says "Geen items".
+Make the debug UI use ONLY the normalized playlist items returned from getPlaylistItems().
+The count must be derived from the same array used to render the list.
+If items cannot be fetched, show an error banner with the raw HTTP status.
+
+H) Migration + Safety
+Add a one-time migration job or admin endpoint:
+POST /api/admin/yodeck/migrate-canonical
+- loops over all linked locations
+- runs ensureCompliance(locationId)
+- logs per location: oldBasePlaylistId, oldAdsPlaylistId, newBasePlaylistId, newAdsPlaylistId, layoutId, push status, verify status.
+Do NOT delete old playlists automatically. Just stop using them.
+
+I) Acceptance criteria
+For the screenshot case (screenId 591896 / location Bouwservice Douven):
+- Live status shows LAYOUT and Elevizion true
+- BASE playlist shows >= 1 item (baseline)
+- ADS playlist shows >= 1 item (self-ad placeholder)
+- Screen playback now shows split BASE+ADS correctly
+- No "Test" playlist is used for linked screens.
+
+Implement with clear logs and minimal new UI. Keep it robust and idempotent.
