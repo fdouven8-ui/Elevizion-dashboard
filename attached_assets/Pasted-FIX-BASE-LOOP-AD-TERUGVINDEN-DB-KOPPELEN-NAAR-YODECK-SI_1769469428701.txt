@@ -1,0 +1,68 @@
+FIX: BASE LOOP + AD TERUGVINDEN (DB) + KOPPELEN NAAR YODECK
+
+SITUATIE
+Op /admin/yodeck-debug staat scherm op juiste Elevizion layout, maar:
+- Basis content: 0 items
+- Advertenties: 0 items
+- "Geen goedgekeurde advertenties gevonden" terwijl ik WEL een video heb geupload + goedgekeurd.
+Dus: Yodeck is ok, maar DB-koppeling en seeding zijn fout of te streng.
+
+DOEL
+1) "Repareer scherm" zorgt ALTIJD voor een werkende baseline loop (nieuws/weer/placeholder) in BASE playlist.
+2) Goedgekeurde advertentie moet altijd terug te vinden zijn óf ik moet hem handmatig kunnen koppelen via de debug pagina.
+3) Alles in het Nederlands en simpel. Geen extra knoppen/termen.
+
+A) BASE LOOP: nooit leeg
+- Pas ensureLocationContent() aan:
+  - ensure BASE playlist bestaat
+  - als BASE playlist 0 items heeft: seed met minimaal 2 dingen:
+    1) bestaande Yodeck Apps uit oude playlist (nieuws/weer) ALS ze bestaan (extract) 
+    2) anders: voeg minimaal "Elevizion Baseline" media toe (fallback)
+  - NA seeding: verify via API dat BASE playlist items > 0, anders log + throw duidelijke error "BASE_SEED_FAILED"
+
+B) ADS LOOP: nooit leeg
+- ensure ADS playlist bestaat
+- seed ADS playlist altijd met "Elevizion Self-Ad" als fallback (zodat hij nooit leeg is)
+- verify items > 0, anders "ADS_SEED_FAILED"
+
+C) AD TERUGVINDEN: query niet meer stuk
+Probleem: approved ad wordt niet gevonden. Maak dit robuust:
+1) Maak endpoint: GET /api/admin/locations/:id/ads-debug
+   return JSON met:
+   - locationId
+   - yodeckDeviceId (indien bekend)
+   - laatste 50 ads in DB (approved/rejected) met velden: id, status, approvedAt, originalFilename, storedFilename, advertiserId, locationId/region, yodeckMediaId (indien gekoppeld), createdAt
+   - plus: "matchReasons" waarom een ad WEL/NIET matcht op deze locatie (locationId match / yodeckDeviceId match / region match)
+2) Pas findApprovedAdsForLocation() aan:
+   - primary: ads die expliciet bij locationId horen
+   - fallback1: ads via advertiserId die op deze locatie gepubliceerd moeten worden (zoals je oude chain)
+   - fallback2: als nog niks: pak "laatste approved ad in DB van de laatste 30 dagen" en toon in UI als "Ongekoppeld maar gevonden" (zodat ik hem kan koppelen)
+
+D) HANDMATIG KOPPELEN (MOET)
+- Voeg endpoint toe: POST /api/admin/locations/:id/link-ad
+  body: { adId: string }
+  - zoekt de ad in DB
+  - zoekt Yodeck media op storedFilename OR originalFilename (case-insensitive, ook zonder extensie)
+  - als gevonden: sla yodeckMediaId op bij de ad (en/of adAsset)
+  - voeg media toe aan ADS playlist (appendMediaToPlaylist idempotent)
+  - push naar screen
+  - return: { ok:true, adId, yodeckMediaId, adsPlaylistId }
+
+E) UI (Yodeck Debug) duidelijk + NL
+- Toon sectie "Goedgekeurde advertentie(s)"
+  - als 0 gevonden: toon NIET alleen "geen", maar toon:
+    - knop "Toon laatste 20 goedgekeurde ads (globaal)" (uit ads-debug)
+    - lijst met 20 ads met knop "Koppel aan dit scherm" (roept link-ad met adId)
+- Toon bovenaan in rood:
+  - "Basis content ontbreekt" als BASE 0 items
+  - "Advertenties ontbreken" als ADS 0 items
+- Knoppen houden op 3:
+  1) Repareer scherm (ensureLocationContent)
+  2) Nu verversen op TV (push)
+  3) (optioneel) Scherm resetten alleen in "Technisch" accordion
+
+ACCEPTATIE
+- Na "Repareer scherm": BASE items > 0 en ADS items > 0.
+- Als de ad niet automatisch matcht, kan ik hem altijd handmatig koppelen via "Koppel aan dit scherm".
+- Na koppelen staat de ad in ADS playlist + scherm push gebeurt.
+- Alles in Nederlands, geen canonical/compliance termen zichtbaar.

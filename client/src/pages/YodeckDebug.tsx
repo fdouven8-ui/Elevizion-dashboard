@@ -99,6 +99,7 @@ export default function YodeckDebug() {
   const [selectedLocation, setSelectedLocation] = useState<string>("");
   const [repareerResult, setRepareerResult] = useState<RepareerResult | null>(null);
   const [showTechnisch, setShowTechnisch] = useState(false);
+  const [showGlobalAds, setShowGlobalAds] = useState(false);
 
   const { 
     screens, 
@@ -196,6 +197,34 @@ export default function YodeckDebug() {
     },
   });
 
+  // Globale ads ophalen (fallback als geen ads gevonden voor locatie)
+  const { data: globalAdsData, refetch: refetchGlobalAds, isLoading: globalAdsLoading } = useQuery<ApprovedAdsResponse>({
+    queryKey: ["/api/admin/ads-debug"],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/ads-debug`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: showGlobalAds,
+    refetchInterval: false,
+  });
+
+  // Koppel specifieke ad aan locatie
+  const linkSpecificAdMutation = useMutation({
+    mutationFn: async ({ locationId, adId }: { locationId: string; adId: string }) => {
+      const res = await apiRequest("POST", `/api/admin/locations/${locationId}/link-ad`, { adId });
+      return await res.json();
+    },
+    onSuccess: () => {
+      refetchPlaylist();
+      refetchApprovedAds();
+      refetchGlobalAds();
+      refresh();
+    },
+  });
+
   // Bepaal status
   const baseOk = playlistItems?.base?.items && playlistItems.base.items.length > 0;
   const adsOk = playlistItems?.ads?.items && playlistItems.ads.items.length > 0;
@@ -224,7 +253,12 @@ export default function YodeckDebug() {
     linkAdMutation.mutate(selectedLocation);
   };
 
-  const isAnyLoading = repareerMutation.isPending || resetMutation.isPending || pushMutation.isPending || linkAdMutation.isPending;
+  const handleLinkSpecificAd = (adId: string) => {
+    if (!selectedLocation) return;
+    linkSpecificAdMutation.mutate({ locationId: selectedLocation, adId });
+  };
+
+  const isAnyLoading = repareerMutation.isPending || resetMutation.isPending || pushMutation.isPending || linkAdMutation.isPending || linkSpecificAdMutation.isPending;
 
   return (
     <div className="space-y-6" data-testid="scherm-beheer-page">
@@ -557,11 +591,71 @@ export default function YodeckDebug() {
                 )}
               </>
             ) : (
-              <div className="text-center py-6 text-muted-foreground">
-                <p>Geen goedgekeurde advertenties gevonden</p>
-                <p className="text-xs mt-1">
-                  Advertenties worden hier getoond nadat ze via het upload portaal zijn goedgekeurd.
-                </p>
+              <div className="space-y-4">
+                <div className="text-center py-4 text-muted-foreground">
+                  <p>Geen goedgekeurde advertenties gevonden voor deze locatie</p>
+                  <p className="text-xs mt-1">
+                    Mogelijk is de adverteerder-koppeling nog niet ingesteld.
+                  </p>
+                </div>
+
+                {!showGlobalAds ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowGlobalAds(true)}
+                    className="w-full"
+                    data-testid="show-global-ads-button"
+                  >
+                    Toon laatste 20 goedgekeurde ads (globaal)
+                  </Button>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium">Recente goedgekeurde ads (globaal)</p>
+                      {globalAdsLoading && <RefreshCw className="h-4 w-4 animate-spin" />}
+                    </div>
+                    
+                    {globalAdsData?.ads && globalAdsData.ads.length > 0 ? (
+                      <div className="space-y-2 max-h-80 overflow-y-auto">
+                        {globalAdsData.ads.map((ad) => (
+                          <div key={ad.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                            <div>
+                              <p className="font-medium text-sm">{ad.advertiserName}</p>
+                              <p className="text-xs text-muted-foreground">{ad.filename}</p>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={isAnyLoading}
+                              onClick={() => handleLinkSpecificAd(ad.id)}
+                              data-testid={`link-ad-${ad.id}`}
+                            >
+                              {linkSpecificAdMutation.isPending ? (
+                                <RefreshCw className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <>
+                                  <LinkIcon className="h-3 w-3 mr-1" />
+                                  Koppel aan dit scherm
+                                </>
+                              )}
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : !globalAdsLoading ? (
+                      <p className="text-sm text-muted-foreground text-center py-4">
+                        Geen recente goedgekeurde ads gevonden in de database.
+                      </p>
+                    ) : null}
+                    
+                    {linkSpecificAdMutation.isError && (
+                      <div className="p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                        Koppelen mislukt: {(linkSpecificAdMutation.error as Error)?.message || "Onbekende fout"}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </CardContent>

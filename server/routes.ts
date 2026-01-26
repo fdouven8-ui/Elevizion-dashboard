@@ -16228,6 +16228,49 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.status(500).json({ ok: false, ads: [], error: error.message, logs: [] });
     }
   });
+
+  /**
+   * GET /api/admin/ads-debug
+   * Get all recent approved ads (global) for debugging
+   */
+  app.get("/api/admin/ads-debug", requireAdminAccess, async (req, res) => {
+    try {
+      const { getRecentApprovedAds } = await import("./services/yodeckCanonicalService");
+      const result = await getRecentApprovedAds(20);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[AdsDebug] Error:", error);
+      res.status(500).json({ ok: false, ads: [], error: error.message, logs: [] });
+    }
+  });
+
+  /**
+   * POST /api/admin/locations/:locationId/link-ad
+   * Manually link a specific ad to a location's ADS playlist
+   * Body: { adId: string }
+   */
+  app.post("/api/admin/locations/:locationId/link-ad", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { adId } = req.body;
+      
+      if (!adId) {
+        return res.status(400).json({ ok: false, error: "adId is verplicht" });
+      }
+      
+      const { linkAdToLocation } = await import("./services/yodeckCanonicalService");
+      
+      console.log(`[LinkAd] Koppelen ad ${adId} aan locatie ${locationId}...`);
+      const result = await linkAdToLocation(adId, locationId);
+      
+      result.logs.forEach(log => console.log(log));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[LinkAd] Error:", error);
+      res.status(500).json({ ok: false, error: error.message, logs: [] });
+    }
+  });
   
   /**
    * POST /api/admin/yodeck/migrate-canonical

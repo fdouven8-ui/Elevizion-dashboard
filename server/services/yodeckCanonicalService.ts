@@ -11,7 +11,7 @@
 
 import { db } from "../db";
 import { locations, screens, placements, contracts, advertisers, adAssets } from "@shared/schema";
-import { eq, and, inArray, isNotNull, or } from "drizzle-orm";
+import { eq, and, inArray, isNotNull, or, desc, gte } from "drizzle-orm";
 import { yodeckRequest, FEATURE_FLAGS, ELEVIZION_LAYOUT_SPEC, buildElevizionLayoutPayload } from "./yodeckLayoutService";
 import { 
   getPlaylistById, 
@@ -961,14 +961,14 @@ export async function findApprovedAdsForLocation(locationId: string): Promise<{
   if (linkedScreens.length === 0) {
     logs.push(`[ApprovedAds] Geen schermen via locationId - probeer yodeckDeviceId...`);
     
-    // Fallback: find via yodeckDeviceId match
+    // Fallback: find via yodeckPlayerId match (numeric Yodeck ID)
     if (location.yodeckDeviceId) {
       const yodeckIdStr = String(location.yodeckDeviceId);
       linkedScreens = await db.select().from(screens)
-        .where(eq(screens.yodeckDeviceId, yodeckIdStr));
+        .where(eq(screens.yodeckPlayerId, yodeckIdStr));
       
       if (linkedScreens.length > 0) {
-        logs.push(`[ApprovedAds] ${linkedScreens.length} schermen gevonden via yodeckDeviceId`);
+        logs.push(`[ApprovedAds] ${linkedScreens.length} schermen gevonden via yodeckPlayerId`);
       }
     }
   }
@@ -1026,14 +1026,16 @@ export async function findApprovedAdsForLocation(locationId: string): Promise<{
       )
     );
   
-  logs.push(`[ApprovedAds] ${approvedAssets.length} goedgekeurde ads gevonden`);
+  logs.push(`[ApprovedAds] ${approvedAssets.length} goedgekeurde ads gevonden via adverteerder-keten`);
   
   // Get advertiser names
   const advertiserMap = new Map<string, string>();
-  const advs = await db.select({ id: advertisers.id, companyName: advertisers.companyName })
-    .from(advertisers)
-    .where(inArray(advertisers.id, advertiserIds));
-  advs.forEach(a => advertiserMap.set(a.id, a.companyName));
+  if (advertiserIds.length > 0) {
+    const advs = await db.select({ id: advertisers.id, companyName: advertisers.companyName })
+      .from(advertisers)
+      .where(inArray(advertisers.id, advertiserIds));
+    advs.forEach(a => advertiserMap.set(a.id, a.companyName));
+  }
   
   const ads: ApprovedAd[] = approvedAssets.map(a => ({
     id: a.id,
@@ -1048,6 +1050,194 @@ export async function findApprovedAdsForLocation(locationId: string): Promise<{
   }));
   
   return { ok: true, ads, logs };
+}
+
+/**
+ * FALLBACK: Get all recent approved ads from DB (last 30 days)
+ * Used when advertiser chain returns empty
+ */
+export async function getRecentApprovedAds(limit: number = 20): Promise<{
+  ok: boolean;
+  ads: ApprovedAd[];
+  logs: string[];
+}> {
+  const logs: string[] = [];
+  logs.push(`[RecentAds] Ophalen laatste ${limit} goedgekeurde ads (globaal, zonder tijdlimiet)...`);
+  
+  // No time filter - always show all approved ads (sorted by most recent first)
+  const recentAssets = await db.select({
+    id: adAssets.id,
+    advertiserId: adAssets.advertiserId,
+    originalFileName: adAssets.originalFileName,
+    storedFilename: adAssets.storedFilename,
+    storageUrl: adAssets.storageUrl,
+    yodeckMediaId: adAssets.yodeckMediaId,
+    approvalStatus: adAssets.approvalStatus,
+    approvedAt: adAssets.approvedAt,
+    createdAt: adAssets.createdAt,
+  })
+    .from(adAssets)
+    .where(
+      or(
+        eq(adAssets.approvalStatus, "APPROVED"),
+        eq(adAssets.approvalStatus, "PUBLISHED")
+      )
+    )
+    .orderBy(desc(adAssets.createdAt))
+    .limit(limit);
+  
+  logs.push(`[RecentAds] ${recentAssets.length} recente ads gevonden`);
+  
+  // Get advertiser names
+  const uniqueAdvertiserIds = Array.from(new Set(recentAssets.map(a => a.advertiserId)));
+  const advertiserMap = new Map<string, string>();
+  
+  if (uniqueAdvertiserIds.length > 0) {
+    const advs = await db.select({ id: advertisers.id, companyName: advertisers.companyName })
+      .from(advertisers)
+      .where(inArray(advertisers.id, uniqueAdvertiserIds));
+    advs.forEach(a => advertiserMap.set(a.id, a.companyName));
+  }
+  
+  const ads: ApprovedAd[] = recentAssets.map(a => ({
+    id: a.id,
+    advertiserId: a.advertiserId,
+    advertiserName: advertiserMap.get(a.advertiserId) || "Onbekend",
+    filename: a.originalFileName,
+    storedFilename: a.storedFilename,
+    storageUrl: a.storageUrl,
+    yodeckMediaId: a.yodeckMediaId,
+    approvalStatus: a.approvalStatus,
+    approvedAt: a.approvedAt,
+  }));
+  
+  return { ok: true, ads, logs };
+}
+
+/**
+ * Link ad to location and add to ADS playlist
+ */
+export async function linkAdToLocation(adId: string, locationId: string): Promise<{
+  ok: boolean;
+  adId: string;
+  yodeckMediaId: number | null;
+  adsPlaylistId: string | null;
+  pushed: boolean;
+  logs: string[];
+  error?: string;
+}> {
+  const logs: string[] = [];
+  logs.push(`[LinkAd] Koppelen ad ${adId} aan locatie ${locationId}...`);
+  
+  // Get location
+  const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+  if (!location) {
+    return { ok: false, adId, yodeckMediaId: null, adsPlaylistId: null, pushed: false, logs, error: "Locatie niet gevonden" };
+  }
+  
+  // Get ad asset
+  const [adAsset] = await db.select().from(adAssets).where(eq(adAssets.id, adId));
+  if (!adAsset) {
+    return { ok: false, adId, yodeckMediaId: null, adsPlaylistId: null, pushed: false, logs, error: "Advertentie niet gevonden" };
+  }
+  
+  logs.push(`[LinkAd] Ad gevonden: "${adAsset.originalFileName}"`);
+  
+  // Try to find in Yodeck by storedFilename OR originalFileName (case-insensitive)
+  let yodeckMediaId = adAsset.yodeckMediaId;
+  
+  if (!yodeckMediaId) {
+    logs.push(`[LinkAd] Ad nog niet gekoppeld aan Yodeck - zoeken...`);
+    
+    // Search by storedFilename first
+    if (adAsset.storedFilename) {
+      const nameWithoutExt = adAsset.storedFilename.replace(/\.[^/.]+$/, "");
+      const searchResult = await findYodeckMediaByName(nameWithoutExt);
+      logs.push(...searchResult.logs);
+      if (searchResult.mediaId) {
+        yodeckMediaId = searchResult.mediaId;
+      }
+    }
+    
+    // Search by original filename if not found
+    if (!yodeckMediaId && adAsset.originalFileName) {
+      const nameWithoutExt = adAsset.originalFileName.replace(/\.[^/.]+$/, "");
+      const searchResult = await findYodeckMediaByName(nameWithoutExt);
+      logs.push(...searchResult.logs);
+      if (searchResult.mediaId) {
+        yodeckMediaId = searchResult.mediaId;
+      }
+    }
+    
+    // Update DB if found
+    if (yodeckMediaId) {
+      await db.update(adAssets).set({
+        yodeckMediaId,
+        yodeckUploadedAt: new Date(),
+      }).where(eq(adAssets.id, adId));
+      logs.push(`[LinkAd] Database bijgewerkt met yodeckMediaId ${yodeckMediaId}`);
+    } else {
+      logs.push(`[LinkAd] ⚠️ Media niet gevonden in Yodeck - upload eerst de video naar Yodeck`);
+      return { ok: false, adId, yodeckMediaId: null, adsPlaylistId: null, pushed: false, logs, error: "Media niet gevonden in Yodeck. Upload de video eerst naar Yodeck." };
+    }
+  }
+  
+  // Get or create canonical ADS playlist for location
+  // ALWAYS use ensureCanonicalPlaylist to get the correct ADS playlist (validates by name pattern)
+  logs.push(`[LinkAd] Verifiëren ADS playlist voor ${location.name}...`);
+  
+  const adsPlaylistResult = await ensureCanonicalPlaylist(location.name, "ADS");
+  logs.push(...adsPlaylistResult.logs);
+  
+  if (!adsPlaylistResult.ok || !adsPlaylistResult.playlistId) {
+    return { ok: false, adId, yodeckMediaId, adsPlaylistId: null, pushed: false, logs, error: "Kon ADS playlist niet vinden of aanmaken." };
+  }
+  
+  const adsPlaylistId = adsPlaylistResult.playlistId;
+  
+  // Update location with correct ADS playlist ID if different or missing
+  if (location.yodeckPlaylistId !== adsPlaylistId) {
+    await db.update(locations).set({ yodeckPlaylistId: adsPlaylistId }).where(eq(locations.id, locationId));
+    logs.push(`[LinkAd] ✓ ADS playlist ID bijgewerkt naar: ${adsPlaylistId}`);
+  }
+  
+  // Add to ADS playlist
+  const appendResult = await appendPlaylistItemIfMissing(adsPlaylistId, yodeckMediaId, 15);
+  logs.push(...appendResult.logs);
+  
+  if (!appendResult.ok) {
+    return { ok: false, adId, yodeckMediaId, adsPlaylistId, pushed: false, logs, error: "Toevoegen aan playlist mislukt" };
+  }
+  
+  logs.push(appendResult.alreadyExists ? `[LinkAd] Media stond al in playlist` : `[LinkAd] ✓ Media toegevoegd aan ADS playlist`);
+  
+  // Push to screen (optional - succeeds even without push)
+  let pushed = false;
+  let yodeckDeviceId = location.yodeckDeviceId;
+  
+  // Fallback: try to find yodeckPlayerId from screens table if location.yodeckDeviceId is missing
+  if (!yodeckDeviceId) {
+    logs.push(`[LinkAd] Geen yodeckDeviceId in locatie - zoeken in screens...`);
+    const linkedScreens = await db.select({ yodeckPlayerId: screens.yodeckPlayerId })
+      .from(screens)
+      .where(eq(screens.locationId, locationId));
+    
+    if (linkedScreens.length > 0 && linkedScreens[0].yodeckPlayerId) {
+      yodeckDeviceId = linkedScreens[0].yodeckPlayerId;
+      logs.push(`[LinkAd] ✓ yodeckPlayerId gevonden via screens: ${yodeckDeviceId}`);
+    }
+  }
+  
+  if (yodeckDeviceId) {
+    const pushResult = await pushScreen(yodeckDeviceId);
+    pushed = pushResult.ok;
+    logs.push(pushed ? `[LinkAd] ✓ Scherm gepushed` : `[LinkAd] Push niet gelukt: ${pushResult.error} (content is wel toegevoegd)`);
+  } else {
+    logs.push(`[LinkAd] ⚠️ Geen Yodeck scherm gekoppeld aan locatie - content is toegevoegd maar niet gepushed. Klik 'Nu verversen op TV' om handmatig te vernieuwen.`);
+  }
+  
+  // Always return success if media was added to playlist
+  return { ok: true, adId, yodeckMediaId, adsPlaylistId, pushed, logs };
 }
 
 /**
@@ -1387,15 +1577,33 @@ export async function ensureLocationContent(locationId: string): Promise<Locatio
   }
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 3: Ensure BASE has baseline media (if no apps found)
+  // STEP 3: Ensure BASE has baseline media (always seed if 0 items)
   // ═══════════════════════════════════════════════════════════════════════════
   logs.push(`[ContentPipeline] ─── STAP 3: BASE baseline media ───`);
   const baseSeedResult = await seedBaselinePlaylist(baseResult.playlistId);
   logs.push(...baseSeedResult.logs);
   
-  // Get final BASE item count
+  // VERIFY: BASE moet items hebben
   const baseItemsResult = await getPlaylistItems(baseResult.playlistId);
   const baseItemCount = baseItemsResult.items.length;
+  
+  if (baseItemCount === 0) {
+    logs.push(`[ContentPipeline] ❌ BASE_SEED_FAILED: Playlist heeft 0 items na seeding!`);
+    logs.push(`[ContentPipeline] TIP: Zorg dat "Elevizion Baseline" media bestaat in Yodeck`);
+    return {
+      ok: false,
+      locationId,
+      locationName: location.name,
+      basePlaylist: { id: baseResult.playlistId, name: baseResult.playlistName, itemCount: 0, appsFromLegacy, hasBaselineMedia: false },
+      adsPlaylist: { id: null, name: null, itemCount: 0, approvedAdsLinked: 0, hasSelfAd: false },
+      approvedAds: [],
+      layout: { id: null, bound: false },
+      pushed: false,
+      logs,
+      error: "BASE_SEED_FAILED: Basis playlist heeft 0 items. Upload eerst Elevizion Baseline media naar Yodeck.",
+    };
+  }
+  logs.push(`[ContentPipeline] ✓ BASE heeft ${baseItemCount} items`);
   
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 4: Find/create canonical ADS playlist
@@ -1461,15 +1669,33 @@ export async function ensureLocationContent(locationId: string): Promise<Locatio
   }
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 7: Ensure ADS has self-ad fallback
+  // STEP 7: Ensure ADS has self-ad fallback (ALTIJD)
   // ═══════════════════════════════════════════════════════════════════════════
   logs.push(`[ContentPipeline] ─── STAP 7: Self-ad fallback ───`);
   const adsSeedResult = await seedAdsPlaylist(adsResult.playlistId);
   logs.push(...adsSeedResult.logs);
   
-  // Get final ADS item count
+  // VERIFY: ADS moet items hebben
   const adsItemsResult = await getPlaylistItems(adsResult.playlistId);
   const adsItemCount = adsItemsResult.items.length;
+  
+  if (adsItemCount === 0) {
+    logs.push(`[ContentPipeline] ❌ ADS_SEED_FAILED: Playlist heeft 0 items na seeding!`);
+    logs.push(`[ContentPipeline] TIP: Zorg dat "Elevizion Self-Ad" media bestaat in Yodeck`);
+    return {
+      ok: false,
+      locationId,
+      locationName: location.name,
+      basePlaylist: { id: baseResult.playlistId, name: baseResult.playlistName, itemCount: baseItemCount, appsFromLegacy, hasBaselineMedia: baseSeedResult.seeded },
+      adsPlaylist: { id: adsResult.playlistId, name: adsResult.playlistName, itemCount: 0, approvedAdsLinked, hasSelfAd: false },
+      approvedAds: linkedAds,
+      layout: { id: null, bound: false },
+      pushed: false,
+      logs,
+      error: "ADS_SEED_FAILED: Advertentie playlist heeft 0 items. Upload eerst Elevizion Self-Ad media naar Yodeck.",
+    };
+  }
+  logs.push(`[ContentPipeline] ✓ ADS heeft ${adsItemCount} items`);
   
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 8: Create/bind Elevizion layout
