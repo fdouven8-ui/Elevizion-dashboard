@@ -21,14 +21,22 @@ import { eq } from "drizzle-orm";
 // TYPES
 // ============================================================================
 
+/**
+ * PlaylistItem - Handles 3 Yodeck response formats:
+ * - Shape A (legacy): { id, order, item: { id, name, type }, duration }
+ * - Shape B (legacy): { id, order, item: 123, duration }
+ * - Shape C (v2 API): { id: mediaId, type: "media", priority, duration }
+ */
 export interface PlaylistItem {
   id: number;
-  order: number;
-  item: {
+  order?: number;
+  priority?: number; // Yodeck v2 uses priority instead of order
+  type?: string; // Yodeck v2 adds type field at root level
+  item?: {
     id: number;
-    name: string;
-    type: string;
-  } | number; // Yodeck can return either Shape A (object) or Shape B (number)
+    name?: string;
+    type?: string;
+  } | number; // Legacy: Yodeck can return either Shape A (object) or Shape B (number)
   duration: number;
 }
 
@@ -46,15 +54,28 @@ export interface Playlist {
 
 /**
  * Safely extract media ID from a playlist item
- * Handles both:
- * - Shape A: item.item = { id: 123, name: "...", type: "..." }
- * - Shape B: item.item = 123 (just the number)
+ * Handles 3 Yodeck response formats:
+ * - Shape A (legacy): item.item = { id: 123, name: "...", type: "..." }
+ * - Shape B (legacy): item.item = 123 (just the number)
+ * - Shape C (v2 API): item.id = mediaId (when type="media" at root level)
  */
 export function extractMediaId(item: PlaylistItem): number | null {
   try {
+    // Shape C (Yodeck v2): { id: mediaId, type: "media", priority, duration }
+    // In v2, the root 'id' is the media ID when type="media"
+    if (item.type === "media" && typeof item.id === 'number') {
+      return item.id;
+    }
+    
+    // Legacy shapes require item.item to be present
     if (item.item === null || item.item === undefined) {
+      // Fallback: if no item.item but has numeric id, use that
+      if (typeof item.id === 'number' && item.id > 0) {
+        return item.id;
+      }
       return null;
     }
+    
     if (typeof item.item === 'number') {
       return item.item; // Shape B
     }
@@ -69,15 +90,23 @@ export function extractMediaId(item: PlaylistItem): number | null {
 
 /**
  * Safely extract media name from a playlist item
- * Returns "Media [id]" for Shape B items
+ * Returns "Media [id]" for Shape B and Shape C items
  */
 export function extractMediaName(item: PlaylistItem): string {
   try {
+    // Shape C (Yodeck v2): no name in response, use id
+    if (item.type === "media" && typeof item.id === 'number') {
+      return `Media ${item.id}`;
+    }
     if (typeof item.item === 'number') {
       return `Media ${item.item}`; // Shape B - no name available
     }
     if (typeof item.item === 'object' && (item.item as any)?.name) {
       return (item.item as any).name;
+    }
+    // Fallback for v2 format
+    if (typeof item.id === 'number' && item.id > 0) {
+      return `Media ${item.id}`;
     }
     return "Unknown";
   } catch {
@@ -87,10 +116,14 @@ export function extractMediaName(item: PlaylistItem): string {
 
 /**
  * Safely extract media type from a playlist item
- * Returns "unknown" for Shape B items
+ * Returns the root type for v2 items, "unknown" for legacy Shape B
  */
 export function extractMediaType(item: PlaylistItem): string {
   try {
+    // Shape C (Yodeck v2): type is at root level
+    if (item.type && typeof item.type === 'string') {
+      return item.type;
+    }
     if (typeof item.item === 'number') {
       return "unknown"; // Shape B - no type available
     }

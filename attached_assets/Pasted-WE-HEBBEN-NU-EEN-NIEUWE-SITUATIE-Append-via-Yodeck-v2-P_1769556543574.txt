@@ -1,0 +1,116 @@
+WE HEBBEN NU EEN NIEUWE SITUATIE:
+
+- Append via Yodeck v2 PATCH werkt: playlist 30461663 heeft 1 item (bevestigd door [PlaylistItems] logs).
+- Maar onze eigen admin endpoints geven tegenstrijdige info:
+  * GET /api/admin/locations/:id/playlist-items (304 response) toont ads.itemCount=0 en items=[]
+  * Daarna logt [PlaylistItems] dat dezelfde playlist 1 item heeft
+  * GET /content-status toont ads.itemCount=0 en needsRepair=true
+=> Conclusie: onze status/playlist-items aggregator is fout (cache/304 of verkeerde parsing), waardoor autopilot blijft repareren en UI onbetrouwbaar is.
+
+DOEL:
+1) Maak status/playlist-items detectie 100% betrouwbaar en consistent met de echte Yodeck playlist.
+2) Maak het stabiel per locatie: 1 canonical ADS playlist + 1 canonical BASE playlist (geen duplicates kiezen per run).
+3) BASE content moet automatisch gevuld worden (weer/nieuws + basisvulling) zodat elke tv altijd basis heeft.
+4) ADS content blijft per locatie gevuld met uploads/approved, met fallback.
+
+BELANGRIJK:
+- NIET de werkende PATCH playlist code slopen.
+- NIET layout assignment / ADS region binding breken.
+- Alleen: canonieke IDs + correcte status + base seeding.
+
+=========================================================
+A) FIX: INCONSISTENTE ITEMCOUNT / CACHING IN ADMIN ENDPOINTS
+=========================================================
+
+1) Forceer dat /api/admin/locations/:id/playlist-items ALTIJD de live Yodeck playlist ophaalt en items correct parse’t.
+   - Geen 304 cache gedrag voor deze endpoint (zet Cache-Control: no-store, no-cache).
+   - Als er intern ETag/If-None-Match wordt gebruikt bij fetch naar Yodeck: schakel dat uit voor playlist-items fetch.
+   - Zorg dat de endpoint niet oude cached data teruggeeft.
+
+2) Zorg dat parsing van Yodeck v2 playlist correct is:
+   - Yodeck v2 playlist response heeft "items": [...]
+   - itemCount = items.length
+   - items array doorgeven (minimaal ids/type/priority/duration)
+   - Als items ontbreken: log de volledige keys van response om parsing te debuggen.
+
+3) FIX content-status:
+   - content-status moet dezelfde “source of truth” gebruiken als playlist-items.
+   - Dus: itemCount in content-status moet komen van live GET /api/v2/playlists/{id} items.length
+   - Als PlaylistItems log zegt 1 item, mag content-status nooit 0 tonen.
+
+4) needsRepair logica aanpassen:
+   - needsRepair = true alleen als:
+        - layout niet correct toegewezen, OF
+        - ADS region niet bound, OF
+        - ADS playlist itemCount == 0, OF
+        - BASE playlist itemCount == 0 (als base verplicht is)
+   - Als ADS playlist >= 1 is, dan adsRepaired moet true zijn en needsRepair moet (voor ADS-deel) false zijn.
+
+=========================================================
+B) STABILITEIT: CANONICAL PLAYLIST IDs PER LOCATIE (STOP DUPLICATES WISSELEN)
+=========================================================
+
+Voeg op Location (DB) 2 velden toe:
+- canonicalAdsPlaylistId
+- canonicalBasePlaylistId
+
+Gedrag:
+- Als canonicalAdsPlaylistId bestaat: gebruik ALTIJD die ID.
+- Als niet bestaat:
+   - zoek alle playlists met naam "Ads | <locationName>"
+   - als meerdere: kies laagste ID, log duplicatesCount
+   - sla gekozen ID op in canonicalAdsPlaylistId
+- Maak nooit opnieuw een playlist aan als canonical bestaat.
+
+Zelfde voor BASE:
+- naam volgens huidige base naming (bijv. "Baseline | <locationName>")
+- kies 1, sla op, hergebruik altijd.
+
+Belangrijk:
+- Autopilot mag niet bij elke run een andere playlist ID kiezen.
+- In logs altijd tonen:
+  [Canonical] adsPlaylistId=<id> basePlaylistId=<id> duplicatesAds=<n> duplicatesBase=<n>
+
+=========================================================
+C) BASE CONTENT AUTOPILOT (WEER + NIEUWS + BASIS VULLING)
+=========================================================
+
+Iedere locatie moet basiscontent hebben, altijd.
+Implementeer base seeding zonder handwerk:
+
+1) Maak 1 standaard set base-items (nieuws widget/app + weer widget/app).
+   - Als jullie dit in layout willen: zorg dat de layout regions widgets bevatten.
+   - Als jullie dit via playlist willen: voeg deze items toe aan BASE playlist.
+   - Kies 1 pad (layout of playlist) en maak het deterministisch.
+
+2) BASE playlist mag nooit leeg blijven:
+   - Als base widgets niet via playlist kunnen:
+       - voeg minimaal 1 placeholder media toe aan BASE playlist (bijv. een bestaande “Sample Coupons Video” of andere safe video)
+   - Base seeding moet ook via GET+PATCH /playlists/{id} (net als ADS).
+
+3) Idempotent:
+   - als nieuws/weer al aanwezig is -> no-op
+   - anders toevoegen
+
+=========================================================
+D) ADS CONTENT PER LOCATIE (UPLOADS)
+=========================================================
+
+- Approved uploads/ads voor deze locatie gaan naar canonicalAdsPlaylistId.
+- Append is idempotent (check bestaande items).
+- ContentGuarantee blijft:
+   - als ADS leeg -> approved ads -> selfAd -> fallback video
+- Autopilot mag pas ok=true/adsRepaired=true als ADS itemCount >= 1 volgens LIVE fetch.
+
+=========================================================
+ACCEPTATIECRITERIA
+=========================================================
+
+1) /playlist-items endpoint toont hetzelfde itemCount als de [PlaylistItems] logs (geen mismatch meer).
+2) /content-status toont ads.itemCount >= 1 als playlist daadwerkelijk 1 item heeft.
+3) needsRepair wordt false zodra layout + bindings + playlists gevuld zijn.
+4) Elke locatie heeft vaste canonical ads/base playlist IDs die niet wisselen.
+5) BASE wordt automatisch gevuld met nieuws/weer (of deterministische placeholder), dus nooit leeg.
+6) ADS vult automatisch met uploads, per locatie gescheiden.
+
+VOER DIT UIT MET MINIMALE WIJZIGINGEN EN BEHOUD WAT NU AL WERKT.
