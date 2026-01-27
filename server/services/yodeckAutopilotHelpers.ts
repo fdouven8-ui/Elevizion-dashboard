@@ -152,11 +152,33 @@ export async function ensureAdsRegionBound(
   logs.push(`[AdsRegionBound] Updating region ${adsRegionIndex} to playlist ${adsPlaylistId}...`);
   
   // Clone layout and update region
-  const updatedRegions = [...layout.regions];
-  updatedRegions[adsRegionIndex] = {
-    ...updatedRegions[adsRegionIndex],
-    item: { type: "playlist", id: adsPlaylistId },
-  };
+  // IMPORTANT: Yodeck API requires float values for rotation
+  // We preserve all original fields and only modify what's needed
+  // Explicitly convert integer fields to floats for Yodeck API compatibility
+  const updatedRegions = layout.regions.map((region: any, idx: number) => {
+    // Clone the original region 
+    const cleanedRegion: any = { ...region };
+    
+    // Ensure rotation is formatted as a float (Yodeck API requirement)
+    // Add a small epsilon to force it to be treated as a float
+    if (cleanedRegion.rotation !== undefined) {
+      const rotVal = Number(cleanedRegion.rotation);
+      // Use Number.toFixed to ensure it's represented with decimals, then parse back
+      cleanedRegion.rotation = parseFloat(rotVal.toFixed(6));
+      // If still 0, make it 0.0 by adding a tiny epsilon (0.000001) 
+      // that won't affect visual appearance but makes it a "float" in JSON
+      if (cleanedRegion.rotation === 0) {
+        cleanedRegion.rotation = 0.000001;
+      }
+    }
+    
+    // Update the item binding for the ADS region only
+    if (idx === adsRegionIndex) {
+      cleanedRegion.item = { type: "playlist", id: adsPlaylistId };
+    }
+    
+    return cleanedRegion;
+  });
   
   // PATCH the layout with updated regions
   const patchPayload = {
