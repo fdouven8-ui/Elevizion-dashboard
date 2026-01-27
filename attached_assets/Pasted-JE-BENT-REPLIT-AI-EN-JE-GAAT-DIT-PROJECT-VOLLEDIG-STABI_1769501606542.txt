@@ -1,0 +1,197 @@
+JE BENT REPLIT AI EN JE GAAT DIT PROJECT VOLLEDIG STABIEL EN 100% AUTOMATISCH MAKEN, ZONDER IETS TE SLOPEN DAT NU AL WERKT.
+
+CONTEXT (NIET WIJZIGEN, ALLEEN GEBRUIKEN):
+- We hebben een Elevizion dashboard dat Yodeck v2 API gebruikt.
+- Layout assignment naar screens werkt nu correct via Yodeck v2 screen_content format: source_type + source_id.
+- Video upload werkt (media komt in Yodeck), maar de video verschijnt niet op schermen omdat de laatste koppelingen/seed stappen niet 100% correct/consistent zijn.
+- We willen: volledig autopilot. Geen UI-knoppen/handmatig gedoe. Knoppen moeten naar achtergrond; app moet zichzelf repareren.
+- Elk scherm moet ALTIJD basis content hebben (nieuws + weer apps/widgets + Elevizion self-ad) en daarbovenop komen klant-ads.
+- Het belangrijkste is dat: na goedkeuring van een advertentie (video review) de upload automatisch zichtbaar wordt op alle juiste schermen, zonder fouten.
+- We willen GEEN grote refactors, GEEN hernoemen van bestaande termen/flows die al werken. Alleen veilig uitbreiden waar nodig.
+
+BELANGRIJKE YODECK V2 DOCUMENTATIE (GEBRUIK DIT EXACT):
+1) MEDIA:
+- List: GET https://app.yodeck.com/api/v2/media?q=...&media_type=video&limit=...&offset=...
+- Create: POST https://app.yodeck.com/api/v2/media  (returns id + get_upload_url or use /media/{id}/upload)
+- Upload URL: GET https://app.yodeck.com/api/v2/media/{id}/upload  -> { upload_url: presigned S3 URL }
+- Complete: POST https://app.yodeck.com/api/v2/media/{id}/upload/complete { upload_url: ... }
+- Status: GET https://app.yodeck.com/api/v2/media/{id}/status -> { status: "encoding" | ... }
+
+2) PLAYLISTS:
+- List: GET https://app.yodeck.com/api/v2/playlists
+- Get:  GET https://app.yodeck.com/api/v2/playlists/{id}
+- Update/Patch: PATCH https://app.yodeck.com/api/v2/playlists/{id}
+- Playlist items have structure like:
+  items: [{ id:<mediaId>, type:"media", priority:<int>, duration:<seconds> }]
+- We have a canonical “Elevizion ADS playlist” concept. Ads must be added there.
+
+3) LAYOUTS:
+- Get: GET https://app.yodeck.com/api/v2/layouts/{id}
+- Update/Patch: PATCH https://app.yodeck.com/api/v2/layouts/{id}
+- CRUCIAAL: layout regions bind content via:
+  regions[].item = { type:"playlist"|"widget"|..., id:<int> }
+  Example:
+  "regions":[{..., "item": {"type":"playlist","id":162} }]
+- background_audio also uses item {type:"widget", id:...}
+- We must NOT destroy existing widget regions (news/weather), only ensure ADS region points to the ADS playlist.
+
+4) SCREENS:
+- List/Get: GET https://app.yodeck.com/api/v2/screens and /screens/{id}
+- Source of truth:
+  screen_content: { source_type:"playlist"|"layout", source_id:<int>, source_name:... }
+- Patch screen: PATCH https://app.yodeck.com/api/v2/screens/{id} with screen_content in v2 format
+- Layout assignment is already fixed; use screens endpoint to verify.
+
+5) WORKSPACES/FOLDERS:
+- GET /api/v2/workspaces, /api/v2/folders
+- Use only for organization if needed; DO NOT make big structural changes.
+
+6) RATE LIMITING:
+- We have seen HTTP 429 “Request was throttled. Expected available in 1 second.”
+- Implement proper backoff + jitter + per-resource locks to avoid spamming Yodeck.
+- Never treat 429 as fatal; retry with delays.
+
+DOEL (WAT MOET 100% WERKEN):
+A) Basis content is altijd aanwezig op elk scherm:
+- Nieuws + Weer (Yodeck apps/widgets) zitten in de layout (bestaat al).
+- Elevizion self-ad moet altijd minstens 1 item in de ADS playlist opleveren als er nog geen klant-ads zijn.
+B) Na approve van een upload:
+- Vind automatisch alle target locaties/schermen (adverteerder -> contracten -> plaatsingen -> locaties).
+- Zorg dat scherm een layout toegewezen heeft.
+- Zorg dat layout ADS-zone daadwerkelijk de ADS playlist afspeelt (regions[].item type playlist id = ADS playlist id).
+- Voeg de goedgekeurde media (video) toe aan ADS playlist (als playlist item type media).
+- Verifieer dat dit zichtbaar kan worden: (screen_content correct + layout region bound + playlist itemcount > 0).
+C) Alles moet idempotent zijn:
+- Herhaalde runs mogen geen dubbele items spammen of layouts slopen.
+- Geen “knopjes” nodig; autopilot/repair moet zichzelf uitvoeren.
+
+NIET DOEN:
+- Geen grote refactor of “hernoemen” van bestaande functies/structuren.
+- Geen blind PUT die hele layouts kan overschrijven zonder eerst GET.
+- Geen fuzzy zoeken op namen als primaire bron (alleen als fallback). Geen “upload this item first” meldingen meer als het ook automatisch kan.
+- Geen UI uitbreiden met nog meer knoppen; juist minimaliseren/achtergrond.
+
+WAT JE NU MOET IMPLEMENTEREN (STAP VOOR STAP, VEILIG):
+
+PHASE 1 — YODECK “TRUTH + MAPPING” (NOOIT GOKKEN)
+1) Voeg admin debug endpoints toe (read-only) zodat we exact kunnen zien wat actief is:
+   - GET /api/admin/yodeck/screens/:yodeckDeviceId/raw  -> proxy GET /api/v2/screens/{id}
+   - GET /api/admin/yodeck/layouts/:layoutId/raw        -> proxy GET /api/v2/layouts/{id}
+   - GET /api/admin/yodeck/playlists/:playlistId/raw    -> proxy GET /api/v2/playlists/{id}
+   (Gebruik bestaande auth/admin middleware, geen publieke endpoints.)
+2) Voeg een kleine “config storage” toe (minimaal, geen grote DB migraties) om deze twee dingen vast te leggen:
+   - ELEVIZION_SELF_AD_MEDIA_ID (globaal)
+   - adsRegionId per layout (of per locatie-layout) zodat we ADS zone exact weten.
+   Voorkeur: bestaande config tabel/kv-store als die er al is. Anders een minimale table “yodeck_config” of “yodeck_layout_bindings”.
+   Maak het zo dat je dit 1x kunt instellen via admin UI of admin endpoint, maar voer geen grote UI refactor uit.
+
+PHASE 2 — GARANDEER DAT ADS PLAYLIST IN DE LAYOUT ZIT (BELANGRIJKSTE MISSING LINK)
+3) Maak helper: ensureAdsRegionBound(layoutId, adsPlaylistId)
+   - GET layout via /api/v2/layouts/{layoutId}
+   - Bepaal adsRegionId:
+     - Gebruik stored mapping (adsRegionId). Als niet aanwezig:
+       - Log een duidelijke “needs mapping” melding + voeg een admin endpoint toe om regions te listten (id + geometry + current item binding) zodat we het 1x kunnen instellen.
+       - GEEN guessing in productie tenzij we expliciet een fallback hebben.
+   - Check of regions[adsRegionIndex].item == {type:"playlist", id: adsPlaylistId}. Zo ja: no-op.
+   - Anders: update alleen die region.item en PATCH de layout:
+     - Eerst: clone de volledige layout payload zoals Yodeck verwacht (regions array volledig meesturen).
+     - PATCH /api/v2/layouts/{layoutId} met dezelfde fields, maar alleen die ene region.item veranderd.
+   - Re-GET layout om te verifiëren dat binding is toegepast.
+   - Idempotent, geen duplicatie, geen andere regions wijzigen (widgets blijven intact).
+
+PHASE 3 — SEED ADS PLAYLIST (NOOIT LEEG)
+4) Maak helper: ensureAdsPlaylistSeeded(adsPlaylistId)
+   - GET playlist /api/v2/playlists/{id} om items te lezen
+   - Als items.length == 0:
+     - Als ELEVIZION_SELF_AD_MEDIA_ID bestaat:
+       - PATCH playlist om 1 item toe te voegen (type:"media", id:selfAdId, priority:1, duration: use default or safe value)
+       - Daarna re-check items.length > 0
+     - Als selfAdId niet ingesteld:
+       - Log “SELF_AD_NOT_CONFIGURED” maar laat autopilot doorgaan (geen hard fail).
+   - Als items.length > 0: no-op.
+   - Bescherm tegen dubbele self-ad (check of mediaId al in items).
+
+PHASE 4 — PUBLISH NA APPROVE (MEDIA -> PLAYLIST -> ZICHTBAAR)
+5) Wanneer een advertentie wordt goedgekeurd (video review approve):
+   - Zorg dat de video upload in Yodeck media daadwerkelijk “ready” is:
+     - Poll /api/v2/media/{id}/status met backoff (encoding -> ready). Timebox zodat we niet eindeloos hangen.
+     - Als status niet ready binnen limiet: plan retry job (existing retry infra) i.p.v. hard fail.
+   - Vind alle target locaties/schermen (bestaande autopilot keten is al gemaakt; NIET herschrijven, alleen gebruiken).
+   - Voor elke locatie:
+     a) Zorg dat screen layout assignment correct is:
+        - Use existing fixed logic (screen_content v2 format).
+        - Verifieer via GET /api/v2/screens/{deviceId}: screen_content.source_type=="layout" en source_id==expected layoutId.
+     b) Zorg dat ADS playlist bestaat (bestaande ensureCanonicalPlaylist("ADS") of equivalent, NIET wijzigen).
+     c) ensureAdsRegionBound(layoutId, adsPlaylistId)
+     d) Voeg de approved ad media toe aan ADS playlist:
+        - PATCH /api/v2/playlists/{adsPlaylistId} items:
+          - Als mediaId al in items -> no-op
+          - Anders append met next priority (max priority + 1) en duration (safe default)
+     e) ensureAdsPlaylistSeeded(adsPlaylistId) (of seed eerst; maakt niet uit zolang eindresultaat niet leeg is)
+   - Foutbestendig:
+     - Als één locatie faalt: log + continue
+     - Retourneer overall result: hoeveel locaties success/fail + redenen.
+
+PHASE 5 — WATCHDOG/REPAIR (AUTOMATISCH, KNOPPEN NAAR ACHTERGROND)
+6) Maak een background worker/cron (of gebruik bestaande worker) die regelmatig (bijv. elke 10-15 min) deze invariant checks doet voor live locaties:
+   - Screen has yodeckDeviceId
+   - Screen is assigned to a layout (screen_content.source_type == "layout")
+   - ADS playlist exists
+   - Layout ADS region bound to ADS playlist
+   - ADS playlist not empty (seed self-ad if needed)
+   Als iets niet klopt: voer reparatie automatisch uit (zelfde helpers).
+   Dit is de “autopilot repair” die de UI-knoppen overbodig maakt.
+
+PHASE 6 — RATE LIMIT + LOCKS + LOGS (STABILITEIT)
+7) Voeg een Yodeck client wrapper toe (als die er nog niet is) met:
+   - backoff on 429: wait 1s, 2s, 4s (respect “Expected available in 1 second” indien aanwezig), add small jitter
+   - per resource locks:
+     - per screenId, per layoutId, per playlistId zodat parallel jobs niet botsen
+   - standard retry for transient 5xx/timeouts
+8) Logging:
+   - Log altijd in een vaste structuur:
+     [Autopilot] [Location <id>] ...
+     [Yodeck] [PATCH layouts/<id>] ok/fail ...
+     [Yodeck] [PATCH playlists/<id>] ok/fail ...
+   - Voeg duidelijke error codes toe (SELF_AD_NOT_CONFIGURED, ADS_REGION_MAPPING_MISSING, YODECK_429_RETRY, etc.)
+   - Maar toon dit niet als UI “errors” voor user; alleen admin logs/health.
+
+PHASE 7 — UI OPSCHONEN (MINIMAAL, NIET BREKEN)
+9) Breng knoppen terug tot “diagnose” en “force repair” (optioneel), maar alle normale werking moet vanzelf gaan.
+   - Verberg/disable overbodige knoppen in menu’s waar mogelijk.
+   - Voeg 1 simpele status indicator per locatie:
+     - layoutAssigned (bool)
+     - adsRegionBound (bool)
+     - adsPlaylistItemCount (int)
+     - lastRepairAt
+   Geen extra complexe UI flows.
+
+ACCEPTANCE TESTS (MOET JE ZELF UITVOEREN EN RAPPORTEREN IN LOGS):
+- Test 1: Nieuwe locatie live zetten:
+  - worker/repair zorgt dat layout assigned is
+  - ADS playlist bestaat
+  - ADS region bound
+  - ADS playlist bevat self-ad (als configured)
+  - scherm is niet leeg
+- Test 2: Upload + approve klant video:
+  - media status wordt ready
+  - ad wordt toegevoegd aan ADS playlist
+  - itemCount stijgt
+  - advertentie verschijnt op scherm zonder handmatige stappen
+- Test 3: Herhaal approve/retry:
+  - geen dubbele playlist items
+  - idempotent
+- Test 4: Rate limit (429):
+  - retries/backoff werken, geen crash
+
+BELANGRIJKE RANDVOORWAARDEN:
+- Gebruik Yodeck v2 endpoints exact zoals hierboven.
+- Gebruik screen_content v2 format (source_type + source_id) voor screens.
+- Gebruik layouts.regions[].item binding (type + id) voor zone content.
+- Gebruik playlists.items met {id, type:"media", priority, duration} voor media items.
+- Niets slopen wat al werkt; alleen de ontbrekende “bind + seed + verify” keten toevoegen en automatiseren.
+
+LEVER OP:
+- Welke nieuwe helpers/endpoints je hebt toegevoegd en waar (bestandsnamen/locaties).
+- Welke config storage is toegevoegd (of hergebruikt).
+- Voorbeeld logs van een run die 1 locatie repareert en 1 ad publiceert.
