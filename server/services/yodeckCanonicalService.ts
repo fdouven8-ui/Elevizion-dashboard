@@ -252,27 +252,38 @@ export async function ensureBaselineLayoutOnScreen(
     const screen = screenResult.data;
     const currentContent = screen.screen_content;
     
-    // Check if layout is already assigned
-    if (currentContent?.layout?.id === layoutResult.layoutId) {
+    // Check if layout is already assigned (handle both v2 and legacy formats)
+    const currentLayoutId = currentContent?.source_type === "layout" 
+      ? currentContent.source_id 
+      : currentContent?.layout?.id;
+    
+    if (currentLayoutId === layoutResult.layoutId) {
       logs.push(`[LayoutAssign] ✓ Baseline layout al actief op scherm`);
       return { ok: true, layoutId: layoutResult.layoutId, logs };
     }
     
-    // Assign the layout to the screen with ADS playlist in the right zone
+    // Assign the layout to the screen using correct Yodeck v2 API format
     logs.push(`[LayoutAssign] Layout toewijzen aan scherm...`);
     
+    // First try the modern screen_content format
     const assignPayload = {
       screen_content: {
-        type: "layout",
-        layout: { id: layoutResult.layoutId },
-        // The ADS playlist goes in zone 2 (70% right side)
-        playlists: {
-          "2": { id: adsPlaylistId }
-        }
+        source_type: "layout",
+        source_id: layoutResult.layoutId,
       }
     };
     
-    const patchResult = await yodeckRequest<any>(`/screens/${screenId}/`, "PATCH", assignPayload);
+    let patchResult = await yodeckRequest<any>(`/screens/${screenId}/`, "PATCH", assignPayload);
+    
+    // Fallback to legacy format if screen_content fails
+    if (!patchResult.ok && (patchResult.status === 400 || patchResult.status === 422)) {
+      logs.push(`[LayoutAssign] screen_content format faalde, probeer legacy format...`);
+      const legacyPayload = {
+        default_playlist_type: "layout",
+        default_playlist: layoutResult.layoutId,
+      };
+      patchResult = await yodeckRequest<any>(`/screens/${screenId}/`, "PATCH", legacyPayload);
+    }
     
     if (!patchResult.ok) {
       logs.push(`[LayoutAssign] ❌ Fout bij toewijzen: ${patchResult.error}`);
@@ -317,11 +328,15 @@ export async function getScreenLayoutStatus(screenId: number): Promise<{
     
     const content = screenResult.data.screen_content;
     
-    if (!content || content.type !== "layout" || !content.layout) {
+    // Handle both v2 format (source_type/source_id) and legacy format (type/layout.id)
+    const isLayoutByV2 = content?.source_type === "layout" && content?.source_id;
+    const isLayoutByLegacy = content?.type === "layout" && content?.layout?.id;
+    
+    if (!content || (!isLayoutByV2 && !isLayoutByLegacy)) {
       return { hasLayout: false, layoutId: null, layoutName: null, isBaselineLayout: false, adsPlaylistLinked: false, adsPlaylistId: null };
     }
     
-    const layoutId = content.layout.id;
+    const layoutId = isLayoutByV2 ? content.source_id : content.layout.id;
     
     // Get layout details
     const layoutResult = await yodeckRequest<{ id: number; name: string }>(`/layouts/${layoutId}`);
@@ -642,9 +657,20 @@ export async function findOrCreateSelfAdMedia(): Promise<{
   logs: string[];
 }> {
   const logs: string[] = [];
+  
+  // OPTION 1: Check for configured self-ad media ID via environment variable
+  const configuredId = process.env.ELEVIZION_SELF_AD_MEDIA_ID;
+  if (configuredId) {
+    const mediaId = parseInt(configuredId, 10);
+    if (!isNaN(mediaId)) {
+      logs.push(`[SelfAdMedia] ✓ Configured self-ad media ID: ${mediaId}`);
+      return { ok: true, mediaId, logs };
+    }
+  }
+  
   logs.push(`[SelfAdMedia] Searching for existing self-ad media...`);
   
-  // Search for existing self-ad media
+  // OPTION 2: Search for existing self-ad media by name (fallback)
   const searchResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
     `/medias/?search=${encodeURIComponent(SELF_AD_MEDIA_NAME)}`
   );
@@ -656,14 +682,33 @@ export async function findOrCreateSelfAdMedia(): Promise<{
     );
     if (match) {
       logs.push(`[SelfAdMedia] Found existing: ID ${match.id} - "${match.name}"`);
+      logs.push(`[SelfAdMedia] TIP: Set ELEVIZION_SELF_AD_MEDIA_ID=${match.id} to skip search`);
       return { ok: true, mediaId: match.id, logs };
     }
   }
   
-  logs.push(`[SelfAdMedia] No existing self-ad media found`);
-  logs.push(`[SelfAdMedia] NOTE: Upload self-ad media manually and name it "${SELF_AD_MEDIA_NAME}"`);
+  // OPTION 3: Try to find ANY video in Yodeck as emergency fallback
+  logs.push(`[SelfAdMedia] No self-ad found, searching for any video as fallback...`);
+  const fallbackResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string; media_type: string }> }>(
+    `/medias/?ordering=-created_at&limit=10`
+  );
   
-  return { ok: true, mediaId: null, logs };
+  if (fallbackResult.ok && fallbackResult.data?.results) {
+    const videos = fallbackResult.data.results.filter(m => 
+      m.media_type === "video" || m.name.toLowerCase().includes("ad") || m.name.toLowerCase().includes("elevizion")
+    );
+    if (videos.length > 0) {
+      const fallback = videos[0];
+      logs.push(`[SelfAdMedia] ⚠️ Using fallback video: ID ${fallback.id} - "${fallback.name}"`);
+      logs.push(`[SelfAdMedia] TIP: Set ELEVIZION_SELF_AD_MEDIA_ID=${fallback.id} to use this permanently`);
+      return { ok: true, mediaId: fallback.id, logs };
+    }
+  }
+  
+  logs.push(`[SelfAdMedia] ⚠️ MISSING_SELF_AD_CONFIG: Geen self-ad media gevonden`);
+  logs.push(`[SelfAdMedia] ACTIE: Upload een video naar Yodeck en set ELEVIZION_SELF_AD_MEDIA_ID=<id>`);
+  
+  return { ok: true, mediaId: null, error: "MISSING_SELF_AD_CONFIG", logs };
 }
 
 /**
@@ -2519,8 +2564,20 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   logs.push(`[Autopilot]   ADS playlist: ${finalAdsCount} items`);
   logs.push(`[Autopilot]   Ads toegevoegd: ${adsAdded}`);
   
+  // Determine overall success and error message
+  const isOk = layoutAssigned || finalAdsCount > 0;
+  let errorMessage: string | undefined;
+  
+  if (!layoutAssigned && yodeckDeviceId) {
+    errorMessage = "Layout kon niet worden toegewezen aan scherm";
+  } else if (!layoutAssigned && !yodeckDeviceId) {
+    errorMessage = "Geen Yodeck scherm gekoppeld aan locatie";
+  } else if (finalAdsCount === 0) {
+    errorMessage = "ADS playlist is leeg - geen ads of self-ad beschikbaar";
+  }
+  
   return {
-    ok: layoutAssigned || finalAdsCount > 0, // OK if layout assigned OR we have ads ready
+    ok: isOk,
     locationId,
     locationName: location.name,
     layoutAssigned,
@@ -2529,6 +2586,7 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
     ads: { playlistId: adsResult.playlistId, itemCount: finalAdsCount, adsAdded },
     pushed,
     logs,
+    error: errorMessage,
   };
 }
 

@@ -119,6 +119,9 @@ async function getYodeckToken(): Promise<string | null> {
   return process.env.YODECK_AUTH_TOKEN || null;
 }
 
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 1000;
+
 export async function yodeckRequest<T>(
   endpoint: string,
   method: "GET" | "POST" | "PUT" | "PATCH" = "GET",
@@ -129,37 +132,58 @@ export async function yodeckRequest<T>(
     return { ok: false, error: "Yodeck token not configured" };
   }
 
-  try {
-    const url = `${YODECK_BASE_URL}${endpoint}`;
-    const options: RequestInit = {
-      method,
-      headers: {
-        "Authorization": `Token ${token}`,
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-      },
-    };
-    
-    if (body) {
-      options.body = JSON.stringify(body);
-    }
-
-    const response = await fetch(url, options);
-    
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      return { 
-        ok: false, 
-        error: `HTTP ${response.status}: ${errorText}`,
-        status: response.status 
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const url = `${YODECK_BASE_URL}${endpoint}`;
+      const options: RequestInit = {
+        method,
+        headers: {
+          "Authorization": `Token ${token}`,
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+        },
       };
-    }
+      
+      if (body) {
+        options.body = JSON.stringify(body);
+      }
 
-    const data = await response.json();
-    return { ok: true, data };
-  } catch (error: any) {
-    return { ok: false, error: error.message };
+      const response = await fetch(url, options);
+      
+      // Handle rate limiting with exponential backoff
+      if (response.status === 429) {
+        if (attempt < MAX_RETRIES) {
+          const backoffMs = BASE_BACKOFF_MS * Math.pow(2, attempt);
+          console.log(`[Yodeck] 429 Rate limit - backing off ${backoffMs}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+          await new Promise(resolve => setTimeout(resolve, backoffMs));
+          continue;
+        }
+        return { ok: false, error: "Rate limited (429) after retries", status: 429 };
+      }
+      
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        return { 
+          ok: false, 
+          error: `HTTP ${response.status}: ${errorText}`,
+          status: response.status 
+        };
+      }
+
+      const data = await response.json();
+      return { ok: true, data };
+    } catch (error: any) {
+      if (attempt < MAX_RETRIES) {
+        const backoffMs = BASE_BACKOFF_MS * Math.pow(2, attempt);
+        console.log(`[Yodeck] Network error - backing off ${backoffMs}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+        await new Promise(resolve => setTimeout(resolve, backoffMs));
+        continue;
+      }
+      return { ok: false, error: error.message };
+    }
   }
+  
+  return { ok: false, error: "Max retries exceeded" };
 }
 
 /**

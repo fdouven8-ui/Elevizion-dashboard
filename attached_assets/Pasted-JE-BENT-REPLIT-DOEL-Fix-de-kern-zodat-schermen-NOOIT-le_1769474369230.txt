@@ -1,0 +1,112 @@
+JE BENT REPLIT. DOEL: Fix de kern zodat schermen NOOIT leeg blijven en ads na goedkeuring AUTOMATISCH zichtbaar worden.
+Belangrijk: VERANDER GEEN werkende onderdelen of namen. Niet refactoren “omdat het mooier is”.
+Alleen het probleem oplossen dat nu in logs zichtbaar is.
+
+WAT WE NU ZEKER WETEN UIT LOGS (FEITEN):
+- Voor locatie “Bouwservice Douven” is er een Yodeck layout gevonden (ID 7694728, naam “Elevizion Standard | Bouwservice Douven”).
+- Maar content-status zegt: layout ok=false en error=LAYOUT_NOT_ASSIGNED (layoutId=null).
+- ADS playlist bestaat (ID 30449618) maar heeft 0 items.
+- Fallback self-ad media bestaat niet (“No existing self-ad media found”), waardoor seeding leeg blijft.
+- Er is throttling (HTTP 429) doordat we te snel playlist items ophalen.
+
+HOOFDPROBLEEM:
+1) De layout is niet daadwerkelijk toegewezen/actief op het scherm in Yodeck.
+2) De ADS playlist is leeg (geen approved ads en geen fallback self-ad), dus zelfs met goede layout blijft het leeg.
+3) We moeten throttling/429 netjes afhandelen met backoff, zodat autopilot niet zichzelf saboteert.
+
+EINDGEDRAG (MOET):
+- Voor elke “Elevizion” locatie die live is en een yodeckDeviceId heeft:
+  A) Er is altijd een layout actief op het scherm (layout assigned) OF een duidelijk herstelpad dat dit automatisch zet.
+  B) Er is altijd content: minimaal een fallback (Elevizion self-ad) + basisapps via layout.
+  C) Na “approve” verschijnen ads automatisch op de juiste schermen (zoals autopilot publishing al doet), maar alleen als schermconfig ook klopt.
+
+CONSTRAINTS (ZEER BELANGRIJK):
+- Maak geen grote hernoemingen (bv. baseline/canonical), geen nieuwe terminologie nodig.
+- Gebruik bestaande functies/endpoints waar mogelijk (autopilot repair, ensurePlaylist, linkAdToLocation, content-status).
+- Voeg alleen gerichte code toe om:
+  - layout assignment echt te doen (niet alleen “vinden”)
+  - ADS playlist altijd te vullen met fallback als er geen ads zijn
+  - rate limiting correct te behandelen
+
+TAKEN (IMPLEMENTEER ZONDER ANDERE DELEN TE BREKEN):
+
+1) FIX: Layout daadwerkelijk toewijzen (LAYOUT_NOT_ASSIGNED oplossen)
+- Waar nu fout gaat: code “vindt” layout, maar zet hem niet als actieve bron op het scherm.
+- Implementeer in de autopilot repair (of bestaande repair/ensure functie) een stap:
+  - “Assign/activate layout on this screen” in Yodeck, voor yodeckDeviceId.
+  - Check daarna via een read/verify call dat het scherm nu echt layout-mode heeft en de layoutId terugkomt (dus niet null).
+- Dit moet idempotent zijn:
+  - Als layout al assigned is -> success, geen extra calls.
+- Belangrijk: Gebruik de bestaande screen configuratie data (yodeckDeviceId, screenId als die bestaat) en bestaande yodeck API wrapper.
+
+2) FIX: ADS playlist mag nooit leeg blijven
+- ADS playlist bestaat (30449618) maar heeft 0 items.
+- Voeg logica toe:
+  - Als “approved ads voor deze locatie” leeg is, seed dan minimaal 1 fallback item.
+  - Die fallback is de Elevizion self-ad.
+- Nu ontbreekt de self-ad media in Yodeck. Los dit op op een manier die geen bestaande flow breekt:
+
+  Optie A (voorkeur, veilig):
+  - Voeg een 1x “baseline assets configuratie” toe in admin (geen verplicht nieuw scherm; mag ook in bestaande debug pagina):
+    - Admin kan 1 keer een bestaande Yodeck media selecteren als “Elevizion Self-Ad”.
+    - Sla alleen het yodeckMediaId op (in DB/config), verander verder niks.
+  - SeedAds gebruikt dit opgeslagen yodeckMediaId (geen zoeken op naam).
+  - Als self-ad niet geconfigureerd is:
+    - log één duidelijke melding en markeer location status als “MISSING_SELF_AD_CONFIG”
+    - maar zorg dat de rest (layout assignment) wel doorgaat.
+
+  Optie B (als selectie te lastig is):
+  - Als er een standaard self-ad bestand in de app assets bestaat, upload die 1x naar Yodeck en sla het yodeckMediaId op.
+  - Doe dit alleen als die file al in project aanwezig is; anders NIET proberen te “verzinnen”.
+
+- Cruciaal:
+  - Geen afhankelijkheid van naam-search zoals “Upload self-ad en noem het exact …”
+  - Want dat is precies wat nu misloopt en leidt tot lege playlists.
+
+3) FIX: Approved ads moeten echt in ADS playlist komen
+- Autopilot publishing bestaat al, maar in praktijk blijft ADS leeg.
+- Voeg een harde “post-approve check” toe:
+  - Na approve: voor elke target locatie:
+    - ensure layout assigned (stap 1)
+    - ensure ADS playlist bestaat (bestaat al)
+    - voeg ad toe (idempotent)
+    - verify: playlist itemCount > 0 (met backoff ivm throttling)
+- Als toevoegen lukt maar Yodeck push faalt:
+  - markeer pendingSync=true en retry via bestaande worker of voeg een lichte retry queue toe.
+- Belangrijk: “success ondanks push fail” mag alleen als pendingSync/retry gegarandeerd is.
+
+4) FIX: HTTP 429 throttling correct afhandelen (nu saboteert het repair)
+- Nu wordt playlist meerdere keren direct achter elkaar opgehaald -> 429.
+- Implementeer een simpele rate-limit/backoff in de Yodeck fetch wrapper:
+  - Bij 429: wacht (minimaal 1s, liefst exponential: 1s, 2s, 4s) en retry max 3 keer.
+  - Zorg dat parallel requests voor dezelfde playlist/screen gelimiteerd zijn (per-id mutex/lock).
+- Verminder dubbele fetches (ik zie “Fetching playlist …” meerdere keren achter elkaar).
+
+5) VERIFICATIE / DIAGNOSTICS (klein, maar essentieel)
+- We moeten exact kunnen zien of het werkt zonder “handmatig in Yodeck kijken”.
+- Breid het bestaande content-status endpoint uit (of laat het zoals is, maar zorg dat het klopt):
+  - layoutAssigned: true/false (niet alleen “layout gevonden”)
+  - activeLayoutId/Name (wat Yodeck echt op het scherm heeft)
+  - adsItemCount (van ADS playlist)
+  - hasFallbackAd (true als self-ad in playlist staat)
+  - needsRepair true/false met concrete reason codes
+- Update autopilot logs:
+  - Log apart:
+    - “layout found” vs “layout assigned”
+    - “ads playlist exists” vs “ads playlist seeded”
+    - “added ad item” vs “synced to screen”
+
+ACCEPTATIECRITERIA (MOET SLAGEN):
+- Voor locatie “Bouwservice Douven”:
+  1) content-status mag NIET meer “LAYOUT_NOT_ASSIGNED” zijn; layoutId en layoutName moeten gevuld zijn.
+  2) ADS playlist itemCount moet >= 1 zijn (fallback) als er geen klant-ads zijn.
+  3) Na approve van een ad: ADS itemCount stijgt en ad wordt zichtbaar op scherm (zonder klikken op repair/reset/refresh).
+- Geen 429 spam meer: bij 429 zien we backoff + retry, en uiteindelijk een stabiele status.
+
+OPLEVERING:
+- Geef alleen:
+  - welke functies je hebt aangepast/toegevoegd (namen behouden waar mogelijk)
+  - welke Yodeck calls je gebruikt voor “layout assign/activate”
+  - hoe self-ad configuratie is opgelost (ID opslaan, waar ingesteld)
+  - hoe throttling/backoff is geïmplementeerd
+- GEEN grote refactor, geen hernoemingen, geen verplaatsen van bestaande logica.

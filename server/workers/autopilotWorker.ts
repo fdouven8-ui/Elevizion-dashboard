@@ -85,6 +85,8 @@ export async function runAutopilotCheck(): Promise<{
       } else {
         errors++;
         logs.push(`[AutopilotWorker] ✗ ${location.name} repair failed: ${result.error}`);
+        // Print detailed logs on failure for debugging
+        result.logs.forEach(log => logs.push(`  ${log}`));
       }
       
       processedCount++;
