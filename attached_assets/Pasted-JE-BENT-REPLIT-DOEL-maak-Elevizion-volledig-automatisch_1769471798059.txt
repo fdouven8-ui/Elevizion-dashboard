@@ -1,0 +1,123 @@
+JE BENT REPLIT. DOEL: maak Elevizion volledig automatisch voor elk scherm.
+Het systeem moet ZONDER handmatige knoppen altijd basiscontent (nieuws/weer/eigen Elevizion ad) tonen en daarna automatisch klant-ads toevoegen zodra die 1x geupload + approved zijn.
+De huidige UI (met "Repareer scherm", "Scherm resetten", "Nu verversen op TV") is te handmatig en moet naar Debug-only.
+
+CONTEXT:
+- We hebben al ensureLocationContent() dat seeding controleert en BASE_SEED_FAILED / ADS_SEED_FAILED geeft bij 0 items.
+- We hebben globale fallback ads: getRecentApprovedAds() pakt laatste 20 approved ads.
+- Manual linking is robuust: linkAdToLocation() maakt ADS playlist via ensureCanonicalPlaylist("ADS") en kan Yodeck player ID via screens tabel vinden.
+- Er zijn admin endpoints: GET /api/admin/ads-debug en POST /api/admin/locations/:id/link-ad (handmatig).
+
+NIEUW EINDGEDRAG (VERPLICHT):
+1) ELKE locatie/scherm dat "live/ready" is, heeft ALTIJD basiscontent:
+   - NEWS widget (webpage/RSS app)
+   - WEATHER widget (webpage app)
+   - ELEVIZION_DEFAULT_AD (standaard promo)
+   Dit geldt voor iedere TV, altijd, ook als er 0 klant-ads zijn.
+2) Klant-ads:
+   - Zodra een ad APPROVED is, wordt die automatisch geplaatst op de juiste locaties (targeting/capacity) en toegevoegd aan de ADS playlist.
+   - Dit mag NOOIT afhankelijk zijn van handmatige knoppen.
+3) UI:
+   - In normale admin UI mag je NIET meer afhankelijk zijn van "Repareer scherm" om content te krijgen.
+   - Knoppen zoals reset/refresh/manual link moeten alleen zichtbaar zijn in DEBUG mode.
+   - In normale mode tonen we alleen status + eventueel 1 noodactie "Repair" (maar systeem moet het zelf al doen).
+
+ARCHITECTUUR: CANONICAL PLAYLIST MODEL (moet je implementeren)
+Per locatie komt er 1 canonical playlist die altijd draait, bv:
+- "Elevizion Standaard | <LocationName>" (bestaat al in UI)
+Deze canonical playlist moet altijd deze structuur hebben:
+A) BASE SECTION:
+   - NEWS_WIDGET item
+   - WEATHER_WIDGET item
+   - ELEVIZION_DEFAULT_AD media item
+B) ADS SECTION:
+   - een aparte "ADS" playlist (subplaylist of playlist item) die in de canonical playlist is opgenomen
+   - Alle klant-ads komen ALLEEN in deze ADS playlist (nooit direct in base)
+
+BELANGRIJK: Idempotent & no-duplicates
+- Als je 10x "ensure" runt, mogen er niet 10 nieuws-items bijkomen.
+- Gebruik vaste keys/identifiers per base item (type + url + name) zodat je kan checken of het item al bestaat.
+
+TE BOUWEN/UIT TE BREIDEN FUNCTIES (server-side):
+1) ensureCanonicalSetupForLocation(locationId, opts?)
+   - haalt canonical playlist op of maakt hem aan
+   - roept ensureBaseContent(locationId) aan
+   - roept ensureAdsPlaylistLinked(locationId) aan
+   - als ADS playlist leeg is en er zijn geen klant-ads voor die locatie -> voeg 1 fallback ad toe (elevizion default of globale approved ads)
+   - return: diagnostic object (baseOk, adsOk, playlistIds, counts, errors)
+
+2) ensureBaseContent(locationId)
+   - garandeert dat NEWS_WIDGET, WEATHER_WIDGET, ELEVIZION_DEFAULT_AD in canonical playlist staan
+   - als 1 van deze ontbreekt -> voeg toe en sync naar Yodeck
+   - base items moeten als "BASE" gelabeld/te herkennen zijn (in DB of via naming convention)
+
+3) ensureAdsPlaylistLinked(locationId)
+   - garandeert dat er een ADS playlist bestaat voor deze locatie
+   - garandeert dat canonical playlist een item bevat dat naar ADS playlist verwijst (subplaylist)
+   - als niet gelinkt -> link het en sync
+
+4) Background autopilot:
+   - Als een locatie "live/ready" wordt gezet (of status Online + heeft yodeck koppeling), trigger automatisch ensureCanonicalSetupForLocation(locationId).
+   - Maak een worker die elke X minuten (bv 5 min) alle live locaties checkt en repareert als:
+     - base items ontbreken
+     - ADS playlist ontbreekt
+     - canonical playlist leeg is
+     - screen heeft “geen content of verkeerde instellingen”
+   - Worker moet veilig zijn: rate-limit + per locatie lock zodat je niet parallel dubbel sync’t.
+
+5) Ad publish autopilot:
+   - Bij ad APPROVED event: automatische placement engine -> selecteert locaties -> voegt ad toe aan ADS playlist van die locaties (idempotent).
+   - Als Yodeck push faalt: sla state op als pending_sync=true en retry via worker. API response mag success tonen als DB state klopt.
+
+NIEUWE ENDPOINTS (voor autopilot, niet voor handmatige knoppen):
+A) POST /api/admin/locations/:id/autopilot-repair
+   - roept ensureCanonicalSetupForLocation(locationId) aan
+   - return diagnostics
+B) GET /api/admin/locations/:id/content-status
+   - geeft baseCount, adsCount, missingBaseItems[], pendingSync, lastSyncAt, lastError
+
+UI WIJZIGINGEN (de pagina op screenshot, YodeckDebug):
+- Toon bovenaan vooral STATUS:
+  - "Basiscontent: OK/NIET OK" + wat mist
+  - "Advertenties: X items" + pending sync indicator
+  - "Laatste sync: tijd"
+- Knoppen:
+  1) In normale mode:
+     - Verberg "Scherm resetten" en "Nu verversen op TV"
+     - Verberg manual link knoppen
+     - Optioneel: 1 knop "Repair" (maar zet er tekst bij: “Autopilot draait; gebruik alleen bij nood”)
+  2) In DEBUG mode:
+     - Toon alle knoppen (reset/refresh/manual link/ads-debug)
+- Voeg debug toggle toe via env:
+  - ADMIN_DEBUG_UI=true/false (default false)
+  - of via admin setting in DB
+
+CRUCIAAL: Het probleem in screenshot (“Scherm heeft geen content… Geen basis content. Geen advertenties.”) moet verdwijnen zonder klikken.
+Dus:
+- Wanneer de pagina opent, moet hij automatisch een status fetch doen.
+- Als status NIET OK en locatie is live -> trigger op de achtergrond autopilot repair (1x) en refresh status na 5-10 sec.
+- Toon UI tekst: “Autopilot herstelt dit scherm…” met spinner.
+
+YODECK DETAILS:
+- NEWS_WIDGET en WEATHER_WIDGET zijn Web Page apps of RSS apps (gebruik bestaande implementatie als die er al is).
+- ELEVIZION_DEFAULT_AD is een vaste media asset (zorg dat die asset altijd beschikbaar is; upload 1x en hergebruik).
+- Houd rekening met het vinden van playerId via screens tabel als location geen yodeckDeviceId heeft (zoals al bij manual linking).
+
+ACCEPTATIECRITERIA (TESTEN):
+1) Nieuwe live locatie zonder content:
+   - Binnen 60 sec: basiscontent aanwezig (news+weather+default ad) en canonical playlist niet leeg.
+2) Locatie met 0 klant-ads:
+   - Scherm blijft draaien met base content (nooit leeg).
+3) Approved ad:
+   - Ad verschijnt automatisch in ADS playlist van gekozen locaties zonder handmatige actie.
+4) Idempotency:
+   - 10x autopilot repair uitvoeren -> geen duplicaten, counts blijven stabiel.
+5) UI:
+   - In normale mode: geen overload aan knoppen; alleen status + eventueel “Repair”.
+   - In debug mode: alle knoppen zichtbaar.
+
+LEVERING:
+- Geef een overzicht van welke bestanden je hebt aangepast.
+- Geef de namen van de nieuwe/gewijzigde functions.
+- Geef voorbeeld response JSON van content-status en autopilot-repair diagnostics.
+- Zorg dat errors duidelijk gelogd worden (BASE_MISSING_ITEMS, ADS_PLAYLIST_MISSING, YODECK_SYNC_FAILED, etc.)

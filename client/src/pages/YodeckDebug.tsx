@@ -1,15 +1,22 @@
 /**
- * Scherm Beheer - Vereenvoudigde Nederlandse versie
+ * Scherm Beheer - Vereenvoudigde Nederlandse versie met Autopilot
  * Één waarheid: Canonical live status + playlists + layout + approved ads
+ * 
+ * AUTOPILOT MODUS:
+ * - Status wordt automatisch opgehaald bij selectie
+ * - Bij problemen wordt auto-repair getriggerd
+ * - Debug knoppen zijn alleen zichtbaar in DEBUG mode
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { RefreshCw, CheckCircle, XCircle, AlertCircle, Monitor, ExternalLink, Wrench, RotateCcw, Tv, HelpCircle, Info, Link as LinkIcon, PlayCircle } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
+import { RefreshCw, CheckCircle, XCircle, AlertCircle, Monitor, ExternalLink, Wrench, RotateCcw, Tv, HelpCircle, Info, Link as LinkIcon, PlayCircle, Settings2, Loader2 } from "lucide-react";
 import { useCanonicalScreens } from "@/hooks/useCanonicalScreens";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -94,12 +101,51 @@ interface ApprovedAdsResponse {
   logs: string[];
 }
 
+interface ContentStatusResponse {
+  locationId: string;
+  locationName: string;
+  isLive: boolean;
+  hasYodeckDevice: boolean;
+  base: {
+    playlistId: string | null;
+    itemCount: number;
+    hasNews: boolean;
+    hasWeather: boolean;
+    hasDefaultAd: boolean;
+    missingItems: string[];
+  };
+  ads: {
+    playlistId: string | null;
+    itemCount: number;
+    hasFallbackAd: boolean;
+    pendingSync: boolean;
+  };
+  lastSyncAt: string | null;
+  lastError: string | null;
+  needsRepair: boolean;
+}
+
+interface AutopilotRepairResult {
+  ok: boolean;
+  locationId: string;
+  locationName: string;
+  baseRepaired: boolean;
+  adsRepaired: boolean;
+  base: { playlistId: string | null; itemCount: number; itemsAdded: string[] };
+  ads: { playlistId: string | null; itemCount: number; fallbackAdded: boolean };
+  pushed: boolean;
+  logs: string[];
+  error?: string;
+}
+
 export default function YodeckDebug() {
   const queryClient = useQueryClient();
   const [selectedLocation, setSelectedLocation] = useState<string>("");
   const [repareerResult, setRepareerResult] = useState<RepareerResult | null>(null);
   const [showTechnisch, setShowTechnisch] = useState(false);
   const [showGlobalAds, setShowGlobalAds] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
+  const [autoRepairTriggered, setAutoRepairTriggered] = useState<string | null>(null);
 
   const { 
     screens, 
@@ -225,6 +271,65 @@ export default function YodeckDebug() {
     },
   });
 
+  // Content status ophalen (autopilot)
+  const { data: contentStatus, refetch: refetchStatus, isLoading: statusLoading } = useQuery<ContentStatusResponse>({
+    queryKey: ["/api/admin/locations/content-status", selectedLocation],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/locations/${selectedLocation}/content-status`, {
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: !!selectedLocation,
+    refetchInterval: 30000, // Elke 30 seconden vernieuwen
+  });
+
+  // Autopilot repair mutation
+  const autopilotRepairMutation = useMutation({
+    mutationFn: async (locationId: string) => {
+      const res = await apiRequest("POST", `/api/admin/locations/${locationId}/autopilot-repair`, {});
+      return await res.json() as AutopilotRepairResult;
+    },
+    onSuccess: (data) => {
+      setRepareerResult({
+        ok: data.ok,
+        locationId: data.locationId,
+        locationName: data.locationName,
+        basePlaylist: { id: data.base.playlistId, name: null, itemCount: data.base.itemCount },
+        adsPlaylist: { id: data.ads.playlistId, name: null, itemCount: data.ads.itemCount },
+        layout: { id: null },
+        pushed: data.pushed,
+        logs: data.logs,
+        error: data.error,
+      });
+      refetchPlaylist();
+      refetchStatus();
+      refetchApprovedAds();
+      refresh();
+      setAutoRepairTriggered(null);
+    },
+    onError: () => {
+      setAutoRepairTriggered(null);
+    },
+  });
+
+  // Auto-repair trigger wanneer status NOT OK en locatie is live
+  useEffect(() => {
+    if (
+      contentStatus &&
+      contentStatus.needsRepair &&
+      contentStatus.isLive &&
+      selectedLocation &&
+      autoRepairTriggered !== selectedLocation &&
+      !autopilotRepairMutation.isPending
+    ) {
+      console.log(`[Autopilot] Triggering auto-repair for ${contentStatus.locationName}...`);
+      setAutoRepairTriggered(selectedLocation);
+      autopilotRepairMutation.mutate(selectedLocation);
+    }
+  }, [contentStatus, selectedLocation, autoRepairTriggered, autopilotRepairMutation.isPending]);
+
   // Bepaal status
   const baseOk = playlistItems?.base?.items && playlistItems.base.items.length > 0;
   const adsOk = playlistItems?.ads?.items && playlistItems.ads.items.length > 0;
@@ -258,7 +363,7 @@ export default function YodeckDebug() {
     linkSpecificAdMutation.mutate({ locationId: selectedLocation, adId });
   };
 
-  const isAnyLoading = repareerMutation.isPending || resetMutation.isPending || pushMutation.isPending || linkAdMutation.isPending || linkSpecificAdMutation.isPending;
+  const isAnyLoading = repareerMutation.isPending || resetMutation.isPending || pushMutation.isPending || linkAdMutation.isPending || linkSpecificAdMutation.isPending || autopilotRepairMutation.isPending;
 
   return (
     <div className="space-y-6" data-testid="scherm-beheer-page">
@@ -270,15 +375,29 @@ export default function YodeckDebug() {
             {generatedAt && <span className="ml-2 text-xs">({new Date(generatedAt).toLocaleTimeString()})</span>}
           </p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => refresh()}
-          disabled={isRefetching}
-          data-testid="ververs-button"
-        >
-          <RefreshCw className={`h-4 w-4 mr-2 ${isRefetching ? "animate-spin" : ""}`} />
-          Ververs
-        </Button>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="debug-mode"
+              checked={debugMode}
+              onCheckedChange={setDebugMode}
+              data-testid="debug-toggle"
+            />
+            <Label htmlFor="debug-mode" className="text-sm text-muted-foreground flex items-center gap-1">
+              <Settings2 className="h-4 w-4" />
+              Debug
+            </Label>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => refresh()}
+            disabled={isRefetching}
+            data-testid="ververs-button"
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${isRefetching ? "animate-spin" : ""}`} />
+            Ververs
+          </Button>
+        </div>
       </div>
 
       {/* Scherm selectie */}
@@ -311,71 +430,130 @@ export default function YodeckDebug() {
             </SelectContent>
           </Select>
 
-          {/* 3 Hoofdknoppen */}
-          <div className="flex gap-3">
-            <Button
-              size="lg"
-              className="flex-1 bg-blue-600 hover:bg-blue-700"
-              disabled={!selectedLocation || isAnyLoading}
-              onClick={handleRepareer}
-              data-testid="repareer-button"
-            >
-              {repareerMutation.isPending ? (
-                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <Wrench className="h-4 w-4 mr-2" />
-              )}
-              Repareer scherm
-            </Button>
-
-            <Button
-              size="lg"
-              variant="destructive"
-              disabled={!selectedLocation || isAnyLoading}
-              onClick={handleReset}
-              data-testid="reset-button"
-            >
-              {resetMutation.isPending ? (
-                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <RotateCcw className="h-4 w-4 mr-2" />
-              )}
-              Scherm resetten
-            </Button>
-
-            <Button
-              size="lg"
-              variant="secondary"
-              disabled={!selectedLocation || isAnyLoading}
-              onClick={handlePush}
-              data-testid="push-button"
-            >
-              {pushMutation.isPending ? (
-                <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <Tv className="h-4 w-4 mr-2" />
-              )}
-              Nu verversen op TV
-            </Button>
-          </div>
-
-          {/* Uitleg link */}
-          <div className="flex justify-end">
-            <button 
-              onClick={() => setShowTechnisch(!showTechnisch)}
-              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
-            >
-              <HelpCircle className="h-3 w-3" />
-              Wat doen deze knoppen?
-            </button>
-          </div>
-
-          {showTechnisch && (
-            <div className="bg-muted p-4 rounded-lg text-sm space-y-2">
-              <p><strong>Repareer scherm:</strong> Zet het scherm naar de standaard Elevizion layout met basis- en advertentie content.</p>
-              <p><strong>Scherm resetten:</strong> Maakt het scherm eerst leeg en stelt het daarna opnieuw in met standaard content.</p>
-              <p><strong>Nu verversen op TV:</strong> Stuurt de huidige instellingen direct naar het fysieke scherm.</p>
+          {/* Autopilot Status Display */}
+          {selectedLocation && (statusLoading || autopilotRepairMutation.isPending) && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-center gap-3">
+              <Loader2 className="h-5 w-5 text-blue-600 animate-spin" />
+              <div>
+                <p className="font-medium text-blue-800">
+                  {autopilotRepairMutation.isPending ? "Autopilot herstelt dit scherm..." : "Status controleren..."}
+                </p>
+                <p className="text-sm text-blue-600">Even geduld, het systeem werkt automatisch.</p>
+              </div>
             </div>
+          )}
+
+          {/* Status indicator when content status is loaded */}
+          {contentStatus && !statusLoading && !autopilotRepairMutation.isPending && (
+            <div className={`rounded-lg p-4 ${contentStatus.needsRepair ? "bg-yellow-50 border border-yellow-200" : "bg-green-50 border border-green-200"}`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  {contentStatus.needsRepair ? (
+                    <AlertCircle className="h-5 w-5 text-yellow-600" />
+                  ) : (
+                    <CheckCircle className="h-5 w-5 text-green-600" />
+                  )}
+                  <div>
+                    <p className={`font-medium ${contentStatus.needsRepair ? "text-yellow-800" : "text-green-800"}`}>
+                      {contentStatus.needsRepair ? "Scherm heeft aandacht nodig" : "Scherm is goed ingesteld"}
+                    </p>
+                    <p className={`text-sm ${contentStatus.needsRepair ? "text-yellow-600" : "text-green-600"}`}>
+                      Basiscontent: {contentStatus.base.itemCount} items • 
+                      Advertenties: {contentStatus.ads.itemCount} items
+                      {contentStatus.lastSyncAt && (
+                        <span> • Laatste sync: {new Date(contentStatus.lastSyncAt).toLocaleTimeString()}</span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                {contentStatus.needsRepair && (
+                  <Button
+                    size="sm"
+                    onClick={() => autopilotRepairMutation.mutate(selectedLocation)}
+                    disabled={isAnyLoading}
+                    data-testid="nood-repair-button"
+                  >
+                    <Wrench className="h-4 w-4 mr-2" />
+                    Repareren
+                  </Button>
+                )}
+              </div>
+              {contentStatus.base.missingItems.length > 0 && (
+                <p className="text-sm text-yellow-600 mt-2">
+                  Ontbrekend: {contentStatus.base.missingItems.join(", ")}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Debug Mode: Alle knoppen */}
+          {debugMode && (
+            <>
+              <div className="flex gap-3">
+                <Button
+                  size="lg"
+                  className="flex-1 bg-blue-600 hover:bg-blue-700"
+                  disabled={!selectedLocation || isAnyLoading}
+                  onClick={handleRepareer}
+                  data-testid="repareer-button"
+                >
+                  {repareerMutation.isPending ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Wrench className="h-4 w-4 mr-2" />
+                  )}
+                  Repareer scherm
+                </Button>
+
+                <Button
+                  size="lg"
+                  variant="destructive"
+                  disabled={!selectedLocation || isAnyLoading}
+                  onClick={handleReset}
+                  data-testid="reset-button"
+                >
+                  {resetMutation.isPending ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                  )}
+                  Scherm resetten
+                </Button>
+
+                <Button
+                  size="lg"
+                  variant="secondary"
+                  disabled={!selectedLocation || isAnyLoading}
+                  onClick={handlePush}
+                  data-testid="push-button"
+                >
+                  {pushMutation.isPending ? (
+                    <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Tv className="h-4 w-4 mr-2" />
+                  )}
+                  Nu verversen op TV
+                </Button>
+              </div>
+
+              <div className="flex justify-end">
+                <button 
+                  onClick={() => setShowTechnisch(!showTechnisch)}
+                  className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                >
+                  <HelpCircle className="h-3 w-3" />
+                  Wat doen deze knoppen?
+                </button>
+              </div>
+
+              {showTechnisch && (
+                <div className="bg-muted p-4 rounded-lg text-sm space-y-2">
+                  <p><strong>Repareer scherm:</strong> Zet het scherm naar de standaard Elevizion layout met basis- en advertentie content.</p>
+                  <p><strong>Scherm resetten:</strong> Maakt het scherm eerst leeg en stelt het daarna opnieuw in met standaard content.</p>
+                  <p><strong>Nu verversen op TV:</strong> Stuurt de huidige instellingen direct naar het fysieke scherm.</p>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

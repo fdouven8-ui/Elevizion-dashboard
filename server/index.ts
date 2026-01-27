@@ -7,6 +7,7 @@ import { syncAllScreensContent } from "./services/yodeckContent";
 import { startOutboxWorker, stopOutboxWorker } from "./services/outboxWorker";
 import { startCapacityWatcher, stopCapacityWatcher } from "./services/capacityWatcherWorker";
 import { startMonthlyReportWorker, stopMonthlyReportWorker } from "./services/monthlyReportWorker";
+import { startAutopilotWorker, stopAutopilotWorker } from "./workers/autopilotWorker";
 import { checkVideoProcessingDependencies } from "./services/videoMetadataService";
 import { db } from "./db";
 import { storage } from "./storage";
@@ -60,6 +61,9 @@ async function gracefulShutdown(signal: string) {
   
   // Stop monthly report worker
   stopMonthlyReportWorker();
+  
+  // Stop autopilot worker
+  stopAutopilotWorker();
   
   // Close HTTP server (stop accepting new connections)
   httpServer.close(() => {
@@ -426,6 +430,14 @@ app.use((req, res, next) => {
           startMonthlyReportWorker();
         }
       }, 25000);
+      
+      // Start autopilot worker (5 minute interval)
+      // Ensures all live locations have canonical content (NEWS/WEATHER/ADS)
+      setTimeout(() => {
+        if (!isShuttingDown) {
+          startAutopilotWorker();
+        }
+      }, 30000);
     },
   );
 })();

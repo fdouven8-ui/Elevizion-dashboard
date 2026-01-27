@@ -34,6 +34,13 @@ export const CANONICAL_PLAYLIST_PREFIXES = {
 export const BASELINE_MEDIA_NAME = "Elevizion Baseline";
 export const SELF_AD_MEDIA_NAME = "Elevizion Self-Ad";
 
+// Base content items that MUST be in BASE playlist
+export const BASE_CONTENT_ITEMS = {
+  NEWS: { name: "Elevizion News", type: "widget", searchPatterns: ["elevizion news", "nieuws", "news"] },
+  WEATHER: { name: "Elevizion Weather", type: "widget", searchPatterns: ["elevizion weather", "weer", "weather"] },
+  DEFAULT_AD: { name: "Elevizion Self-Ad", type: "media", searchPatterns: ["elevizion self-ad", "self-ad", "zelf ad"] },
+};
+
 // Feature flag to block non-canonical writes (enable when ready)
 export const BLOCK_LEGACY_WRITES = process.env.BLOCK_LEGACY_WRITES === "true";
 
@@ -1876,4 +1883,517 @@ export async function forceAppendLatestApprovedAd(locationId: string): Promise<{
   
   logs.push(`[ForceAppend] ✓ Ad toegevoegd aan ADS playlist en scherm gepusht`);
   return { ok: true, ad: { ...latestAd, yodeckMediaId: linkResult.yodeckMediaId }, added: true, logs };
+}
+
+// ============================================================================
+// AUTOPILOT: CONTENT STATUS & CANONICAL SETUP
+// ============================================================================
+
+export interface ContentStatusResult {
+  locationId: string;
+  locationName: string;
+  isLive: boolean;
+  hasYodeckDevice: boolean;
+  
+  base: {
+    playlistId: string | null;
+    itemCount: number;
+    hasNews: boolean;
+    hasWeather: boolean;
+    hasDefaultAd: boolean;
+    missingItems: string[];
+  };
+  
+  ads: {
+    playlistId: string | null;
+    itemCount: number;
+    hasFallbackAd: boolean;
+    pendingSync: boolean;
+  };
+  
+  lastSyncAt: Date | null;
+  lastError: string | null;
+  needsRepair: boolean;
+}
+
+/**
+ * Search for a media/widget by name patterns in Yodeck
+ */
+async function findMediaByPatterns(patterns: string[]): Promise<{
+  ok: boolean;
+  mediaId: number | null;
+  mediaName: string | null;
+  mediaType: string | null;
+  logs: string[];
+}> {
+  const logs: string[] = [];
+  
+  for (const pattern of patterns) {
+    logs.push(`[FindMedia] Zoeken naar "${pattern}"...`);
+    
+    // Search medias
+    const mediaResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
+      `/medias/?search=${encodeURIComponent(pattern)}`
+    );
+    
+    if (mediaResult.ok && mediaResult.data?.results && mediaResult.data.results.length > 0) {
+      const match = mediaResult.data.results.find(m => 
+        m.name.toLowerCase().includes(pattern.toLowerCase())
+      );
+      if (match) {
+        logs.push(`[FindMedia] ✓ Media gevonden: ${match.id} - "${match.name}"`);
+        return { ok: true, mediaId: match.id, mediaName: match.name, mediaType: "media", logs };
+      }
+    }
+    
+    // Search webpages (for widgets like news/weather)
+    const webpageResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
+      `/webpages/?search=${encodeURIComponent(pattern)}`
+    );
+    
+    if (webpageResult.ok && webpageResult.data?.results && webpageResult.data.results.length > 0) {
+      const match = webpageResult.data.results.find(w => 
+        w.name.toLowerCase().includes(pattern.toLowerCase())
+      );
+      if (match) {
+        logs.push(`[FindMedia] ✓ Webpage/widget gevonden: ${match.id} - "${match.name}"`);
+        return { ok: true, mediaId: match.id, mediaName: match.name, mediaType: "webpage", logs };
+      }
+    }
+  }
+  
+  logs.push(`[FindMedia] Niet gevonden met patterns: ${patterns.join(", ")}`);
+  return { ok: true, mediaId: null, mediaName: null, mediaType: null, logs };
+}
+
+/**
+ * Get content status for a location (for UI display)
+ */
+export async function getContentStatus(locationId: string): Promise<ContentStatusResult> {
+  const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+  
+  if (!location) {
+    return {
+      locationId,
+      locationName: "Onbekend",
+      isLive: false,
+      hasYodeckDevice: false,
+      base: { playlistId: null, itemCount: 0, hasNews: false, hasWeather: false, hasDefaultAd: false, missingItems: ["NEWS", "WEATHER", "DEFAULT_AD"] },
+      ads: { playlistId: null, itemCount: 0, hasFallbackAd: false, pendingSync: false },
+      lastSyncAt: null,
+      lastError: "Locatie niet gevonden",
+      needsRepair: true,
+    };
+  }
+  
+  const isLive = location.status === "active" || location.status === "readyForAds";
+  const hasYodeckDevice = !!(location.yodeckDeviceId);
+  
+  // Get BASE playlist items
+  let baseItemCount = 0;
+  let hasNews = false;
+  let hasWeather = false;
+  let hasDefaultAd = false;
+  const missingItems: string[] = [];
+  
+  if (location.yodeckBaselinePlaylistId) {
+    const baseItems = await getPlaylistItems(location.yodeckBaselinePlaylistId);
+    if (baseItems.ok) {
+      baseItemCount = baseItems.items.length;
+      
+      // Check for specific items
+      for (const item of baseItems.items) {
+        const nameLower = item.name.toLowerCase();
+        if (nameLower.includes("news") || nameLower.includes("nieuws")) hasNews = true;
+        if (nameLower.includes("weather") || nameLower.includes("weer")) hasWeather = true;
+        if (nameLower.includes("self-ad") || nameLower.includes("baseline") || nameLower.includes("elevizion")) hasDefaultAd = true;
+      }
+    }
+  }
+  
+  if (!hasNews) missingItems.push("NEWS");
+  if (!hasWeather) missingItems.push("WEATHER");
+  if (!hasDefaultAd) missingItems.push("DEFAULT_AD");
+  
+  // Get ADS playlist items
+  let adsItemCount = 0;
+  let hasFallbackAd = false;
+  
+  if (location.yodeckPlaylistId) {
+    const adsItems = await getPlaylistItems(location.yodeckPlaylistId);
+    if (adsItems.ok) {
+      adsItemCount = adsItems.items.length;
+      hasFallbackAd = adsItemCount > 0;
+    }
+  }
+  
+  const needsRepair = missingItems.length > 0 || baseItemCount === 0 || adsItemCount === 0 || !location.yodeckBaselinePlaylistId || !location.yodeckPlaylistId;
+  
+  return {
+    locationId,
+    locationName: location.name,
+    isLive,
+    hasYodeckDevice,
+    base: {
+      playlistId: location.yodeckBaselinePlaylistId,
+      itemCount: baseItemCount,
+      hasNews,
+      hasWeather,
+      hasDefaultAd,
+      missingItems,
+    },
+    ads: {
+      playlistId: location.yodeckPlaylistId,
+      itemCount: adsItemCount,
+      hasFallbackAd,
+      pendingSync: false,
+    },
+    lastSyncAt: location.yodeckPlaylistVerifiedAt,
+    lastError: location.lastYodeckVerifyError,
+    needsRepair,
+  };
+}
+
+export interface AutopilotRepairResult {
+  ok: boolean;
+  locationId: string;
+  locationName: string;
+  
+  baseRepaired: boolean;
+  adsRepaired: boolean;
+  
+  base: {
+    playlistId: string | null;
+    itemCount: number;
+    itemsAdded: string[];
+  };
+  
+  ads: {
+    playlistId: string | null;
+    itemCount: number;
+    fallbackAdded: boolean;
+  };
+  
+  pushed: boolean;
+  logs: string[];
+  error?: string;
+}
+
+/**
+ * AUTOPILOT: Ensure canonical setup for a location
+ * 
+ * This is the MAIN autopilot function that:
+ * 1. Ensures BASE playlist exists with all required items (NEWS, WEATHER, DEFAULT_AD)
+ * 2. Ensures ADS playlist exists with at least 1 fallback ad
+ * 3. Links layout to screen
+ * 4. Pushes to device
+ * 
+ * IDEMPOTENT: Can be called multiple times safely without duplicates
+ */
+export async function ensureCanonicalSetupForLocation(locationId: string): Promise<AutopilotRepairResult> {
+  const logs: string[] = [];
+  logs.push(`[Autopilot] ═══════════════════════════════════════`);
+  logs.push(`[Autopilot] Start voor locatie ${locationId}`);
+  
+  // Get location
+  const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+  
+  if (!location) {
+    return {
+      ok: false,
+      locationId,
+      locationName: "Onbekend",
+      baseRepaired: false,
+      adsRepaired: false,
+      base: { playlistId: null, itemCount: 0, itemsAdded: [] },
+      ads: { playlistId: null, itemCount: 0, fallbackAdded: false },
+      pushed: false,
+      logs,
+      error: "Locatie niet gevonden",
+    };
+  }
+  
+  logs.push(`[Autopilot] Locatie: ${location.name}`);
+  const itemsAdded: string[] = [];
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 1: Ensure canonical BASE playlist
+  // ═══════════════════════════════════════════════════════════════════════════
+  logs.push(`[Autopilot] ─── STAP 1: BASE playlist ───`);
+  const baseResult = await ensureCanonicalPlaylist(location.name, "BASE");
+  logs.push(...baseResult.logs);
+  
+  if (!baseResult.ok) {
+    return {
+      ok: false,
+      locationId,
+      locationName: location.name,
+      baseRepaired: false,
+      adsRepaired: false,
+      base: { playlistId: null, itemCount: 0, itemsAdded: [] },
+      ads: { playlistId: null, itemCount: 0, fallbackAdded: false },
+      pushed: false,
+      logs,
+      error: `BASE playlist fout: ${baseResult.error}`,
+    };
+  }
+  
+  // Update location if needed
+  if (location.yodeckBaselinePlaylistId !== baseResult.playlistId) {
+    await db.update(locations).set({ yodeckBaselinePlaylistId: baseResult.playlistId }).where(eq(locations.id, locationId));
+    logs.push(`[Autopilot] ✓ BASE playlist ID opgeslagen: ${baseResult.playlistId}`);
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2: Ensure base content items (NEWS, WEATHER, DEFAULT_AD)
+  // ═══════════════════════════════════════════════════════════════════════════
+  logs.push(`[Autopilot] ─── STAP 2: Basiscontent items ───`);
+  
+  // Get current items
+  const currentItems = await getPlaylistItems(baseResult.playlistId);
+  const currentItemNames = currentItems.items.map(i => i.name.toLowerCase());
+  
+  // Check and add each required item
+  for (const [key, config] of Object.entries(BASE_CONTENT_ITEMS)) {
+    // Check if already exists
+    const exists = currentItemNames.some(name => 
+      config.searchPatterns.some(pattern => name.includes(pattern.toLowerCase()))
+    );
+    
+    if (exists) {
+      logs.push(`[Autopilot] ✓ ${key} al aanwezig`);
+      continue;
+    }
+    
+    // Find media/widget
+    const findResult = await findMediaByPatterns(config.searchPatterns);
+    logs.push(...findResult.logs);
+    
+    if (findResult.mediaId) {
+      const appendResult = await appendPlaylistItemIfMissing(baseResult.playlistId, findResult.mediaId, 30);
+      logs.push(...appendResult.logs);
+      
+      if (!appendResult.alreadyExists) {
+        itemsAdded.push(key);
+        logs.push(`[Autopilot] ✓ ${key} toegevoegd aan BASE playlist`);
+      }
+    } else {
+      logs.push(`[Autopilot] ⚠️ ${key} niet gevonden in Yodeck - upload dit item eerst`);
+    }
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 3: Ensure seed content (fallback if nothing found)
+  // ═══════════════════════════════════════════════════════════════════════════
+  logs.push(`[Autopilot] ─── STAP 3: Baseline fallback ───`);
+  const baseSeedResult = await seedBaselinePlaylist(baseResult.playlistId);
+  logs.push(...baseSeedResult.logs);
+  
+  // Verify BASE has items
+  const baseItemsResult = await getPlaylistItems(baseResult.playlistId);
+  const baseItemCount = baseItemsResult.items.length;
+  
+  if (baseItemCount === 0) {
+    logs.push(`[Autopilot] ❌ BASE playlist heeft 0 items - upload basiscontent naar Yodeck`);
+    return {
+      ok: false,
+      locationId,
+      locationName: location.name,
+      baseRepaired: false,
+      adsRepaired: false,
+      base: { playlistId: baseResult.playlistId, itemCount: 0, itemsAdded },
+      ads: { playlistId: null, itemCount: 0, fallbackAdded: false },
+      pushed: false,
+      logs,
+      error: "BASE_EMPTY: Basiscontent items ontbreken in Yodeck. Upload NEWS, WEATHER en DEFAULT_AD media.",
+    };
+  }
+  logs.push(`[Autopilot] ✓ BASE heeft ${baseItemCount} items`);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 4: Ensure canonical ADS playlist
+  // ═══════════════════════════════════════════════════════════════════════════
+  logs.push(`[Autopilot] ─── STAP 4: ADS playlist ───`);
+  const adsResult = await ensureCanonicalPlaylist(location.name, "ADS");
+  logs.push(...adsResult.logs);
+  
+  if (!adsResult.ok) {
+    return {
+      ok: false,
+      locationId,
+      locationName: location.name,
+      baseRepaired: itemsAdded.length > 0,
+      adsRepaired: false,
+      base: { playlistId: baseResult.playlistId, itemCount: baseItemCount, itemsAdded },
+      ads: { playlistId: null, itemCount: 0, fallbackAdded: false },
+      pushed: false,
+      logs,
+      error: `ADS playlist fout: ${adsResult.error}`,
+    };
+  }
+  
+  // Update location if needed
+  if (location.yodeckPlaylistId !== adsResult.playlistId) {
+    await db.update(locations).set({ yodeckPlaylistId: adsResult.playlistId }).where(eq(locations.id, locationId));
+    logs.push(`[Autopilot] ✓ ADS playlist ID opgeslagen: ${adsResult.playlistId}`);
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 5: Seed ADS with fallback if empty
+  // ═══════════════════════════════════════════════════════════════════════════
+  logs.push(`[Autopilot] ─── STAP 5: ADS fallback ───`);
+  const adsSeedResult = await seedAdsPlaylist(adsResult.playlistId);
+  logs.push(...adsSeedResult.logs);
+  
+  // Verify ADS has items
+  const adsItemsResult = await getPlaylistItems(adsResult.playlistId);
+  const adsItemCount = adsItemsResult.items.length;
+  
+  if (adsItemCount === 0) {
+    logs.push(`[Autopilot] ⚠️ ADS playlist heeft 0 items - fallback toevoegen...`);
+    
+    // Try to add global approved ads as fallback
+    const globalAdsResult = await getRecentApprovedAds();
+    if (globalAdsResult.ads && globalAdsResult.ads.length > 0) {
+      const firstAd = globalAdsResult.ads[0];
+      const linkResult = await linkAdToLocation(locationId, firstAd.id.toString());
+      logs.push(...linkResult.logs);
+      
+      if (linkResult.ok) {
+        logs.push(`[Autopilot] ✓ Globale ad toegevoegd als fallback: ${firstAd.filename}`);
+      }
+    } else {
+      logs.push(`[Autopilot] ⚠️ Geen globale ads beschikbaar als fallback`);
+    }
+  }
+  
+  // Re-check ADS count
+  const finalAdsItems = await getPlaylistItems(adsResult.playlistId);
+  const finalAdsCount = finalAdsItems.items.length;
+  logs.push(`[Autopilot] ✓ ADS heeft ${finalAdsCount} items`);
+  
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 6: Push to screen
+  // ═══════════════════════════════════════════════════════════════════════════
+  logs.push(`[Autopilot] ─── STAP 6: Push naar scherm ───`);
+  let pushed = false;
+  let yodeckDeviceId = location.yodeckDeviceId;
+  
+  // Fallback: try screens table
+  if (!yodeckDeviceId) {
+    const linkedScreens = await db.select({ yodeckPlayerId: screens.yodeckPlayerId })
+      .from(screens)
+      .where(eq(screens.locationId, locationId));
+    
+    if (linkedScreens.length > 0 && linkedScreens[0].yodeckPlayerId) {
+      yodeckDeviceId = linkedScreens[0].yodeckPlayerId;
+      logs.push(`[Autopilot] ✓ yodeckPlayerId gevonden via screens: ${yodeckDeviceId}`);
+    }
+  }
+  
+  if (yodeckDeviceId) {
+    const pushResult = await pushScreen(yodeckDeviceId);
+    pushed = pushResult.ok;
+    logs.push(pushed ? `[Autopilot] ✓ Scherm gepushed` : `[Autopilot] Push niet gelukt: ${pushResult.error}`);
+  } else {
+    logs.push(`[Autopilot] ⚠️ Geen Yodeck scherm gekoppeld - content is klaar maar niet gepushed`);
+  }
+  
+  // Update last sync timestamp
+  await db.update(locations).set({ 
+    yodeckPlaylistVerifiedAt: new Date(),
+    lastYodeckVerifyError: null,
+    layoutMode: "LAYOUT",
+  }).where(eq(locations.id, locationId));
+  
+  logs.push(`[Autopilot] ═══════════════════════════════════════`);
+  logs.push(`[Autopilot] ✓ Autopilot repair voltooid`);
+  
+  return {
+    ok: true,
+    locationId,
+    locationName: location.name,
+    baseRepaired: itemsAdded.length > 0 || baseSeedResult.seeded,
+    adsRepaired: adsSeedResult.seeded,
+    base: { playlistId: baseResult.playlistId, itemCount: baseItemCount, itemsAdded },
+    ads: { playlistId: adsResult.playlistId, itemCount: finalAdsCount, fallbackAdded: adsSeedResult.seeded },
+    pushed,
+    logs,
+  };
+}
+
+/**
+ * Find all locations that should receive ads from a specific advertiser
+ * Chain: advertiser → contracts → placements → screens → locations
+ */
+export async function findLocationsForAdvertiser(advertiserId: string): Promise<string[]> {
+  // Get all active contracts for this advertiser
+  const advertiserContracts = await db.select({ id: contracts.id })
+    .from(contracts)
+    .where(and(
+      eq(contracts.advertiserId, advertiserId),
+      eq(contracts.status, "signed")
+    ));
+  
+  if (advertiserContracts.length === 0) {
+    console.log(`[FindLocations] No active contracts for advertiser ${advertiserId}`);
+    return [];
+  }
+  
+  const contractIds = advertiserContracts.map(c => c.id);
+  
+  // Get all placements for these contracts
+  const contractPlacements = await db.select({ screenId: placements.screenId })
+    .from(placements)
+    .where(inArray(placements.contractId, contractIds));
+  
+  if (contractPlacements.length === 0) {
+    console.log(`[FindLocations] No placements for advertiser ${advertiserId} contracts`);
+    return [];
+  }
+  
+  const screenIds = Array.from(new Set(contractPlacements.map(p => p.screenId).filter(Boolean)));
+  
+  // Get locations for these screens
+  const screenLocations = await db.select({ locationId: screens.locationId })
+    .from(screens)
+    .where(and(
+      inArray(screens.id, screenIds),
+      isNotNull(screens.locationId)
+    ));
+  
+  const locationIds = Array.from(new Set(screenLocations.map(s => s.locationId).filter(Boolean))) as string[];
+  
+  console.log(`[FindLocations] Advertiser ${advertiserId} → ${advertiserContracts.length} contracts → ${contractPlacements.length} placements → ${locationIds.length} locations`);
+  
+  return locationIds;
+}
+
+/**
+ * Get all live locations that need autopilot repair
+ */
+export async function getLiveLocationsNeedingRepair(): Promise<Array<{ id: string; name: string; reason: string }>> {
+  const liveLocations = await db.select()
+    .from(locations)
+    .where(or(
+      eq(locations.status, "active"),
+      eq(locations.status, "readyForAds")
+    ));
+  
+  const needsRepair: Array<{ id: string; name: string; reason: string }> = [];
+  
+  for (const loc of liveLocations) {
+    const reasons: string[] = [];
+    
+    if (!loc.yodeckBaselinePlaylistId) reasons.push("geen BASE playlist");
+    if (!loc.yodeckPlaylistId) reasons.push("geen ADS playlist");
+    if (!loc.yodeckDeviceId) reasons.push("geen Yodeck device");
+    
+    // Quick check without hitting Yodeck API
+    if (reasons.length > 0) {
+      needsRepair.push({ id: loc.id, name: loc.name, reason: reasons.join(", ") });
+    }
+  }
+  
+  return needsRepair;
 }

@@ -672,6 +672,35 @@ export async function approveAsset(
       console.warn('[AdminReview] Placement plan error:', planError.message);
     }
     
+    // AUTOPILOT: Add approved ad to targeted locations' ADS playlists
+    let locationsLinked = 0;
+    try {
+      const { findLocationsForAdvertiser, linkAdToLocation } = await import('./yodeckCanonicalService');
+      
+      // Find all locations that should receive this ad (via placements/contracts)
+      const targetLocations = await findLocationsForAdvertiser(asset.advertiserId);
+      console.log(`[Autopilot] Found ${targetLocations.length} locations for advertiser ${asset.advertiserId}`);
+      
+      // Link ad to each location's ADS playlist
+      for (const locationId of targetLocations) {
+        try {
+          const linkResult = await linkAdToLocation(locationId, assetId);
+          if (linkResult.ok) {
+            locationsLinked++;
+            console.log(`[Autopilot] ✓ Linked ad to location ${locationId}`);
+          } else {
+            console.warn(`[Autopilot] ⚠️ Failed to link ad to location ${locationId}: ${linkResult.error}`);
+          }
+        } catch (linkError: any) {
+          console.warn(`[Autopilot] ⚠️ Error linking to location ${locationId}: ${linkError.message}`);
+        }
+      }
+      
+      console.log(`[Autopilot] Ad ${assetId} linked to ${locationsLinked}/${targetLocations.length} locations`);
+    } catch (autopilotError: any) {
+      console.warn('[Autopilot] Error in ad autopilot:', autopilotError.message);
+    }
+    
     // Send approval email to advertiser
     try {
       const baseUrl = process.env.REPL_SLUG 

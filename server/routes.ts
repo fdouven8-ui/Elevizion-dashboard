@@ -16273,6 +16273,60 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
   
   /**
+   * GET /api/admin/locations/:locationId/content-status
+   * Get content status for a location (autopilot UI)
+   */
+  app.get("/api/admin/locations/:locationId/content-status", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { getContentStatus } = await import("./services/yodeckCanonicalService");
+      
+      const result = await getContentStatus(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ContentStatus] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/locations/:locationId/autopilot-repair
+   * Run autopilot repair for a location
+   */
+  app.post("/api/admin/locations/:locationId/autopilot-repair", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { ensureCanonicalSetupForLocation } = await import("./services/yodeckCanonicalService");
+      
+      console.log(`[AutopilotRepair] Starting for location: ${locationId}`);
+      const result = await ensureCanonicalSetupForLocation(locationId);
+      
+      console.log(`[AutopilotRepair] Result: ok=${result.ok}, baseRepaired=${result.baseRepaired}, adsRepaired=${result.adsRepaired}`);
+      result.logs.forEach(log => console.log(log));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[AutopilotRepair] Error:", error);
+      res.status(500).json({ ok: false, error: error.message, logs: [] });
+    }
+  });
+
+  /**
+   * GET /api/admin/locations/needs-repair
+   * Get all live locations that need autopilot repair
+   */
+  app.get("/api/admin/locations/needs-repair", requireAdminAccess, async (req, res) => {
+    try {
+      const { getLiveLocationsNeedingRepair } = await import("./services/yodeckCanonicalService");
+      const result = await getLiveLocationsNeedingRepair();
+      res.json({ ok: true, locations: result, count: result.length });
+    } catch (error: any) {
+      console.error("[NeedsRepair] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/yodeck/migrate-canonical
    * Migrate all linked locations to canonical model
    */
