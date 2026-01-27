@@ -16290,6 +16290,41 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * GET /api/admin/autopilot/inspect/:locationId
+   * Full diagnostic endpoint for autopilot troubleshooting
+   * Returns complete state from DB + live Yodeck data
+   */
+  app.get("/api/admin/autopilot/inspect/:locationId", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { inspectLocationPlayback } = await import("./services/yodeckCanonicalService");
+      
+      const result = await inspectLocationPlayback(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[AutopilotInspect] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/cleanup-duplicates/:locationId
+   * Find and cleanup duplicate playlists for a location
+   */
+  app.post("/api/admin/autopilot/cleanup-duplicates/:locationId", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { cleanupDuplicatePlaylists } = await import("./services/yodeckCanonicalService");
+      
+      const result = await cleanupDuplicatePlaylists(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[DuplicateCleanup] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/locations/:locationId/autopilot-repair
    * Run autopilot repair for a location
    */

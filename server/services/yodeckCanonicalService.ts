@@ -2871,3 +2871,437 @@ export async function getLiveLocationsNeedingRepair(): Promise<Array<{ id: strin
   
   return needsRepair;
 }
+
+// ============================================================================
+// AUTOPILOT INSPECT ENDPOINT - Full Diagnostics
+// ============================================================================
+
+export interface AutopilotInspectResult {
+  ok: boolean;
+  timestamp: string;
+  location: {
+    id: string;
+    name: string;
+    status: string;
+    readyForAds: boolean;
+    yodeckDeviceId: string | null;
+    yodeckPlaylistId: string | null;
+    yodeckBaselinePlaylistId: string | null;
+    yodeckLayoutId: string | null;
+  };
+  liveScreen: {
+    screenId: number | null;
+    contentType: string | null;
+    sourceId: number | null;
+    sourceName: string | null;
+    error?: string;
+  };
+  liveLayout: {
+    layoutId: number | null;
+    layoutName: string | null;
+    regions: Array<{
+      regionId: number;
+      itemType: string;
+      itemId: number | null;
+      itemName?: string;
+    }>;
+    adsRegionBound: boolean;
+    adsRegionPlaylistId: number | null;
+    error?: string;
+  };
+  adsPlaylist: {
+    playlistId: number | null;
+    playlistName: string | null;
+    itemCount: number;
+    itemIds: number[];
+    error?: string;
+  };
+  baselinePlaylist: {
+    playlistId: number | null;
+    itemCount: number;
+  };
+  duplicates: {
+    adsCount: number;
+    adsDuplicateIds: number[];
+    baseCount: number;
+    baseDuplicateIds: number[];
+  };
+  lastRepairAt: string | null;
+  lastRepairResult: string | null;
+  needsRepair: boolean;
+  repairReasons: string[];
+}
+
+/**
+ * Full diagnostic inspection for a location - returns all relevant data for debugging
+ */
+export async function inspectLocationPlayback(locationId: string): Promise<AutopilotInspectResult> {
+  const timestamp = new Date().toISOString();
+  
+  // Get location from DB
+  const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+  
+  if (!location) {
+    return {
+      ok: false,
+      timestamp,
+      location: { id: locationId, name: "NOT_FOUND", status: "unknown", readyForAds: false, yodeckDeviceId: null, yodeckPlaylistId: null, yodeckBaselinePlaylistId: null, yodeckLayoutId: null },
+      liveScreen: { screenId: null, contentType: null, sourceId: null, sourceName: null, error: "LOCATION_NOT_FOUND" },
+      liveLayout: { layoutId: null, layoutName: null, regions: [], adsRegionBound: false, adsRegionPlaylistId: null },
+      adsPlaylist: { playlistId: null, playlistName: null, itemCount: 0, itemIds: [], error: "LOCATION_NOT_FOUND" },
+      baselinePlaylist: { playlistId: null, itemCount: 0 },
+      duplicates: { adsCount: 0, adsDuplicateIds: [], baseCount: 0, baseDuplicateIds: [] },
+      lastRepairAt: null,
+      lastRepairResult: null,
+      needsRepair: true,
+      repairReasons: ["LOCATION_NOT_FOUND"],
+    };
+  }
+  
+  const repairReasons: string[] = [];
+  
+  // Resolve screen ID
+  let yodeckScreenId: number | null = null;
+  if (location.yodeckDeviceId) {
+    yodeckScreenId = parseInt(location.yodeckDeviceId);
+  } else {
+    // Fallback to screens table
+    const linkedScreens = await db.select({ yodeckPlayerId: screens.yodeckPlayerId })
+      .from(screens)
+      .where(eq(screens.locationId, locationId));
+    if (linkedScreens.length > 0 && linkedScreens[0].yodeckPlayerId) {
+      yodeckScreenId = parseInt(linkedScreens[0].yodeckPlayerId);
+    }
+  }
+  
+  // Get live screen data
+  let liveScreen: AutopilotInspectResult["liveScreen"] = {
+    screenId: yodeckScreenId,
+    contentType: null,
+    sourceId: null,
+    sourceName: null,
+  };
+  
+  let liveLayout: AutopilotInspectResult["liveLayout"] = {
+    layoutId: null,
+    layoutName: null,
+    regions: [],
+    adsRegionBound: false,
+    adsRegionPlaylistId: null,
+  };
+  
+  if (yodeckScreenId && !isNaN(yodeckScreenId)) {
+    const screenResult = await yodeckRequest<any>(`/screens/${yodeckScreenId}`);
+    
+    if (screenResult.ok && screenResult.data) {
+      const screen = screenResult.data;
+      const content = screen.screen_content || {};
+      
+      liveScreen = {
+        screenId: yodeckScreenId,
+        contentType: content.source_type || null,
+        sourceId: content.source_id || null,
+        sourceName: content.source_name || null,
+      };
+      
+      // If content is layout, get layout details
+      if (content.source_type === "layout" && content.source_id) {
+        const layoutResult = await yodeckRequest<any>(`/layouts/${content.source_id}`);
+        
+        if (layoutResult.ok && layoutResult.data) {
+          const layout = layoutResult.data;
+          const regions: AutopilotInspectResult["liveLayout"]["regions"] = [];
+          
+          // Parse regions (Yodeck v2 format: layout.regions array)
+          const layoutRegions = layout.regions || [];
+          for (const region of layoutRegions) {
+            const item = region.item || {};
+            regions.push({
+              regionId: region.id || 0,
+              itemType: item.type || "unknown",
+              itemId: item.id || null,
+              itemName: item.name,
+            });
+            
+            // Check if this is the ADS region (playlist type)
+            if (item.type === "playlist" && item.id) {
+              liveLayout.adsRegionPlaylistId = item.id;
+              // Check if bound to our canonical playlist
+              if (location.yodeckPlaylistId && String(item.id) === location.yodeckPlaylistId) {
+                liveLayout.adsRegionBound = true;
+              }
+            }
+          }
+          
+          liveLayout = {
+            ...liveLayout,
+            layoutId: content.source_id,
+            layoutName: layout.name || null,
+            regions,
+          };
+        }
+      }
+    } else {
+      liveScreen.error = screenResult.error || "SCREEN_FETCH_FAILED";
+      if (!location.yodeckDeviceId) {
+        repairReasons.push("NO_YODECK_DEVICE");
+      }
+    }
+  } else {
+    repairReasons.push("NO_YODECK_DEVICE");
+  }
+  
+  // Check content type
+  if (liveScreen.contentType !== "layout") {
+    repairReasons.push("SCREEN_NOT_IN_LAYOUT_MODE");
+  }
+  
+  // Get ADS playlist data
+  let adsPlaylist: AutopilotInspectResult["adsPlaylist"] = {
+    playlistId: location.yodeckPlaylistId ? parseInt(location.yodeckPlaylistId) : null,
+    playlistName: null,
+    itemCount: 0,
+    itemIds: [],
+  };
+  
+  if (location.yodeckPlaylistId) {
+    const itemsResult = await getPlaylistItems(location.yodeckPlaylistId);
+    adsPlaylist.itemCount = itemsResult.items.length;
+    adsPlaylist.itemIds = itemsResult.items.map(i => extractMediaId(i)).filter((id): id is number => id !== null);
+    adsPlaylist.playlistName = `Ads | ${location.name}`;
+    
+    if (adsPlaylist.itemCount === 0) {
+      repairReasons.push("ADS_PLAYLIST_EMPTY");
+    }
+  } else {
+    repairReasons.push("NO_ADS_PLAYLIST_ID");
+  }
+  
+  // Check ADS region binding
+  if (liveLayout.layoutId && !liveLayout.adsRegionBound && location.yodeckPlaylistId) {
+    repairReasons.push("ADS_REGION_NOT_BOUND");
+  }
+  
+  // Get baseline playlist data
+  let baselinePlaylist: AutopilotInspectResult["baselinePlaylist"] = {
+    playlistId: location.yodeckBaselinePlaylistId ? parseInt(location.yodeckBaselinePlaylistId) : null,
+    itemCount: 0,
+  };
+  
+  if (location.yodeckBaselinePlaylistId) {
+    const baseItemsResult = await getPlaylistItems(location.yodeckBaselinePlaylistId);
+    baselinePlaylist.itemCount = baseItemsResult.items.length;
+  }
+  
+  // Check for duplicate playlists
+  const canonicalAdsName = `Ads | ${location.name}`;
+  const canonicalBaseName = `Baseline | ${location.name}`;
+  
+  let duplicates: AutopilotInspectResult["duplicates"] = {
+    adsCount: 0,
+    adsDuplicateIds: [],
+    baseCount: 0,
+    baseDuplicateIds: [],
+  };
+  
+  // Search for ADS duplicates
+  const adsSearchResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
+    `/playlists/?search=${encodeURIComponent(canonicalAdsName)}`
+  );
+  
+  if (adsSearchResult.ok && adsSearchResult.data) {
+    const exactMatches = adsSearchResult.data.results.filter(p => p.name === canonicalAdsName);
+    if (exactMatches.length > 1) {
+      duplicates.adsCount = exactMatches.length;
+      // All except the canonical one (lowest ID or stored ID) are duplicates
+      const canonicalId = location.yodeckPlaylistId ? parseInt(location.yodeckPlaylistId) : Math.min(...exactMatches.map(p => p.id));
+      duplicates.adsDuplicateIds = exactMatches.filter(p => p.id !== canonicalId).map(p => p.id);
+    }
+  }
+  
+  // Search for BASE duplicates
+  const baseSearchResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
+    `/playlists/?search=${encodeURIComponent(canonicalBaseName)}`
+  );
+  
+  if (baseSearchResult.ok && baseSearchResult.data) {
+    const exactMatches = baseSearchResult.data.results.filter(p => p.name === canonicalBaseName);
+    if (exactMatches.length > 1) {
+      duplicates.baseCount = exactMatches.length;
+      const canonicalId = location.yodeckBaselinePlaylistId ? parseInt(location.yodeckBaselinePlaylistId) : Math.min(...exactMatches.map(p => p.id));
+      duplicates.baseDuplicateIds = exactMatches.filter(p => p.id !== canonicalId).map(p => p.id);
+    }
+  }
+  
+  if (duplicates.adsCount > 1) {
+    repairReasons.push(`${duplicates.adsCount - 1}_DUPLICATE_ADS_PLAYLISTS`);
+  }
+  
+  return {
+    ok: repairReasons.length === 0,
+    timestamp,
+    location: {
+      id: location.id,
+      name: location.name,
+      status: location.status,
+      readyForAds: location.readyForAds,
+      yodeckDeviceId: location.yodeckDeviceId,
+      yodeckPlaylistId: location.yodeckPlaylistId,
+      yodeckBaselinePlaylistId: location.yodeckBaselinePlaylistId,
+      yodeckLayoutId: location.yodeckLayoutId,
+    },
+    liveScreen,
+    liveLayout,
+    adsPlaylist,
+    baselinePlaylist,
+    duplicates,
+    lastRepairAt: location.yodeckPlaylistVerifiedAt?.toISOString() || null,
+    lastRepairResult: location.yodeckPlaylistVerifyStatus || null,
+    needsRepair: repairReasons.length > 0,
+    repairReasons,
+  };
+}
+
+// ============================================================================
+// DUPLICATE CLEANUP
+// ============================================================================
+
+export interface DuplicateCleanupResult {
+  ok: boolean;
+  locationId: string;
+  locationName: string;
+  adsCleanup: {
+    canonicalId: number | null;
+    duplicatesFound: number;
+    duplicatesArchived: number[];
+    errors: string[];
+  };
+  baseCleanup: {
+    canonicalId: number | null;
+    duplicatesFound: number;
+    duplicatesArchived: number[];
+    errors: string[];
+  };
+  logs: string[];
+}
+
+/**
+ * Find and cleanup duplicate playlists for a location
+ * Archives duplicates by renaming them to "(DUPLICATE - DO NOT USE) ..."
+ */
+export async function cleanupDuplicatePlaylists(locationId: string): Promise<DuplicateCleanupResult> {
+  const logs: string[] = [];
+  
+  const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+  
+  if (!location) {
+    return {
+      ok: false,
+      locationId,
+      locationName: "NOT_FOUND",
+      adsCleanup: { canonicalId: null, duplicatesFound: 0, duplicatesArchived: [], errors: ["LOCATION_NOT_FOUND"] },
+      baseCleanup: { canonicalId: null, duplicatesFound: 0, duplicatesArchived: [], errors: ["LOCATION_NOT_FOUND"] },
+      logs: ["[DuplicateCleanup] Location not found"],
+    };
+  }
+  
+  logs.push(`[DuplicateCleanup] Starting for: ${location.name}`);
+  
+  // Cleanup ADS playlists
+  const adsResult = await cleanupPlaylistType(location, "ADS", logs);
+  
+  // Cleanup BASE playlists  
+  const baseResult = await cleanupPlaylistType(location, "BASE", logs);
+  
+  logs.push(`[DuplicateCleanup] Complete: ADS ${adsResult.duplicatesArchived.length} archived, BASE ${baseResult.duplicatesArchived.length} archived`);
+  
+  return {
+    ok: adsResult.errors.length === 0 && baseResult.errors.length === 0,
+    locationId,
+    locationName: location.name,
+    adsCleanup: adsResult,
+    baseCleanup: baseResult,
+    logs,
+  };
+}
+
+async function cleanupPlaylistType(
+  location: { id: string; name: string; yodeckPlaylistId: string | null; yodeckBaselinePlaylistId: string | null },
+  type: "ADS" | "BASE",
+  logs: string[]
+): Promise<{ canonicalId: number | null; duplicatesFound: number; duplicatesArchived: number[]; errors: string[] }> {
+  const canonicalName = type === "ADS" ? `Ads | ${location.name}` : `Baseline | ${location.name}`;
+  const storedId = type === "ADS" ? location.yodeckPlaylistId : location.yodeckBaselinePlaylistId;
+  
+  logs.push(`[DuplicateCleanup] Searching ${type} playlists: "${canonicalName}"`);
+  
+  const searchResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
+    `/playlists/?search=${encodeURIComponent(canonicalName)}`
+  );
+  
+  if (!searchResult.ok || !searchResult.data) {
+    return { canonicalId: null, duplicatesFound: 0, duplicatesArchived: [], errors: [`Search failed: ${searchResult.error}`] };
+  }
+  
+  const exactMatches = searchResult.data.results.filter(p => p.name === canonicalName);
+  logs.push(`[DuplicateCleanup] Found ${exactMatches.length} exact matches`);
+  
+  if (exactMatches.length <= 1) {
+    return { 
+      canonicalId: storedId ? parseInt(storedId) : (exactMatches[0]?.id || null), 
+      duplicatesFound: 0, 
+      duplicatesArchived: [], 
+      errors: [] 
+    };
+  }
+  
+  // Determine canonical: use stored ID if valid, otherwise lowest ID
+  let canonicalId: number;
+  if (storedId) {
+    const storedIdNum = parseInt(storedId);
+    if (exactMatches.some(p => p.id === storedIdNum)) {
+      canonicalId = storedIdNum;
+    } else {
+      canonicalId = Math.min(...exactMatches.map(p => p.id));
+    }
+  } else {
+    canonicalId = Math.min(...exactMatches.map(p => p.id));
+  }
+  
+  logs.push(`[DuplicateCleanup] Canonical ID: ${canonicalId}`);
+  
+  // Update DB with canonical ID if not already set
+  if (!storedId) {
+    if (type === "ADS") {
+      await db.update(locations).set({ yodeckPlaylistId: String(canonicalId) }).where(eq(locations.id, location.id));
+    } else {
+      await db.update(locations).set({ yodeckBaselinePlaylistId: String(canonicalId) }).where(eq(locations.id, location.id));
+    }
+    logs.push(`[DuplicateCleanup] Saved canonical ID to DB: ${canonicalId}`);
+  }
+  
+  // Archive duplicates (rename to indicate they're not used)
+  const duplicates = exactMatches.filter(p => p.id !== canonicalId);
+  const archived: number[] = [];
+  const errors: string[] = [];
+  
+  for (const dup of duplicates) {
+    const newName = `(DUPLICATE - DO NOT USE) ${dup.name}`;
+    logs.push(`[DuplicateCleanup] Archiving ${dup.id}: "${newName}"`);
+    
+    const renameResult = await yodeckRequest<any>(`/playlists/${dup.id}/`, "PATCH", { name: newName });
+    
+    if (renameResult.ok) {
+      archived.push(dup.id);
+    } else {
+      errors.push(`Failed to archive ${dup.id}: ${renameResult.error}`);
+    }
+  }
+  
+  return {
+    canonicalId,
+    duplicatesFound: duplicates.length,
+    duplicatesArchived: archived,
+    errors,
+  };
+}
