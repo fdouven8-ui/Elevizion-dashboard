@@ -16301,7 +16301,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       console.log(`[AutopilotRepair] Starting for location: ${locationId}`);
       const result = await ensureCanonicalSetupForLocation(locationId);
       
-      console.log(`[AutopilotRepair] Result: ok=${result.ok}, baseRepaired=${result.baseRepaired}, adsRepaired=${result.adsRepaired}`);
+      console.log(`[AutopilotRepair] Result: ok=${result.ok}, layoutAssigned=${result.layoutAssigned}, adsRepaired=${result.adsRepaired}`);
       result.logs.forEach(log => console.log(log));
       
       res.json(result);

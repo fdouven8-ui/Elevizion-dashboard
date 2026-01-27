@@ -58,6 +58,12 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **Video Upload Portal**: Self-service portal (`/upload/:token`) for advertisers to upload video content. Features token-based authentication, video validation via `ffprobe`, auto-renaming, object storage integration, drag-and-drop UI, and auto-transcoding of non-standard video formats.
 - **Admin Video Review Workflow**: Mandatory admin approval for uploaded videos at `/video-review`, including proposal preview for screen matching, automatic placement plan creation upon approval, and email notifications.
 - **Autopilot Ad Publishing**: When an ad is approved via `approveAsset()`, the system automatically finds all target locations (via advertiser → contracts → placements → screens → locations chain using `findLocationsForAdvertiser()`) and links the approved ad to each location's ADS playlist via `linkAdToLocation()`. Non-blocking with per-location error handling.
+- **Layout-Based Baseline Content Architecture**: Baseline content (news, weather) is handled via a fixed Yodeck Layout named "Elevizion Baseline", NOT via playlist media seeding. The autopilot system:
+  - Uses `findBaselineLayout()` to locate the baseline layout in Yodeck
+  - Uses `ensureBaselineLayoutOnScreen()` to assign the layout with ADS playlist in zone 2
+  - Only manages the ADS playlist for advertisements; layout handles all baseline content
+  - Error codes: `BASELINE_LAYOUT_MISSING`, `WRONG_LAYOUT`, `LAYOUT_NOT_ASSIGNED`, `NO_YODECK_DEVICE`
+  - Requires the layout to exist in Yodeck; autopilot fails with clear Dutch message if missing
 - **Auto-Playlist Provisioning & Cleanup Service**: Ensures screens have valid, sellable playlists by enforcing canonical naming, cleaning up stale mappings, resolving duplicates, and auto-creating playlists via the Yodeck API.
 - **Tag-Based Publishing System**: Production-hardened ad publishing using Yodeck media tags for scalability and robust error tracking.
 - **Layout-Based Content Separation**: 2-zone layout system with 30% BASE (left) for baseline content and 70% ADS (right) for advertisements. Admin page at `/layouts` manages layout configuration per location. Includes API probing with cached status, idempotent playlist/layout creation, and fallback schedule mode when Yodeck layouts API is unavailable.
@@ -72,12 +78,13 @@ Core entities include: Entities (unified for ADVERTISER + SCREEN), Sites, Advert
 - **FAIL FAST Principle**: If `screen_content` cannot be read, `sourceType = "unknown"`. Never guess, never infer, never fall back silently.
 - **Playlist Items Service**: `yodeckPlaylistItemsService.ts` manages playlist content with idempotent operations. Functions: `getPlaylistById`, `appendMediaToPlaylist`, `ensureMediaUsedByLocation`, `pushScreen`, `verifyMediaInPlaylist`, `getLocationPlaylistsSummary`. Safely handles both Yodeck item formats (Shape A: object, Shape B: number) via shared extractors.
 - **Canonical Playlist Management**: `yodeckCanonicalService.ts` provides the single control path for screen content operations:
-  - **Canonical Naming**: "Baseline | <name>" for BASE, "Ads | <name>" for ADS playlists. DB stores IDs in `yodeckBaselinePlaylistId` and `yodeckPlaylistId`.
-  - **Duplicate Handling**: Deterministically picks lowest ID when duplicates exist, logs warnings.
-  - **Playlist Seeding**: BASE auto-seeds with "Elevizion Baseline" media, ADS with "Elevizion Self-Ad" placeholder (never empty/Test).
-  - **Layout Binding**: `verifyLayoutBindings()` checks and `fixLayoutBindings()` auto-corrects BASE/ADS region assignments.
-  - **ensureLocationCompliance()**: Single function that creates playlists, seeds content, verifies layout, assigns to screen, pushes, and updates DB.
-  - **ensureLocationContent()**: Full content pipeline that also finds/links approved ads: (1) Creates BASE/ADS playlists, (2) Extracts legacy apps (news/weather) from old playlists, (3) Finds approved ads via advertiser chain (location → screens → placements → contracts → advertisers → adAssets), (4) Links approved ads to Yodeck media by filename search, (5) Seeds content, (6) Binds layout and pushes to screen.
+  - **NEW ARCHITECTURE (2026)**: Layout-based baseline content. Baseline content (news/weather apps) is handled by a fixed Yodeck Layout named "Elevizion Baseline", NOT via playlist seeding. Autopilot only manages the ADS playlist for advertisements.
+  - **ensureCanonicalSetupForLocation()**: NEW autopilot entry point with 4 steps: (1) Find "Elevizion Baseline" layout, (2) Ensure ADS playlist, (3) Seed ADS with approved ads, (4) Assign layout with ADS playlist to screen.
+  - **getContentStatus()**: Returns layout status with error codes: BASELINE_LAYOUT_MISSING, WRONG_LAYOUT, LAYOUT_NOT_ASSIGNED, NO_YODECK_DEVICE.
+  - **Layout Functions**: `findBaselineLayout()`, `ensureBaselineLayoutOnScreen()`, `getScreenLayoutStatus()` for layout management.
+  - **Canonical Naming**: "Ads | <name>" for ADS playlists. DB stores ID in `yodeckPlaylistId`.
+  - **DEPRECATED**: `ensureLocationCompliance()` and BASE playlist logic - kept for backward compatibility but no longer used in autopilot.
+  - **ensureLocationContent()**: Full content pipeline that also finds/links approved ads: (1) Creates ADS playlist, (2) Finds approved ads via advertiser chain (location → screens → placements → contracts → advertisers → adAssets), (3) Links approved ads to Yodeck media by filename search, (4) Seeds content, (5) Assigns layout and pushes to screen.
   - **Approved Ads Pipeline**: `findApprovedAdsForLocation()` follows advertiser chain with yodeckDeviceId fallback. `linkApprovedAdToYodeck()` searches Yodeck by storedFilename (ADV-...) or original filename. `adAssets.yodeckMediaId` tracks linked media.
   - **Global Ads Fallback**: `getRecentApprovedAds()` retrieves all approved ads without time limit (last 20 sorted by createdAt) when location-specific ads unavailable.
   - **Manual Ad Linking**: `linkAdToLocation()` enables manual ad-to-location linking with: (1) Auto-creates ADS playlist via ensureCanonicalPlaylist if missing, (2) Searches Yodeck by storedFilename or originalFilename, (3) Falls back to screens.yodeckPlayerId when location.yodeckDeviceId missing, (4) Returns success even if push fails (content is added).

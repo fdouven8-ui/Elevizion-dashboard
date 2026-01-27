@@ -1,10 +1,14 @@
 /**
- * YodeckCanonicalService - Unified canonical playlist management
+ * YodeckCanonicalService - Layout-Based Content Management
+ * 
+ * NEW ARCHITECTURE (2026): Baseline content via fixed Yodeck Layout
  * 
  * This service ensures every location has:
- * - BASE playlist: "Baseline | <locationName>" with at least 1 item (baseline media)
- * - ADS playlist: "Ads | <locationName>" with at least 1 item (self-ad placeholder)
- * - Layout bound to both playlists correctly
+ * - Baseline Layout: "Elevizion Baseline" assigned to screen (contains news/weather apps)
+ * - ADS playlist: "Ads | <locationName>" linked to layout zone 2 for advertisements
+ * 
+ * IMPORTANT: Baseline content (news, weather) is handled by the Layout, NOT playlists.
+ * Autopilot only manages the ADS playlist. Layout must exist in Yodeck.
  * 
  * All screen content control MUST go through this service.
  */
@@ -34,12 +38,15 @@ export const CANONICAL_PLAYLIST_PREFIXES = {
 export const BASELINE_MEDIA_NAME = "Elevizion Baseline";
 export const SELF_AD_MEDIA_NAME = "Elevizion Self-Ad";
 
-// Base content items that MUST be in BASE playlist
-export const BASE_CONTENT_ITEMS = {
-  NEWS: { name: "Elevizion News", type: "widget", searchPatterns: ["elevizion news", "nieuws", "news"] },
-  WEATHER: { name: "Elevizion Weather", type: "widget", searchPatterns: ["elevizion weather", "weer", "weather"] },
-  DEFAULT_AD: { name: "Elevizion Self-Ad", type: "media", searchPatterns: ["elevizion self-ad", "self-ad", "zelf ad"] },
-};
+/**
+ * NEW ARCHITECTURE: Baseline content is handled via a fixed Yodeck Layout
+ * that already contains News/Weather apps. Autopilot ONLY manages the ADS playlist.
+ */
+export const BASELINE_LAYOUT_NAME = "Elevizion Baseline";
+
+// DEPRECATED: Base content items via media seeding is no longer used
+// News/Weather are Yodeck Apps inside the baseline layout, not media uploads
+// export const BASE_CONTENT_ITEMS = { ... }
 
 // Feature flag to block non-canonical writes (enable when ready)
 export const BLOCK_LEGACY_WRITES = process.env.BLOCK_LEGACY_WRITES === "true";
@@ -92,10 +99,17 @@ export interface CanonicalPlaylistResult {
   logs: string[];
 }
 
+/**
+ * Compliance result interface
+ * 
+ * NOTE: basePlaylist is DEPRECATED - baseline content now handled by Layout.
+ * Use layout field for new code. basePlaylist kept for backward compatibility.
+ */
 export interface EnsureComplianceResult {
   ok: boolean;
   locationId: string;
   locationName: string;
+  // DEPRECATED: Base playlist no longer used in autopilot - layout handles baseline
   basePlaylist: {
     id: string | null;
     name: string | null;
@@ -117,6 +131,221 @@ export interface EnsureComplianceResult {
   verified: boolean;
   logs: string[];
   error?: string;
+}
+
+// ============================================================================
+// BASELINE LAYOUT MANAGEMENT
+// ============================================================================
+
+export interface BaselineLayoutResult {
+  ok: boolean;
+  layoutId: number | null;
+  layoutName: string;
+  error?: string;
+  logs: string[];
+}
+
+/**
+ * Find the baseline layout in Yodeck by name
+ * Returns the layout ID if found, null if not found
+ */
+export async function findBaselineLayout(): Promise<BaselineLayoutResult> {
+  const logs: string[] = [];
+  logs.push(`[BaselineLayout] Zoeken naar layout: "${BASELINE_LAYOUT_NAME}"`);
+  
+  try {
+    const result = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>("/layouts");
+    
+    if (!result.ok || !result.data) {
+      logs.push(`[BaselineLayout] ❌ Kan layouts niet ophalen: ${result.error || "onbekende fout"}`);
+      return {
+        ok: false,
+        layoutId: null,
+        layoutName: BASELINE_LAYOUT_NAME,
+        error: "LAYOUTS_UNAVAILABLE",
+        logs,
+      };
+    }
+    
+    const layouts = result.data.results || [];
+    logs.push(`[BaselineLayout] ${layouts.length} layouts gevonden`);
+    
+    // Find exact match
+    const baseline = layouts.find(l => l.name === BASELINE_LAYOUT_NAME);
+    
+    if (baseline) {
+      logs.push(`[BaselineLayout] ✓ Layout gevonden: ID ${baseline.id}`);
+      return {
+        ok: true,
+        layoutId: baseline.id,
+        layoutName: baseline.name,
+        logs,
+      };
+    }
+    
+    // Try partial match
+    const partial = layouts.find(l => l.name.toLowerCase().includes("baseline") || l.name.toLowerCase().includes("elevizion"));
+    if (partial) {
+      logs.push(`[BaselineLayout] ⚠️ Exacte match niet gevonden, wel: "${partial.name}" (ID ${partial.id})`);
+      return {
+        ok: true,
+        layoutId: partial.id,
+        layoutName: partial.name,
+        logs,
+      };
+    }
+    
+    logs.push(`[BaselineLayout] ❌ Layout "${BASELINE_LAYOUT_NAME}" niet gevonden in Yodeck`);
+    return {
+      ok: false,
+      layoutId: null,
+      layoutName: BASELINE_LAYOUT_NAME,
+      error: "BASELINE_LAYOUT_MISSING",
+      logs,
+    };
+    
+  } catch (error: any) {
+    logs.push(`[BaselineLayout] ❌ Fout: ${error.message}`);
+    return {
+      ok: false,
+      layoutId: null,
+      layoutName: BASELINE_LAYOUT_NAME,
+      error: error.message,
+      logs,
+    };
+  }
+}
+
+/**
+ * Ensure the baseline layout is assigned to a screen
+ * Returns the assigned layout info
+ */
+export async function ensureBaselineLayoutOnScreen(
+  screenId: number, 
+  adsPlaylistId: number
+): Promise<{ ok: boolean; layoutId: number | null; error?: string; logs: string[] }> {
+  const logs: string[] = [];
+  logs.push(`[LayoutAssign] Controleren layout voor scherm ${screenId}`);
+  
+  // First find the baseline layout
+  const layoutResult = await findBaselineLayout();
+  logs.push(...layoutResult.logs);
+  
+  if (!layoutResult.ok || !layoutResult.layoutId) {
+    return {
+      ok: false,
+      layoutId: null,
+      error: layoutResult.error || "BASELINE_LAYOUT_MISSING",
+      logs,
+    };
+  }
+  
+  // Check current screen status
+  try {
+    const screenResult = await yodeckRequest<{ id: number; screen_content: any }>(`/screens/${screenId}`);
+    
+    if (!screenResult.ok || !screenResult.data) {
+      logs.push(`[LayoutAssign] ❌ Kan scherm ${screenId} niet ophalen`);
+      return { ok: false, layoutId: null, error: "SCREEN_NOT_FOUND", logs };
+    }
+    
+    const screen = screenResult.data;
+    const currentContent = screen.screen_content;
+    
+    // Check if layout is already assigned
+    if (currentContent?.layout?.id === layoutResult.layoutId) {
+      logs.push(`[LayoutAssign] ✓ Baseline layout al actief op scherm`);
+      return { ok: true, layoutId: layoutResult.layoutId, logs };
+    }
+    
+    // Assign the layout to the screen with ADS playlist in the right zone
+    logs.push(`[LayoutAssign] Layout toewijzen aan scherm...`);
+    
+    const assignPayload = {
+      screen_content: {
+        type: "layout",
+        layout: { id: layoutResult.layoutId },
+        // The ADS playlist goes in zone 2 (70% right side)
+        playlists: {
+          "2": { id: adsPlaylistId }
+        }
+      }
+    };
+    
+    const patchResult = await yodeckRequest<any>(`/screens/${screenId}/`, "PATCH", assignPayload);
+    
+    if (!patchResult.ok) {
+      logs.push(`[LayoutAssign] ❌ Fout bij toewijzen: ${patchResult.error}`);
+      return { ok: false, layoutId: layoutResult.layoutId, error: patchResult.error, logs };
+    }
+    
+    logs.push(`[LayoutAssign] ✓ Layout ${layoutResult.layoutId} toegewezen aan scherm ${screenId}`);
+    
+    // Push to device
+    const pushResult = await yodeckRequest<any>(`/screens/${screenId}/push/`, "POST");
+    if (pushResult.ok) {
+      logs.push(`[LayoutAssign] ✓ Push naar device geslaagd`);
+    } else {
+      logs.push(`[LayoutAssign] ⚠️ Push mislukt: ${pushResult.error}`);
+    }
+    
+    return { ok: true, layoutId: layoutResult.layoutId, logs };
+    
+  } catch (error: any) {
+    logs.push(`[LayoutAssign] ❌ Fout: ${error.message}`);
+    return { ok: false, layoutId: null, error: error.message, logs };
+  }
+}
+
+/**
+ * Get the current layout status for a screen
+ */
+export async function getScreenLayoutStatus(screenId: number): Promise<{
+  hasLayout: boolean;
+  layoutId: number | null;
+  layoutName: string | null;
+  isBaselineLayout: boolean;
+  adsPlaylistLinked: boolean;
+  adsPlaylistId: number | null;
+}> {
+  try {
+    const screenResult = await yodeckRequest<{ id: number; screen_content: any }>(`/screens/${screenId}`);
+    
+    if (!screenResult.ok || !screenResult.data) {
+      return { hasLayout: false, layoutId: null, layoutName: null, isBaselineLayout: false, adsPlaylistLinked: false, adsPlaylistId: null };
+    }
+    
+    const content = screenResult.data.screen_content;
+    
+    if (!content || content.type !== "layout" || !content.layout) {
+      return { hasLayout: false, layoutId: null, layoutName: null, isBaselineLayout: false, adsPlaylistLinked: false, adsPlaylistId: null };
+    }
+    
+    const layoutId = content.layout.id;
+    
+    // Get layout details
+    const layoutResult = await yodeckRequest<{ id: number; name: string }>(`/layouts/${layoutId}`);
+    const layoutName = layoutResult.ok ? layoutResult.data?.name || null : null;
+    
+    // Check if it's the baseline layout
+    const isBaselineLayout = layoutName?.toLowerCase().includes("baseline") || 
+                              layoutName?.toLowerCase().includes("elevizion") || 
+                              false;
+    
+    // Check if ADS playlist is linked (zone 2)
+    const adsPlaylistId = content.playlists?.["2"]?.id || null;
+    
+    return {
+      hasLayout: true,
+      layoutId,
+      layoutName,
+      isBaselineLayout,
+      adsPlaylistLinked: !!adsPlaylistId,
+      adsPlaylistId,
+    };
+  } catch {
+    return { hasLayout: false, layoutId: null, layoutName: null, isBaselineLayout: false, adsPlaylistLinked: false, adsPlaylistId: null };
+  }
 }
 
 // ============================================================================
@@ -1889,19 +2118,22 @@ export async function forceAppendLatestApprovedAd(locationId: string): Promise<{
 // AUTOPILOT: CONTENT STATUS & CANONICAL SETUP
 // ============================================================================
 
+/**
+ * NEW ARCHITECTURE: Content status focuses on Layout + ADS playlist
+ * Baseline content (news/weather) is handled by the Yodeck Layout, not playlists
+ */
 export interface ContentStatusResult {
   locationId: string;
   locationName: string;
   isLive: boolean;
   hasYodeckDevice: boolean;
   
-  base: {
-    playlistId: string | null;
-    itemCount: number;
-    hasNews: boolean;
-    hasWeather: boolean;
-    hasDefaultAd: boolean;
-    missingItems: string[];
+  // NEW: Layout status replaces base playlist
+  layout: {
+    ok: boolean;
+    layoutId: number | null;
+    layoutName: string | null;
+    error?: string; // BASELINE_LAYOUT_MISSING, WRONG_LAYOUT, LAYOUT_NOT_ASSIGNED, NO_YODECK_DEVICE
   };
   
   ads: {
@@ -1969,6 +2201,10 @@ async function findMediaByPatterns(patterns: string[]): Promise<{
 /**
  * Get content status for a location (for UI display)
  */
+/**
+ * NEW ARCHITECTURE: Get content status based on Layout + ADS playlist
+ * Baseline content (news/weather) is handled by the Layout, NOT playlists
+ */
 export async function getContentStatus(locationId: string): Promise<ContentStatusResult> {
   const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
   
@@ -1978,7 +2214,7 @@ export async function getContentStatus(locationId: string): Promise<ContentStatu
       locationName: "Onbekend",
       isLive: false,
       hasYodeckDevice: false,
-      base: { playlistId: null, itemCount: 0, hasNews: false, hasWeather: false, hasDefaultAd: false, missingItems: ["NEWS", "WEATHER", "DEFAULT_AD"] },
+      layout: { ok: false, layoutId: null, layoutName: null, error: "LOCATION_NOT_FOUND" },
       ads: { playlistId: null, itemCount: 0, hasFallbackAd: false, pendingSync: false },
       lastSyncAt: null,
       lastError: "Locatie niet gevonden",
@@ -1989,31 +2225,42 @@ export async function getContentStatus(locationId: string): Promise<ContentStatu
   const isLive = location.status === "active" || location.status === "readyForAds";
   const hasYodeckDevice = !!(location.yodeckDeviceId);
   
-  // Get BASE playlist items
-  let baseItemCount = 0;
-  let hasNews = false;
-  let hasWeather = false;
-  let hasDefaultAd = false;
-  const missingItems: string[] = [];
-  
-  if (location.yodeckBaselinePlaylistId) {
-    const baseItems = await getPlaylistItems(location.yodeckBaselinePlaylistId);
-    if (baseItems.ok) {
-      baseItemCount = baseItems.items.length;
-      
-      // Check for specific items
-      for (const item of baseItems.items) {
-        const nameLower = item.name.toLowerCase();
-        if (nameLower.includes("news") || nameLower.includes("nieuws")) hasNews = true;
-        if (nameLower.includes("weather") || nameLower.includes("weer")) hasWeather = true;
-        if (nameLower.includes("self-ad") || nameLower.includes("baseline") || nameLower.includes("elevizion")) hasDefaultAd = true;
-      }
+  // Resolve Yodeck screen ID
+  let yodeckScreenId: number | null = null;
+  if (location.yodeckDeviceId) {
+    yodeckScreenId = parseInt(location.yodeckDeviceId);
+  } else {
+    // Fallback to screens table
+    const linkedScreens = await db.select({ yodeckPlayerId: screens.yodeckPlayerId })
+      .from(screens)
+      .where(eq(screens.locationId, locationId));
+    if (linkedScreens.length > 0 && linkedScreens[0].yodeckPlayerId) {
+      yodeckScreenId = parseInt(linkedScreens[0].yodeckPlayerId);
     }
   }
   
-  if (!hasNews) missingItems.push("NEWS");
-  if (!hasWeather) missingItems.push("WEATHER");
-  if (!hasDefaultAd) missingItems.push("DEFAULT_AD");
+  // Check layout status on screen
+  let layoutStatus = { ok: false, layoutId: null as number | null, layoutName: null as string | null, error: undefined as string | undefined };
+  
+  if (yodeckScreenId && !isNaN(yodeckScreenId)) {
+    const screenLayoutStatus = await getScreenLayoutStatus(yodeckScreenId);
+    
+    if (screenLayoutStatus.hasLayout && screenLayoutStatus.isBaselineLayout) {
+      layoutStatus = { ok: true, layoutId: screenLayoutStatus.layoutId, layoutName: screenLayoutStatus.layoutName, error: undefined };
+    } else if (screenLayoutStatus.hasLayout) {
+      layoutStatus = { ok: false, layoutId: screenLayoutStatus.layoutId, layoutName: screenLayoutStatus.layoutName, error: "WRONG_LAYOUT" };
+    } else {
+      // Check if baseline layout exists at all
+      const baselineLayout = await findBaselineLayout();
+      if (!baselineLayout.ok) {
+        layoutStatus = { ok: false, layoutId: null, layoutName: null, error: "BASELINE_LAYOUT_MISSING" };
+      } else {
+        layoutStatus = { ok: false, layoutId: null, layoutName: null, error: "LAYOUT_NOT_ASSIGNED" };
+      }
+    }
+  } else {
+    layoutStatus = { ok: false, layoutId: null, layoutName: null, error: "NO_YODECK_DEVICE" };
+  }
   
   // Get ADS playlist items
   let adsItemCount = 0;
@@ -2027,21 +2274,15 @@ export async function getContentStatus(locationId: string): Promise<ContentStatu
     }
   }
   
-  const needsRepair = missingItems.length > 0 || baseItemCount === 0 || adsItemCount === 0 || !location.yodeckBaselinePlaylistId || !location.yodeckPlaylistId;
+  // Repair needed if: layout not OK, or no ADS playlist, or ADS empty
+  const needsRepair = !layoutStatus.ok || !location.yodeckPlaylistId || adsItemCount === 0;
   
   return {
     locationId,
     locationName: location.name,
     isLive,
     hasYodeckDevice,
-    base: {
-      playlistId: location.yodeckBaselinePlaylistId,
-      itemCount: baseItemCount,
-      hasNews,
-      hasWeather,
-      hasDefaultAd,
-      missingItems,
-    },
+    layout: layoutStatus,
     ads: {
       playlistId: location.yodeckPlaylistId,
       itemCount: adsItemCount,
@@ -2054,24 +2295,26 @@ export async function getContentStatus(locationId: string): Promise<ContentStatu
   };
 }
 
+/**
+ * NEW ARCHITECTURE: Autopilot result focuses on Layout + ADS playlist
+ */
 export interface AutopilotRepairResult {
   ok: boolean;
   locationId: string;
   locationName: string;
   
-  baseRepaired: boolean;
+  layoutAssigned: boolean;
   adsRepaired: boolean;
   
-  base: {
-    playlistId: string | null;
-    itemCount: number;
-    itemsAdded: string[];
+  layout: {
+    layoutId: number | null;
+    layoutName: string | null;
   };
   
   ads: {
     playlistId: string | null;
     itemCount: number;
-    fallbackAdded: boolean;
+    adsAdded: number;
   };
   
   pushed: boolean;
@@ -2080,13 +2323,16 @@ export interface AutopilotRepairResult {
 }
 
 /**
- * AUTOPILOT: Ensure canonical setup for a location
+ * NEW AUTOPILOT ARCHITECTURE: Ensure layout + ADS playlist for a location
  * 
  * This is the MAIN autopilot function that:
- * 1. Ensures BASE playlist exists with all required items (NEWS, WEATHER, DEFAULT_AD)
- * 2. Ensures ADS playlist exists with at least 1 fallback ad
- * 3. Links layout to screen
- * 4. Pushes to device
+ * 1. Finds the baseline layout "Elevizion Baseline" (must exist in Yodeck)
+ * 2. Ensures ADS playlist exists for this location
+ * 3. Assigns baseline layout to screen with ADS playlist in zone 2
+ * 4. Adds approved ads to ADS playlist
+ * 5. Pushes to device
+ * 
+ * IMPORTANT: Baseline content (news/weather) is handled by the Layout, NOT by media seeding
  * 
  * IDEMPOTENT: Can be called multiple times safely without duplicates
  */
@@ -2103,10 +2349,10 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
       ok: false,
       locationId,
       locationName: "Onbekend",
-      baseRepaired: false,
+      layoutAssigned: false,
       adsRepaired: false,
-      base: { playlistId: null, itemCount: 0, itemsAdded: [] },
-      ads: { playlistId: null, itemCount: 0, fallbackAdded: false },
+      layout: { layoutId: null, layoutName: null },
+      ads: { playlistId: null, itemCount: 0, adsAdded: 0 },
       pushed: false,
       logs,
       error: "Locatie niet gevonden",
@@ -2114,106 +2360,36 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   }
   
   logs.push(`[Autopilot] Locatie: ${location.name}`);
-  const itemsAdded: string[] = [];
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 1: Ensure canonical BASE playlist
+  // STEP 1: Find baseline layout (MUST exist in Yodeck)
   // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 1: BASE playlist ───`);
-  const baseResult = await ensureCanonicalPlaylist(location.name, "BASE");
-  logs.push(...baseResult.logs);
+  logs.push(`[Autopilot] ─── STAP 1: Baseline layout zoeken ───`);
+  const layoutResult = await findBaselineLayout();
+  logs.push(...layoutResult.logs);
   
-  if (!baseResult.ok) {
+  if (!layoutResult.ok || !layoutResult.layoutId) {
+    logs.push(`[Autopilot] ❌ Baseline layout ontbreekt in Yodeck`);
     return {
       ok: false,
       locationId,
       locationName: location.name,
-      baseRepaired: false,
+      layoutAssigned: false,
       adsRepaired: false,
-      base: { playlistId: null, itemCount: 0, itemsAdded: [] },
-      ads: { playlistId: null, itemCount: 0, fallbackAdded: false },
+      layout: { layoutId: null, layoutName: BASELINE_LAYOUT_NAME },
+      ads: { playlistId: null, itemCount: 0, adsAdded: 0 },
       pushed: false,
       logs,
-      error: `BASE playlist fout: ${baseResult.error}`,
+      error: `BASELINE_LAYOUT_MISSING: Maak layout "${BASELINE_LAYOUT_NAME}" aan in Yodeck met nieuws en weer apps.`,
     };
   }
   
-  // Update location if needed
-  if (location.yodeckBaselinePlaylistId !== baseResult.playlistId) {
-    await db.update(locations).set({ yodeckBaselinePlaylistId: baseResult.playlistId }).where(eq(locations.id, locationId));
-    logs.push(`[Autopilot] ✓ BASE playlist ID opgeslagen: ${baseResult.playlistId}`);
-  }
+  logs.push(`[Autopilot] ✓ Baseline layout gevonden: ${layoutResult.layoutName} (ID ${layoutResult.layoutId})`);
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 2: Ensure base content items (NEWS, WEATHER, DEFAULT_AD)
+  // STEP 2: Ensure ADS playlist exists
   // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 2: Basiscontent items ───`);
-  
-  // Get current items
-  const currentItems = await getPlaylistItems(baseResult.playlistId);
-  const currentItemNames = currentItems.items.map(i => i.name.toLowerCase());
-  
-  // Check and add each required item
-  for (const [key, config] of Object.entries(BASE_CONTENT_ITEMS)) {
-    // Check if already exists
-    const exists = currentItemNames.some(name => 
-      config.searchPatterns.some(pattern => name.includes(pattern.toLowerCase()))
-    );
-    
-    if (exists) {
-      logs.push(`[Autopilot] ✓ ${key} al aanwezig`);
-      continue;
-    }
-    
-    // Find media/widget
-    const findResult = await findMediaByPatterns(config.searchPatterns);
-    logs.push(...findResult.logs);
-    
-    if (findResult.mediaId) {
-      const appendResult = await appendPlaylistItemIfMissing(baseResult.playlistId, findResult.mediaId, 30);
-      logs.push(...appendResult.logs);
-      
-      if (!appendResult.alreadyExists) {
-        itemsAdded.push(key);
-        logs.push(`[Autopilot] ✓ ${key} toegevoegd aan BASE playlist`);
-      }
-    } else {
-      logs.push(`[Autopilot] ⚠️ ${key} niet gevonden in Yodeck - upload dit item eerst`);
-    }
-  }
-  
-  // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 3: Ensure seed content (fallback if nothing found)
-  // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 3: Baseline fallback ───`);
-  const baseSeedResult = await seedBaselinePlaylist(baseResult.playlistId);
-  logs.push(...baseSeedResult.logs);
-  
-  // Verify BASE has items
-  const baseItemsResult = await getPlaylistItems(baseResult.playlistId);
-  const baseItemCount = baseItemsResult.items.length;
-  
-  if (baseItemCount === 0) {
-    logs.push(`[Autopilot] ❌ BASE playlist heeft 0 items - upload basiscontent naar Yodeck`);
-    return {
-      ok: false,
-      locationId,
-      locationName: location.name,
-      baseRepaired: false,
-      adsRepaired: false,
-      base: { playlistId: baseResult.playlistId, itemCount: 0, itemsAdded },
-      ads: { playlistId: null, itemCount: 0, fallbackAdded: false },
-      pushed: false,
-      logs,
-      error: "BASE_EMPTY: Basiscontent items ontbreken in Yodeck. Upload NEWS, WEATHER en DEFAULT_AD media.",
-    };
-  }
-  logs.push(`[Autopilot] ✓ BASE heeft ${baseItemCount} items`);
-  
-  // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 4: Ensure canonical ADS playlist
-  // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 4: ADS playlist ───`);
+  logs.push(`[Autopilot] ─── STAP 2: ADS playlist ───`);
   const adsResult = await ensureCanonicalPlaylist(location.name, "ADS");
   logs.push(...adsResult.logs);
   
@@ -2222,10 +2398,10 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
       ok: false,
       locationId,
       locationName: location.name,
-      baseRepaired: itemsAdded.length > 0,
+      layoutAssigned: false,
       adsRepaired: false,
-      base: { playlistId: baseResult.playlistId, itemCount: baseItemCount, itemsAdded },
-      ads: { playlistId: null, itemCount: 0, fallbackAdded: false },
+      layout: { layoutId: layoutResult.layoutId, layoutName: layoutResult.layoutName },
+      ads: { playlistId: null, itemCount: 0, adsAdded: 0 },
       pushed: false,
       logs,
       error: `ADS playlist fout: ${adsResult.error}`,
@@ -2239,44 +2415,62 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   }
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 5: Seed ADS with fallback if empty
+  // STEP 3: Seed ADS with approved ads from database
   // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 5: ADS fallback ───`);
+  logs.push(`[Autopilot] ─── STAP 3: Approved ads toevoegen ───`);
+  let adsAdded = 0;
+  
+  // First seed with fallback
   const adsSeedResult = await seedAdsPlaylist(adsResult.playlistId);
   logs.push(...adsSeedResult.logs);
   
-  // Verify ADS has items
-  const adsItemsResult = await getPlaylistItems(adsResult.playlistId);
-  const adsItemCount = adsItemsResult.items.length;
+  // Get approved ads for this location via advertiser chain
+  const approvedAdsResult = await findApprovedAdsForLocation(locationId);
+  logs.push(...approvedAdsResult.logs);
   
-  if (adsItemCount === 0) {
-    logs.push(`[Autopilot] ⚠️ ADS playlist heeft 0 items - fallback toevoegen...`);
-    
-    // Try to add global approved ads as fallback
+  if (approvedAdsResult.ads && approvedAdsResult.ads.length > 0) {
+    for (const ad of approvedAdsResult.ads) {
+      // First link to Yodeck (get media ID)
+      const linkResult = await linkApprovedAdToYodeck(ad);
+      logs.push(...linkResult.logs);
+      
+      // Then add to ADS playlist if linked
+      if (linkResult.ok && linkResult.yodeckMediaId) {
+        const appendResult = await appendPlaylistItemIfMissing(adsResult.playlistId, linkResult.yodeckMediaId, 15);
+        logs.push(...appendResult.logs);
+        if (!appendResult.alreadyExists) {
+          adsAdded++;
+        }
+      }
+    }
+    logs.push(`[Autopilot] ✓ ${adsAdded}/${approvedAdsResult.ads.length} ads toegevoegd aan playlist`);
+  } else {
+    // Try global ads fallback
     const globalAdsResult = await getRecentApprovedAds();
     if (globalAdsResult.ads && globalAdsResult.ads.length > 0) {
       const firstAd = globalAdsResult.ads[0];
       const linkResult = await linkAdToLocation(locationId, firstAd.id.toString());
       logs.push(...linkResult.logs);
-      
       if (linkResult.ok) {
-        logs.push(`[Autopilot] ✓ Globale ad toegevoegd als fallback: ${firstAd.filename}`);
+        adsAdded++;
+        logs.push(`[Autopilot] ✓ Globale ad toegevoegd als fallback`);
       }
     } else {
-      logs.push(`[Autopilot] ⚠️ Geen globale ads beschikbaar als fallback`);
+      logs.push(`[Autopilot] ⚠️ Geen ads beschikbaar - scherm toont alleen baseline content`);
     }
   }
   
-  // Re-check ADS count
+  // Verify ADS count
   const finalAdsItems = await getPlaylistItems(adsResult.playlistId);
   const finalAdsCount = finalAdsItems.items.length;
-  logs.push(`[Autopilot] ✓ ADS heeft ${finalAdsCount} items`);
+  logs.push(`[Autopilot] ✓ ADS playlist heeft ${finalAdsCount} items`);
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 6: Push to screen
+  // STEP 4: Assign layout to screen with ADS playlist
   // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 6: Push naar scherm ───`);
+  logs.push(`[Autopilot] ─── STAP 4: Layout toewijzen aan scherm ───`);
   let pushed = false;
+  let layoutAssigned = false;
   let yodeckDeviceId = location.yodeckDeviceId;
   
   // Fallback: try screens table
@@ -2292,11 +2486,24 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   }
   
   if (yodeckDeviceId) {
-    const pushResult = await pushScreen(yodeckDeviceId);
-    pushed = pushResult.ok;
-    logs.push(pushed ? `[Autopilot] ✓ Scherm gepushed` : `[Autopilot] Push niet gelukt: ${pushResult.error}`);
+    const screenId = parseInt(yodeckDeviceId);
+    const adsPlaylistIdNum = parseInt(adsResult.playlistId);
+    
+    if (!isNaN(screenId) && !isNaN(adsPlaylistIdNum)) {
+      const assignResult = await ensureBaselineLayoutOnScreen(screenId, adsPlaylistIdNum);
+      logs.push(...assignResult.logs);
+      
+      layoutAssigned = assignResult.ok;
+      pushed = assignResult.ok;
+      
+      if (!assignResult.ok) {
+        logs.push(`[Autopilot] ⚠️ Layout toewijzing niet gelukt: ${assignResult.error}`);
+      }
+    } else {
+      logs.push(`[Autopilot] ⚠️ Ongeldige screen/playlist ID`);
+    }
   } else {
-    logs.push(`[Autopilot] ⚠️ Geen Yodeck scherm gekoppeld - content is klaar maar niet gepushed`);
+    logs.push(`[Autopilot] ⚠️ Geen Yodeck scherm gekoppeld - content is klaar maar niet toegewezen`);
   }
   
   // Update last sync timestamp
@@ -2308,15 +2515,18 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   
   logs.push(`[Autopilot] ═══════════════════════════════════════`);
   logs.push(`[Autopilot] ✓ Autopilot repair voltooid`);
+  logs.push(`[Autopilot]   Layout actief: ${layoutAssigned ? "JA" : "NEE"}`);
+  logs.push(`[Autopilot]   ADS playlist: ${finalAdsCount} items`);
+  logs.push(`[Autopilot]   Ads toegevoegd: ${adsAdded}`);
   
   return {
-    ok: true,
+    ok: layoutAssigned || finalAdsCount > 0, // OK if layout assigned OR we have ads ready
     locationId,
     locationName: location.name,
-    baseRepaired: itemsAdded.length > 0 || baseSeedResult.seeded,
-    adsRepaired: adsSeedResult.seeded,
-    base: { playlistId: baseResult.playlistId, itemCount: baseItemCount, itemsAdded },
-    ads: { playlistId: adsResult.playlistId, itemCount: finalAdsCount, fallbackAdded: adsSeedResult.seeded },
+    layoutAssigned,
+    adsRepaired: adsAdded > 0 || adsSeedResult.seeded,
+    layout: { layoutId: layoutResult.layoutId, layoutName: layoutResult.layoutName },
+    ads: { playlistId: adsResult.playlistId, itemCount: finalAdsCount, adsAdded },
     pushed,
     logs,
   };

@@ -1,0 +1,66 @@
+We are using Yodeck with Apps + Layouts. 
+Baseline content (news, weather) already exists as Yodeck Apps and is used inside a Layout.
+
+CURRENT PROBLEM:
+Autopilot incorrectly tries to seed baseline content by searching Yodeck media ("news", "weather", "self-ad"),
+which fails because news/weather are Apps, not media uploads.
+This causes empty baseline playlists and broken screens.
+
+NEW REQUIRED ARCHITECTURE (MANDATORY):
+1) Baseline content MUST be handled via a fixed Yodeck Layout, NOT via playlists or media seeding.
+2) Advertisements MUST be handled via ADS playlists only.
+3) Autopilot must ensure:
+   - correct Layout is active on the screen
+   - ADS playlist exists and is linked to the layout
+   - approved ads from DB are present in ADS playlist
+
+IMPLEMENTATION:
+
+A) Baseline Layout
+- Define a single baseline layout name, e.g.:
+  BASELINE_LAYOUT_NAME = "Elevizion Baseline"
+- This layout already contains:
+  - News App
+  - Weather App
+  - Any fixed branding
+- Autopilot MUST NOT try to create or search for news/weather media anymore.
+
+B) Autopilot flow per location/screen:
+1) Resolve Yodeck screen/player ID
+2) Ensure baseline layout is active on the screen:
+   - If another layout is active → switch to BASELINE_LAYOUT_NAME
+3) Ensure ADS playlist exists for the location
+4) Ensure ADS playlist is linked to the layout (zone/playlist slot)
+5) Fetch approved ads from database for that location
+6) Add ads to ADS playlist (idempotent, no duplicates)
+
+C) Remove/disable:
+- FindMedia("news")
+- FindMedia("weather")
+- Baseline media seeding logic
+- Any logic that requires uploading baseline media
+
+D) Error handling:
+- If baseline layout does not exist → fail with BASELINE_LAYOUT_MISSING
+- UI must show one clear message:
+  "Baseline layout ontbreekt in Yodeck. Maak layout 'Elevizion Baseline' aan."
+- Do NOT show "upload dit item eerst" anymore.
+
+E) UI changes (Dashboard):
+- Replace "Geen basis content" warning with:
+  - Layout status: OK / Missing
+  - ADS playlist status: X items
+- Remove dependency on "Repareer scherm" for baseline
+- Autopilot runs automatically when:
+  - screen becomes online
+  - ad is approved
+  - worker periodic check
+
+ACCEPTANCE:
+- New screen with no ads still shows news & weather (via layout)
+- Approved ads appear automatically without manual action
+- No screen can ever be empty
+- Autopilot logs clearly show:
+  - Layout active
+  - ADS playlist linked
+  - Ads count

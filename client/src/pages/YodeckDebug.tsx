@@ -101,18 +101,20 @@ interface ApprovedAdsResponse {
   logs: string[];
 }
 
+/**
+ * NEW ARCHITECTURE: Content status focuses on Layout + ADS playlist
+ * Baseline content (news/weather) is handled by the Yodeck Layout, not playlists
+ */
 interface ContentStatusResponse {
   locationId: string;
   locationName: string;
   isLive: boolean;
   hasYodeckDevice: boolean;
-  base: {
-    playlistId: string | null;
-    itemCount: number;
-    hasNews: boolean;
-    hasWeather: boolean;
-    hasDefaultAd: boolean;
-    missingItems: string[];
+  layout: {
+    ok: boolean;
+    layoutId: number | null;
+    layoutName: string | null;
+    error?: string; // BASELINE_LAYOUT_MISSING, WRONG_LAYOUT, LAYOUT_NOT_ASSIGNED, NO_YODECK_DEVICE
   };
   ads: {
     playlistId: string | null;
@@ -129,10 +131,10 @@ interface AutopilotRepairResult {
   ok: boolean;
   locationId: string;
   locationName: string;
-  baseRepaired: boolean;
+  layoutAssigned: boolean;
   adsRepaired: boolean;
-  base: { playlistId: string | null; itemCount: number; itemsAdded: string[] };
-  ads: { playlistId: string | null; itemCount: number; fallbackAdded: boolean };
+  layout: { layoutId: number | null; layoutName: string | null };
+  ads: { playlistId: string | null; itemCount: number; adsAdded: number };
   pushed: boolean;
   logs: string[];
   error?: string;
@@ -296,9 +298,9 @@ export default function YodeckDebug() {
         ok: data.ok,
         locationId: data.locationId,
         locationName: data.locationName,
-        basePlaylist: { id: data.base.playlistId, name: null, itemCount: data.base.itemCount },
+        basePlaylist: { id: null, name: null, itemCount: 0 }, // No longer used - layout handles baseline
         adsPlaylist: { id: data.ads.playlistId, name: null, itemCount: data.ads.itemCount },
-        layout: { id: null },
+        layout: { id: data.layout.layoutId?.toString() || null },
         pushed: data.pushed,
         logs: data.logs,
         error: data.error,
@@ -330,12 +332,13 @@ export default function YodeckDebug() {
     }
   }, [contentStatus, selectedLocation, autoRepairTriggered, autopilotRepairMutation.isPending]);
 
-  // Bepaal status
-  const baseOk = playlistItems?.base?.items && playlistItems.base.items.length > 0;
+  // Bepaal status - NEW ARCHITECTURE: Use layout status, not base playlist items
+  const layoutOk = contentStatus?.layout?.ok ?? false;
   const adsOk = playlistItems?.ads?.items && playlistItems.ads.items.length > 0;
-  const contentOk = baseOk && adsOk;
+  const contentOk = layoutOk && adsOk; // Layout handles baseline (news/weather), ADS playlist handles ads
   const isElevizionLayout = selectedScreen?.sourceType === "layout" && 
-    (selectedScreen?.sourceName?.toLowerCase().includes("elevizion") || false);
+    (selectedScreen?.sourceName?.toLowerCase().includes("elevizion") || 
+     selectedScreen?.sourceName?.toLowerCase().includes("baseline") || false);
   const isOnline = selectedScreen?.onlineStatus === "online";
 
   const handleRepareer = () => {
@@ -458,7 +461,7 @@ export default function YodeckDebug() {
                       {contentStatus.needsRepair ? "Scherm heeft aandacht nodig" : "Scherm is goed ingesteld"}
                     </p>
                     <p className={`text-sm ${contentStatus.needsRepair ? "text-yellow-600" : "text-green-600"}`}>
-                      Basiscontent: {contentStatus.base.itemCount} items • 
+                      Layout: {contentStatus.layout.ok ? "OK" : "Niet actief"} • 
                       Advertenties: {contentStatus.ads.itemCount} items
                       {contentStatus.lastSyncAt && (
                         <span> • Laatste sync: {new Date(contentStatus.lastSyncAt).toLocaleTimeString()}</span>
@@ -478,9 +481,17 @@ export default function YodeckDebug() {
                   </Button>
                 )}
               </div>
-              {contentStatus.base.missingItems.length > 0 && (
+              {contentStatus.layout.error && (
                 <p className="text-sm text-yellow-600 mt-2">
-                  Ontbrekend: {contentStatus.base.missingItems.join(", ")}
+                  {contentStatus.layout.error === "BASELINE_LAYOUT_MISSING" 
+                    ? 'Baseline layout ontbreekt in Yodeck. Maak layout "Elevizion Baseline" aan.'
+                    : contentStatus.layout.error === "LAYOUT_NOT_ASSIGNED"
+                    ? "Layout is niet toegewezen aan dit scherm."
+                    : contentStatus.layout.error === "WRONG_LAYOUT"
+                    ? "Verkeerde layout actief op scherm."
+                    : contentStatus.layout.error === "NO_YODECK_DEVICE"
+                    ? "Geen Yodeck scherm gekoppeld."
+                    : contentStatus.layout.error}
                 </p>
               )}
             </div>
@@ -558,8 +569,8 @@ export default function YodeckDebug() {
         </CardContent>
       </Card>
 
-      {/* Status melding */}
-      {selectedScreen && playlistItems && !playlistLoading && (
+      {/* Status melding - NEW ARCHITECTURE: Layout + ADS only */}
+      {selectedScreen && !playlistLoading && (
         <>
           {contentOk && isElevizionLayout ? (
             <Card className="border-green-500 bg-green-50">
@@ -569,8 +580,8 @@ export default function YodeckDebug() {
                   Scherm is goed ingesteld
                 </p>
                 <p className="text-green-700 text-sm mt-1">
-                  Basis content: {playlistItems.base.items.length} item{playlistItems.base.items.length !== 1 ? "s" : ""} • 
-                  Advertenties: {playlistItems.ads.items.length} item{playlistItems.ads.items.length !== 1 ? "s" : ""}
+                  Layout: {contentStatus?.layout?.layoutName || "Elevizion Baseline"} (bevat nieuws & weer) • 
+                  Advertenties: {playlistItems?.ads?.items?.length || 0} item{(playlistItems?.ads?.items?.length || 0) !== 1 ? "s" : ""}
                 </p>
               </CardContent>
             </Card>
@@ -579,13 +590,15 @@ export default function YodeckDebug() {
               <CardContent className="pt-4">
                 <p className="text-red-800 flex items-center gap-2 font-medium">
                   <AlertCircle className="h-5 w-5" />
-                  Scherm heeft geen content of verkeerde instellingen
+                  Scherm heeft aandacht nodig
                 </p>
                 <p className="text-red-700 text-sm mt-1">
-                  {!baseOk && "Geen basis content. "}
+                  {!layoutOk && (contentStatus?.layout?.error === "BASELINE_LAYOUT_MISSING" 
+                    ? 'Baseline layout ontbreekt. Maak "Elevizion Baseline" aan in Yodeck. '
+                    : !contentStatus?.layout?.ok && "Layout niet actief. ")}
                   {!adsOk && "Geen advertenties. "}
-                  {!isElevizionLayout && "Niet op Elevizion layout. "}
-                  Klik op "Repareer scherm" om standaard content te plaatsen.
+                  {!isElevizionLayout && layoutOk && "Verkeerde layout actief. "}
+                  Klik op "Repareren" om dit op te lossen.
                 </p>
               </CardContent>
             </Card>
@@ -649,28 +662,32 @@ export default function YodeckDebug() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              {/* BASIS Content */}
+              {/* LAYOUT STATUS - NEW ARCHITECTURE: Layout handles baseline content */}
               <div className="p-4 bg-gray-50 rounded-lg">
                 <h4 className="font-medium mb-2 flex items-center gap-2">
-                  Basis content
-                  <Badge variant={baseOk ? "outline" : "destructive"}>
-                    {playlistItems.base.items.length} item{playlistItems.base.items.length !== 1 ? "s" : ""}
+                  Baseline Layout
+                  <Badge variant={layoutOk ? "outline" : "destructive"}>
+                    {layoutOk ? "OK" : "Niet actief"}
                   </Badge>
                 </h4>
-                {playlistItems.base.items.length > 0 ? (
-                  <ul className="text-sm space-y-1">
-                    {playlistItems.base.items.slice(0, 5).map((item) => (
-                      <li key={item.id} className="flex items-center gap-2">
-                        <Badge variant="secondary" className="text-xs">{item.type}</Badge>
-                        <span className="truncate">{item.name}</span>
-                      </li>
-                    ))}
-                    {playlistItems.base.items.length > 5 && (
-                      <li className="text-muted-foreground text-xs">... en {playlistItems.base.items.length - 5} meer</li>
-                    )}
-                  </ul>
+                {layoutOk ? (
+                  <div className="text-sm space-y-1">
+                    <p className="text-green-700">✓ Layout: {contentStatus?.layout?.layoutName || "Elevizion Baseline"}</p>
+                    <p className="text-muted-foreground text-xs">Bevat nieuws, weer en baseline content</p>
+                  </div>
                 ) : (
-                  <p className="text-sm text-orange-600">⚠️ Geen basis content</p>
+                  <div className="text-sm space-y-1">
+                    <p className="text-orange-600">
+                      {contentStatus?.layout?.error === "BASELINE_LAYOUT_MISSING" 
+                        ? '⚠️ Layout "Elevizion Baseline" ontbreekt in Yodeck'
+                        : contentStatus?.layout?.error === "LAYOUT_NOT_ASSIGNED"
+                        ? "⚠️ Layout niet toegewezen aan scherm"
+                        : contentStatus?.layout?.error === "WRONG_LAYOUT"
+                        ? "⚠️ Verkeerde layout actief"
+                        : "⚠️ Layout status onbekend"}
+                    </p>
+                    <p className="text-muted-foreground text-xs">Klik op "Repareren" om de juiste layout te activeren</p>
+                  </div>
                 )}
               </div>
 
