@@ -506,14 +506,51 @@ export function isNonCanonicalPlaylistName(name: string): boolean {
 
 /**
  * Find or create canonical playlist for a location
+ * STABILITY FIX: If existingPlaylistId is provided from DB, validate and use it directly
+ * Only search by name or create new when no existing ID is stored
+ * 
+ * @param options - Either an options object OR a workspaceId number (backward compatible)
  */
 export async function ensureCanonicalPlaylist(
   locationName: string,
   type: "BASE" | "ADS",
-  workspaceId?: number
+  options?: { existingPlaylistId?: string | null; workspaceId?: number } | number
 ): Promise<CanonicalPlaylistResult> {
   const logs: string[] = [];
   const canonicalName = getCanonicalPlaylistName(locationName, type);
+  
+  // Backward compatibility: if options is a number, treat it as workspaceId
+  const resolvedOptions = typeof options === "number" 
+    ? { workspaceId: options } 
+    : options;
+  const existingId = resolvedOptions?.existingPlaylistId;
+  
+  // STABILITY: If we have a stored playlist ID, validate and use it directly
+  if (existingId) {
+    logs.push(`[EnsurePlaylist] Using stored ID: ${existingId}`);
+    
+    const validateResult = await yodeckRequest<{ id: number; name: string; items?: any[] }>(
+      `/playlists/${existingId}/`
+    );
+    
+    if (validateResult.ok && validateResult.data) {
+      const itemsResult = await getPlaylistItems(existingId);
+      logs.push(`[EnsurePlaylist] ✓ Validated: ${validateResult.data.name} (${itemsResult.items.length} items)`);
+      
+      return {
+        ok: true,
+        playlistId: existingId,
+        playlistName: validateResult.data.name,
+        isNew: false,
+        itemCount: itemsResult.items.length,
+        logs,
+      };
+    }
+    
+    // Stored ID is invalid (deleted in Yodeck?) - fall through to name search
+    logs.push(`[EnsurePlaylist] ⚠️ Stored ID ${existingId} not found in Yodeck, searching by name...`);
+  }
+  
   logs.push(`[EnsurePlaylist] Looking for: "${canonicalName}"`);
   
   // Search for existing playlist with canonical name
@@ -550,17 +587,17 @@ export async function ensureCanonicalPlaylist(
     }
   }
   
-  // Create new playlist
+  // Create new playlist (only when no existing ID and none found by name)
   logs.push(`[EnsurePlaylist] Creating new playlist: "${canonicalName}"`);
   
   const createPayload: any = {
     name: canonicalName,
     description: `Elevizion canonical ${type} playlist`,
-    items: [], // Always include items array
+    items: [],
   };
   
-  if (workspaceId) {
-    createPayload.workspace = workspaceId;
+  if (resolvedOptions?.workspaceId) {
+    createPayload.workspace = resolvedOptions.workspaceId;
   }
   
   const createResult = await yodeckRequest<{ id: number; name: string }>(
@@ -1076,9 +1113,11 @@ export async function ensureLocationCompliance(locationId: string): Promise<Ensu
     logs.push(`[Compliance] WARNING: No yodeckDeviceId - cannot manage screen`);
   }
   
-  // Step 1: Ensure canonical BASE playlist
+  // Step 1: Ensure canonical BASE playlist (use stored ID if available)
   logs.push(`[Compliance] Step 1: Ensuring BASE playlist...`);
-  const baseResult = await ensureCanonicalPlaylist(location.name, "BASE");
+  const baseResult = await ensureCanonicalPlaylist(location.name, "BASE", { 
+    existingPlaylistId: location.yodeckBaselinePlaylistId 
+  });
   logs.push(...baseResult.logs);
   
   if (!baseResult.ok) {
@@ -1101,9 +1140,11 @@ export async function ensureLocationCompliance(locationId: string): Promise<Ensu
   const baseSeedResult = await seedBaselinePlaylist(baseResult.playlistId);
   logs.push(...baseSeedResult.logs);
   
-  // Step 3: Ensure canonical ADS playlist
+  // Step 3: Ensure canonical ADS playlist (use stored ID if available)
   logs.push(`[Compliance] Step 3: Ensuring ADS playlist...`);
-  const adsResult = await ensureCanonicalPlaylist(location.name, "ADS");
+  const adsResult = await ensureCanonicalPlaylist(location.name, "ADS", {
+    existingPlaylistId: location.yodeckPlaylistId
+  });
   logs.push(...adsResult.logs);
   
   if (!adsResult.ok) {
@@ -1582,11 +1623,12 @@ export async function linkAdToLocation(adId: string, locationId: string): Promis
     }
   }
   
-  // Get or create canonical ADS playlist for location
-  // ALWAYS use ensureCanonicalPlaylist to get the correct ADS playlist (validates by name pattern)
+  // Get or create canonical ADS playlist for location (use stored ID if available)
   logs.push(`[LinkAd] Verifiëren ADS playlist voor ${location.name}...`);
   
-  const adsPlaylistResult = await ensureCanonicalPlaylist(location.name, "ADS");
+  const adsPlaylistResult = await ensureCanonicalPlaylist(location.name, "ADS", {
+    existingPlaylistId: location.yodeckPlaylistId
+  });
   logs.push(...adsPlaylistResult.logs);
   
   if (!adsPlaylistResult.ok || !adsPlaylistResult.playlistId) {
@@ -1929,10 +1971,12 @@ export async function ensureLocationContent(locationId: string): Promise<Locatio
   logs.push(`[ContentPipeline] Locatie: ${location.name}`);
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 1: Find/create canonical BASE playlist
+  // STEP 1: Find/create canonical BASE playlist (use stored ID if available)
   // ═══════════════════════════════════════════════════════════════════════════
   logs.push(`[ContentPipeline] ─── STAP 1: BASE playlist ───`);
-  const baseResult = await ensureCanonicalPlaylist(location.name, "BASE");
+  const baseResult = await ensureCanonicalPlaylist(location.name, "BASE", {
+    existingPlaylistId: location.yodeckBaselinePlaylistId
+  });
   logs.push(...baseResult.logs);
   
   if (!baseResult.ok) {
@@ -2006,10 +2050,12 @@ export async function ensureLocationContent(locationId: string): Promise<Locatio
   logs.push(`[ContentPipeline] ✓ BASE heeft ${baseItemCount} items`);
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 4: Find/create canonical ADS playlist
+  // STEP 4: Find/create canonical ADS playlist (use stored ID if available)
   // ═══════════════════════════════════════════════════════════════════════════
   logs.push(`[ContentPipeline] ─── STAP 4: ADS playlist ───`);
-  const adsResult = await ensureCanonicalPlaylist(location.name, "ADS");
+  const adsResult = await ensureCanonicalPlaylist(location.name, "ADS", {
+    existingPlaylistId: location.yodeckPlaylistId
+  });
   logs.push(...adsResult.logs);
   
   if (!adsResult.ok) {
@@ -2551,10 +2597,12 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   logs.push(`[Autopilot] ✓ Baseline layout gevonden: ${layoutResult.layoutName} (ID ${layoutResult.layoutId})`);
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 2: Ensure ADS playlist exists
+  // STEP 2: Ensure ADS playlist exists (use stored ID if available)
   // ═══════════════════════════════════════════════════════════════════════════
   logs.push(`[Autopilot] ─── STAP 2: ADS playlist ───`);
-  const adsResult = await ensureCanonicalPlaylist(location.name, "ADS");
+  const adsResult = await ensureCanonicalPlaylist(location.name, "ADS", {
+    existingPlaylistId: location.yodeckPlaylistId
+  });
   logs.push(...adsResult.logs);
   
   if (!adsResult.ok) {

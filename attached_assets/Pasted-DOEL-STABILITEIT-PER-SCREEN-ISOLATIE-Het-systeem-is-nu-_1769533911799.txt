@@ -1,0 +1,123 @@
+DOEL (STABILITEIT + PER SCREEN ISOLATIE):
+Het systeem is nu in staat om media aan playlists toe te voegen via Yodeck v2 (GET+PATCH /playlists/{id}).
+Nu moet het STABIEL worden:
+
+1) IEDER SCHERM / LOCATIE heeft exact 2 canonieke playlists:
+   - BASE playlist (nieuws/weer/basisvulling)
+   - ADS playlist (uploads/approved ads/self-ad/fallback)
+   Deze playlists zijn UNIEK per locatie en mogen nooit vermengen met andere locaties.
+
+2) GEEN DUPLICATE PLAYLISTS MEER:
+   Het systeem maakt nu tientallen "Ads | <locatie>" playlists aan (70 duplicates).
+   Dit moet stoppen: 1 locatie = 1 ADS playlist ID = altijd hergebruiken.
+
+3) BASISCONTENT IS STANDAARD EN AUTOMATISCH:
+   Iedere locatie moet altijd dezelfde basis hebben:
+   - Nieuws widget/app
+   - Weer widget/app
+   - Eventueel Elevizion basis slide/video (optioneel)
+   Dit moet per locatie in de BASE playlist zitten, zonder handmatige acties.
+
+4) SCHERM VULT ZICH VERDER MET UPLOADS:
+   ADS playlist wordt gevuld met approved ads die bij die locatie horen.
+   Als er geen approved ads zijn, moet ADS playlist alsnog >= 1 item hebben (fallback).
+
+BELANGRIJK:
+- NIET de bestaande werkende flows breken:
+  * layout assignment werkt
+  * ADS region binding werkt
+  * media toevoegen via PATCH /playlists/{id} werkt
+- Geen grote refactor, alleen stabiliseren en canoniek maken.
+
+======================================================================
+IMPLEMENTATIE-EISEN (HOOG NIVEAU, MINIMALE WIJZIGINGEN)
+======================================================================
+
+A) CANONICAL IDS OPSLAAN IN DB (BELANGRIJKSTE STABILITEIT FIX)
+Voeg 2 velden toe op Location (of een aparte mapping tabel als dat al bestaat):
+- canonicalAdsPlaylistId
+- canonicalBasePlaylistId
+(Optioneel ook: canonicalLayoutId als die nog niet bestaat)
+
+Gedrag:
+- Als canonicalAdsPlaylistId bestaat: gebruik ALTIJD die playlist, maak nooit nieuwe.
+- Als niet bestaat:
+   - zoek playlist op naam "Ads | <locationName>" (exact match)
+   - als meerdere gevonden: kies de laagste ID, LOG duplicates
+   - sla gekozen ID op als canonicalAdsPlaylistId
+   - gebruik voortaan alleen deze ID
+
+Hetzelfde voor Base:
+- "Baseline | <locationName>" of jullie huidige base naming
+- kies 1 ID, sla op, hergebruik altijd
+
+=> Resultaat: duplicates kunnen bestaan, maar het systeem gebruikt er nog maar 1 per locatie.
+
+B) DUPLICATE AANMAAK STOPPEN
+Pas ensureCanonicalPlaylist() zo aan dat hij:
+- eerst canonical*PlaylistId checkt en direct teruggeeft
+- alleen een playlist aanmaakt als er nog geen canonical bestaat EN er geen bestaande gevonden is
+- NOOIT in een loop of repair cycle steeds opnieuw create doet
+
+C) BASE CONTENT (NIEUWS/WEER) STANDAARDISEREN ZONDER HANDWERK
+We willen niet meer zoeken op namen als "news" of "weather" in media lijst.
+Gebruik Yodeck Layout + Regions met widgets/apps waar mogelijk, of een vaste BASE playlist met widget items.
+
+Implementatie:
+- Maak 1 "baseline template" in Yodeck die voor alle locaties geldt:
+  * layout met region(s) voor nieuws + weer (widget items)
+  * region voor main content die een BASE playlist of ADS playlist kan tonen
+- Zorg dat iedere locatie’s layoutId (canonicalLayoutId) verwijst naar een layout waarin widgets al zitten.
+  Als layouts per locatie bestaan (zoals "Elevizion Standard | <loc>"):
+  - update niet op naam-gokken maar sla canonicalLayoutId op zodra gevonden
+  - stop met fuzzy match "Elevizion Baseline"
+  - gebruik: als screen al layout draait, lees source_id en sla dat op als canonicalLayoutId voor die locatie
+
+Belangrijk:
+- Nieuws/weer moet voor ieder scherm hetzelfde “type content” zijn (widgets/apps), niet als video uploads.
+- Base playlist mag nooit leeg zijn; als widgets niet via playlist kunnen, zorg dat layout zelf widgets bevat en base playlist minimaal 1 placeholder bevat.
+
+D) ADS CONTENT (UPLOADS) PER LOCATIE, NOOIT GLOBAAL MIXEN
+- Approved ads toevoegen moet ALTIJD naar canonicalAdsPlaylistId van die locatie.
+- Voeg idempotent toe (als mediaId al in playlist items zit -> no-op).
+- Gebruik GET+PATCH /api/v2/playlists/{id} (zoals nu werkt).
+- Nooit meer POST /playlist_items/ gebruiken.
+
+E) CONTENT GUARANTEE BLIJFT GELDEN
+Voor ADS playlist:
+- Na autopilot/repair moet adsPlaylistItemCount >= 1 zijn.
+- Voorkeursvolgorde:
+  1. approved ads voor locatie
+  2. selfAdMediaId als geconfigureerd
+  3. fallback: eerste beschikbare Yodeck video met status "finished"/"ready"
+- Autopilot mag alleen adsRepaired=true zetten als count >= 1
+
+F) REPAIR CYCLE: VEILIG EN DETERMINISTISCH
+De 5-min repair flow moet:
+- canonical IDs gebruiken (geen nieuwe resources creëren)
+- alleen bij missing bindings repareren
+- nooit playlists blijven aanmaken
+
+G) ADMIN / DEBUG
+Houd bestaande endpoints in stand.
+Voeg (alleen als het klein is) extra velden toe in verify output:
+- canonicalAdsPlaylistId
+- canonicalBasePlaylistId
+- duplicatesFoundCount
+- adsPlaylistItemCount
+- baseHasNewsWidget/baseHasWeatherWidget (best effort)
+Maar geen nieuwe UI nodig.
+
+======================================================================
+ACCEPTATIECRITERIA (HARD)
+======================================================================
+
+1) Voor elke locatie:
+   - exact 1 canonical ADS playlist ID wordt gebruikt (geen wisselen)
+   - exact 1 canonical BASE playlist ID wordt gebruikt
+2) ADS playlists vullen zich alleen met content voor die locatie (uploads/approved)
+3) Ieder scherm toont altijd basis (weer/nieuws) + daarnaast ads content
+4) Geen groei meer van duplicate playlists in Yodeck bij elke repair cycle
+5) Autopilot/repair kan 24 uur draaien zonder dat playlists blijven exploderen of schermen leeg raken
+
+Voer dit uit met minimale wijzigingen, behoud alles wat al werkt (layout binding + PATCH playlists).
