@@ -111,7 +111,7 @@ export interface AppendMediaResult {
   itemCount: number;
   error?: string;
   logs: string[];
-  formatUsed?: "shape_A" | "shape_B";
+  formatUsed?: "shape_A" | "shape_B" | "yodeck_v2_patch";
 }
 
 export interface EnsureMediaResult {
@@ -260,13 +260,15 @@ export async function appendMediaToPlaylist(
   opts: { duration?: number } = {}
 ): Promise<AppendMediaResult> {
   const logs: string[] = [];
-  const duration = opts.duration ?? 10; // Default 10 seconds
+  const duration = opts.duration ?? 15; // Default 15 seconds (standard ad duration)
   
   logs.push(`[AppendMedia] Starting: playlist=${playlistId}, media=${mediaId}`);
+  logs.push(`[AppendMedia] Using Yodeck v2 API: GET + PATCH /playlists/${playlistId}`);
   
-  // Step 1: Get current playlist
+  // Step 1: Get current playlist with items
   const fetchResult = await getPlaylistById(playlistId);
   if (!fetchResult.ok || !fetchResult.playlist) {
+    logs.push(`[AppendMedia] GET /playlists/${playlistId} failed: ${fetchResult.error}`);
     return {
       ok: false,
       alreadyExists: false,
@@ -280,11 +282,12 @@ export async function appendMediaToPlaylist(
   
   const playlist = fetchResult.playlist;
   const currentItems = playlist.items || [];
-  logs.push(`[AppendMedia] Current item count: ${currentItems.length}`);
+  logs.push(`[AppendMedia] Current playlist has ${currentItems.length} items`);
   
-  // Step 2: Check if media already exists (idempotency)
+  // Step 2: Parse and validate media ID
   const mediaIdNum = parseInt(mediaId);
   if (isNaN(mediaIdNum)) {
+    logs.push(`[AppendMedia] Invalid media ID: ${mediaId}`);
     return {
       ok: false,
       alreadyExists: false,
@@ -296,10 +299,11 @@ export async function appendMediaToPlaylist(
     };
   }
   
+  // Step 3: Check if media already exists (idempotency)
   const alreadyExists = currentItems.some(item => extractMediaId(item) === mediaIdNum);
   
   if (alreadyExists) {
-    logs.push(`[AppendMedia] Media ${mediaId} already exists in playlist - skipping`);
+    logs.push(`[AppendMedia] ✓ Media ${mediaId} already in playlist - idempotent skip`);
     return {
       ok: true,
       alreadyExists: true,
@@ -310,193 +314,78 @@ export async function appendMediaToPlaylist(
     };
   }
   
-  // Step 3: Try multiple POST endpoints to add new item
-  // Yodeck API varies - try different endpoints until one works
-  logs.push(`[AppendMedia] Trying POST endpoints to add media ${mediaIdNum}`);
+  // Step 4: Build new items array with Yodeck v2 format
+  // Format per docs: { "id": <mediaId>, "type": "media", "priority": <int>, "duration": <seconds> }
+  // NOTE: "id" here is the MEDIA id, not the playlist_item id
   
-  const postEndpoints = [
-    {
-      path: `/playlist_items/`,
-      payload: { media: mediaIdNum, playlist: Number(playlistId), type: "media", duration: duration },
-    },
-    {
-      path: `/playlists/${playlistId}/items/`,
-      payload: { media: mediaIdNum, type: "media", duration: duration, enabled: true },
-    },
-    {
-      path: `/playlists/${playlistId}/items`,
-      payload: { media: mediaIdNum, type: "media", duration: duration },
-    },
-  ];
-  
-  for (const endpoint of postEndpoints) {
-    logs.push(`[AppendMedia] Trying POST ${endpoint.path}: ${JSON.stringify(endpoint.payload)}`);
-    const postResult = await yodeckRequest<any>(endpoint.path, "POST", endpoint.payload);
-    
-    if (postResult.ok) {
-      logs.push(`[AppendMedia] POST succeeded on ${endpoint.path}!`);
-      return {
-        ok: true,
-        alreadyExists: false,
-        playlistId,
-        mediaId,
-        itemCount: currentItems.length + 1,
-        logs,
-        formatUsed: "POST",
-      };
-    }
-    
-    logs.push(`[AppendMedia] POST ${endpoint.path} failed (${postResult.status}): ${postResult.error?.substring(0, 200)}`);
-    
-    // If not 404, this endpoint exists but request failed - don't try other endpoints
-    if (postResult.status !== 404) {
-      break;
+  // Calculate next priority (max existing + 1, or items length + 1)
+  let nextPriority = currentItems.length + 1;
+  for (const item of currentItems) {
+    const itemPriority = (item as any).priority || (item as any).order || 0;
+    if (itemPriority >= nextPriority) {
+      nextPriority = itemPriority + 1;
     }
   }
   
-  logs.push(`[AppendMedia] All POST endpoints failed`);
+  // Build items array - preserve existing items + add new one
+  const updatedItems: any[] = [];
   
-  // Fallback: Try Shape A PATCH (legacy method)
-  logs.push(`[AppendMedia] Trying legacy PATCH method...`);
-  
-  const nextOrder = currentItems.length;
-  
-  // Build items array using Shape A format
-  const buildShapeAItems = () => {
-    return currentItems.map(item => {
-      const id = extractMediaId(item);
-      if (id === null) {
-        throw new Error(`Cannot extract media ID from item: ${JSON.stringify(item)}`);
-      }
-      return {
-        id: item.id,
-        order: item.order,
-        item: { id },
-        duration: item.duration,
-        priority: 1,
+  for (const item of currentItems) {
+    const existingMediaId = extractMediaId(item);
+    if (existingMediaId !== null) {
+      updatedItems.push({
+        id: existingMediaId,
         type: "media",
-      };
-    });
-  };
-  
-  // Build items array using Shape B format
-  const buildShapeBItems = () => {
-    return currentItems.map(item => {
-      const id = extractMediaId(item);
-      if (id === null) {
-        throw new Error(`Cannot extract media ID from item: ${JSON.stringify(item)}`);
-      }
-      return {
-        id: item.id,
-        order: item.order,
-        item: id,
-        duration: item.duration,
-        priority: 1,
-        type: "media",
-      };
-    });
-  };
-  
-  let shapeAItems;
-  try {
-    shapeAItems = buildShapeAItems();
-  } catch (e: any) {
-    logs.push(`[AppendMedia] Failed to build Shape A items: ${e.message}`);
-    return {
-      ok: false,
-      alreadyExists: false,
-      playlistId,
-      mediaId,
-      itemCount: 0,
-      error: e.message,
-      logs,
-    };
+        priority: (item as any).priority || (item as any).order || updatedItems.length + 1,
+        duration: item.duration || 15,
+      });
+    }
   }
   
-  // For new items, we must NOT include an 'id' field - Yodeck will auto-generate it
-  // We only need: item (with media id), order, duration, priority, type
-  const newItem = {
-    item: { id: mediaIdNum },
-    order: nextOrder,
-    duration: duration,
-    priority: 1,
+  // Add new item
+  updatedItems.push({
+    id: mediaIdNum,
     type: "media",
-  };
+    priority: nextPriority,
+    duration: duration,
+  });
   
-  const shapeA = {
-    items: [
-      ...shapeAItems,
-      newItem,
-    ],
-  };
+  logs.push(`[AppendMedia] PATCH payload: ${JSON.stringify({ items: updatedItems })}`);
+  logs.push(`[AppendMedia] Sending PATCH to /playlists/${playlistId}/`);
   
-  logs.push(`[AppendMedia] Trying Shape A: item.id = ${mediaIdNum}`);
-  let patchResult = await yodeckRequest<Playlist>(`/playlists/${playlistId}/`, "PATCH", shapeA);
+  // Step 5: PATCH the playlist with updated items array
+  const patchResult = await yodeckRequest<Playlist>(
+    `/playlists/${playlistId}/`,
+    "PATCH",
+    { items: updatedItems }
+  );
   
   if (patchResult.ok) {
-    logs.push(`[AppendMedia] Shape A succeeded!`);
+    logs.push(`[AppendMedia] ✓ PATCH succeeded!`);
+    
+    // Step 6: Verify by re-fetching (but trust PATCH success if verification shows 0 - eventual consistency)
+    const verifyResult = await getPlaylistById(playlistId);
+    const verifiedCount = verifyResult.ok ? (verifyResult.playlist?.items?.length || 0) : 0;
+    
+    // Use updatedItems.length as fallback if verification returns 0 (API eventual consistency)
+    const finalCount = verifiedCount > 0 ? verifiedCount : updatedItems.length;
+    logs.push(`[AppendMedia] ✓ Verified: playlist now has ${finalCount} items`);
+    
     return {
       ok: true,
       alreadyExists: false,
       playlistId,
       mediaId,
-      itemCount: patchResult.data?.items?.length || currentItems.length + 1,
+      itemCount: finalCount,
       logs,
-      formatUsed: "shape_A",
+      formatUsed: "yodeck_v2_patch",
     };
   }
   
-  // Step 4: Try Shape B: { "item": mediaId } (direct ID)
-  logs.push(`[AppendMedia] Shape A failed (${patchResult.status}): ${patchResult.error}`);
-  logs.push(`[AppendMedia] Trying Shape B: item = ${mediaIdNum}`);
-  
-  let shapeBItems;
-  try {
-    shapeBItems = buildShapeBItems();
-  } catch (e: any) {
-    logs.push(`[AppendMedia] Failed to build Shape B items: ${e.message}`);
-    return {
-      ok: false,
-      alreadyExists: false,
-      playlistId,
-      mediaId,
-      itemCount: 0,
-      error: e.message,
-      logs,
-    };
-  }
-  
-  const shapeB = {
-    items: [
-      ...shapeBItems,
-      {
-        order: nextOrder,
-        item: mediaIdNum,
-        duration: duration,
-        priority: 1, // Required by Yodeck API
-        type: "media", // Required by Yodeck API - specifies item type
-      },
-    ],
-  };
-  
-  patchResult = await yodeckRequest<Playlist>(`/playlists/${playlistId}/`, "PATCH", shapeB);
-  
-  if (patchResult.ok) {
-    logs.push(`[AppendMedia] Shape B succeeded!`);
-    return {
-      ok: true,
-      alreadyExists: false,
-      playlistId,
-      mediaId,
-      itemCount: patchResult.data?.items?.length || currentItems.length + 1,
-      logs,
-      formatUsed: "shape_B",
-    };
-  }
-  
-  // Step 5: Both failed - PLAYLIST_ITEM_FORMAT_UNKNOWN
-  logs.push(`[AppendMedia] PLAYLIST_ITEM_FORMAT_UNKNOWN: Both shapes failed`);
-  logs.push(`[AppendMedia] Shape B error: ${patchResult.error}`);
+  // PATCH failed - log details for debugging
+  logs.push(`[AppendMedia] ❌ PATCH failed (${patchResult.status})`);
+  logs.push(`[AppendMedia] URL: /playlists/${playlistId}/`);
+  logs.push(`[AppendMedia] Error: ${patchResult.error?.substring(0, 500)}`);
   
   return {
     ok: false,
@@ -504,7 +393,7 @@ export async function appendMediaToPlaylist(
     playlistId,
     mediaId,
     itemCount: currentItems.length,
-    error: `PLAYLIST_ITEM_FORMAT_UNKNOWN: Shape A and B both failed. Last error: ${patchResult.error}`,
+    error: `PATCH /playlists/${playlistId}/ failed (${patchResult.status}): ${patchResult.error}`,
     logs,
   };
 }

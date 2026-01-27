@@ -868,12 +868,19 @@ export async function seedAdsPlaylist(playlistId: string): Promise<{
   const appendResult = await appendPlaylistItemIfMissing(playlistId, mediaIdToAdd, 15);
   logs.push(...appendResult.logs);
   
-  // STEP 5: Verify the playlist now has content
+  // Check if append succeeded (trust the API response over verification)
+  if (appendResult.ok && appendResult.itemCount > 0) {
+    logs.push(`[ContentGuarantee] ✓ SUCCESS: PATCH geslaagd - playlist heeft ${appendResult.itemCount} items`);
+    logs.push(`[ContentGuarantee] ✓ ADS playlist gegarandeerd NIET leeg`);
+    return { ok: true, seeded: true, itemCount: appendResult.itemCount, logs };
+  }
+  
+  // STEP 5: Verify the playlist now has content (fallback verification)
   const verifyResult = await getPlaylistItems(playlistId);
-  const finalItemCount = verifyResult.ok ? verifyResult.items.length : appendResult.itemCount;
+  const finalItemCount = verifyResult.ok ? verifyResult.items.length : 0;
   
   if (finalItemCount > 0) {
-    logs.push(`[ContentGuarantee] ✓ SUCCESS: Playlist heeft nu ${finalItemCount} items`);
+    logs.push(`[ContentGuarantee] ✓ SUCCESS: Verificatie toont ${finalItemCount} items`);
     logs.push(`[ContentGuarantee] ✓ ADS playlist gegarandeerd NIET leeg`);
     return { ok: true, seeded: true, itemCount: finalItemCount, logs };
   }

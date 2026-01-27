@@ -1,0 +1,52 @@
+WE HEBBEN NU EEN HARD BLOKKEREND PROBLEEM:
+
+De autopilot content guarantee werkt conceptueel (hij vindt fallback media zoals "ADV-...mp4"), maar playlists blijven leeg omdat het toevoegen van media faalt met:
+[AppendMedia] POST /playlist_items/ failed (404) + HTML Not Found
+
+Ook baseline seeding faalt met HTTP 404 bij upload.
+
+DOEL:
+Fix alleen het stuk waardoor playlist items NIET toegevoegd worden en baseline upload/seed faalt, zonder andere werkende delen te veranderen (layout assignment en ADS region binding werken al).
+
+BELANGRIJK:
+- Geen grote refactors
+- Geen hernoemen van bestaande flows
+- Alleen endpoints corrigeren + idempotent gedrag
+
+WAT JE MOET DOEN:
+
+1) STOP met POST /playlist_items/
+Dit endpoint bestaat niet (404). Daarom blijven playlists leeg en blijft het scherm zwart.
+
+2) Voeg media toe aan playlists via Yodeck v2 playlists endpoints:
+- GET https://app.yodeck.com/api/v2/playlists/{playlistId}  (haal huidige items op)
+- PATCH https://app.yodeck.com/api/v2/playlists/{playlistId} met een bijgewerkte items array
+
+Items format (zoals in docs):
+items: [
+  { "id": <mediaId>, "type": "media", "priority": <int>, "duration": <seconds> }
+]
+
+Implementatie-eisen:
+- Idempotent: als mediaId al in items zit -> no-op
+- priority: bepaal nextPriority = max(priority)+1 of lengte+1
+- duration: gebruik 15s (of bestaande duration) als veilige default
+- Na PATCH: re-GET playlist en log itemCount
+
+3) Fix baseline seeding op dezelfde manier:
+Als baseline playlist leeg is en je “placeholder baseline asset” wilt uploaden/seed’en:
+- Zorg dat upload flow de juiste v2 media upload endpoints gebruikt (geen legacy endpoint dat 404 geeft)
+- Daarna voeg je het media item toe aan de baseline playlist via PATCH /playlists/{id} (zelfde methode als hierboven)
+- Geen “Upload failed: HTTP 404” meer accepteren: log exact welke URL je aanroept, zodat we zien of het /api/v2/media/{id}/upload is.
+
+4) Voeg beschermende logging toe (alleen logs):
+- Log de volledige path die je aanroept bij playlist update en media upload (zonder secrets)
+- Als je een 404 krijgt: log response body en de URL zodat we meteen zien welk endpoint fout is
+- Autopilot mag pas “adsRepaired=true” zijn als playlist itemCount >= 1
+
+ACCEPTATIECRITERIA:
+- Bij draaien van autopilot:
+  - “ContentGuarantee” kiest fallback mediaId
+  - PATCH /api/v2/playlists/{id} slaagt
+  - playlist itemCount wordt >= 1
+  - scherm gaat content afspelen (zwart scherm weg)
