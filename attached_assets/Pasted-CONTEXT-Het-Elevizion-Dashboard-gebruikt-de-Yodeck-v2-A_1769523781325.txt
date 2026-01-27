@@ -1,0 +1,142 @@
+CONTEXT:
+Het Elevizion Dashboard gebruikt de Yodeck v2 API met layouts, playlists en screens.
+Layout assignment, ADS region binding en screen assignment werken correct.
+Het probleem is dat ADS playlists leeg blijven, waardoor schermen geen content tonen,
+ondanks dat media in Yodeck bestaat en vindbaar is.
+
+DOEL:
+Zorg dat GEEN ENKEL scherm ooit leeg kan zijn.
+Een ADS playlist mag NOOIT eindigen met 0 items.
+
+BELANGRIJKE REGEL (VERPLICHT):
+Autopilot is pas OK als:
+- layout is toegewezen
+- ADS region is gebonden
+- ADS playlist >= 1 item bevat
+
+ALS DE PLAYLIST LEEG IS, IS HET EEN BUG.
+
+---
+
+WAT JE MOET IMPLEMENTEREN (ZONDER BESTAANDE WERKENDE LOGICA TE BREKEN):
+
+1) CONTENT GUARANTEE LOGICA (VERPLICHT TOEVOEGEN)
+
+Breid de bestaande seed/repair/autopilot flow uit met harde content-garantie:
+
+Functionele volgorde (exact deze volgorde aanhouden):
+
+IF ADS playlist al items bevat:
+    doe niets, stop (OK)
+
+ELSE IF approved ads bestaan voor deze locatie:
+    voeg deze ads toe aan de ADS playlist
+
+ELSE IF selfAdMediaId bestaat:
+    voeg self-ad toe aan de ADS playlist
+
+ELSE:
+    zoek een willekeurige bestaande video in Yodeck
+    voorwaarden:
+      - media_type = video
+      - status = ready
+    kies bijvoorbeeld:
+      - nieuwste upload
+      - of oudste video
+      - of eerste resultaat
+    voeg deze video toe aan de ADS playlist
+
+DIT IS GEEN WAARSCHUWING, MAAR VERPLICHT GEDRAG.
+DE PLAYLIST MAG NIET LEEG BLIJVEN.
+
+---
+
+2) FALLBACK MAG NOOIT STOPPEN OP "GEEN SELF-AD"
+
+Huidige gedrag:
+- "No self-ad media available - playlist will be empty"
+
+Dit is ONJUIST.
+
+Nieuw verplicht gedrag:
+- self-ad is optioneel
+- fallback naar bestaande video is verplicht
+- autopilot mag niet afronden zolang playlist leeg is
+
+---
+
+3) ADS PLAYLIST DUPLICATES OPLOSSEN (ZONDER REFACTOR)
+
+Er bestaan nu tientallen duplicaten van:
+"Ads | <Locatie>"
+
+Oplossing:
+- Kies één canonieke ADS playlist per locatie
+- Hergebruik altijd dezelfde playlist ID
+- Maak GEEN nieuwe playlist aan als er al één bestaat
+- Als meerdere playlists gevonden worden:
+    - gebruik altijd dezelfde (bijv. laagste ID)
+    - log duplicates
+    - voeg content ALTIJD toe aan de gekozen playlist
+
+---
+
+4) CONTENT TOEVOEGEN = ECHTE YODECK ACTIE
+
+Zorg dat fallback of ads toevoegen altijd resulteert in:
+POST /api/v2/playlists/{playlistId}
+{
+  items: [
+    {
+      id: <mediaId>,
+      type: "media",
+      duration: <default of bestaande duration>
+    }
+  ]
+}
+
+Alleen loggen is NIET voldoende.
+Het item moet echt in de playlist terechtkomen.
+
+---
+
+5) AUTOPILOT STATUS AANPASSEN
+
+Autopilot mag alleen "ok=true" retourneren als:
+- layoutAssigned == true
+- adsRegionBound == true
+- adsPlaylistItemCount >= 1
+
+GEEN "ok=true" MEER ALS DE PLAYLIST LEEG IS.
+
+---
+
+6) LOGGING (UITBREIDEN, NIET VERVANGEN)
+
+Voeg duidelijke logs toe:
+[ContentGuarantee] ADS playlist leeg → fallback gestart
+[ContentGuarantee] Fallback media gekozen: <mediaId>
+[ContentGuarantee] Media toegevoegd aan playlist <playlistId>
+[ContentGuarantee] ADS playlist gegarandeerd niet leeg
+
+---
+
+WAT JE UITDRUKKELIJK NIET MAG DOEN:
+- Geen bestaande layout logic wijzigen
+- Geen ADS region binding aanpassen
+- Geen API structuren hernoemen
+- Geen UI of knoppen toevoegen
+- Geen self-ad verplicht maken
+
+ALLEEN inhoudsgarantie afdwingen in autopilot.
+
+---
+
+ACCEPTATIECRITERIA:
+- Geen enkel scherm blijft leeg
+- ADS playlists eindigen nooit met 0 items
+- Geüploade video’s verschijnen automatisch op schermen
+- Geen handmatige acties nodig
+- Autopilot is betrouwbaar en deterministisch
+
+EINDE.

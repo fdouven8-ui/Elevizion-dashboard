@@ -204,45 +204,128 @@ export async function ensureAdsRegionBound(
 }
 
 /**
- * Ensure ADS playlist is not empty (seed with self-ad if needed)
+ * Find ANY ready video in Yodeck to use as fallback content
+ * This ensures playlists are NEVER empty
+ */
+async function findFallbackVideo(): Promise<{ ok: boolean; mediaId?: number; name?: string; logs: string[] }> {
+  const logs: string[] = [];
+  logs.push(`[FallbackVideo] Searching for ANY available video in Yodeck...`);
+  
+  // Search for media items of type video with status ready
+  const mediaResult = await yodeckRequest<any>(`/media?media_type=video&page_size=50`);
+  
+  if (!mediaResult.ok || !mediaResult.data) {
+    logs.push(`[FallbackVideo] ❌ Failed to fetch media: ${mediaResult.error}`);
+    return { ok: false, logs };
+  }
+  
+  // Handle paginated results
+  const mediaItems = mediaResult.data.results || mediaResult.data || [];
+  
+  if (!Array.isArray(mediaItems) || mediaItems.length === 0) {
+    logs.push(`[FallbackVideo] ❌ No video media found in Yodeck`);
+    return { ok: false, logs };
+  }
+  
+  logs.push(`[FallbackVideo] Found ${mediaItems.length} videos in Yodeck`);
+  
+  // Filter for ready videos
+  const readyVideos = mediaItems.filter((m: any) => 
+    m.status === "ready" || m.status === "done" || m.status === undefined
+  );
+  
+  if (readyVideos.length === 0) {
+    logs.push(`[FallbackVideo] ❌ No ready videos found`);
+    return { ok: false, logs };
+  }
+  
+  logs.push(`[FallbackVideo] ${readyVideos.length} videos are ready`);
+  
+  // Sort by created_at descending to get newest first (most likely to be relevant)
+  readyVideos.sort((a: any, b: any) => {
+    const dateA = new Date(a.created_at || 0).getTime();
+    const dateB = new Date(b.created_at || 0).getTime();
+    return dateB - dateA;
+  });
+  
+  const chosenVideo = readyVideos[0];
+  logs.push(`[FallbackVideo] ✓ Chosen fallback: "${chosenVideo.name}" (ID ${chosenVideo.id})`);
+  
+  return { ok: true, mediaId: chosenVideo.id, name: chosenVideo.name, logs };
+}
+
+/**
+ * Ensure ADS playlist is not empty - CONTENT GUARANTEE
+ * 
+ * This function ensures a playlist NEVER remains empty by following this chain:
+ * 1. If playlist already has items → OK
+ * 2. If selfAdMediaId is configured → use self-ad
+ * 3. FALLBACK: Find ANY ready video in Yodeck and add it
+ * 
+ * CRITICAL: A playlist MUST have at least 1 item after this function completes.
  */
 export async function ensureAdsPlaylistSeeded(adsPlaylistId: number): Promise<AutopilotResult> {
   const logs: string[] = [];
-  logs.push(`[AdsPlaylistSeed] Checking playlist ${adsPlaylistId}...`);
+  logs.push(`[ContentGuarantee] ═══ PLAYLIST CONTENT CHECK ═══`);
+  logs.push(`[ContentGuarantee] Checking playlist ${adsPlaylistId}...`);
   
   // Get current playlist items
   const playlistResult = await yodeckRequest<any>(`/playlists/${adsPlaylistId}`);
   
   if (!playlistResult.ok || !playlistResult.data) {
-    logs.push(`[AdsPlaylistSeed] ❌ Failed to fetch playlist: ${playlistResult.error}`);
+    logs.push(`[ContentGuarantee] ❌ Failed to fetch playlist: ${playlistResult.error}`);
     return { ok: false, action: "failed", logs, error: `PLAYLIST_FETCH_FAILED: ${playlistResult.error}` };
   }
   
   const playlist = playlistResult.data;
   const items = playlist.items || [];
   
-  logs.push(`[AdsPlaylistSeed] Playlist "${playlist.name}" has ${items.length} items`);
+  logs.push(`[ContentGuarantee] Playlist "${playlist.name}" has ${items.length} items`);
   
-  // If not empty, we're done
+  // STEP 1: If not empty, we're done
   if (items.length > 0) {
-    logs.push(`[AdsPlaylistSeed] ✓ Playlist not empty, no seeding needed`);
+    logs.push(`[ContentGuarantee] ✓ Playlist already has content - OK`);
     return { ok: true, action: "no_change", logs };
   }
   
-  // Get self-ad media ID
+  logs.push(`[ContentGuarantee] ⚠️ Playlist is LEEG - content garantie gestart`);
+  
+  // STEP 2: Try self-ad first
+  let mediaIdToAdd: number | null = null;
+  let mediaSource = "";
+  
   const selfAdMediaId = await getSelfAdMediaId();
   
-  if (!selfAdMediaId) {
-    logs.push(`[AdsPlaylistSeed] ⚠️ SELF_AD_NOT_CONFIGURED - playlist will remain empty`);
-    logs.push(`[AdsPlaylistSeed] Set ELEVIZION_SELF_AD_MEDIA_ID env var or use admin config`);
-    return { ok: false, action: "failed", logs, error: "SELF_AD_NOT_CONFIGURED" };
+  if (selfAdMediaId) {
+    mediaIdToAdd = selfAdMediaId;
+    mediaSource = "self-ad";
+    logs.push(`[ContentGuarantee] Self-ad geconfigureerd: ${selfAdMediaId}`);
+  } else {
+    logs.push(`[ContentGuarantee] Geen self-ad geconfigureerd, fallback naar willekeurige video...`);
+    
+    // STEP 3: MANDATORY FALLBACK - find ANY video
+    const fallbackResult = await findFallbackVideo();
+    logs.push(...fallbackResult.logs);
+    
+    if (fallbackResult.ok && fallbackResult.mediaId) {
+      mediaIdToAdd = fallbackResult.mediaId;
+      mediaSource = `fallback-video "${fallbackResult.name}"`;
+      logs.push(`[ContentGuarantee] Fallback media gekozen: ${fallbackResult.mediaId}`);
+    }
   }
   
-  logs.push(`[AdsPlaylistSeed] Seeding with self-ad media ID: ${selfAdMediaId}`);
+  // Check if we have anything to add
+  if (!mediaIdToAdd) {
+    logs.push(`[ContentGuarantee] ❌ KRITIEKE FOUT: Geen media beschikbaar`);
+    logs.push(`[ContentGuarantee] Upload minstens één video naar Yodeck om dit op te lossen`);
+    return { ok: false, action: "failed", logs, error: "NO_MEDIA_AVAILABLE" };
+  }
   
-  // Add self-ad to playlist
+  // STEP 4: Add the media to the playlist
+  logs.push(`[ContentGuarantee] Media toevoegen aan playlist (bron: ${mediaSource})...`);
+  
   const newItems = [{
-    id: selfAdMediaId,
+    id: mediaIdToAdd,
     type: "media",
     priority: 1,
     duration: 15, // Default 15 seconds
@@ -253,20 +336,23 @@ export async function ensureAdsPlaylistSeeded(adsPlaylistId: number): Promise<Au
   });
   
   if (!patchResult.ok) {
-    logs.push(`[AdsPlaylistSeed] ❌ Failed to add self-ad: ${patchResult.error}`);
+    logs.push(`[ContentGuarantee] ❌ Failed to add media: ${patchResult.error}`);
     return { ok: false, action: "failed", logs, error: `PLAYLIST_PATCH_FAILED: ${patchResult.error}` };
   }
   
-  // Verify
+  logs.push(`[ContentGuarantee] PATCH verstuurd, verifiëren...`);
+  
+  // STEP 5: Verify the playlist now has content
   const verifyResult = await yodeckRequest<any>(`/playlists/${adsPlaylistId}`);
   const verifyItems = verifyResult.data?.items || [];
   
   if (verifyItems.length > 0) {
-    logs.push(`[AdsPlaylistSeed] ✓ Playlist now has ${verifyItems.length} items`);
+    logs.push(`[ContentGuarantee] ✓ SUCCESS: Playlist heeft nu ${verifyItems.length} items`);
+    logs.push(`[ContentGuarantee] ✓ ADS playlist gegarandeerd NIET leeg`);
     return { ok: true, action: "updated", logs };
   }
   
-  logs.push(`[AdsPlaylistSeed] ⚠️ Seed sent but verification shows 0 items`);
+  logs.push(`[ContentGuarantee] ⚠️ PATCH verstuurd maar verificatie toont 0 items`);
   return { ok: false, action: "failed", logs, error: "SEED_VERIFY_FAILED" };
 }
 

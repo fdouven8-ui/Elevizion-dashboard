@@ -2463,6 +2463,7 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   // STEP 2.5: Bind ADS region in layout to ADS playlist (NEW - critical step!)
   // ═══════════════════════════════════════════════════════════════════════════
   logs.push(`[Autopilot] ─── STAP 2.5: ADS region binding ───`);
+  let adsRegionBound = false;
   if (layoutResult.layoutId && adsResult.playlistId) {
     try {
       const { ensureAdsRegionBound } = await import("./yodeckAutopilotHelpers");
@@ -2470,6 +2471,7 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
       logs.push(...regionResult.logs);
       
       if (regionResult.ok) {
+        adsRegionBound = true;
         logs.push(`[Autopilot] ✓ ADS region gebonden aan playlist ${adsResult.playlistId}`);
       } else {
         logs.push(`[Autopilot] ⚠️ ADS region binding: ${regionResult.error || "onbekende fout"}`);
@@ -2583,19 +2585,29 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   logs.push(`[Autopilot] ═══════════════════════════════════════`);
   logs.push(`[Autopilot] ✓ Autopilot repair voltooid`);
   logs.push(`[Autopilot]   Layout actief: ${layoutAssigned ? "JA" : "NEE"}`);
+  logs.push(`[Autopilot]   ADS region gebonden: ${adsRegionBound ? "JA" : "NEE"}`);
   logs.push(`[Autopilot]   ADS playlist: ${finalAdsCount} items`);
   logs.push(`[Autopilot]   Ads toegevoegd: ${adsAdded}`);
   
-  // Determine overall success and error message
-  const isOk = layoutAssigned || finalAdsCount > 0;
+  // CRITICAL: Autopilot is ONLY ok if ALL conditions are met:
+  // 1. Layout is assigned to screen
+  // 2. ADS region is bound to playlist  
+  // 3. ADS playlist has at least 1 item (CONTENT GUARANTEE)
+  // If ANY of these conditions fail, ok=false
+  const contentGuaranteeOk = finalAdsCount >= 1;
+  const isOk = layoutAssigned && adsRegionBound && contentGuaranteeOk;
+  
   let errorMessage: string | undefined;
   
   if (!layoutAssigned && yodeckDeviceId) {
     errorMessage = "Layout kon niet worden toegewezen aan scherm";
   } else if (!layoutAssigned && !yodeckDeviceId) {
     errorMessage = "Geen Yodeck scherm gekoppeld aan locatie";
-  } else if (finalAdsCount === 0) {
-    errorMessage = "ADS playlist is leeg - geen ads of self-ad beschikbaar";
+  } else if (!adsRegionBound) {
+    errorMessage = "ADS region niet gebonden aan playlist";
+  } else if (!contentGuaranteeOk) {
+    errorMessage = "CONTENT_GUARANTEE_FAILED: ADS playlist is leeg";
+    logs.push(`[Autopilot] ❌ KRITIEK: Playlist is leeg na repair - dit mag NIET`);
   }
   
   return {

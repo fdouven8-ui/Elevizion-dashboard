@@ -189,12 +189,19 @@ export async function performFullLocationRepair(locationId: string): Promise<Ful
     logs.push(`[FullRepair] ⚠️ Geen Yodeck device ID - toewijzing overgeslagen`);
   }
 
+  // Get final playlist item count for content guarantee check
+  let finalPlaylistItemCount = 0;
+  const finalCheck = await yodeckRequest<any>(`/playlists/${adsPlaylistId}`);
+  if (finalCheck.ok && finalCheck.data?.items) {
+    finalPlaylistItemCount = finalCheck.data.items.length;
+  }
+
   logs.push(`[FullRepair] ═══════════════════════════════════════`);
   logs.push(`[FullRepair] Resultaat:`);
   logs.push(`[FullRepair]   Layout gevonden: ${steps.layoutFound ? "JA" : "NEE"}`);
   logs.push(`[FullRepair]   Playlist aangemaakt: ${steps.playlistCreated ? "JA" : "NEE"}`);
   logs.push(`[FullRepair]   Region gebonden: ${steps.regionBound ? "JA" : "NEE"}`);
-  logs.push(`[FullRepair]   Playlist geseeded: ${steps.playlistSeeded ? "JA" : "NEE"}`);
+  logs.push(`[FullRepair]   Playlist items: ${finalPlaylistItemCount}`);
   logs.push(`[FullRepair]   Ads toegevoegd: ${steps.adsAdded}`);
   logs.push(`[FullRepair]   Scherm toegewezen: ${steps.screenAssigned ? "JA" : "NEE"}`);
 
@@ -203,9 +210,17 @@ export async function performFullLocationRepair(locationId: string): Promise<Ful
     console.log(log);
   }
 
+  // CRITICAL: Content Guarantee - ok=true ONLY if playlist has >= 1 item
+  const contentGuaranteeOk = finalPlaylistItemCount >= 1;
   const ok = steps.layoutFound && steps.playlistCreated && 
              (steps.regionBound || !layoutId) && 
-             (steps.screenAssigned || !yodeckDeviceId);
+             (steps.screenAssigned || !yodeckDeviceId) &&
+             contentGuaranteeOk;
+
+  if (!contentGuaranteeOk) {
+    errors.push("CONTENT_GUARANTEE_FAILED: ADS playlist is leeg");
+    logs.push(`[FullRepair] ❌ KRITIEK: Playlist is leeg na repair - dit mag NIET`);
+  }
 
   return { ok, locationId, locationName: location.name, steps, errors, logs };
 }
