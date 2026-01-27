@@ -64,7 +64,8 @@ export async function runAutopilotCheck(): Promise<{
       continue;
     }
     
-    logs.push(`[AutopilotWorker] ${location.name} needs repair: ${status.base.missingItems.join(", ") || "empty playlists"}`);
+    const repairReason = status.layout?.error || (!status.ads.playlistId ? "geen ADS playlist" : "lege ADS playlist");
+    logs.push(`[AutopilotWorker] ${location.name} needs repair: ${repairReason}`);
     
     // Stop if we've hit max repairs
     if (processedCount >= MAX_REPAIRS_PER_RUN) {
@@ -80,7 +81,7 @@ export async function runAutopilotCheck(): Promise<{
       
       if (result.ok) {
         repaired++;
-        logs.push(`[AutopilotWorker] ✓ ${location.name} repaired (base: ${result.base.itemCount}, ads: ${result.ads.itemCount})`);
+        logs.push(`[AutopilotWorker] ✓ ${location.name} repaired (layout: ${result.layoutAssigned ? "OK" : "-"}, ads: ${result.ads.itemCount})`);
       } else {
         errors++;
         logs.push(`[AutopilotWorker] ✗ ${location.name} repair failed: ${result.error}`);

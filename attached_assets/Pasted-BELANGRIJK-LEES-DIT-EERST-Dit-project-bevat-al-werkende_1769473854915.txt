@@ -1,0 +1,138 @@
+BELANGRIJK – LEES DIT EERST:
+Dit project bevat al werkende onderdelen (upload, review, Yodeck-integratie, playlists, layouts, placement logic).
+JE MAG GEEN BESTAANDE WERKENDE LOGICA, NAMEN OF STRUCTUREN VERANDEREN.
+JE MAG ALLEEN:
+- aanvullen
+- bewaken
+- robuuster maken
+- en automatische checks/retries toevoegen
+Alles wat al correct werkt moet exact zo blijven werken.
+
+DOEL (EINDGEDRAG):
+De Elevizion applicatie moet volledig automatisch en foutbestendig werken voor de kernflow:
+Upload video → goedkeuring door admin → advertentie verschijnt automatisch op de juiste schermen.
+Zonder handmatige knoppen, zonder stil falen, zonder dat assets “verdwijnen”.
+
+────────────────────────
+1) FUNCTIONEEL DOEL (HOOG NIVEAU)
+────────────────────────
+- Een video wordt geüpload via een gemailde uploadlink.
+- Na goedkeuring door de admin verschijnt deze advertentie automatisch op alle geselecteerde schermen.
+- Elk scherm heeft altijd basiscontent (Yodeck apps zoals nieuws en weer + Elevizion basis-ad), zodat een scherm nooit leeg is.
+- Advertenties vullen zich hier automatisch bij.
+- Als iets faalt, herstelt het systeem zichzelf automatisch of blijft retry’en tot het lukt.
+- De admin UI is NIET nodig om content “werkend te maken”, alleen om te observeren.
+
+────────────────────────
+2) BEHOUD VAN BESTAANDE WERKING (CRITISCH)
+────────────────────────
+- Analyseer eerst de bestaande code en flows.
+- Laat bestaande uploads, validaties, Yodeck API-calls, playlist-logica, placement plans en database-structuren intact.
+- Verander GEEN:
+  - bestaande functienamen
+  - bestaande API endpoints
+  - bestaande statusnamen
+  - bestaande Yodeck integratie die al correct werkt
+- Voeg alleen logica toe ALS:
+  - er een gat is (bijv. geen retry, geen status, geen check)
+  - of als er nu “stil falen” kan optreden
+
+────────────────────────
+3) UPLOAD & ASSET BETROUWBAARHEID
+────────────────────────
+Probleem dat opgelost moet worden:
+Geüploade video’s mogen NOOIT verdwijnen of onzichtbaar worden na goedkeuring.
+
+Richtlijnen:
+- Zorg dat geüploade bestanden altijd persistent opgeslagen zijn (niet alleen tijdelijk).
+- Voeg een eenvoudige maar duidelijke statuslijn toe per asset:
+  (bijv. upload ontvangen → gevalideerd → goedgekeurd → gepubliceerd)
+- Als een bestand ontbreekt of niet meer te lezen is:
+  - markeer dit expliciet als fout
+  - log de oorzaak
+  - voorkom dat het systeem “doet alsof” alles goed ging
+
+Let op:
+Gebruik bestaande statusvelden/structuren waar mogelijk. Alleen uitbreiden indien nodig.
+
+────────────────────────
+4) GOEDKEURING → AUTOMATISCHE PUBLICATIE
+────────────────────────
+Na goedkeuring door de admin moet AUTOMATISCH gebeuren:
+- De advertentie wordt voorbereid voor publicatie (zoals nu al gebeurt).
+- De advertentie wordt gekoppeld aan de juiste schermen/locaties volgens bestaande logica.
+- De advertentie wordt toegevoegd aan de juiste playlists.
+- De advertentie wordt gesynchroniseerd met Yodeck zodat hij zichtbaar wordt op TV.
+
+Belangrijk:
+- Deze stap mag NIET afhankelijk zijn van handmatige acties in de UI.
+- Als een stap faalt (bijv. Yodeck tijdelijk niet bereikbaar):
+  - sla de fout op
+  - blijf automatisch retry’en
+  - ga wel door met andere schermen
+
+────────────────────────
+5) BASISCONTENT PER SCHERM (ALTIJD AANWEZIG)
+────────────────────────
+- Elk scherm moet altijd basiscontent hebben:
+  - nieuws
+  - weer
+  - Elevizion basis-ad
+- Deze basiscontent bestaat al (Yodeck apps / layouts).
+- Het systeem moet alleen controleren en afdwingen dat deze basis actief is op elk live scherm.
+- Probeer GEEN nieuws/weer als media te uploaden of te zoeken.
+- Als basis ontbreekt:
+  - markeer dit duidelijk
+  - herstel dit automatisch waar mogelijk
+  - geef één heldere melding in de admin (geen ruis)
+
+────────────────────────
+6) IDEMPOTENTIE & DUBBELE ACTIES VOORKOMEN
+────────────────────────
+- Dezelfde advertentie mag niet meerdere keren in dezelfde playlist terechtkomen.
+- Dubbele goedkeuringen, retries of herstarts mogen geen duplicaten veroorzaken.
+- Gebruik bestaande checks/IDs waar mogelijk om dit te voorkomen.
+- Als iets al correct gekoppeld is: beschouw dat als succes en ga verder.
+
+────────────────────────
+7) AUTOMATISCHE CONTROLE & HERSTEL (AUTOPILOT)
+────────────────────────
+Voeg achtergrondlogica toe die:
+- periodiek controleert of live schermen:
+  - basiscontent actief hebben
+  - de juiste playlist gebruiken
+- controleert of goedgekeurde advertenties die nog niet zichtbaar zijn alsnog gepubliceerd worden
+- automatisch herstelt zonder tussenkomst van de gebruiker
+
+Belangrijk:
+- Deze logica mag NIET agressief zijn (geen spam naar Yodeck).
+- Gebruik locks / throttling / retries zoals al gebruikelijk in het project.
+
+────────────────────────
+8) LOGGING & INZICHT (ZONDER EXTRA CHAOS)
+────────────────────────
+- Maak logs duidelijker en betekenisvoller:
+  - waar zit een advertentie vast?
+  - op asset-niveau of scherm-niveau?
+- Geen nieuwe complexe dashboards nodig.
+- Eén helder inzicht per advertentie en per scherm is voldoende.
+- Geen extra knoppen toevoegen tenzij strikt noodzakelijk.
+
+────────────────────────
+9) ACCEPTATIECRITERIA (BELANGRIJK)
+────────────────────────
+Het werk is pas klaar als dit klopt:
+
+- Een video uploaden + goedkeuren resulteert altijd in zichtbaarheid op schermen (eventueel met korte vertraging door retries).
+- Schermen blijven nooit leeg.
+- Een tijdelijke fout (bijv. Yodeck API) herstelt zichzelf.
+- Niets “verdwijnt” zonder duidelijke foutstatus.
+- Bestaande werkende delen functioneren exact zoals vóór deze wijziging.
+
+────────────────────────
+10) OPLEVERING
+────────────────────────
+Geef bij oplevering:
+- Een korte samenvatting van wat is toegevoegd (geen herschreven delen).
+- Welke automatische checks/retries zijn toegevoegd.
+- Welke situaties nu automatisch worden hersteld die dat eerder niet werden.
