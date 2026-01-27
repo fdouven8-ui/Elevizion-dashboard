@@ -16441,5 +16441,145 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  // =========================================================================
+  // AUTOPILOT CONFIG ENDPOINTS
+  // =========================================================================
+
+  /**
+   * GET /api/admin/autopilot/config
+   * Get all Yodeck autopilot configuration
+   */
+  app.get("/api/admin/autopilot/config", requireAdminAccess, async (req, res) => {
+    try {
+      const { getAllYodeckConfig, getSelfAdMediaId } = await import("./services/yodeckAutopilotConfig");
+      const config = await getAllYodeckConfig();
+      res.json({ ok: true, config });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/config/self-ad
+   * Set the self-ad media ID
+   */
+  app.post("/api/admin/autopilot/config/self-ad", requireAdminAccess, async (req, res) => {
+    try {
+      const { mediaId } = req.body;
+      if (!mediaId || isNaN(parseInt(mediaId))) {
+        return res.status(400).json({ ok: false, error: "Valid mediaId required" });
+      }
+      
+      const { setSelfAdMediaId } = await import("./services/yodeckAutopilotConfig");
+      await setSelfAdMediaId(parseInt(mediaId));
+      res.json({ ok: true, message: `Self-ad media ID set to ${mediaId}` });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/config/layout-region
+   * Set the ADS region ID for a layout
+   */
+  app.post("/api/admin/autopilot/config/layout-region", requireAdminAccess, async (req, res) => {
+    try {
+      const { layoutId, regionId } = req.body;
+      if (!layoutId || isNaN(parseInt(layoutId))) {
+        return res.status(400).json({ ok: false, error: "Valid layoutId required" });
+      }
+      if (regionId === undefined || isNaN(parseInt(regionId))) {
+        return res.status(400).json({ ok: false, error: "Valid regionId required" });
+      }
+      
+      const { setLayoutAdsRegionId } = await import("./services/yodeckAutopilotConfig");
+      await setLayoutAdsRegionId(parseInt(layoutId), parseInt(regionId));
+      res.json({ ok: true, message: `Layout ${layoutId} ADS region set to ${regionId}` });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/autopilot/layout/:layoutId/regions
+   * Get layout regions for mapping configuration
+   */
+  app.get("/api/admin/autopilot/layout/:layoutId/regions", requireAdminAccess, async (req, res) => {
+    try {
+      const { layoutId } = req.params;
+      const { getLayoutRegions } = await import("./services/yodeckAutopilotHelpers");
+      const result = await getLayoutRegions(parseInt(layoutId));
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/ensure-ads-region/:layoutId
+   * Ensure ADS region is bound to a playlist
+   */
+  app.post("/api/admin/autopilot/ensure-ads-region/:layoutId", requireAdminAccess, async (req, res) => {
+    try {
+      const { layoutId } = req.params;
+      const { playlistId } = req.body;
+      
+      if (!playlistId || isNaN(parseInt(playlistId))) {
+        return res.status(400).json({ ok: false, error: "Valid playlistId required" });
+      }
+      
+      const { ensureAdsRegionBound } = await import("./services/yodeckAutopilotHelpers");
+      const result = await ensureAdsRegionBound(parseInt(layoutId), parseInt(playlistId));
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/seed-playlist/:playlistId
+   * Seed an empty playlist with self-ad
+   */
+  app.post("/api/admin/autopilot/seed-playlist/:playlistId", requireAdminAccess, async (req, res) => {
+    try {
+      const { playlistId } = req.params;
+      const { ensureAdsPlaylistSeeded } = await import("./services/yodeckAutopilotHelpers");
+      const result = await ensureAdsPlaylistSeeded(parseInt(playlistId));
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/verify-screen/:screenId
+   * Full verification of screen content setup
+   */
+  app.post("/api/admin/autopilot/verify-screen/:screenId", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { verifyScreenSetup } = await import("./services/yodeckAutopilotHelpers");
+      const result = await verifyScreenSetup(parseInt(screenId));
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/full-repair/:locationId
+   * Full autopilot repair for a location
+   */
+  app.post("/api/admin/autopilot/full-repair/:locationId", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { performFullLocationRepair } = await import("./services/yodeckAutopilotService");
+      const result = await performFullLocationRepair(locationId);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   return httpServer;
 }
