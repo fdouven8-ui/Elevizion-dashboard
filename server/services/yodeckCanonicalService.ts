@@ -2460,6 +2460,28 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   }
   
   // ═══════════════════════════════════════════════════════════════════════════
+  // STEP 2.5: Bind ADS region in layout to ADS playlist (NEW - critical step!)
+  // ═══════════════════════════════════════════════════════════════════════════
+  logs.push(`[Autopilot] ─── STAP 2.5: ADS region binding ───`);
+  if (layoutResult.layoutId && adsResult.playlistId) {
+    try {
+      const { ensureAdsRegionBound } = await import("./yodeckAutopilotHelpers");
+      const regionResult = await ensureAdsRegionBound(layoutResult.layoutId, parseInt(adsResult.playlistId));
+      logs.push(...regionResult.logs);
+      
+      if (regionResult.ok) {
+        logs.push(`[Autopilot] ✓ ADS region gebonden aan playlist ${adsResult.playlistId}`);
+      } else {
+        logs.push(`[Autopilot] ⚠️ ADS region binding: ${regionResult.error || "onbekende fout"}`);
+      }
+    } catch (bindError: any) {
+      logs.push(`[Autopilot] ⚠️ ADS region binding fout: ${bindError.message}`);
+    }
+  } else {
+    logs.push(`[Autopilot] ⚠️ Overslaan ADS region binding - geen layout of playlist`);
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════
   // STEP 3: Seed ADS with approved ads from database
   // ═══════════════════════════════════════════════════════════════════════════
   logs.push(`[Autopilot] ─── STAP 3: Approved ads toevoegen ───`);

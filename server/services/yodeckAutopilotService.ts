@@ -172,7 +172,7 @@ export async function performFullLocationRepair(locationId: string): Promise<Ful
     if (yodeckDeviceId.startsWith("yd_player_") || isNaN(parseInt(yodeckDeviceId))) {
       logs.push(`[FullRepair] ⚠️ Mock device ID: ${yodeckDeviceId} - overgeslagen`);
     } else {
-      const assignResult = await ensureBaselineLayoutOnScreen(parseInt(yodeckDeviceId), layoutId, parseInt(adsPlaylistId));
+      const assignResult = await ensureBaselineLayoutOnScreen(parseInt(yodeckDeviceId), parseInt(adsPlaylistId));
       logs.push(...assignResult.logs);
       
       if (assignResult.ok) {
@@ -250,7 +250,7 @@ async function findApprovedAdsForLocation(locationId: string): Promise<Array<{
     }
 
     // Get contracts and advertisers
-    const contractIds = [...new Set(screenPlacements.map(p => p.contractId).filter(Boolean))];
+    const contractIds = Array.from(new Set(screenPlacements.map(p => p.contractId).filter(Boolean)));
     
     for (const contractId of contractIds) {
       if (!contractId) continue;
