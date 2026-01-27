@@ -14,7 +14,8 @@ import { db } from "../db";
 import { eq } from "drizzle-orm";
 import { locations, screens, adAssets, contracts, placements, advertisers } from "@shared/schema";
 import { yodeckRequest } from "./yodeckLayoutService";
-import { ensureCanonicalPlaylist, findBaselineLayout, ensureBaselineLayoutOnScreen } from "./yodeckCanonicalService";
+import { findBaselineLayout, ensureBaselineLayoutOnScreen } from "./yodeckCanonicalService";
+import { yodeckPublishService } from "./yodeckPublishService";
 import { ensureAdsRegionBound, ensureAdsPlaylistSeeded, addMediaToPlaylistIfMissing, verifyScreenSetup } from "./yodeckAutopilotHelpers";
 import { getSelfAdMediaId } from "./yodeckAutopilotConfig";
 
@@ -92,10 +93,12 @@ export async function performFullLocationRepair(locationId: string): Promise<Ful
 
   const layoutId = layoutResult.layoutId;
 
-  // STEP 2: Ensure ADS playlist exists
-  logs.push(`[FullRepair] ─── STAP 2: ADS playlist ───`);
-  const playlistResult = await ensureCanonicalPlaylist(location.name, "ADS");
-  logs.push(...playlistResult.logs);
+  // STEP 2: Ensure ADS playlist exists (use TAG-BASED playlist for automatic content)
+  logs.push(`[FullRepair] ─── STAP 2: ADS tag-based playlist ───`);
+  
+  // Use tag-based playlist so media with "elevizion:ad" tag automatically appears
+  const playlistResult = await yodeckPublishService.ensureTagBasedPlaylist(locationId);
+  logs.push(`[FullRepair] Tag-based playlist result: ok=${playlistResult.ok}, verifyStatus=${playlistResult.verifyStatus}`);
 
   if (!playlistResult.ok || !playlistResult.playlistId) {
     errors.push(`ADS_PLAYLIST_FAILED: ${playlistResult.error || "Playlist kon niet worden aangemaakt"}`);
@@ -104,8 +107,8 @@ export async function performFullLocationRepair(locationId: string): Promise<Ful
   }
 
   steps.playlistCreated = true;
-  const adsPlaylistId = playlistResult.playlistId;
-  logs.push(`[FullRepair] ✓ ADS playlist: ${adsPlaylistId}`);
+  const adsPlaylistId = String(playlistResult.playlistId);
+  logs.push(`[FullRepair] ✓ ADS tag-based playlist: ${adsPlaylistId}`);
 
   // Update location with playlist ID
   if (location.yodeckPlaylistId !== adsPlaylistId) {

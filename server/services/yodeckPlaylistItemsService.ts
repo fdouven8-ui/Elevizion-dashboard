@@ -128,6 +128,102 @@ export interface EnsureMediaResult {
 }
 
 // ============================================================================
+// MEDIA TAGGING OPERATIONS
+// ============================================================================
+
+/**
+ * Add a tag to a media item in Yodeck
+ * This is essential for tag-based playlists - when media has a tag,
+ * it automatically appears in all tag-based playlists with that tag filter.
+ */
+export async function addTagToMedia(mediaId: number | string, tag: string): Promise<{
+  ok: boolean;
+  mediaId: number;
+  tag: string;
+  error?: string;
+}> {
+  const id = typeof mediaId === 'string' ? parseInt(mediaId) : mediaId;
+  console.log(`[MediaTag] Adding tag "${tag}" to media ${id}...`);
+  
+  // First get current media to preserve existing tags
+  const getResult = await yodeckRequest<any>(`/media/${id}/`);
+  if (!getResult.ok) {
+    console.error(`[MediaTag] Failed to get media ${id}: ${getResult.error}`);
+    return { ok: false, mediaId: id, tag, error: getResult.error };
+  }
+  
+  const currentTags: string[] = getResult.data?.tags || getResult.data?.tag_names || [];
+  
+  // Check if tag already exists
+  if (currentTags.includes(tag)) {
+    console.log(`[MediaTag] Media ${id} already has tag "${tag}"`);
+    return { ok: true, mediaId: id, tag };
+  }
+  
+  // Add the new tag
+  const newTags = [...currentTags, tag];
+  
+  // Try different payload formats for updating tags
+  const payloads = [
+    { tags: newTags },
+    { tag_names: newTags },
+    { tags: newTags.map(t => ({ name: t })) },
+  ];
+  
+  for (const payload of payloads) {
+    const patchResult = await yodeckRequest<any>(`/media/${id}/`, "PATCH", payload);
+    if (patchResult.ok) {
+      console.log(`[MediaTag] Successfully added tag "${tag}" to media ${id}`);
+      return { ok: true, mediaId: id, tag };
+    }
+    console.log(`[MediaTag] PATCH with ${JSON.stringify(payload)} failed: ${patchResult.error?.substring(0, 100)}`);
+  }
+  
+  console.error(`[MediaTag] All tag update attempts failed for media ${id}`);
+  return { ok: false, mediaId: id, tag, error: "YODECK_MEDIA_TAG_UPDATE_FAILED" };
+}
+
+/**
+ * Get a tag-based playlist by name or create one
+ */
+export async function ensureTagBasedPlaylistExists(name: string, filterTag: string): Promise<{
+  ok: boolean;
+  playlistId?: number;
+  isNew: boolean;
+  error?: string;
+}> {
+  console.log(`[TagPlaylist] Ensuring tag-based playlist "${name}" with filter "${filterTag}"...`);
+  
+  // Search for existing playlist by name
+  const searchResult = await yodeckRequest<{ results: any[] }>(`/tagbased-playlists/?q=${encodeURIComponent(name)}`);
+  
+  if (searchResult.ok && searchResult.data?.results?.length > 0) {
+    const existing = searchResult.data.results.find((p: any) => p.name === name);
+    if (existing) {
+      console.log(`[TagPlaylist] Found existing playlist: ${existing.id}`);
+      return { ok: true, playlistId: existing.id, isNew: false };
+    }
+  }
+  
+  // Create new tag-based playlist
+  const createPayload = {
+    name,
+    tags: [{ name: filterTag }],
+    description: `Auto-managed by Elevizion. Shows all media with tag: ${filterTag}`,
+  };
+  
+  const createResult = await yodeckRequest<any>(`/tagbased-playlists/`, "POST", createPayload);
+  
+  if (createResult.ok && createResult.data?.id) {
+    console.log(`[TagPlaylist] Created new tag-based playlist: ${createResult.data.id}`);
+    return { ok: true, playlistId: createResult.data.id, isNew: true };
+  }
+  
+  console.error(`[TagPlaylist] Failed to create playlist: ${createResult.error}`);
+  return { ok: false, isNew: false, error: createResult.error };
+}
+
+// ============================================================================
 // PLAYLIST OPERATIONS
 // ============================================================================
 
@@ -214,7 +310,55 @@ export async function appendMediaToPlaylist(
     };
   }
   
-  // Step 3: Try Shape A: { "item": { "id": mediaId } }
+  // Step 3: Try multiple POST endpoints to add new item
+  // Yodeck API varies - try different endpoints until one works
+  logs.push(`[AppendMedia] Trying POST endpoints to add media ${mediaIdNum}`);
+  
+  const postEndpoints = [
+    {
+      path: `/playlist_items/`,
+      payload: { media: mediaIdNum, playlist: Number(playlistId), type: "media", duration: duration },
+    },
+    {
+      path: `/playlists/${playlistId}/items/`,
+      payload: { media: mediaIdNum, type: "media", duration: duration, enabled: true },
+    },
+    {
+      path: `/playlists/${playlistId}/items`,
+      payload: { media: mediaIdNum, type: "media", duration: duration },
+    },
+  ];
+  
+  for (const endpoint of postEndpoints) {
+    logs.push(`[AppendMedia] Trying POST ${endpoint.path}: ${JSON.stringify(endpoint.payload)}`);
+    const postResult = await yodeckRequest<any>(endpoint.path, "POST", endpoint.payload);
+    
+    if (postResult.ok) {
+      logs.push(`[AppendMedia] POST succeeded on ${endpoint.path}!`);
+      return {
+        ok: true,
+        alreadyExists: false,
+        playlistId,
+        mediaId,
+        itemCount: currentItems.length + 1,
+        logs,
+        formatUsed: "POST",
+      };
+    }
+    
+    logs.push(`[AppendMedia] POST ${endpoint.path} failed (${postResult.status}): ${postResult.error?.substring(0, 200)}`);
+    
+    // If not 404, this endpoint exists but request failed - don't try other endpoints
+    if (postResult.status !== 404) {
+      break;
+    }
+  }
+  
+  logs.push(`[AppendMedia] All POST endpoints failed`);
+  
+  // Fallback: Try Shape A PATCH (legacy method)
+  logs.push(`[AppendMedia] Trying legacy PATCH method...`);
+  
   const nextOrder = currentItems.length;
   
   // Build items array using Shape A format
@@ -229,6 +373,8 @@ export async function appendMediaToPlaylist(
         order: item.order,
         item: { id },
         duration: item.duration,
+        priority: 1,
+        type: "media",
       };
     });
   };
@@ -245,6 +391,8 @@ export async function appendMediaToPlaylist(
         order: item.order,
         item: id,
         duration: item.duration,
+        priority: 1,
+        type: "media",
       };
     });
   };
@@ -265,14 +413,20 @@ export async function appendMediaToPlaylist(
     };
   }
   
+  // For new items, we must NOT include an 'id' field - Yodeck will auto-generate it
+  // We only need: item (with media id), order, duration, priority, type
+  const newItem = {
+    item: { id: mediaIdNum },
+    order: nextOrder,
+    duration: duration,
+    priority: 1,
+    type: "media",
+  };
+  
   const shapeA = {
     items: [
       ...shapeAItems,
-      {
-        order: nextOrder,
-        item: { id: mediaIdNum },
-        duration: duration,
-      },
+      newItem,
     ],
   };
   
@@ -319,6 +473,8 @@ export async function appendMediaToPlaylist(
         order: nextOrder,
         item: mediaIdNum,
         duration: duration,
+        priority: 1, // Required by Yodeck API
+        type: "media", // Required by Yodeck API - specifies item type
       },
     ],
   };
