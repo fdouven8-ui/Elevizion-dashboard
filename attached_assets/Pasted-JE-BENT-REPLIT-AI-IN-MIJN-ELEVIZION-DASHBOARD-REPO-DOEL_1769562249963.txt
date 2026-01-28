@@ -1,0 +1,115 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION DASHBOARD REPO. DOEL: STABIEL “BASIS + ADS” SYSTEEM ZONDER HANDMATIGE YODECK-KNOPPEN.
+
+✅ GEWENSTE SITUATIE (EINDRESULTAAT)
+- Ik heb 1 “basis playlist” in Yodeck die nieuws/weer bevat (Classic playlist), bijv. naam: “Elevizion – Basis”.
+- ELK scherm (locatie) moet automatisch een “combined playlist” krijgen die ALTIJD draait op dat scherm.
+- Die combined playlist bevat:
+  1) alle items uit de basis playlist (nieuws/weer apps)
+  2) de advertenties voor die specifieke locatie
+  3) als er geen ads zijn: minimaal 1 fallback video (maakt niet uit welke)
+- Alles draait in 1 playlist per scherm (dus geen layout nodig, geen split-screen nodig, geen schedule nodig).
+- Volgorde maakt niet uit, maar basis+ads moeten samen in de loop zitten en “redelijk verdeeld” (niet alle ads achter elkaar als dat kan).
+- NOOIT meer 70 duplicate playlists. Per locatie exact 1 gecombineerde playlist die we hergebruiken.
+
+🚫 WAT MOET STOPPEN / VERWIJDEREN UIT AUTOPILOT
+- Stop met “layout assign” als primaire methode. Screen content moet Playlist zijn.
+- Stop met het aanmaken van tientallen duplicate “Ads | …” playlists.
+- Stop met endpoint POST /playlist_items/ (die geeft 404). We gebruiken alleen v2 endpoints die werken:
+  - GET /api/v2/playlists/{id}
+  - PATCH /api/v2/playlists/{id}/  (met items array)  ← dit werkt al in logs
+  - GET /api/v2/media (om fallback te vinden)
+
+🧩 YODECK API FEITEN (BELANGRIJK)
+- Mijn code heeft al een werkende methode: “GET + PATCH /playlists/{id}” om items toe te voegen.
+- Gebruik die als single source of truth.
+- Als response HTML “Not Found” bevat, behandel dat als verkeerd endpoint.
+
+🗃️ DATA MODEL (DB)
+- In tabel `locations` bestaan al playlist kolommen (migra is gedaan). Gebruik ze:
+  - basePlaylistId (of bestaande baseline playlist kolom)
+  - adsPlaylistId (mag, maar wordt vervangen door combined)
+  - voeg toe: combinedPlaylistId (string) + combinedPlaylistVerifiedAt + combinedPlaylistVerifyStatus + lastYodeckVerifyError
+- Sla per locatie het Yodeck screenId op (yodeckDeviceId).
+
+🧠 CANONICAL NAMING & DEDUPE STRATEGY (KRITISCH)
+- Basis playlist wordt 1x gekozen via config:
+  - AUTOPILOT_BASE_PLAYLIST_ID = "<id>"   (of via /api/admin/autopilot/config)
+- Combined playlist naam per locatie:
+  - `Elevizion | Loop | <LocationName>`  (exact zo)
+- Deduping:
+  - Zoek playlists op naam (case-insensitive, trim).
+  - Als er meerdere zijn: kies de laagste id als canonical, markeer de rest als “duplicate” in logs en gebruik ze niet meer.
+  - Schrijf canonical id naar locations.combinedPlaylistId zodat we niet telkens opnieuw zoeken.
+
+🔁 AUTOPILOT WORKFLOW (MOET ELKE 5 MIN DRAAIEN + OOK HANDMATIG)
+Voor elke live locatie met yodeckDeviceId:
+1) Ensure base playlist bestaat (config). Zo niet: status “MISSING_BASE_PLAYLIST_CONFIG”.
+2) Ensure combined playlist bestaat (create indien niet):
+   - create Classic playlist (via bestaande create playlist call in codebase; als die nog niet bestaat: implementeer die op /api/v2/playlists)
+3) Sync combined items:
+   A) Haal items van base playlist op (alle items, inclusief apps/RSS/weather; exact kopiëren)
+   B) Haal ads op voor locatie:
+      - “approved ads” uit database of placements engine (wat jullie nu al hebben)
+      - als 0 ads: kies fallback mediaId (eerste bruikbare video uit Yodeck media list of bestaande fallback logic)
+   C) Bouw “desiredItems”:
+      - start met baseItems
+      - voeg ad items ertussen:
+         - simpele verdeling: na elke 2 base items, 1 ad (of min(ads, base/2))
+         - als base weinig items heeft, zet ads om en om met base
+      - Zorg dat durations kloppen:
+         - base items behoud duration uit base
+         - ads duration = 15 (of lees duration als beschikbaar)
+   D) PATCH combined playlist met gewenste items:
+      - Gebruik exact de werkende PATCH payload structuur die nu SUCCESS gaf:
+        {"items":[{...},{...}]}
+      - Voor items: behoud type uit base (app/rss/media etc) zoals Yodeck teruggeeft
+      - Voor media ads items: {"id": <mediaId>, "type":"media", "priority":2, "duration":15}
+      - LET OP: gebruik het veld dat Yodeck accepteert (zoals in jouw bestaande code: id=mediaId).
+4) Assign combined playlist aan het scherm:
+   - PATCH screen content naar playlist:
+     - PATCH /api/v2/screens/{screenId} met screen_content:
+       {"screen_content":{"source_type":"playlist","source_id":<combinedPlaylistId>}}
+   - Verifieer daarna met GET /screens/{id} of source_type=playlist en source_id klopt.
+5) Status in dashboard:
+   - content-status endpoint moet tonen:
+     - layout is niet leidend; toon “playlist mode”
+     - itemCount van combined playlist
+     - lastSyncAt, needsRepair false als combined gevuld is.
+
+🧰 ADMIN ENDPOINTS (MOETEN BESTAAN / AANPASSEN)
+- GET /api/admin/autopilot/config  (toon basePlaylistId + fallback policy)
+- POST /api/admin/autopilot/config (set basePlaylistId)
+- POST /api/admin/autopilot/repair/:locationId (force sync + assign)
+- GET /api/admin/locations/:id/content-status (toon combinedPlaylistId + itemCount + screen content mode)
+
+🛡️ STABILITEIT / LOCKING
+- Houd per locatie lock (zoals je al hebt) zodat 2 workers niet tegelijk dezelfde playlist patchen.
+- Maak alle Yodeck calls idempotent.
+- Als PATCH faalt: log met duidelijke fout + response body (JSON of HTML).
+- Als base playlist items niet opgehaald kunnen worden: markeer needsRepair true.
+
+🧪 TESTPLAN (MOET JE UITVOEREN EN RAPPORTEREN)
+1) Stel AUTOPILOT_BASE_PLAYLIST_ID in naar mijn “Elevizion – Basis” playlist.
+2) Run repair op locatie Bouwservice Douven:
+   - Expect: combined playlist gemaakt/gevonden
+   - Expect: combined playlist items > 0 (base items + minimaal 1 ad/fallback)
+   - Expect: screen_content source_type=playlist en source_id=combinedPlaylistId
+3) Refresh Yodeck UI: het scherm mag nooit “NO CONTENT TO PLAY” tonen als base playlist bestaat.
+4) Herstart server: autopilot draait opnieuw en maakt niets duplicaat.
+
+📌 BELANGRIJK: GEEN VRAGEN TERUG
+- Implementeer dit direct op basis van bestaande code (autopilot, yodeck client, contentGuarantee, playlistItems).
+- Houd wijzigingen zo klein mogelijk: hergebruik bestaande Yodeck client en werkende PATCH /playlists flow.
+- Verwijder/disable de oude “AdsRegionBound/layout binding” route als die nog dingen door elkaar haalt.
+
+OUTPUT VERWACHT
+- Commit-ready code changes
+- Nieuwe/gewijzigde endpoints
+- Duidelijke logs bij run zodat ik zie:
+  - base items count
+  - ads count
+  - combined items count
+  - screen assign ok
+  - dedupe count (hoeveel duplicates genegeerd)
+
+START NU MET IMPLEMENTEREN.
