@@ -304,14 +304,32 @@ export async function getBasePlaylistItems(logs: string[]): Promise<PlaylistItem
 }
 
 /**
+ * Get config setting for allowGlobalFallbackAds
+ */
+async function getAllowGlobalFallbackAds(): Promise<boolean> {
+  const [setting] = await db.select()
+    .from(systemSettings)
+    .where(eq(systemSettings.key, "autopilot.allowGlobalFallbackAds"));
+  
+  if (setting?.value) {
+    return setting.value === "true";
+  }
+  return false; // Default: NO global fallback
+}
+
+/**
  * Get approved ads for a specific location
  * Chain: location → screens → placements → contracts → advertisers → approved assets
+ * 
+ * IMPORTANT: Does NOT fall back to global ads unless allowGlobalFallbackAds=true
+ * If no placements exist, returns empty array (only fallback video will be used)
  */
 export async function getAdsForLocation(locationId: string, logs: string[]): Promise<{
   mediaIds: number[];
   durations: number[];
+  source: "placements" | "global" | "none";
 }> {
-  logs.push(`[CombinedPlaylist] Looking up ads for location ${locationId}`);
+  logs.push(`[AdsSync] Looking up ads for location ${locationId}`);
   
   // Step 1: Get screens for this location
   const locationScreens = await db.select({ id: screens.id })
@@ -319,12 +337,12 @@ export async function getAdsForLocation(locationId: string, logs: string[]): Pro
     .where(eq(screens.locationId, locationId));
   
   if (locationScreens.length === 0) {
-    logs.push(`[CombinedPlaylist] No screens linked to location`);
-    return { mediaIds: [], durations: [] };
+    logs.push(`[AdsSync] No screens linked to location`);
+    return { mediaIds: [], durations: [], source: "none" };
   }
   
   const screenIds = locationScreens.map(s => s.id);
-  logs.push(`[CombinedPlaylist] Found ${screenIds.length} screens`);
+  logs.push(`[AdsSync] Found ${screenIds.length} screens`);
   
   // Step 2: Get placements for these screens
   const screenPlacements = await db.select({ contractId: placements.contractId })
@@ -335,12 +353,21 @@ export async function getAdsForLocation(locationId: string, logs: string[]): Pro
     ));
   
   if (screenPlacements.length === 0) {
-    logs.push(`[CombinedPlaylist] No active placements - trying global fallback`);
-    return getGlobalApprovedAds(logs);
+    logs.push(`[AdsSync] No active placements for this location`);
+    
+    // Check if global fallback is allowed
+    const allowGlobal = await getAllowGlobalFallbackAds();
+    if (allowGlobal) {
+      logs.push(`[AdsSync] allowGlobalFallbackAds=true - using global ads`);
+      return getGlobalApprovedAds(logs);
+    } else {
+      logs.push(`[AdsSync] allowGlobalFallbackAds=false - returning empty (fallback only)`);
+      return { mediaIds: [], durations: [], source: "none" };
+    }
   }
   
   const contractIds = Array.from(new Set(screenPlacements.map(p => p.contractId)));
-  logs.push(`[CombinedPlaylist] Found ${contractIds.length} contracts`);
+  logs.push(`[AdsSync] Found ${contractIds.length} contracts from placements`);
   
   // Step 3: Get advertisers from contracts
   const contractData = await db.select({ advertiserId: contracts.advertiserId })
@@ -351,7 +378,7 @@ export async function getAdsForLocation(locationId: string, logs: string[]): Pro
     ));
   
   const advertiserIds = Array.from(new Set(contractData.map(c => c.advertiserId)));
-  logs.push(`[CombinedPlaylist] Found ${advertiserIds.length} advertisers`);
+  logs.push(`[AdsSync] Found ${advertiserIds.length} advertisers`);
   
   // Step 4: Get approved assets for these advertisers (using adAssets table)
   const approvedAssets = await db.select({
@@ -364,30 +391,42 @@ export async function getAdsForLocation(locationId: string, logs: string[]): Pro
     ));
   
   if (approvedAssets.length === 0) {
-    logs.push(`[CombinedPlaylist] No approved assets for advertisers - trying global fallback`);
-    return getGlobalApprovedAds(logs);
+    logs.push(`[AdsSync] No approved assets for advertisers`);
+    
+    // Check if global fallback is allowed
+    const allowGlobal = await getAllowGlobalFallbackAds();
+    if (allowGlobal) {
+      logs.push(`[AdsSync] allowGlobalFallbackAds=true - using global ads`);
+      return getGlobalApprovedAds(logs);
+    } else {
+      logs.push(`[AdsSync] allowGlobalFallbackAds=false - returning empty (fallback only)`);
+      return { mediaIds: [], durations: [], source: "none" };
+    }
   }
   
   const mediaIds = approvedAssets
     .filter(a => a.yodeckMediaId !== null)
     .map(a => a.yodeckMediaId!);
   
-  logs.push(`[CombinedPlaylist] ✓ Found ${mediaIds.length} approved ads`);
+  logs.push(`[AdsSync] ✓ Found ${mediaIds.length} approved ads from placements`);
   
   return { 
     mediaIds, 
-    durations: mediaIds.map(() => DEFAULT_AD_DURATION) 
+    durations: mediaIds.map(() => DEFAULT_AD_DURATION),
+    source: "placements"
   };
 }
 
 /**
  * Global fallback: get any recent approved ads
+ * Only used when allowGlobalFallbackAds=true
  */
 async function getGlobalApprovedAds(logs: string[]): Promise<{
   mediaIds: number[];
   durations: number[];
+  source: "placements" | "global" | "none";
 }> {
-  logs.push(`[CombinedPlaylist] Fetching global approved ads (fallback)`);
+  logs.push(`[AdsSync] Fetching global approved ads (fallback)`);
   
   const recentAds = await db.select({
     yodeckMediaId: adAssets.yodeckMediaId,
@@ -402,15 +441,20 @@ async function getGlobalApprovedAds(logs: string[]): Promise<{
     .map(a => a.yodeckMediaId!);
   
   if (mediaIds.length > 0) {
-    logs.push(`[CombinedPlaylist] ✓ Found ${mediaIds.length} global approved ads`);
+    logs.push(`[AdsSync] ✓ Found ${mediaIds.length} global approved ads`);
+    return { 
+      mediaIds, 
+      durations: mediaIds.map(() => DEFAULT_AD_DURATION),
+      source: "global"
+    };
   } else {
-    logs.push(`[CombinedPlaylist] ⚠️ No approved ads found anywhere`);
+    logs.push(`[AdsSync] ⚠️ No approved ads found anywhere`);
+    return { 
+      mediaIds: [], 
+      durations: [],
+      source: "none"
+    };
   }
-  
-  return { 
-    mediaIds, 
-    durations: mediaIds.map(() => DEFAULT_AD_DURATION) 
-  };
 }
 
 /**

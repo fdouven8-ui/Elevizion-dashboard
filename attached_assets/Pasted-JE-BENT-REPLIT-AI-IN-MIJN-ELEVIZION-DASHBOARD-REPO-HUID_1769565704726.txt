@@ -1,0 +1,84 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION DASHBOARD REPO.
+
+HUIDIGE STATUS (UIT LOGS):
+- BASE playlist werkt nu: "Baseline | Bouwservice Douven (4 items)" ✅
+- ADS playlist werkt technisch: "Ads | Bouwservice Douven (2 items)" ✅
+- LinkAd gebruikt yodeckMediaId en AppendMedia is idempotent ✅
+MAAR:
+- Autopilot eindigt met adsRepaired=false en "Ads toegevoegd: 0" terwijl alles al goed staat.
+- ApprovedAds valt altijd terug naar globale ads omdat er "Geen plaatsingen voor deze schermen" zijn.
+- Ik wil STABIEL per scherm: basis altijd, en ads alleen waar ze horen + automatisch wisselen.
+
+DOEL:
+1) adsRepaired/status moet TRUE zijn als ADS playlist in gewenste staat is, ook als er niets nieuws toegevoegd is.
+2) ADS playlist moet "authoritative" exact gesynct worden:
+   - desiredAds = ads die voor deze locatie/scherm bedoeld zijn (placements)
+   - als placements leeg: alleen fallback/self-ad (of 1 globale fallback) maar NIET alle globale ads automatisch (tenzij expliciet gekozen)
+   - ADS playlist items worden EXACT = desiredAds (in vaste volgorde)
+   - verwijder items die er niet in horen
+   - voeg items toe die missen
+   - idempotent
+3) ApprovedAds moet per locatie werken:
+   - Als er placements bestaan: gebruik die (filter op locationId)
+   - Als er geen placements bestaan: return [] (geen globale fallback), zodat ads niet overal gaan draaien.
+   - Maak een aparte optie/config "allowGlobalFallbackAds" (default FALSE). Alleen als TRUE mag globale fallback gebruikt worden.
+
+CONCRETE CHANGES:
+
+A) FIX adsRepaired STATUS
+- In autopilot repair stap 4:
+  - bereken desiredMediaIds (wat moet in ADS playlist)
+  - fetch current playlist mediaIds
+  - compute: missing = desired - current, extra = current - desired
+  - als missing leeg AND extra leeg => adsRepaired=true, adsAdded=0, adsRemoved=0, status="OK"
+  - als er wijzigingen zijn uitgevoerd => adsRepaired=true, adsAdded=n, adsRemoved=m
+
+B) AUTHORITATIVE SYNC: replacePlaylistItems(playlistId, desiredItems)
+- Maak helper die PATCH /playlists/{id} met payload:
+  { "items": [ { "id": <mediaId>, "type":"media", "priority":2, "duration": 15 }, ... ] }
+- Gebruik deze helper voor ADS playlist:
+  - bouw desiredItems op basis van desiredMediaIds
+  - duur: 10-15 sec (gebruik video duration als bekend, anders 15)
+- BELANGRIJK: Als desiredMediaIds leeg:
+  - voeg 1 fallback item toe (selfAdMediaId of eerste beschikbare approved ad als fallback)
+  - maar NIET globale ads tenzij config allowGlobalFallbackAds=true
+
+C) PER-SCREEN SELECTIE (placements)
+- Zorg dat er een duidelijke bron is voor "welke ads horen op deze locatie":
+  OPTIE 1 (beste): placements tabel / placement_plans
+    - ApprovedAdsForLocation(locationId) moet ads pakken uit placements waar status ACTIVE en signed
+  OPTIE 2 (simpel): nieuwe join table location_ads (locationId, adId, active)
+    - zodra admin of engine een ad toewijst aan locatie, zet record active=true
+- Kies de minst ingrijpende optie die nu al in repo aanwezig is.
+- Stop met automatisch "globale fallback ads" als er geen placements zijn.
+
+D) LOGGING (super duidelijk)
+- "[AdsSync] desired=<n> current=<n> missing=<n> extra=<n> action=OK|PATCH"
+- "[AdsSync] desiredMediaIds=[...first 10]"
+- "[AdsSync] currentMediaIds=[...first 10]"
+- In response payload: include adsRemoved en adsStatus.
+
+E) UPDATE API RESPONSE
+POST /api/admin/locations/:id/autopilot-repair moet teruggeven:
+{
+  ads: {
+    playlistId,
+    itemCount,
+    desiredCount,
+    adsAdded,
+    adsRemoved,
+    adsRepaired,      // true als OK of fixed
+    adsStatus: "OK" | "PATCHED" | "FALLBACK_ONLY" | "ERROR"
+  }
+}
+
+ACCEPTANCE TEST:
+- Als ik autopilot-repair run terwijl playlist al correct is:
+  - adsRepaired=true
+  - adsStatus="OK"
+  - adsAdded=0 adsRemoved=0
+- Als ik een ad deactiveer voor die locatie:
+  - volgende run verwijdert hem uit ADS playlist
+- Geen globale ads op schermen waar niets is geselecteerd (tenzij allowGlobalFallbackAds=true)
+
+IMPLEMENTEER DIT NU MET MINIMALE INGRIJPENDE WIJZIGINGEN EN BEHOUD DE WERKENDE PATCH /playlists/{id} FLOW.
