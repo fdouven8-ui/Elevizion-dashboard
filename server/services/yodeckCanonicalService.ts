@@ -1419,7 +1419,13 @@ export async function findApprovedAdsForLocation(locationId: string): Promise<{
   logs.push(`[ApprovedAds] ${screenIds.length} schermen gevonden totaal`);
   
   if (screenIds.length === 0) {
-    return { ok: true, ads: [], logs };
+    logs.push(`[ApprovedAds] Geen schermen - fallback naar globale approved ads`);
+    const fallbackResult = await getRecentApprovedAds(10);
+    logs.push(...fallbackResult.logs);
+    if (fallbackResult.ads.length > 0) {
+      logs.push(`[ApprovedAds] ✓ Fallback: ${fallbackResult.ads.length} globale ads gevonden`);
+    }
+    return { ok: true, ads: fallbackResult.ads, logs };
   }
   
   // Find placements for these screens
@@ -1427,8 +1433,14 @@ export async function findApprovedAdsForLocation(locationId: string): Promise<{
     .where(inArray(placements.screenId, screenIds));
   
   if (linkedPlacements.length === 0) {
-    logs.push(`[ApprovedAds] Geen plaatsingen voor deze schermen`);
-    return { ok: true, ads: [], logs };
+    logs.push(`[ApprovedAds] Geen plaatsingen voor deze schermen - fallback naar globale approved ads`);
+    // FALLBACK: If no placements, return all recent approved ads (for testing/new setup)
+    const fallbackResult = await getRecentApprovedAds(10);
+    logs.push(...fallbackResult.logs);
+    if (fallbackResult.ads.length > 0) {
+      logs.push(`[ApprovedAds] ✓ Fallback: ${fallbackResult.ads.length} globale ads gevonden`);
+    }
+    return { ok: true, ads: fallbackResult.ads, logs };
   }
   
   const contractIds = Array.from(new Set(linkedPlacements.map(p => p.contractId)));
@@ -2841,6 +2853,25 @@ export async function findLocationsForAdvertiser(advertiserId: string): Promise<
   console.log(`[FindLocations] Advertiser ${advertiserId} → ${advertiserContracts.length} contracts → ${contractPlacements.length} placements → ${locationIds.length} locations`);
   
   return locationIds;
+}
+
+/**
+ * Get all live locations (active or readyForAds)
+ * Used as fallback when no targeted locations are found via contracts
+ */
+export async function getAllLiveLocations(): Promise<Array<{ id: string; name: string }>> {
+  const liveLocations = await db.select({
+    id: locations.id,
+    name: locations.name,
+  })
+    .from(locations)
+    .where(or(
+      eq(locations.status, "active"),
+      eq(locations.status, "readyForAds")
+    ));
+  
+  console.log(`[GetLiveLocations] Found ${liveLocations.length} live locations`);
+  return liveLocations;
 }
 
 /**

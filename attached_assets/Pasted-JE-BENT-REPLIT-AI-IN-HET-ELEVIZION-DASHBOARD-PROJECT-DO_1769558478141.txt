@@ -1,0 +1,152 @@
+JE BENT REPLIT AI IN HET ELEVIZION DASHBOARD PROJECT.
+DOEL: Het systeem moet STABIEL worden. Ieder scherm krijgt eigen ADS playlist + eigen baseline playlist, layout blijft draaien met nieuws/weer widgets, en uploads worden automatisch placements zodat ApprovedAds nooit leeg blijft.
+
+CONTEXT UIT LOGS (BELANGRIJK):
+- ADS playlist werkt (voorbeeld: playlist 30461663 has 1 items, content-status itemCount=1 hasFallbackAd=true)
+- ApprovedAds endpoint geeft NU 0 terug: "Geen plaatsingen voor deze schermen"
+=> Dus placements worden niet automatisch aangemaakt/gekoppeld bij approve, of ApprovedAds query is te streng / kijkt verkeerd.
+- Eerder bestond issue: /playlist_items endpoint gaf 404. Gebruik alleen Yodeck v2: GET/PATCH /api/v2/playlists/{id}, GET/PATCH /api/v2/layouts/{id}, GET/PATCH /api/v2/screens/{id}.
+- Er waren heel veel duplicate playlists ("70 duplicates found"). Dat moet definitief stoppen.
+
+WAT MOET ER OPGELOST WORDEN (ACCEPTATIECRITERIA):
+A) Per locatie/scherm:
+  - Er is EXACT 1 canonical ADS playlist + 1 canonical BASE playlist (in DB opgeslagen).
+  - Autopilot vult ADS playlist als leeg (approved ads -> self-ad -> fallback).
+  - Autopilot vult BASE playlist als leeg (self-ad -> fallback).
+  - Layout blijft “Elevizion Standard | <locatie>” met nieuws/weer widgets. Ads-region in layout wijst naar canonical ADS playlist id.
+  - Geen “NO CONTENT TO PLAY” meer.
+
+B) Upload/Approve pipeline:
+  - Zodra een video wordt goedgekeurd, moet het systeem automatisch placements aanmaken en koppelen aan de juiste locaties (op basis van targeting of minimaal aan alle live locaties als default).
+  - ApprovedAds endpoint moet daarna ads teruggeven (niet leeg) zonder dat ik handmatig placements hoef te maken.
+
+C) Stabiliteit:
+  - Nooit meer duplicates aanmaken bij ensurePlaylist.
+  - Alle Yodeck calls via 1 wrapper met retry/backoff op 429.
+  - Per locatie locking blijft.
+
+IMPLEMENTATIESTAPPEN
+
+1) DATABASE: voeg canonical velden toe op Location (of aparte mapping tabel)
+- locations.yodeckAdsPlaylistId (string/int)
+- locations.yodeckBasePlaylistId (string/int)
+- locations.yodeckLayoutId (int) (optioneel, als je per locatie layout wil vastpinnen)
+Maak migratie + update Prisma/ORM schema + type updates.
+
+2) YODECK SERVICE: maak één wrapper yodeckRequest()
+- parameters: method, path, body, query
+- base url: https://app.yodeck.com/api/v2
+- auth header: bestaande Token <label>:<token>
+- retry op 429 en 5xx met exponential backoff (max 5 tries)
+- log bij failure: status + path + response snippet
+
+3) CANONICAL PLAYLIST ENSURE (STOP DUPLICATES)
+Implementeer:
+ensureCanonicalPlaylistForLocation(locationId, kind) waar kind in ["ADS","BASE"]
+LOGICA:
+- Als location.yodeckAdsPlaylistId (of base) al bestaat: return die en VERBIED aanmaken nieuwe.
+- Anders:
+  - Zoek in Yodeck playlists op naam exact: 
+    ADS: `Ads | ${locationName}`
+    BASE: `Base | ${locationName}`
+    (Gebruik GET /playlists?limit=100&offset=... en filter client-side op name; of qstring als beschikbaar)
+  - Als 1 gevonden: set in DB en return
+  - Als meerdere gevonden:
+     - kies laagste id als canonical
+     - hernoem de rest via PATCH /playlists/{id} name = `(DUPLICATE) ${origName} #${id}` en/of voeg in description "DO NOT USE"
+     - set canonical id in DB
+  - Als geen gevonden:
+     - Create playlist via POST /playlists met name, description "Elevizion canonical ${kind} playlist"
+     - set id in DB en return
+
+4) PLAYLIST ITEM “MERGE PATCH” (NIET WISSEN)
+Maak helper:
+appendMediaToPlaylistIfMissing(playlistId, mediaId, duration=15)
+- GET /playlists/{id} -> items
+- Als mediaId al in items: return no-op
+- Anders: newItems = bestaande items + {id: mediaId, type:"media", priority: nextPriority, duration}
+- PATCH /playlists/{id} met { items: newItems }
+BELANGRIJK: noem field exact "items" zoals Yodeck v2 verwacht, en stuur volledige lijst (merge).
+
+5) LAYOUT ADS REGION BINDING (PER LOCATIE)
+Maak:
+ensureAdsRegionBound(layoutId, adsPlaylistId)
+- GET /layouts/{layoutId}
+- Vind region die bedoeld is voor ads:
+   - voorkeur: region.item.type == "playlist" EN region.item.id hoort bij ADS playlist OF region.name/metadata matches "ADS" als aanwezig.
+   - als niet herkenbaar: fallback: eerste region met item.type=="playlist" die NIET de base playlist is (maar log warning).
+- Als region.item.id != adsPlaylistId:
+   - PATCH /layouts/{layoutId} met aangepaste regions array (alleen die region.item.id wijzigen)
+- Return {changed:boolean, regionId}
+
+6) ENSURE LOCATION PLAYBACK (AUTOPILOT CORE)
+Implement:
+ensureLocationPlayback(locationId)
+STAPPEN:
+- Fetch location + yodeckDeviceId + (optioneel) yodeckLayoutId
+- adsPlaylistId = ensureCanonicalPlaylistForLocation(locationId,"ADS")
+- basePlaylistId = ensureCanonicalPlaylistForLocation(locationId,"BASE")
+- Determine layoutId:
+   - als location.yodeckLayoutId set: gebruik
+   - anders: gebruik bestaande baseline find logic: zoek layout "Elevizion Standard | ${locationName}" of bestaande fallback "Elevizion Standard | Bouwservice Douven" etc. Als je fallback gebruikt: schrijf layoutId terug naar DB zodat het stabiel is.
+- Ensure screen in layout mode assigned naar layoutId:
+   - PATCH /screens/{screenId} met screen_content.source_type="layout", source_id=layoutId (volgens bestaande working code)
+- ensureAdsRegionBound(layoutId, adsPlaylistId)
+- Ensure playlists gevuld:
+   - base: als leeg -> kies media: selfAdMediaId (config) else fallbackVideoId (eerste finished video) -> appendMediaToPlaylistIfMissing(basePlaylistId, chosen)
+   - ads: als leeg -> probeer ApprovedAds uit DB -> anders selfAd -> anders fallback -> appendMediaToPlaylistIfMissing(adsPlaylistId, chosen)
+- Return result object met counts + actionsTaken
+
+7) FIX: APPROVED ADS MAG NIET LEEG ZIJN NA APPROVE (AUTOMATISCHE PLACEMENTS)
+Zoek waar “approve video/ad” gebeurt (bijv. admin endpoint /api/admin/ads/:id/approve of “Video Beoordelen” action).
+BIJ APPROVE:
+- Zorg dat er ALTIJD placements worden aangemaakt:
+  - Als ad targeting locaties/steden heeft: selecteer live locaties die matchen
+  - Als er geen targeting is (of testmode): default naar alle live locaties (isLive && hasYodeckDevice)
+- Voor elke gekozen locatie:
+  - creëer placement record (of placement_plan) zodat ApprovedAds query ze terugvindt
+  - status moet "approved/active/signed" zijn (wat ApprovedAds nu verwacht)
+- Zorg idempotent:
+  - bij her-approve niet dubbel plaatsen; unique constraint (adId, locationId)
+- Update ApprovedAds endpoint indien nodig:
+  - Als het nu alleen “signed placements” pakt en dat blokkeert test: voeg fallback: als approved ad bestaat zonder placements, return hem onder "unassignedApprovedAds" + log waarschuwing
+  - Maar de hoofd fix is: placements meteen maken.
+
+8) SYNC / CONTENT STATUS BUGFIX (OPTIONEEL MAAR HANDIG)
+In logs:
+- content-status toont ads.itemCount=1
+- yodeck content sync toont "0 unique media, 0 total assignments"
+Dat betekent dat de sync parser waarschijnlijk layouts niet goed telt of playlist items niet cachet.
+Fix de sync (YodeckContent Sync):
+- Als screen_content.source_type=="layout": tel als "with content"
+- Optioneel: haal layout -> lees playlist region id -> haal playlist -> items en tel assignments
+Niet noodzakelijk voor playback, maar wel voor correcte dashboard status.
+
+9) NIEUWE DEBUG ENDPOINT
+GET /api/admin/autopilot/inspect/:locationId
+Return JSON:
+- location, screenId, layoutId
+- adsPlaylistId, basePlaylistId
+- live screen_content (source_type/id/name)
+- live layout regions (id + item.type + item.id)
+- live ads playlist items (ids)
+- live base playlist items (ids)
+- approvedAds count + ids
+- lastRepairAt/lastError
+
+10) TESTPLAN (MOET JE UITVOEREN IN CODE MET LOGS)
+- Run ensureLocationPlayback voor Bouwservice Douven
+- Log result: actionsTaken, adsCount>=1, baseCount>=1
+- Approve één geüploade ad/video via UI
+- Verify: ApprovedAds endpoint geeft minimaal 1 ad terug
+- Autopilot run binnen 5 min: ADS playlist krijgt die ad (niet alleen fallback)
+
+OUTPUT VAN JOU (REPLIT) NA IMPLEMENTATIE:
+- Noem welke files je hebt aangepast
+- Print 1 voorbeeld van /api/admin/autopilot/inspect/<bouwserviceLocationId>
+- Print 1 autopilot run log met actionsTaken
+
+BELANGRIJK:
+- Gebruik GEEN /playlist_items/ endpoint (die gaf 404). Alleen v2 playlists PATCH.
+- Maak geen nieuwe knoppen of extra UI complexiteit; alleen stabiliteit + autopilot + placements.
+- Respecteer bestaande testMode vlag: in testMode mag default targeting “alle live locaties” zijn.

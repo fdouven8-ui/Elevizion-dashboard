@@ -675,11 +675,19 @@ export async function approveAsset(
     // AUTOPILOT: Add approved ad to targeted locations' ADS playlists
     let locationsLinked = 0;
     try {
-      const { findLocationsForAdvertiser, linkAdToLocation } = await import('./yodeckCanonicalService');
+      const { findLocationsForAdvertiser, linkAdToLocation, getAllLiveLocations } = await import('./yodeckCanonicalService');
       
       // Find all locations that should receive this ad (via placements/contracts)
-      const targetLocations = await findLocationsForAdvertiser(asset.advertiserId);
+      let targetLocations = await findLocationsForAdvertiser(asset.advertiserId);
       console.log(`[Autopilot] Found ${targetLocations.length} locations for advertiser ${asset.advertiserId}`);
+      
+      // FALLBACK: If no locations via contracts, use ALL live locations (default for testMode or new advertisers)
+      if (targetLocations.length === 0) {
+        console.log(`[Autopilot] Geen locaties via contracten - fallback naar alle live locaties`);
+        const liveLocations = await getAllLiveLocations();
+        targetLocations = liveLocations.map(loc => loc.id);
+        console.log(`[Autopilot] Fallback: ${targetLocations.length} live locaties gevonden`);
+      }
       
       // Link ad to each location's ADS playlist
       for (const locationId of targetLocations) {
