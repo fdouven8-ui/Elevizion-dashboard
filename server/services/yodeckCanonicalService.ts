@@ -2558,13 +2558,11 @@ async function findMediaByPatterns(patterns: string[]): Promise<{
 }
 
 /**
- * Get content status for a location (for UI display)
+ * Get content status for a location - PLAYLIST MODE
+ * Uses the ACTIVE playlist from Yodeck screen (screen_content.source_id) as source of truth.
+ * This matches what's actually playing on the screen.
  */
-/**
- * NEW ARCHITECTURE: Get content status based on Layout + ADS playlist
- * Baseline content (news/weather) is handled by the Layout, NOT playlists
- */
-export async function getContentStatus(locationId: string): Promise<ContentStatusResult> {
+export async function getContentStatus(locationId: string): Promise<ContentStatusResult & { mode: "PLAYLIST" }> {
   const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
   
   if (!location) {
@@ -2573,7 +2571,8 @@ export async function getContentStatus(locationId: string): Promise<ContentStatu
       locationName: "Onbekend",
       isLive: false,
       hasYodeckDevice: false,
-      layout: { ok: false, layoutId: null, layoutName: null, error: "LOCATION_NOT_FOUND" },
+      mode: "PLAYLIST",
+      layout: { ok: true, layoutId: null, layoutName: null, error: undefined }, // Not applicable in PLAYLIST mode
       ads: { playlistId: null, itemCount: 0, hasFallbackAd: false, pendingSync: false },
       lastSyncAt: null,
       lastError: "Locatie niet gevonden",
@@ -2598,58 +2597,49 @@ export async function getContentStatus(locationId: string): Promise<ContentStatu
     }
   }
   
-  // Check layout status on screen
-  let layoutStatus = { ok: false, layoutId: null as number | null, layoutName: null as string | null, error: undefined as string | undefined };
+  // PLAYLIST MODE: Get the ACTIVE playlist from Yodeck screen (screen_content.source_id)
+  let activePlaylistId: string | null = null;
+  let activePlaylistName: string | null = null;
+  let activeItemCount = 0;
   
   if (yodeckScreenId && !isNaN(yodeckScreenId)) {
-    const screenLayoutStatus = await getScreenLayoutStatus(yodeckScreenId);
-    
-    if (screenLayoutStatus.hasLayout && screenLayoutStatus.isBaselineLayout) {
-      layoutStatus = { ok: true, layoutId: screenLayoutStatus.layoutId, layoutName: screenLayoutStatus.layoutName, error: undefined };
-    } else if (screenLayoutStatus.hasLayout) {
-      layoutStatus = { ok: false, layoutId: screenLayoutStatus.layoutId, layoutName: screenLayoutStatus.layoutName, error: "WRONG_LAYOUT" };
-    } else {
-      // Check if baseline layout exists at all
-      const baselineLayout = await findBaselineLayout();
-      if (!baselineLayout.ok) {
-        layoutStatus = { ok: false, layoutId: null, layoutName: null, error: "BASELINE_LAYOUT_MISSING" };
-      } else {
-        layoutStatus = { ok: false, layoutId: null, layoutName: null, error: "LAYOUT_NOT_ASSIGNED" };
+    const screenResult = await yodeckRequest<any>(`/screens/${yodeckScreenId}/`);
+    if (screenResult.ok && screenResult.data?.screen_content?.source_id) {
+      activePlaylistId = String(screenResult.data.screen_content.source_id);
+      
+      // Get playlist details
+      const playlistResult = await yodeckRequest<any>(`/playlists/${activePlaylistId}/`);
+      if (playlistResult.ok && playlistResult.data) {
+        activePlaylistName = playlistResult.data.name || null;
+        activeItemCount = Array.isArray(playlistResult.data.items) ? playlistResult.data.items.length : 0;
       }
     }
-  } else {
-    layoutStatus = { ok: false, layoutId: null, layoutName: null, error: "NO_YODECK_DEVICE" };
   }
   
-  // Get ADS playlist items
-  let adsItemCount = 0;
-  let hasFallbackAd = false;
+  // In PLAYLIST mode, layout is not used - always OK
+  const layoutStatus = { ok: true, layoutId: null as number | null, layoutName: null as string | null, error: undefined as string | undefined };
   
-  if (location.yodeckPlaylistId) {
-    const adsItems = await getPlaylistItems(location.yodeckPlaylistId);
-    if (adsItems.ok) {
-      adsItemCount = adsItems.items.length;
-      hasFallbackAd = adsItemCount > 0;
-    }
-  }
-  
-  // Repair needed if: layout not OK, or no ADS playlist, or ADS empty
-  const needsRepair = !layoutStatus.ok || !location.yodeckPlaylistId || adsItemCount === 0;
+  // needsRepair only if:
+  // 1. No Yodeck device linked
+  // 2. No active playlist
+  // 3. Active playlist is empty (0 items)
+  const needsRepair = !yodeckScreenId || !activePlaylistId || activeItemCount === 0;
   
   return {
     locationId,
     locationName: location.name,
     isLive,
     hasYodeckDevice,
-    layout: layoutStatus,
+    mode: "PLAYLIST",
+    layout: layoutStatus, // Always OK in PLAYLIST mode (layout checks disabled)
     ads: {
-      playlistId: location.yodeckPlaylistId,
-      itemCount: adsItemCount,
-      hasFallbackAd,
+      playlistId: activePlaylistId, // Use ACTIVE playlist, not legacy yodeckPlaylistId
+      itemCount: activeItemCount,
+      hasFallbackAd: activeItemCount > 0,
       pendingSync: false,
     },
     lastSyncAt: location.yodeckPlaylistVerifiedAt,
-    lastError: location.lastYodeckVerifyError,
+    lastError: needsRepair && activeItemCount === 0 ? "Playlist is leeg" : (location.lastYodeckVerifyError || null),
     needsRepair,
   };
 }

@@ -41,6 +41,7 @@ import {
   CheckCircle2,
   XCircle,
   AlertCircle,
+  Info,
   Database,
   Settings,
   Zap,
@@ -205,12 +206,14 @@ export default function ScreenDetail() {
     playlistName: string | null;
     expectedPlaylistName: string | null;
     itemCount: number;
-    baselineCount: number;
+    baselineCount: number | null;
+    baselineCountUnknown?: boolean;
     adsCount: number;
     lastPushAt: string | null;
     lastPushResult: string | null;
     verificationOk: boolean;
     mismatch: boolean;
+    mismatchLevel?: "error" | "warning" | "info";
     mismatchReason?: string;
     error?: string;
   }>({
@@ -778,7 +781,9 @@ export default function ScreenDetail() {
                           <p className="text-sm text-muted-foreground">Content</p>
                           <p className="font-medium">{nowPlaying?.itemCount || 0} items</p>
                           <p className="text-xs text-muted-foreground">
-                            {nowPlaying?.baselineCount || 0} basis + {nowPlaying?.adsCount || 0} ads
+                            {nowPlaying?.baselineCountUnknown 
+                              ? `? basis + ${nowPlaying?.itemCount || 0} items` 
+                              : `${nowPlaying?.baselineCount ?? 0} basis + ${nowPlaying?.adsCount || 0} ads`}
                           </p>
                           {nowPlaying?.itemCount === 0 && (
                             <Badge variant="destructive" className="mt-1 text-xs">LEEG!</Badge>
@@ -788,13 +793,31 @@ export default function ScreenDetail() {
                     </>
                   )}
 
-                  {/* Mismatch Warning */}
-                  {nowPlaying?.mismatch && (
-                    <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                  {/* Mismatch/Info Messages - differentiated by level */}
+                  {nowPlaying?.mismatchReason && nowPlaying?.mismatchLevel === "error" && (
+                    <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg" data-testid="mismatch-error">
+                      <XCircle className="h-5 w-5 text-red-600" />
+                      <div>
+                        <p className="font-medium text-red-800">Probleem gedetecteerd</p>
+                        <p className="text-sm text-red-700">{nowPlaying.mismatchReason}</p>
+                      </div>
+                    </div>
+                  )}
+                  {nowPlaying?.mismatchReason && nowPlaying?.mismatchLevel === "warning" && (
+                    <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg" data-testid="mismatch-warning">
                       <AlertCircle className="h-5 w-5 text-amber-600" />
                       <div>
-                        <p className="font-medium text-amber-800">Mismatch gedetecteerd</p>
+                        <p className="font-medium text-amber-800">Let op</p>
                         <p className="text-sm text-amber-700">{nowPlaying.mismatchReason}</p>
+                      </div>
+                    </div>
+                  )}
+                  {nowPlaying?.mismatchReason && nowPlaying?.mismatchLevel === "info" && (
+                    <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg" data-testid="mismatch-info">
+                      <Info className="h-5 w-5 text-blue-600" />
+                      <div>
+                        <p className="font-medium text-blue-800">Info</p>
+                        <p className="text-sm text-blue-700">{nowPlaying.mismatchReason}</p>
                       </div>
                     </div>
                   )}

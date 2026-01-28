@@ -897,12 +897,14 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   baselinePlaylistId: string | null;
   baselineConfigured: boolean;
   itemCount: number;
-  baselineCount: number;
+  baselineCount: number | null;
+  baselineCountUnknown?: boolean;
   adsCount: number;
   lastPushAt: string | null;
   lastPushResult: string | null;
   verificationOk: boolean;
   mismatch: boolean;
+  mismatchLevel?: "error" | "warning" | "info";
   mismatchReason?: string;
   error?: string;
 }> {
@@ -988,11 +990,15 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   let playlistName: string | null = null;
   let itemCount = 0;
   
+  // Get active playlist items with their mediaIds
+  let playlistItems: Array<{ id: number; name?: string; type?: string }> = [];
+  
   if (playlistId) {
     const playlistResult = await yodeckRequest<any>(`/playlists/${playlistId}/`);
     if (playlistResult.ok && playlistResult.data) {
       playlistName = playlistResult.data.name || null;
-      itemCount = Array.isArray(playlistResult.data.items) ? playlistResult.data.items.length : 0;
+      playlistItems = Array.isArray(playlistResult.data.items) ? playlistResult.data.items : [];
+      itemCount = playlistItems.length;
     }
   }
   
@@ -1004,30 +1010,62 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   // 2. Playlist has content (itemCount > 0)
   const verificationOk = playlistId !== null && hasContent;
   
-  // Mismatch warning (not failure)
+  // Mismatch warning (not failure) - only show if playlist doesn't look like our managed one
   const isElevizionPlaylist = playlistName?.toLowerCase().includes("elevizion");
   const mismatch = playlistName !== null && !isElevizionPlaylist;
   
-  // Estimate baseline vs ads
-  let baselineCount = 0;
+  // Count baseline vs ads by MATCHING MEDIA IDs
+  let baselineCount: number | "unknown" = 0;
   let adsCount = 0;
+  
   if (hasContent && baselineConfigured) {
-    // Fetch baseline to count
-    const baselineStatus = await getBaselinePlaylistStatus();
-    baselineCount = baselineStatus.itemCount;
-    adsCount = Math.max(0, itemCount - baselineCount);
+    // Fetch baseline items to get their mediaIds
+    const baselineLogs: string[] = [];
+    const baselineResult = await getBaselineItemsFromYodeck(baselineLogs);
+    if (baselineResult.ok && baselineResult.items.length > 0) {
+      const baselineMediaIds = new Set(baselineResult.items.map(item => item.mediaId));
+      
+      // Count how many items in active playlist match baseline mediaIds
+      baselineCount = playlistItems.filter(item => baselineMediaIds.has(item.id)).length;
+      adsCount = itemCount - baselineCount;
+    } else {
+      // Baseline fetch failed - can't determine counts
+      baselineCount = "unknown";
+      adsCount = itemCount;
+    }
+  } else if (hasContent && !baselineConfigured) {
+    // Baseline not configured but playlist has content
+    // Don't assume anything about what's baseline vs ads
+    baselineCount = "unknown";
+    adsCount = itemCount;
   }
   
   // Build specific error/status message
   let lastPushResult: string | null = null;
   if (verificationOk) {
     lastPushResult = "ok";
-  } else if (!baselineConfigured) {
-    lastPushResult = "error: baseline playlist niet geconfigureerd - ga naar Instellingen";
   } else if (!playlistId) {
     lastPushResult = "error: geen playlist toegewezen - klik Force Repair";
   } else if (!hasContent) {
     lastPushResult = `error: playlist ${playlistId} leeg (0 items) - klik Force Repair`;
+  }
+  // Note: baseline not configured is NOT an error if content is playing
+  
+  // Determine mismatch reason - only show as warning/error for actual problems
+  let mismatchReason: string | undefined = undefined;
+  let mismatchLevel: "error" | "warning" | "info" | undefined = undefined;
+  
+  if (!hasContent) {
+    mismatchReason = `Playlist is leeg (0 items) - Force Repair nodig!`;
+    mismatchLevel = "error";
+  } else if (!baselineConfigured && verificationOk) {
+    // Content playing but baseline not configured - INFO level only (not an error)
+    mismatchReason = "Baseline playlist niet geconfigureerd - baseline telling onbekend";
+    mismatchLevel = "info";
+  } else if (mismatch && verificationOk) {
+    // Playlist playing but not an Elevizion playlist - warning
+    mismatchReason = `Let op: playlist heet "${playlistName}"`;
+    mismatchLevel = "warning";
   }
   
   return {
@@ -1039,15 +1077,15 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     baselinePlaylistId,
     baselineConfigured,
     itemCount,
-    baselineCount,
+    baselineCount: typeof baselineCount === "number" ? baselineCount : null,
+    baselineCountUnknown: baselineCount === "unknown",
     adsCount,
     lastPushAt: null,
     lastPushResult,
     verificationOk,
-    mismatch,
-    mismatchReason: !baselineConfigured ? "Baseline playlist niet geconfigureerd" :
-                    !hasContent ? `Playlist is leeg (0 items) - Force Repair nodig!` : 
-                    mismatch ? `Let op: playlist heet "${playlistName}"` : undefined,
+    mismatch: mismatchLevel === "error" || mismatchLevel === "warning",
+    mismatchLevel,
+    mismatchReason,
   };
 }
 
