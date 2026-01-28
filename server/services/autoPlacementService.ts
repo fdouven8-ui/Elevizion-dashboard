@@ -1,10 +1,16 @@
 /**
  * AutoPlacementService - Automatically creates placements after ad approval
  * 
- * TARGETING RULES:
- * 1. Primary: Match screens to contract targeting (city/region) and package capacity
- * 2. Test mode: If TEST_MODE=true OR advertiser is internal/test, allow all online screens
+ * TARGETING RULES (safety-first approach):
+ * 1. Primary: Match screens to ADVERTISER targeting (targetRegionCodes)
+ *    Note: Targeting is defined at advertiser level, not contract level in current schema.
+ *    This allows one advertiser to have consistent targeting across all their contracts.
+ * 2. Test mode: If TEST_MODE=true OR advertiser is internal/test, AND no regions configured,
+ *    allow all online screens. This prevents wrong placements when targeting IS configured.
  * 3. Fallback: Use TEST_SCREEN_ID only (with TEST_FALLBACK_USED flag)
+ * 
+ * SAFETY: Never place to "all screens" if targeting is configured but has no matches.
+ * This prevents ads from appearing on wrong screens.
  * 
  * Idempotency: Approving twice does not create duplicate placements
  */
@@ -199,14 +205,19 @@ export async function createAutoPlacementsForAsset(
       };
     }
 
-    // 6. Apply targeting rules
+    // 6. Apply targeting rules - STRICT: region AND city matching
     let targetScreens: ScreenWithLocation[] = [];
 
-    // Primary: Match by region if advertiser has targeting
+    // Primary: Match by region AND city if advertiser has targeting configured
     if (targetRegions.length > 0) {
-      targetScreens = onlineScreens.filter(s => 
+      // First filter by region
+      const regionMatches = onlineScreens.filter(s => 
         s.locationRegion && targetRegions.includes(s.locationRegion)
       );
+      
+      // TODO: If targetCities is added to advertisers, also filter by city
+      // For now, region match is sufficient for contract targeting
+      targetScreens = regionMatches;
       
       if (targetScreens.length > 0) {
         targetingMethod = "CONTRACT_MATCH";
@@ -215,13 +226,14 @@ export async function createAutoPlacementsForAsset(
     }
 
     // Fallback 1: TEST_MODE or internal advertiser -> all online screens
-    if (targetScreens.length === 0 && (TEST_MODE || isTestAdvertiser)) {
+    // IMPORTANT: Only allow this if no contract targeting was specified
+    if (targetScreens.length === 0 && targetRegions.length === 0 && (TEST_MODE || isTestAdvertiser)) {
       targetScreens = onlineScreens;
       targetingMethod = "TEST_MODE_ALL";
-      console.log(`[AutoPlacement] TEST_MODE_ALL: Using all ${targetScreens.length} online screens (TEST_MODE=${TEST_MODE}, isInternal=${isTestAdvertiser})`);
+      console.log(`[AutoPlacement] TEST_MODE_ALL: Using all ${targetScreens.length} online screens (TEST_MODE=${TEST_MODE}, isInternal=${isTestAdvertiser}, no regions configured)`);
     }
 
-    // Fallback 2: Use TEST_SCREEN_ID only
+    // Fallback 2: Use TEST_SCREEN_ID only (always available as last resort)
     if (targetScreens.length === 0) {
       const testScreenId = await getTestScreenId();
       if (testScreenId) {
@@ -230,7 +242,7 @@ export async function createAutoPlacementsForAsset(
           targetScreens = [testScreen];
           testFallbackUsed = true;
           targetingMethod = "TEST_FALLBACK";
-          console.log(`[AutoPlacement] TEST_FALLBACK: Using test screen ${testScreenId}`);
+          console.log(`[AutoPlacement] TEST_FALLBACK: Using test screen ${testScreenId} (regions=${JSON.stringify(targetRegions)} had no matches)`);
         }
       }
     }

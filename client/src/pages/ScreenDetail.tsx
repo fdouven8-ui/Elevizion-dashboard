@@ -203,11 +203,13 @@ export default function ScreenDetail() {
     };
     playlistId: string | null;
     playlistName: string | null;
+    expectedPlaylistName: string | null;
     itemCount: number;
     baselineCount: number;
     adsCount: number;
     lastPushAt: string | null;
     lastPushResult: string | null;
+    verificationOk: boolean;
     mismatch: boolean;
     mismatchReason?: string;
     error?: string;
@@ -728,28 +730,62 @@ export default function ScreenDetail() {
                     )}
                   </div>
 
-                  {/* Playlist Info */}
+                  {/* Playlist Info with Verification */}
                   {nowPlaying?.deviceStatus?.status !== "UNLINKED" && (
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="p-3 bg-muted/30 rounded-lg">
-                        <p className="text-sm text-muted-foreground">Actieve playlist</p>
-                        <p className="font-medium truncate" title={nowPlaying?.playlistName || undefined}>
-                          {nowPlaying?.playlistName || "Geen playlist"}
-                        </p>
-                        {nowPlaying?.playlistId && (
-                          <p className="text-xs text-muted-foreground">ID: {nowPlaying.playlistId}</p>
-                        )}
-                      </div>
-                      <div className="p-3 bg-muted/30 rounded-lg">
-                        <p className="text-sm text-muted-foreground">Items</p>
-                        <p className="font-medium">{nowPlaying?.itemCount || 0} items</p>
-                        {(nowPlaying?.baselineCount || nowPlaying?.adsCount) ? (
-                          <p className="text-xs text-muted-foreground">
-                            {nowPlaying.baselineCount} basis + {nowPlaying.adsCount} ads
+                    <>
+                      {/* Verification Status Banner */}
+                      {nowPlaying?.verificationOk !== undefined && (
+                        <div className={`flex items-center gap-2 p-3 rounded-lg border ${
+                          nowPlaying.verificationOk 
+                            ? "bg-green-50 border-green-200" 
+                            : "bg-red-50 border-red-200"
+                        }`} data-testid="verification-status">
+                          {nowPlaying.verificationOk ? (
+                            <>
+                              <CheckCircle2 className="h-5 w-5 text-green-600" />
+                              <span className="font-medium text-green-800">Geverifieerd OK</span>
+                            </>
+                          ) : (
+                            <>
+                              <AlertCircle className="h-5 w-5 text-red-600" />
+                              <span className="font-medium text-red-800">Verificatie mislukt</span>
+                              {nowPlaying?.lastPushResult && (
+                                <span className="text-sm text-red-600 ml-2">
+                                  ({nowPlaying.lastPushResult})
+                                </span>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                      
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="p-3 bg-muted/30 rounded-lg">
+                          <p className="text-sm text-muted-foreground">Actieve playlist</p>
+                          <p className="font-medium truncate" title={nowPlaying?.playlistName || undefined}>
+                            {nowPlaying?.playlistName || "Geen playlist"}
                           </p>
-                        ) : null}
+                          {nowPlaying?.playlistId && (
+                            <p className="text-xs text-muted-foreground">ID: {nowPlaying.playlistId}</p>
+                          )}
+                          {nowPlaying?.expectedPlaylistName && nowPlaying?.playlistName !== nowPlaying.expectedPlaylistName && (
+                            <p className="text-xs text-amber-600 mt-1">
+                              Verwacht: {nowPlaying.expectedPlaylistName}
+                            </p>
+                          )}
+                        </div>
+                        <div className="p-3 bg-muted/30 rounded-lg">
+                          <p className="text-sm text-muted-foreground">Content</p>
+                          <p className="font-medium">{nowPlaying?.itemCount || 0} items</p>
+                          <p className="text-xs text-muted-foreground">
+                            {nowPlaying?.baselineCount || 0} basis + {nowPlaying?.adsCount || 0} ads
+                          </p>
+                          {nowPlaying?.itemCount === 0 && (
+                            <Badge variant="destructive" className="mt-1 text-xs">LEEG!</Badge>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    </>
                   )}
 
                   {/* Mismatch Warning */}
