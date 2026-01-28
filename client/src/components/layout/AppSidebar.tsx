@@ -318,13 +318,13 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Diagnostiek - Only visible in admin mode */}
-        {canViewSettings && isAdmin && (
+        {/* Admin / Eigenaar - Altijd zichtbaar voor admins, onafhankelijk van UI mode */}
+        {canViewSettings && (
           <>
             <SidebarSeparator className="my-3 opacity-30" />
             <SidebarGroup className="py-1">
               <SidebarGroupLabel className="text-[10px] uppercase tracking-wider text-sidebar-foreground/40 px-3 mb-1">
-                Diagnostiek
+                Admin
               </SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu className="gap-0.5">

@@ -1,0 +1,110 @@
+Je werkt aan het Elevizion dashboard. Herstel en corrigeer de UI + content-flow op basis van de huidige situatie. Verwijder GEEN bestaande functionaliteit zonder expliciete reden.
+
+PROBLEMEN DIE NU OPGELOST MOETEN WORDEN
+1) Instellingen zijn niet zichtbaar terwijl ze wel nodig zijn
+2) De scheiding tussen “normale UI” en “admin-only UI” is verdwenen
+3) Content staat in het dashboard maar verschijnt NIET op het fysieke scherm (Yodeck)
+4) Ads staan op “niet gekoppeld” terwijl het scherm live voor advertenties is
+
+---
+
+1️⃣ MENU STRUCTUUR (HERSTELLEN, NIET VEREENVOUDIGEN)
+Herstel de oude structuur met TWEE LOGISCHE BLOKKEN in de sidebar:
+
+BLOK 1 – STANDAARD (altijd zichtbaar)
+- Home
+- Onboarding
+- Schermen
+- Adverteerders
+- Plaatsingen
+- Video Beoordelen
+- Wachtrij
+- Financieel
+
+BLOK 2 – ADMIN / EIGENAAR (alleen voor mij zichtbaar)
+- Instellingen
+- Diagnostiek
+- Technische tools
+- Integraties (Yodeck / Moneybird detail)
+- Eventuele debug/statuspagina’s
+
+Deze admin-items mogen bestaan, maar mogen NIET de standaard workflow vervuilen.
+
+---
+
+2️⃣ INSTELLINGEN TERUGZETTEN
+- De pagina “Instellingen” moet weer bereikbaar zijn
+- Hierin zitten o.a.:
+  - Basiscontent configuratie
+  - Autopilot instellingen
+  - Standaard playlists / layouts
+  - Fallback gedrag
+
+Instellingen zijn ADMIN-only, maar mogen niet verdwijnen.
+
+---
+
+3️⃣ CONTENT ≠ SCHERM (DIT IS NU STUK)
+Probleem:
+- In de tab “Content” staat content (NOS nieuws + advertentie)
+- Op het fysieke scherm draait NIKS
+
+Dit betekent:
+- De content is NIET daadwerkelijk gekoppeld aan een actieve Yodeck playlist/layout
+- Of de ADS playlist wordt niet gebruikt door het scherm
+- Of de layout verwijst niet naar de juiste playlist
+
+ACTIE (verplicht):
+- Controleer per scherm:
+  - Welke layout actief is
+  - Welke playlist(s) daarin gebruikt worden
+  - Of ADS playlist daadwerkelijk items bevat
+- Als een ad status heeft “Niet gekoppeld”:
+  - Moet automatisch een koppeling plaatsvinden als:
+    - Scherm live is voor advertenties
+    - Regio/stad matcht
+    - Capaciteit beschikbaar is
+
+Geen handmatige knop vereist voor normale flow.
+
+---
+
+4️⃣ BASISCONTENT + ADS MOETEN ECHT DRAAIEN
+Regel afdwingen:
+- Elk scherm gebruikt exact 1 layout
+- Die layout bevat:
+  - Basiscontent playlist (nieuws/weer/Elevizion)
+  - ADS playlist
+
+Als basiscontent zichtbaar is in de UI maar niet op het scherm:
+- Automatisch re-seeden
+- Automatisch herpubliceren naar Yodeck
+
+Geen “content lijkt oké” maar fysiek zwart scherm meer.
+
+---
+
+5️⃣ STATUSSEN MOETEN DE REALITEIT TONEN
+Corrigeer statussen:
+- “Live voor advertenties” mag alleen groen zijn als:
+  - Scherm online is
+  - Layout actief is
+  - Minstens basiscontent draait
+
+- “Niet gekoppeld” bij een ad mag niet blijven hangen als:
+  - Het scherm geschikt is
+  - De ad goedgekeurd is
+  - Er capaciteit is
+
+Status = gevolg van werkelijkheid, niet van database-flag.
+
+---
+
+6️⃣ DOEL VAN DEZE FIX
+Na deze wijziging kan ik:
+- Instellingen weer zien
+- Duidelijk verschil zien tussen mijn admin-tools en normale UI
+- In “Content” zien wat er draait én dat ook fysiek op het scherm zien
+- Zien dat een advertentie automatisch gekoppeld en afgespeeld wordt
+
+Los dit gericht op. Geen herontwerp, geen nieuwe concepten, alleen herstellen wat functioneel hoort te werken.
