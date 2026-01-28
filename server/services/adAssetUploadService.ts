@@ -676,6 +676,27 @@ export async function approveAsset(
       console.error('[AdminReview] Auto-placement error:', autoPlacementError.message);
     }
     
+    // CANONICAL PLAYLIST PUBLISHING: Add to location canonical playlists
+    let canonicalPublishResult: { success: boolean; locationsUpdated: number; errors: string[] } | null = null;
+    try {
+      const { publishApprovedVideoToLocations } = await import('./canonicalBroadcastService');
+      
+      // Only publish if the asset has a Yodeck media ID
+      if (asset.yodeckMediaId) {
+        canonicalPublishResult = await publishApprovedVideoToLocations(asset.yodeckMediaId, asset.advertiserId);
+        
+        if (canonicalPublishResult.success) {
+          console.log(`[AdminReview] Canonical publish: ${canonicalPublishResult.locationsUpdated} locations updated`);
+        } else {
+          console.warn('[AdminReview] Canonical publish had errors:', canonicalPublishResult.errors);
+        }
+      } else {
+        console.log('[AdminReview] Asset has no yodeckMediaId, skipping canonical publish');
+      }
+    } catch (canonicalError: any) {
+      console.error('[AdminReview] Canonical publish error:', canonicalError.message);
+    }
+    
     // Legacy: Also trigger placement plan for backward compatibility
     let planId: string | undefined;
     try {
@@ -705,9 +726,11 @@ export async function approveAsset(
       console.error('[AdminReview] Failed to send approval email:', emailError);
     }
     
-    // Build success message with auto-placement info
+    // Build success message with auto-placement and canonical publish info
     let message = 'Video goedgekeurd';
-    if (autoPlacementResult?.success && autoPlacementResult.placementsCreated > 0) {
+    if (canonicalPublishResult?.success && canonicalPublishResult.locationsUpdated > 0) {
+      message += ` en gepubliceerd naar ${canonicalPublishResult.locationsUpdated} locatie(s)`;
+    } else if (autoPlacementResult?.success && autoPlacementResult.placementsCreated > 0) {
       message += ` en automatisch geplaatst op ${autoPlacementResult.placementsCreated} scherm(en)`;
     } else if (autoPlacementResult?.success && autoPlacementResult.screensPublished > 0) {
       message += ` en ${autoPlacementResult.screensPublished} scherm(en) gesynchroniseerd`;
@@ -718,6 +741,7 @@ export async function approveAsset(
       message,
       placementPlanId: planId,
       autoPlacement: autoPlacementResult,
+      canonicalPublish: canonicalPublishResult,
     };
   } catch (error: any) {
     console.error('[AdminReview] Error approving asset:', error);

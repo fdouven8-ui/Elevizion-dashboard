@@ -1,0 +1,138 @@
+ROLE: Senior full-stack engineer. You are editing my existing Elevizion dashboard codebase (Node/Express + DB + Yodeck API v2 integration). Goal is to permanently fix “NO CONTENT TO PLAY” and remove legacy/old broadcast paths so they can never come back and cause mismatches.
+
+PROBLEM (current):
+- UI shows playlist has items, but screen shows “NO CONTENT TO PLAY”.
+- /now-playing shows mismatch: “DB verwacht layout/<id>, actual playlist/<id>”.
+- There are multiple legacy modes (layoutMode=LAYOUT, TAG_BASED playlists, fallback schedules, auto-playlist-crop detection). These create drift: DB expects layout while Yodeck is on playlist, or DB points to playlist A while Yodeck plays auto playlist B.
+
+NON-NEGOTIABLE NEW RULES (make these enforced in code + DB):
+1) EVERY screen MUST be driven by exactly ONE canonical Yodeck playlist per Location. No layouts, no schedules, no tag-based broadcasting, no “auto-playlist-crop” as a source of truth.
+2) There is a single “BASE” playlist template that already exists in Yodeck (the one that was previously set and contains weather/news etc). For each location we “copy/clone” that base template (or create once and seed items equal to the template). This becomes the canonical playlist for that location.
+3) Uploaded + approved advertiser videos MUST be appended/inserted into the correct location playlist (the canonical playlist of that location) according to placement rules.
+4) ALL old broadcast methods must be removed or hard-disabled so they cannot be used accidentally:
+   - layoutMode=LAYOUT path
+   - any code that pushes layouts to screens
+   - any tag-based “playlistTag” selection
+   - any FALLBACK_SCHEDULE broadcast
+   - any verification logic expecting layout ids
+   - any function that treats “auto-playlist-crop” as the actual playback target
+   If removing is risky, then keep stubs that throw an explicit error and log “LEGACY_BROADCAST_PATH_DISABLED”.
+
+TARGET ARCHITECTURE (make it real in code):
+- Single source of truth per location:
+  location.yodeckPlaylistId (string) = canonical playlist id for that location
+  location.yodeckBaselinePlaylistId is NO LONGER USED (remove or keep nullable but unused)
+  location.layoutMode is removed OR forced to "PLAYLIST" always
+- Screen assignment:
+  Each Yodeck screen (player) MUST be set to source_type="playlist", source_id=<location.yodeckPlaylistId>
+  We never assign layouts. We never assign schedules. We never assign by tags.
+
+DELIVERABLES (implement all in this one pass):
+A) DATABASE MIGRATION + NORMALIZATION
+1) Add a boolean or enum to mark canonical mode:
+   - location.broadcastMode ENUM default 'PLAYLIST'
+2) Create a migration that:
+   - Sets broadcastMode='PLAYLIST' for ALL locations
+   - Nulls out or deprecates: layoutMode, yodeckLayoutId, combinedPlaylistId, playlistMode, playlistTag (or keep but not used)
+   - Ensures each active location with yodeckDeviceId has a yodeckPlaylistId:
+       If missing, create/clone from Base Template playlist and store id.
+   - For each Screen row, ensure it is linked to a location; if not, log and skip.
+
+B) CANONICAL PLAYLIST TEMPLATE + CLONE
+1) In config/environment, define:
+   YODECK_BASE_TEMPLATE_PLAYLIST_ID = "<the existing base playlist id that was already configured>"
+   (If not present, fallback to current known id you already have in DB like 30461645 or whatever is the existing base. Add a clearly named env var and use it.)
+2) Implement yodeckClonePlaylistFromTemplate(templatePlaylistId, newName):
+   - Fetch template playlist items from Yodeck v2
+   - Create a new playlist in Yodeck named "Elevizion | Loop | <LocationName> | <YDK-DEVICEID>"
+   - Add all template items to this new playlist in the same order/durations
+   - Return new playlist id
+3) Implement ensureLocationCanonicalPlaylist(locationId):
+   - If location.yodeckPlaylistId exists -> return it
+   - Else clone from template and set location.yodeckPlaylistId, broadcastMode='PLAYLIST'
+
+C) HARD ASSIGN PLAYLIST TO SCREEN (NO OTHER PATH EXISTS)
+1) Implement setYodeckScreenSourceToPlaylist(yodeckScreenId, playlistId) using Yodeck v2:
+   - PATCH /api/v2/screens/{id}/ with { "source_type":"playlist", "source_id": Number(playlistId) }
+   - Verify by GET /api/v2/screens/{id}/ and assert source_type/source_id match
+2) Implement ensureScreenBroadcast(screenId):
+   - Load screen + location
+   - Ensure location has canonical playlist
+   - Set screen source to canonical playlist
+   - Store lastPushAt + lastPushResult in DB
+3) Add a worker that runs every 5 minutes:
+   - For each active screen with yodeckPlayerId: ensureScreenBroadcast()
+   - This is idempotent and safe; it only reasserts correct source.
+
+D) PLAYABILITY GUARANTEE (fix “playlist has items but nothing plays”)
+1) Create a known-good test media generator:
+   - ffmpeg create 3s 1920x1080 H.264 yuv420p mp4 with centered text “ELEVIZION TEST”
+2) Upload it to Yodeck using existing two-step upload pipeline.
+3) Implement ensurePlaylistNotEmptyAndPlayable(playlistId):
+   - Fetch playlist items
+   - If zero items OR no playable media, add known-good test media to playlist
+   - Refetch and assert itemCount>0
+4) In ensureLocationCanonicalPlaylist OR ensureScreenBroadcast, call ensurePlaylistNotEmptyAndPlayable().
+
+E) APPROVED VIDEO → ADD TO CORRECT LOCATION PLAYLIST
+1) Identify the existing “approve video / publish to yodeck” flow.
+2) Replace any “tag based”, “layout based”, or “ADS playlist” linking with:
+   - Determine target locations/screens for that advertiser (your placement engine)
+   - For each target location:
+       playlistId = ensureLocationCanonicalPlaylist(locationId)
+       add that mediaId to THAT playlist (append at end or with your desired rotation logic)
+3) Ensure dedupe:
+   - Don’t add same media twice to same playlist (check existing playlist items)
+4) After adding, call ensureScreenBroadcast() for all screens of that location.
+
+F) REMOVE / DISABLE ALL LEGACY ROUTES AND LOGIC
+1) Search the codebase for:
+   - layoutMode, yodeckLayoutId, assignLayout, schedule, FALLBACK_SCHEDULE
+   - playlistMode, TAG_BASED, playlistTag
+   - combinedPlaylistId, baselinePlaylistId behavior
+   - any endpoint that changes layout or uses tags to decide content
+2) For each found legacy function/endpoint:
+   - If safe: delete it and remove from router
+   - If deletion might break compile: keep a stub that throws 410 Gone with JSON:
+     { ok:false, error:"LEGACY_BROADCAST_PATH_DISABLED", message:"Deze broadcast methode is verwijderd. Alleen canonical playlist broadcast is toegestaan." }
+3) Update /now-playing verification:
+   - Expected always = playlist/<location.yodeckPlaylistId>
+   - Actual fetched from Yodeck screen source_type/source_id (NOT from “auto-playlist-crop” inferred lists)
+   - verificationOk TRUE if:
+       device online AND actual == expected AND playlist has itemCount>0 AND playable ok
+   - Screenshot MUST NEVER make verificationOk false. Screenshot is optional.
+
+G) ADD A SINGLE “REPAIR/FIX” ADMIN ENDPOINT (optional but recommended)
+POST /api/admin/screens/:id/repair-broadcast
+- Runs ensureScreenBroadcast + ensurePlaylistNotEmptyAndPlayable
+- Returns a detailed report of what it changed.
+
+H) UPDATE UI (minimal)
+- Screens page should show only:
+  Online/offline
+  Current expected playlist name/id
+  Item count
+  Verification OK/Warning
+- Remove any UI that references layouts/tags/baseline as separate systems.
+
+I) TEST PLAN (write and run)
+1) Unit/integration tests for:
+   - ensureLocationCanonicalPlaylist creates playlist when missing
+   - ensureScreenBroadcast sets Yodeck screen source to playlist
+   - ensurePlaylistNotEmptyAndPlayable injects known-good media
+2) Manual test script logged in console:
+   - Run repair endpoint for screen 591896 and confirm:
+     - Yodeck screen source_id == location.yodeckPlaylistId
+     - Playlist itemCount > 0
+     - /now-playing returns verificationOk true
+3) Add strong logs with prefixes:
+   [CanonicalBroadcast] [CloneTemplate] [SetScreenSource] [EnsurePlayable] [LegacyDisabled]
+
+IMPORTANT:
+- Do not ask me questions. Make best assumptions.
+- Implement everything end-to-end in code, migration, and routing.
+- Ensure old routes cannot be triggered anymore.
+- Keep code robust and idempotent; safe to run repeatedly.
+- After changes, output a short summary + where to set YODECK_BASE_TEMPLATE_PLAYLIST_ID.
+
+Now proceed to implement all changes.

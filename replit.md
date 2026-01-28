@@ -74,15 +74,31 @@ The system integrates various advanced functionalities:
   - `forceRepairAndProof()` - Complete E2E cycle with 6-poll backoff (5s, 5s, 10s, 10s, 15s, 15s)
   - Returns complete diagnostics: proofStatus, pollAttempts, refreshMethodUsed, detectedNoContent flag
   - Endpoint: `POST /api/screens/:id/force-repair-proof`
-- **Broadcast Enforcer** (`screenPlaylistService.ts`): Deterministic playback control system:
-  - `enforceBroadcastForScreen(screenId)` - Forces Yodeck player to correct playlist via API
-  - Priority: combinedPlaylistId > actual > yodeckPlaylistId (aligned with getEffectivePlaybackPlaylistId)
-  - Fetches BEFORE state, forces via PATCH /screens/{id}/, verifies AFTER state
-  - Auto-updates Location DB: layoutMode=PLAYLIST, combinedPlaylistId, combinedPlaylistVerifiedAt
-  - verificationOk = sourceMatchesTarget && playlistItemCount > 0
-  - KnownGood media upload is optional (Yodeck API limitation)
-  - Endpoint: `POST /api/admin/screens/:id/force-broadcast`
+- **Canonical Broadcast Service** (`canonicalBroadcastService.ts`): SINGLE SOURCE OF TRUTH for all broadcast operations:
+  - **Architecture**: Each location has ONE canonical playlist (`location.yodeckPlaylistId`). No layouts, no schedules, no tags.
+  - **Template Cloning**: New locations clone from `YODECK_BASE_TEMPLATE_PLAYLIST_ID` (env/DB config)
+  - Key functions:
+    - `ensureLocationCanonicalPlaylist(locationId)` - Create/verify canonical playlist
+    - `setYodeckScreenSourceToPlaylist(screenId, playlistId)` - Assign screen to playlist
+    - `ensureScreenBroadcast(screenId)` - Full workflow: ensure playlist + assign screen
+    - `addMediaToCanonicalPlaylist(locationId, mediaId)` - Add approved ad to location playlist
+    - `repairBroadcast(screenId)` - Full repair with detailed logging
+    - `runBroadcastWorker()` - 5-minute worker for all active screens
+  - Endpoints:
+    - `POST /api/admin/screens/:id/canonical-repair` - Repair single screen
+    - `GET/POST /api/admin/canonical-broadcast/config` - Template config
+    - `POST /api/admin/canonical-broadcast/run-worker` - Manual worker trigger
+- **Broadcast Enforcer** (`screenPlaylistService.ts`): Now delegates to canonical service:
+  - `POST /api/admin/screens/:id/force-broadcast` → redirects to `repairBroadcast()` from canonicalBroadcastService
+  - Uses `yodeckPlaylistId` as SINGLE SOURCE OF TRUTH
   - UI: "Forceer uitzending (fix)" button in ScreenDetail page
+- **Approval → Canonical Publish Integration** (`adAssetUploadService.ts`):
+  - `approveAsset()` calls `publishApprovedVideoToLocations()` from canonicalBroadcastService
+  - Approved videos are automatically added to location canonical playlists
+- **Legacy Route Deprecation** (410 Gone):
+  - All `/api/admin/layouts/*` routes return 410 LEGACY_LAYOUT_SYSTEM_DISABLED
+  - All `/api/admin/autopilot/*` baseline/combined/layout routes return 410
+  - Legacy systems replaced by canonical playlist architecture
 
 ## External Dependencies
 

@@ -15265,155 +15265,68 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   // ADMIN: LAYOUTS (Baseline + Ads separation)
   // ============================================================================
   
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.get("/api/admin/layouts", requireAdminAccess, async (req, res) => {
-    try {
-      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
-      const result = await yodeckLayoutService.getLayoutStatusForLocations();
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout system is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
   });
   
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.post("/api/admin/layouts/apply", requireAdminAccess, async (req, res) => {
-    try {
-      const { locationId } = req.body;
-      
-      if (!locationId) {
-        return res.status(400).json({ error: "locationId is verplicht" });
-      }
-      
-      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
-      const result = await yodeckLayoutService.applyLayoutToLocation(locationId);
-      
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout system is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
   });
   
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.get("/api/admin/layouts/probe", requireAdminAccess, async (req, res) => {
-    try {
-      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
-      const supported = await yodeckLayoutService.probeLayoutsSupport(true);
-      const status = yodeckLayoutService.getLayoutSupportStatus();
-      
-      res.json({
-        layoutsSupported: supported,
-        lastCheck: status.lastCheck,
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout system is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
   });
   
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.post("/api/admin/layouts/:locationId/seed-baseline", requireAdminAccess, async (req, res) => {
-    try {
-      const { locationId } = req.params;
-      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
-      
-      const location = await storage.getLocation(locationId);
-      if (!location) {
-        return res.status(404).json({ error: "Locatie niet gevonden" });
-      }
-      
-      if (!location.yodeckBaselinePlaylistId) {
-        return res.status(400).json({ error: "Baseline playlist niet geconfigureerd" });
-      }
-      
-      const result = await yodeckLayoutService.seedBaselinePlaylist(location.yodeckBaselinePlaylistId);
-      
-      res.json({
-        ok: result.ok,
-        seeded: result.seeded,
-        error: result.error,
-        logs: result.logs,
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Baseline seeding is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
   });
   
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.get("/api/admin/layouts/:locationId/baseline-status", requireAdminAccess, async (req, res) => {
-    try {
-      const { locationId } = req.params;
-      const { yodeckLayoutService } = await import("./services/yodeckLayoutService");
-      
-      const location = await storage.getLocation(locationId);
-      if (!location) {
-        return res.status(404).json({ error: "Locatie niet gevonden" });
-      }
-      
-      if (!location.yodeckBaselinePlaylistId) {
-        return res.json({ hasPlaylist: false, isEmpty: true });
-      }
-      
-      const isEmpty = await yodeckLayoutService.checkPlaylistEmpty(location.yodeckBaselinePlaylistId);
-      
-      res.json({
-        hasPlaylist: true,
-        playlistId: location.yodeckBaselinePlaylistId,
-        isEmpty,
-      });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Baseline status is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
   });
 
-  // Force Elevizion layout on screen (detect wrong layout, fix, push, verify)
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.post("/api/admin/layouts/:locationId/force", requireAdminAccess, async (req, res) => {
-    try {
-      const { locationId } = req.params;
-      const { ensureScreenUsesElevizionLayout } = await import("./services/yodeckLayoutService");
-      
-      console.log(`[ForceLayout] API called for location ${locationId}`);
-      const result = await ensureScreenUsesElevizionLayout(locationId);
-      
-      result.logs.forEach(log => console.log(log));
-      
-      if (!result.ok) {
-        return res.status(400).json({ 
-          success: false, 
-          error: result.error,
-          verified: false,
-          logs: result.logs,
-        });
-      }
-      
-      res.json({
-        success: true,
-        verified: result.verified,
-        layoutId: result.layoutId,
-        layoutName: result.layoutName,
-        logs: result.logs,
-      });
-    } catch (error: any) {
-      console.error(`[ForceLayout] Error: ${error.message}`);
-      res.status(500).json({ success: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Force layout is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
   });
 
-  // Get detailed layout status for all locations (includes screen current config)
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.get("/api/admin/layouts/detailed", requireAdminAccess, async (req, res) => {
-    try {
-      const { getDetailedLayoutStatus } = await import("./services/yodeckLayoutService");
-      const status = await getDetailedLayoutStatus();
-      res.json(status);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout status is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
   });
 
-  // Check screen layout config for a single location
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.get("/api/admin/layouts/:locationId/screen-status", requireAdminAccess, async (req, res) => {
-    try {
-      const { locationId } = req.params;
-      const { checkScreenLayoutConfig } = await import("./services/yodeckLayoutService");
-      const status = await checkScreenLayoutConfig(locationId);
-      res.json(status);
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Screen layout status is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
   });
 
   // ============================================================================
@@ -16591,27 +16504,12 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   // AUTOPILOT CONFIG ENDPOINTS
   // =========================================================================
 
-  /**
-   * GET /api/admin/autopilot/baseline-status
-   * Alias for /api/admin/settings/baseline-status - Get baseline playlist status
-   */
+  // DEPRECATED: Baseline system is replaced by canonical playlist architecture
   app.get("/api/admin/autopilot/baseline-status", requireAdminAccess, async (req, res) => {
-    try {
-      const { getBaselinePlaylistStatus } = await import("./services/screenPlaylistService");
-      const status = await getBaselinePlaylistStatus();
-      res.json(status);
-    } catch (error: any) {
-      console.error("[AutopilotBaselineStatus] Error:", error);
-      res.status(500).json({ 
-        configured: false, 
-        playlistId: null, 
-        playlistName: null,
-        itemCount: 0,
-        items: [],
-        lastCheckedAt: new Date().toISOString(),
-        error: error.message 
-      });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_BASELINE_SYSTEM_DISABLED",
+      message: "Baseline system is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
   });
 
   /**
@@ -16647,265 +16545,124 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
-  /**
-   * POST /api/admin/autopilot/config/layout-region
-   * Set the ADS region ID for a layout
-   */
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.post("/api/admin/autopilot/config/layout-region", requireAdminAccess, async (req, res) => {
-    try {
-      const { layoutId, regionId } = req.body;
-      if (!layoutId || isNaN(parseInt(layoutId))) {
-        return res.status(400).json({ ok: false, error: "Valid layoutId required" });
-      }
-      if (regionId === undefined || isNaN(parseInt(regionId))) {
-        return res.status(400).json({ ok: false, error: "Valid regionId required" });
-      }
-      
-      const { setLayoutAdsRegionId } = await import("./services/yodeckAutopilotConfig");
-      await setLayoutAdsRegionId(parseInt(layoutId), parseInt(regionId));
-      res.json({ ok: true, message: `Layout ${layoutId} ADS region set to ${regionId}` });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout region config is deprecated. Use canonical playlist via /api/admin/canonical-broadcast/config" 
+    });
   });
 
-  /**
-   * GET /api/admin/autopilot/layout/:layoutId/regions
-   * Get layout regions for mapping configuration
-   */
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.get("/api/admin/autopilot/layout/:layoutId/regions", requireAdminAccess, async (req, res) => {
-    try {
-      const { layoutId } = req.params;
-      const { getLayoutRegions } = await import("./services/yodeckAutopilotHelpers");
-      const result = await getLayoutRegions(parseInt(layoutId));
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout regions is deprecated. Use canonical playlist architecture" 
+    });
   });
 
-  /**
-   * POST /api/admin/autopilot/ensure-ads-region/:layoutId
-   * Ensure ADS region is bound to a playlist
-   */
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
   app.post("/api/admin/autopilot/ensure-ads-region/:layoutId", requireAdminAccess, async (req, res) => {
-    try {
-      const { layoutId } = req.params;
-      const { playlistId } = req.body;
-      
-      if (!playlistId || isNaN(parseInt(playlistId))) {
-        return res.status(400).json({ ok: false, error: "Valid playlistId required" });
-      }
-      
-      const { ensureAdsRegionBound } = await import("./services/yodeckAutopilotHelpers");
-      const result = await ensureAdsRegionBound(parseInt(layoutId), parseInt(playlistId));
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout regions is deprecated. Use canonical playlist architecture" 
+    });
   });
 
-  /**
-   * POST /api/admin/autopilot/seed-playlist/:playlistId
-   * Seed an empty playlist with self-ad
-   */
+  // DEPRECATED: Legacy autopilot system is replaced by canonical playlist architecture
   app.post("/api/admin/autopilot/seed-playlist/:playlistId", requireAdminAccess, async (req, res) => {
-    try {
-      const { playlistId } = req.params;
-      const { ensureAdsPlaylistSeeded } = await import("./services/yodeckAutopilotHelpers");
-      const result = await ensureAdsPlaylistSeeded(parseInt(playlistId));
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_SYSTEM_DISABLED",
+      message: "Seed playlist is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
   });
 
-  /**
-   * POST /api/admin/autopilot/verify-screen/:screenId
-   * Full verification of screen content setup
-   */
+  // DEPRECATED: Legacy autopilot system is replaced by canonical playlist architecture
   app.post("/api/admin/autopilot/verify-screen/:screenId", requireAdminAccess, async (req, res) => {
-    try {
-      const { screenId } = req.params;
-      const { verifyScreenSetup } = await import("./services/yodeckAutopilotHelpers");
-      const result = await verifyScreenSetup(parseInt(screenId));
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_SYSTEM_DISABLED",
+      message: "Verify screen is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
   });
 
-  /**
-   * POST /api/admin/autopilot/full-repair/:locationId
-   * Full autopilot repair for a location
-   */
+  // DEPRECATED: Legacy autopilot system is replaced by canonical playlist architecture
   app.post("/api/admin/autopilot/full-repair/:locationId", requireAdminAccess, async (req, res) => {
-    try {
-      const { locationId } = req.params;
-      const { performFullLocationRepair } = await import("./services/yodeckAutopilotService");
-      const result = await performFullLocationRepair(locationId);
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_SYSTEM_DISABLED",
+      message: "Full repair is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
   });
 
   // =========================================================================
-  // COMBINED PLAYLIST MODE ENDPOINTS (NEW ARCHITECTURE)
+  // COMBINED PLAYLIST MODE ENDPOINTS (DEPRECATED - use canonical instead)
   // =========================================================================
 
-  /**
-   * GET /api/admin/autopilot/combined-config
-   * Get combined playlist autopilot configuration
-   */
+  // DEPRECATED: Combined playlist system is replaced by canonical playlist architecture
   app.get("/api/admin/autopilot/combined-config", requireAdminAccess, async (req, res) => {
-    try {
-      const { getBasePlaylistId } = await import("./services/combinedPlaylistService");
-      const basePlaylistId = await getBasePlaylistId();
-      res.json({ 
-        ok: true, 
-        config: {
-          basePlaylistId,
-          mode: "combined_playlist",
-        }
-      });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Combined playlist config is deprecated. Use /api/admin/canonical-broadcast/config" 
+    });
   });
 
-  /**
-   * POST /api/admin/autopilot/combined-config
-   * Set combined playlist configuration
-   */
+  // DEPRECATED: Combined playlist system is replaced by canonical playlist architecture
   app.post("/api/admin/autopilot/combined-config", requireAdminAccess, async (req, res) => {
-    try {
-      const { basePlaylistId } = req.body;
-      if (!basePlaylistId) {
-        return res.status(400).json({ ok: false, error: "basePlaylistId required" });
-      }
-      
-      const { setBasePlaylistId } = await import("./services/combinedPlaylistService");
-      await setBasePlaylistId(String(basePlaylistId));
-      res.json({ ok: true, message: `Base playlist ID set to ${basePlaylistId}` });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Combined playlist config is deprecated. Use /api/admin/canonical-broadcast/config" 
+    });
   });
 
-  /**
-   * POST /api/admin/autopilot/repair/:locationId
-   * Force combined playlist sync + assign for a location
-   */
+  // DEPRECATED: Combined playlist system is replaced by canonical playlist architecture
   app.post("/api/admin/autopilot/repair/:locationId", requireAdminAccess, async (req, res) => {
-    try {
-      const { locationId } = req.params;
-      const { ensureCombinedPlaylistForLocation } = await import("./services/combinedPlaylistService");
-      const result = await ensureCombinedPlaylistForLocation(locationId);
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Combined playlist repair is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
   });
 
-  /**
-   * GET /api/admin/locations/:id/content-status
-   * Get combined playlist content status for a location
-   */
+  // DEPRECATED: Combined playlist system is replaced by canonical playlist architecture
   app.get("/api/admin/locations/:id/content-status", requireAdminAccess, async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { getLocationContentStatus } = await import("./services/combinedPlaylistService");
-      const status = await getLocationContentStatus(id);
-      res.json({ ok: true, ...status });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Content status is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
   });
 
   // =========================================================================
-  // AUTOPILOT: BASELINE FROM TEMPLATE
+  // AUTOPILOT: BASELINE FROM TEMPLATE (DEPRECATED)
   // =========================================================================
 
-  /**
-   * GET /api/admin/autopilot/config
-   * Get full autopilot configuration including baseTemplatePlaylistId
-   */
+  // DEPRECATED: Legacy autopilot config is replaced by canonical broadcast config
   app.get("/api/admin/autopilot/config", requireAdminAccess, async (req, res) => {
-    try {
-      const { getAutopilotConfigStatus } = await import("./services/combinedPlaylistService");
-      const config = await getAutopilotConfigStatus();
-      res.json({ ok: true, config });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_CONFIG_DISABLED",
+      message: "Autopilot config is deprecated. Use /api/admin/canonical-broadcast/config" 
+    });
   });
 
-  /**
-   * POST /api/admin/autopilot/config
-   * Set autopilot configuration (baseTemplatePlaylistId)
-   */
+  // DEPRECATED: Legacy autopilot config is replaced by canonical broadcast config
   app.post("/api/admin/autopilot/config", requireAdminAccess, async (req, res) => {
-    try {
-      const { baseTemplatePlaylistId } = req.body;
-      
-      if (!baseTemplatePlaylistId) {
-        return res.status(400).json({ ok: false, error: "baseTemplatePlaylistId required" });
-      }
-      
-      const { setBaseTemplatePlaylistId, getPlaylistById } = await import("./services/combinedPlaylistService");
-      const { getPlaylistById: fetchPlaylist } = await import("./services/yodeckPlaylistItemsService");
-      
-      // Validate the playlist exists
-      const validateResult = await fetchPlaylist(String(baseTemplatePlaylistId));
-      if (!validateResult.ok) {
-        return res.status(400).json({ ok: false, error: `Playlist ${baseTemplatePlaylistId} not found in Yodeck` });
-      }
-      
-      await setBaseTemplatePlaylistId(String(baseTemplatePlaylistId));
-      res.json({ 
-        ok: true, 
-        message: `Base template playlist ID set to ${baseTemplatePlaylistId}`,
-        playlistName: validateResult.playlist?.name,
-        itemCount: validateResult.playlist?.items?.length || 0,
-      });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_CONFIG_DISABLED",
+      message: "Autopilot config is deprecated. Use /api/admin/canonical-broadcast/config" 
+    });
   });
 
-  /**
-   * POST /api/admin/autopilot/sync-baseline/:locationId
-   * Sync a location's baseline playlist from template (if empty)
-   */
+  // DEPRECATED: Baseline sync is replaced by canonical playlist template cloning
   app.post("/api/admin/autopilot/sync-baseline/:locationId", requireAdminAccess, async (req, res) => {
-    try {
-      const { locationId } = req.params;
-      const { ensureBaselineFromTemplate } = await import("./services/combinedPlaylistService");
-      const result = await ensureBaselineFromTemplate(locationId);
-      
-      // Log to console for visibility
-      result.logs.forEach(log => console.log(log));
-      
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_BASELINE_SYNC_DISABLED",
+      message: "Baseline sync is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
   });
 
-  /**
-   * GET /api/admin/yodeck/debug/template-baseline/:locationId
-   * Debug endpoint: compare template items vs baseline items for a location
-   */
+  // DEPRECATED: Template baseline debug is replaced by canonical playlist architecture
   app.get("/api/admin/yodeck/debug/template-baseline/:locationId", requireAdminAccess, async (req, res) => {
-    try {
-      const { locationId } = req.params;
-      const { getTemplateBaselineDiff } = await import("./services/combinedPlaylistService");
-      const diff = await getTemplateBaselineDiff(locationId);
-      res.json(diff);
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      error: "LEGACY_TEMPLATE_BASELINE_DISABLED",
+      message: "Template baseline debug is deprecated. Use /api/screens/:id/now-playing" 
+    });
   });
 
   /**
@@ -17962,20 +17719,29 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * POST /api/admin/screens/:screenId/force-broadcast
-   * Broadcast Enforcer - Force deterministic playback with known-good content
+   * Broadcast Enforcer - Now uses canonical playlist architecture
+   * Redirects to canonical repair for single source of truth
    */
   app.post("/api/admin/screens/:screenId/force-broadcast", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.params;
-      const { enforceBroadcastForScreen } = await import("./services/screenPlaylistService");
+      const { repairBroadcast } = await import("./services/canonicalBroadcastService");
       
-      console.log(`[ForceBroadcast] Starting enforce for screen ${screenId}`);
-      const result = await enforceBroadcastForScreen(screenId);
+      console.log(`[ForceBroadcast] Using canonical repair for screen ${screenId}`);
+      const result = await repairBroadcast(screenId);
       
-      console.log(`[ForceBroadcast] Result: ok=${result.ok}, verificationOk=${result.verificationOk}`);
+      console.log(`[ForceBroadcast] Canonical result: ok=${result.ok}, verified=${result.verified}`);
       result.logs.forEach(log => console.log(`[ForceBroadcast] ${log}`));
       
-      res.json(result);
+      // Map to legacy response format for backward compatibility
+      res.json({
+        ok: result.ok,
+        verificationOk: result.verified,
+        playlistId: result.playlistId,
+        itemCount: result.itemCount,
+        logs: result.logs,
+        message: result.ok ? "Canonical broadcast repair completed" : result.error,
+      });
     } catch (error: any) {
       console.error("[ForceBroadcast] Error:", error);
       res.status(500).json({ ok: false, error: error.message });
@@ -18029,6 +17795,91 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       });
     } catch (error: any) {
       console.error("[RepairAll] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/:screenId/canonical-repair
+   * Canonical Broadcast Repair - ensures screen plays location's canonical playlist
+   */
+  app.post("/api/admin/screens/:screenId/canonical-repair", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { repairBroadcast } = await import("./services/canonicalBroadcastService");
+      
+      console.log(`[CanonicalRepair] Starting repair for screen ${screenId}`);
+      const result = await repairBroadcast(screenId);
+      
+      console.log(`[CanonicalRepair] Result: ok=${result.ok}, verified=${result.verified}`);
+      result.logs.forEach(log => console.log(`[CanonicalRepair] ${log}`));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[CanonicalRepair] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/canonical-broadcast/config
+   * Get canonical broadcast configuration
+   */
+  app.get("/api/admin/canonical-broadcast/config", requireAdminAccess, async (req, res) => {
+    try {
+      const { getBaseTemplatePlaylistId } = await import("./services/canonicalBroadcastService");
+      const templateId = await getBaseTemplatePlaylistId();
+      
+      res.json({
+        ok: true,
+        baseTemplatePlaylistId: templateId,
+        configured: !!templateId,
+        envVarName: "YODECK_BASE_TEMPLATE_PLAYLIST_ID",
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/canonical-broadcast/config
+   * Set canonical broadcast configuration
+   */
+  app.post("/api/admin/canonical-broadcast/config", requireAdminAccess, async (req, res) => {
+    try {
+      const { baseTemplatePlaylistId } = req.body;
+      if (!baseTemplatePlaylistId) {
+        return res.status(400).json({ ok: false, error: "baseTemplatePlaylistId is required" });
+      }
+      
+      const { setBaseTemplatePlaylistId } = await import("./services/canonicalBroadcastService");
+      await setBaseTemplatePlaylistId(baseTemplatePlaylistId);
+      
+      res.json({ ok: true, baseTemplatePlaylistId });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/canonical-broadcast/run-worker
+   * Manually trigger canonical broadcast worker
+   */
+  app.post("/api/admin/canonical-broadcast/run-worker", requireAdminAccess, async (req, res) => {
+    try {
+      const { runBroadcastWorker } = await import("./services/canonicalBroadcastService");
+      
+      console.log(`[CanonicalWorker] Manual trigger...`);
+      const result = await runBroadcastWorker();
+      
+      console.log(`[CanonicalWorker] Done: ${result.screensOk}/${result.screensProcessed} OK`);
+      
+      res.json({
+        ok: result.screensFailed === 0,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("[CanonicalWorker] Error:", error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });

@@ -51,17 +51,22 @@ function computeExpectedSource(location: {
     return { type: "unknown", id: null, source: "none" };
   }
   
-  if (location.combinedPlaylistId) {
-    return { type: "playlist", id: location.combinedPlaylistId, source: "combinedPlaylistId" };
-  }
-  
-  if (location.layoutMode === "LAYOUT" && location.yodeckLayoutId) {
-    return { type: "layout", id: location.yodeckLayoutId, source: "yodeckLayoutId" };
-  }
-  
+  // CANONICAL: yodeckPlaylistId is the SINGLE SOURCE OF TRUTH
+  // Priority: yodeckPlaylistId > combinedPlaylistId
+  // Layouts are DEPRECATED and never used
   if (location.yodeckPlaylistId) {
-    return { type: "playlist", id: location.yodeckPlaylistId, source: "yodeckPlaylistId" };
+    return { type: "playlist", id: location.yodeckPlaylistId, source: "yodeckPlaylistId (canonical)" };
   }
+  
+  // Fallback to combinedPlaylistId for backward compat (should be same as yodeckPlaylistId)
+  if (location.combinedPlaylistId) {
+    return { type: "playlist", id: location.combinedPlaylistId, source: "combinedPlaylistId (legacy fallback)" };
+  }
+  
+  // DEPRECATED: Layouts are no longer used
+  // if (location.layoutMode === "LAYOUT" && location.yodeckLayoutId) {
+  //   return { type: "layout", id: location.yodeckLayoutId, source: "yodeckLayoutId" };
+  // }
   
   return { type: "unknown", id: null, source: "none" };
 }
@@ -69,20 +74,22 @@ function computeExpectedSource(location: {
 /**
  * Get the effective playlist ID for content operations
  * This ensures whatever we add is actually broadcast
+ * CANONICAL: yodeckPlaylistId is the SINGLE SOURCE OF TRUTH
  */
 export function getEffectivePlaybackPlaylistId(
   location: { combinedPlaylistId: string | null; yodeckPlaylistId: string | null } | null,
   actualPlaylistId: string | null
 ): string | null {
-  // Priority: combinedPlaylistId > actualPlaylistId > yodeckPlaylistId
-  if (location?.combinedPlaylistId) {
-    return location.combinedPlaylistId;
+  // Priority: yodeckPlaylistId (canonical) > actualPlaylistId > combinedPlaylistId (legacy)
+  if (location?.yodeckPlaylistId) {
+    return location.yodeckPlaylistId;
   }
   if (actualPlaylistId) {
     return actualPlaylistId;
   }
-  if (location?.yodeckPlaylistId) {
-    return location.yodeckPlaylistId;
+  // Legacy fallback only
+  if (location?.combinedPlaylistId) {
+    return location.combinedPlaylistId;
   }
   return null;
 }
@@ -168,21 +175,23 @@ export async function repairBroadcastMismatch(screenId: string): Promise<{
     return { repaired: false, before, after: before, actualSource, logs };
   }
   
-  // Auto-heal: Update location to use this playlist as canonical
-  logs.push(`Detected auto-playlist, updating location...`);
+  // Auto-heal: Update location to use this playlist as CANONICAL
+  logs.push(`Detected auto-playlist, updating location to canonical...`);
   
   const now = new Date();
   await db.update(locations).set({
     layoutMode: "PLAYLIST",
-    combinedPlaylistId: actualSourceId,
+    yodeckPlaylistId: actualSourceId,  // CANONICAL: yodeckPlaylistId is the single source of truth
+    combinedPlaylistId: actualSourceId, // Legacy sync for backward compat
     combinedPlaylistVerifiedAt: now,
     updatedAt: now,
   }).where(eq(locations.id, location.id));
   
-  logs.push(`Updated location ${location.id}: combinedPlaylistId=${actualSourceId}, layoutMode=PLAYLIST`);
+  logs.push(`Updated location ${location.id}: yodeckPlaylistId=${actualSourceId} (canonical), layoutMode=PLAYLIST`);
   
   const after = computeExpectedSource({
     ...location,
+    yodeckPlaylistId: actualSourceId,
     combinedPlaylistId: actualSourceId,
     layoutMode: "PLAYLIST",
   });
