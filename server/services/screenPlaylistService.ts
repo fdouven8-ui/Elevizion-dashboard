@@ -18,10 +18,177 @@
  */
 
 import { db } from "../db";
-import { screens, placements, contracts, adAssets, systemSettings } from "@shared/schema";
+import { screens, placements, contracts, adAssets, systemSettings, locations } from "@shared/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { yodeckRequest } from "./yodeckLayoutService";
 import { getYodeckDeviceStatus, UnifiedDeviceStatus } from "./unifiedDeviceStatusService";
+
+// ============================================================================
+// EXPECTED SOURCE CALCULATION
+// ============================================================================
+
+interface ExpectedSource {
+  type: "playlist" | "layout" | "unknown";
+  id: string | null;
+  source: "combinedPlaylistId" | "yodeckLayoutId" | "yodeckPlaylistId" | "none";
+}
+
+/**
+ * Compute expected source from Location DB fields (NOT from current playlist name)
+ * Priority:
+ * 1. If location.combinedPlaylistId exists -> expectedType=playlist expectedId=combinedPlaylistId
+ * 2. Else if location.layoutMode==="LAYOUT" and location.yodeckLayoutId -> expectedType=layout expectedId=yodeckLayoutId
+ * 3. Else if location.yodeckPlaylistId -> expectedType=playlist expectedId=yodeckPlaylistId
+ * 4. Else expected unknown
+ */
+function computeExpectedSource(location: {
+  combinedPlaylistId: string | null;
+  layoutMode: string | null;
+  yodeckLayoutId: string | null;
+  yodeckPlaylistId: string | null;
+} | null): ExpectedSource {
+  if (!location) {
+    return { type: "unknown", id: null, source: "none" };
+  }
+  
+  if (location.combinedPlaylistId) {
+    return { type: "playlist", id: location.combinedPlaylistId, source: "combinedPlaylistId" };
+  }
+  
+  if (location.layoutMode === "LAYOUT" && location.yodeckLayoutId) {
+    return { type: "layout", id: location.yodeckLayoutId, source: "yodeckLayoutId" };
+  }
+  
+  if (location.yodeckPlaylistId) {
+    return { type: "playlist", id: location.yodeckPlaylistId, source: "yodeckPlaylistId" };
+  }
+  
+  return { type: "unknown", id: null, source: "none" };
+}
+
+/**
+ * Get the effective playlist ID for content operations
+ * This ensures whatever we add is actually broadcast
+ */
+export function getEffectivePlaybackPlaylistId(
+  location: { combinedPlaylistId: string | null; yodeckPlaylistId: string | null } | null,
+  actualPlaylistId: string | null
+): string | null {
+  // Priority: combinedPlaylistId > actualPlaylistId > yodeckPlaylistId
+  if (location?.combinedPlaylistId) {
+    return location.combinedPlaylistId;
+  }
+  if (actualPlaylistId) {
+    return actualPlaylistId;
+  }
+  if (location?.yodeckPlaylistId) {
+    return location.yodeckPlaylistId;
+  }
+  return null;
+}
+
+/**
+ * Auto-heal: Detect if actual Yodeck playlist is an auto-playlist and update Location DB
+ * Returns repair status
+ */
+export async function repairBroadcastMismatch(screenId: string): Promise<{
+  repaired: boolean;
+  before: ExpectedSource;
+  after: ExpectedSource;
+  actualSource: { type: string; id: string | null; name: string | null };
+  logs: string[];
+}> {
+  const logs: string[] = [];
+  
+  // Get screen with location
+  const [screenData] = await db.select({
+    id: screens.id,
+    yodeckPlayerId: screens.yodeckPlayerId,
+    locationId: screens.locationId,
+  }).from(screens).where(eq(screens.id, screenId));
+  
+  if (!screenData) {
+    logs.push(`Screen ${screenId} not found`);
+    return { repaired: false, before: { type: "unknown", id: null, source: "none" }, after: { type: "unknown", id: null, source: "none" }, actualSource: { type: "unknown", id: null, name: null }, logs };
+  }
+  
+  if (!screenData.locationId) {
+    logs.push(`Screen ${screenId} has no location linked`);
+    return { repaired: false, before: { type: "unknown", id: null, source: "none" }, after: { type: "unknown", id: null, source: "none" }, actualSource: { type: "unknown", id: null, name: null }, logs };
+  }
+  
+  if (!screenData.yodeckPlayerId) {
+    logs.push(`Screen ${screenId} has no Yodeck player linked`);
+    return { repaired: false, before: { type: "unknown", id: null, source: "none" }, after: { type: "unknown", id: null, source: "none" }, actualSource: { type: "unknown", id: null, name: null }, logs };
+  }
+  
+  // Get location
+  const [location] = await db.select({
+    id: locations.id,
+    name: locations.name,
+    combinedPlaylistId: locations.combinedPlaylistId,
+    layoutMode: locations.layoutMode,
+    yodeckLayoutId: locations.yodeckLayoutId,
+    yodeckPlaylistId: locations.yodeckPlaylistId,
+  }).from(locations).where(eq(locations.id, screenData.locationId));
+  
+  if (!location) {
+    logs.push(`Location ${screenData.locationId} not found`);
+    return { repaired: false, before: { type: "unknown", id: null, source: "none" }, after: { type: "unknown", id: null, source: "none" }, actualSource: { type: "unknown", id: null, name: null }, logs };
+  }
+  
+  const before = computeExpectedSource(location);
+  logs.push(`Before: expected ${before.type}/${before.id} from ${before.source}`);
+  
+  // Fetch actual source from Yodeck (fresh, no cache)
+  const screenResult = await yodeckRequest<any>(`/screens/${screenData.yodeckPlayerId}/`);
+  
+  if (!screenResult.ok || !screenResult.data) {
+    logs.push(`Failed to fetch Yodeck screen data`);
+    return { repaired: false, before, after: before, actualSource: { type: "unknown", id: null, name: null }, logs };
+  }
+  
+  const content = screenResult.data.screen_content;
+  const actualSourceType = content?.source_type || "unknown";
+  const actualSourceId = content?.source_id ? String(content.source_id) : null;
+  const actualSourceName = content?.source_name || null;
+  
+  logs.push(`Actual: ${actualSourceType}/${actualSourceId} name="${actualSourceName}"`);
+  
+  const actualSource = { type: actualSourceType, id: actualSourceId, name: actualSourceName };
+  
+  // Check if this is an auto-playlist we should adopt
+  const isAutoPlaylist = actualSourceType === "playlist" && (
+    (actualSourceName && actualSourceName.includes("(auto-playlist-")) ||
+    (actualSourceName && actualSourceName.includes("Elevizion | Loop | YDK-"))
+  );
+  
+  if (!isAutoPlaylist) {
+    logs.push(`Not an auto-playlist, no repair needed`);
+    return { repaired: false, before, after: before, actualSource, logs };
+  }
+  
+  // Auto-heal: Update location to use this playlist as canonical
+  logs.push(`Detected auto-playlist, updating location...`);
+  
+  const now = new Date();
+  await db.update(locations).set({
+    layoutMode: "PLAYLIST",
+    combinedPlaylistId: actualSourceId,
+    combinedPlaylistVerifiedAt: now,
+    updatedAt: now,
+  }).where(eq(locations.id, location.id));
+  
+  logs.push(`Updated location ${location.id}: combinedPlaylistId=${actualSourceId}, layoutMode=PLAYLIST`);
+  
+  const after = computeExpectedSource({
+    ...location,
+    combinedPlaylistId: actualSourceId,
+    layoutMode: "PLAYLIST",
+  });
+  
+  return { repaired: true, before, after, actualSource, logs };
+}
 
 // ============================================================================
 // TYPES
@@ -1070,11 +1237,34 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     yodeckPlayerId: screens.yodeckPlayerId,
     screenId: screens.screenId,
     name: screens.name,
+    locationId: screens.locationId,
     yodeckScreenshotUrl: screens.yodeckScreenshotUrl,
     yodeckScreenshotLastOkAt: screens.yodeckScreenshotLastOkAt,
     yodeckScreenshotByteSize: screens.yodeckScreenshotByteSize,
     yodeckScreenshotHash: screens.yodeckScreenshotHash,
   }).from(screens).where(eq(screens.id, screenId));
+  
+  // Get location for expected source calculation
+  let location: {
+    id: string;
+    combinedPlaylistId: string | null;
+    layoutMode: string | null;
+    yodeckLayoutId: string | null;
+    yodeckPlaylistId: string | null;
+  } | null = null;
+  
+  if (screen?.locationId) {
+    const [loc] = await db.select({
+      id: locations.id,
+      combinedPlaylistId: locations.combinedPlaylistId,
+      layoutMode: locations.layoutMode,
+      yodeckLayoutId: locations.yodeckLayoutId,
+      yodeckPlaylistId: locations.yodeckPlaylistId,
+    }).from(locations).where(eq(locations.id, screen.locationId));
+    location = loc || null;
+  }
+  
+  const expectedSource = computeExpectedSource(location);
   
   if (!screen?.yodeckPlayerId) {
     return {
@@ -1141,14 +1331,26 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   // VERIFICATION: Check if playlist has content
   const hasContent = itemCount > 0;
   
+  // Actual source from Yodeck
+  const actualSourceType = content?.source_type || "unknown";
+  const actualSourceId = playlistId; // Already extracted above
+  
+  // Compare actual vs expected source from Location DB
+  // Mismatch = true when DB config differs from actual Yodeck playback
+  const sourceMismatch = expectedSource.id !== null && (
+    expectedSource.type !== actualSourceType ||
+    expectedSource.id !== actualSourceId
+  );
+  
   // Verification is OK if:
   // 1. Screen has a playlist assigned
   // 2. Playlist has content (itemCount > 0)
-  const verificationOk = playlistId !== null && hasContent;
+  // 3. Source matches expected (or expected is unknown)
+  const verificationOk = playlistId !== null && hasContent && !sourceMismatch;
   
-  // Mismatch warning (not failure) - only show if playlist doesn't look like our managed one
+  // Mismatch for UI display
   const isElevizionPlaylist = playlistName?.toLowerCase().includes("elevizion");
-  const mismatch = playlistName !== null && !isElevizionPlaylist;
+  const mismatch = sourceMismatch || (playlistName !== null && !isElevizionPlaylist);
   
   // Count baseline vs ads by MATCHING MEDIA IDs
   let baselineCount: number | "unknown" = 0;
@@ -1194,11 +1396,15 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   if (!hasContent) {
     mismatchReason = `Playlist is leeg (0 items) - Force Repair nodig!`;
     mismatchLevel = "error";
-  } else if (!baselineConfigured && verificationOk) {
+  } else if (sourceMismatch) {
+    // Source mismatch between DB config and actual Yodeck playback
+    mismatchReason = `Broadcast mismatch: DB verwacht ${expectedSource.type}/${expectedSource.id} (${expectedSource.source}), actual ${actualSourceType}/${actualSourceId}`;
+    mismatchLevel = "warning";
+  } else if (!baselineConfigured && !sourceMismatch) {
     // Content playing but baseline not configured - INFO level only (not an error)
     mismatchReason = "Baseline playlist niet geconfigureerd - baseline telling onbekend";
     mismatchLevel = "info";
-  } else if (mismatch && verificationOk) {
+  } else if (!isElevizionPlaylist && !sourceMismatch) {
     // Playlist playing but not an Elevizion playlist - warning
     mismatchReason = `Let op: playlist heet "${playlistName}"`;
     mismatchLevel = "warning";

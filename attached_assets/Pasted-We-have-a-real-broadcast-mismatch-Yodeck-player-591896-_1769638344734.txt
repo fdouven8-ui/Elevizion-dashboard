@@ -1,0 +1,47 @@
+We have a real broadcast mismatch. Yodeck player 591896 is actually playing playlistId=30498772 (auto-playlist), but our Location record is configured for layoutMode=LAYOUT with yodeckLayoutId=7694728 and yodeckPlaylistId=30461663 + baseline 30461645. Our UI shows “Geverifieerd OK” because expectedPlaylistName is derived from current playlist name instead of DB config.
+
+Goal: ensure “what we push into the playlist is what plays on screen” with minimal changes.
+
+Implement an AUTO-HEAL that makes the ACTUAL playing Yodeck playlist canonical for the location when we detect an auto-playlist, so future pushes go to the real source.
+
+Changes:
+
+1) Fix verification logic:
+- In /api/screens/:id/now-playing, compute expectedSource from Location DB fields (NOT from current playlistName).
+Expected selection:
+  - If location.combinedPlaylistId exists -> expectedType=playlist expectedId=combinedPlaylistId
+  - Else if location.layoutMode==="LAYOUT" and location.yodeckLayoutId -> expectedType=layout expectedId=yodeckLayoutId
+  - Else if location.yodeckPlaylistId -> expectedType=playlist expectedId=yodeckPlaylistId
+  - Else expected unknown
+- Compare against actual Yodeck {source_type, source_id}.
+Set mismatch=true when different.
+
+2) Add auto-heal in AutopilotWorker (or in a dedicated repair function called by worker):
+For each linked location with yodeckDeviceId:
+- Fetch actual {source_type, source_id, source_name} fresh from Yodeck (no cache).
+- If source_type === "playlist" AND source_name contains "(auto-playlist-" OR name contains "Elevizion | Loop | YDK-":
+    Then we treat this playlist as the canonical playback playlist.
+    Update Location in DB:
+      - set layoutMode = "PLAYLIST"
+      - set combinedPlaylistId = actual.source_id  (string)
+      - set combinedPlaylistVerifiedAt = now()
+      - set combinedPlaylistItemCount = itemCount if available
+      - optionally set yodeckPlaylistId = actual.source_id as well (keep both for compatibility)
+      - DO NOT delete old yodeckLayoutId/yodeckPlaylistId; just stop using them for expected source while combinedPlaylistId is present.
+- Return “repaired: true” in logs when this occurs.
+
+3) Update your content push/linking code to always target the effective playlist:
+Create helper getEffectivePlaybackPlaylistId(location, screenNowPlaying):
+  - if location.combinedPlaylistId -> use that
+  - else if screenNowPlaying.actual playlistId exists -> use that (fallback)
+  - else if location.yodeckPlaylistId -> use that
+All “add media to playlist” operations must use getEffectivePlaybackPlaylistId. This ensures whatever we add is actually broadcast.
+
+4) Add a small endpoint for manual trigger:
+POST /api/screens/:id/repair-broadcast
+Calls the same auto-heal logic for that screen’s location and returns before/after.
+
+Acceptance:
+- After one autopilot cycle (or manual POST), location combinedPlaylistId becomes 30498772 for this case.
+- After that, any ad/baseline media we add goes into 30498772 and is visible on the physical screen.
+- UI mismatch correctly shows when DB config differs from actual Yodeck playback.

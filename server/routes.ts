@@ -17939,6 +17939,28 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/screens/:screenId/repair-broadcast
+   * Auto-heal broadcast mismatch: detect actual Yodeck playlist and update Location DB
+   */
+  app.post("/api/screens/:screenId/repair-broadcast", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { repairBroadcastMismatch } = await import("./services/screenPlaylistService");
+      
+      console.log(`[RepairBroadcast] Starting repair for screen ${screenId}`);
+      const result = await repairBroadcastMismatch(screenId);
+      
+      console.log(`[RepairBroadcast] Result: repaired=${result.repaired}`);
+      result.logs.forEach(log => console.log(`[RepairBroadcast] ${log}`));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[RepairBroadcast] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/autopilot/repair-all
    * Repair all linked screens
    */
