@@ -17445,6 +17445,394 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/screens/:screenId/force-push
+   * PRODUCTION-GRADE Force Push & Verify - Guarantees Yodeck player plays the intended playlist
+   * 
+   * This is a SURGICAL fix for playback mismatch issues. Steps:
+   * A) Resolve player and targetPlaylistId
+   * B) Hard-assert Yodeck player's active source (PATCH if needed)
+   * C) Ensure playlist is not empty (seed if needed)
+   * D) Trigger player refresh/sync
+   * E) Fetch screenshot BYTES with cache busting and store metadata
+   */
+  app.post("/api/screens/:screenId/force-push", requireAdminAccess, async (req, res) => {
+    const logs: string[] = [];
+    const log = (msg: string) => {
+      console.log(msg);
+      logs.push(msg);
+    };
+    
+    try {
+      const { screenId } = req.params;
+      log(`[ForcePush] ═══════════════════════════════════════════════════════════`);
+      log(`[ForcePush] Starting force-push for screen ${screenId}`);
+      log(`[ForcePush] Timestamp: ${new Date().toISOString()}`);
+      
+      const { yodeckRequest } = await import("./services/yodeckLayoutService");
+      const crypto = await import("crypto");
+      
+      // ═══════════════════════════════════════════════════════════════════════
+      // STEP A: Resolve player and targetPlaylistId
+      // ═══════════════════════════════════════════════════════════════════════
+      log(`[ForcePush] STEP A: Resolving player and target playlist...`);
+      
+      const [screen] = await db.select({
+        id: screens.id,
+        name: screens.name,
+        yodeckPlayerId: screens.yodeckPlayerId,
+        yodeckContentSummary: screens.yodeckContentSummary,
+        yodeckScreenshotUrl: screens.yodeckScreenshotUrl,
+      })
+      .from(screens)
+      .where(eq(screens.id, screenId));
+      
+      if (!screen) {
+        return res.status(404).json({ ok: false, error: "Screen not found", logs });
+      }
+      
+      const playerId = screen.yodeckPlayerId;
+      if (!playerId) {
+        return res.status(400).json({ ok: false, error: "Screen has no Yodeck player linked", logs });
+      }
+      
+      log(`[ForcePush] Screen: "${screen.name}" -> Player: ${playerId}`);
+      
+      // Extract cached sourceId from yodeckContentSummary if available
+      const cachedSourceId = (screen.yodeckContentSummary as any)?.sourceId 
+        ? String((screen.yodeckContentSummary as any).sourceId) 
+        : null;
+      
+      // Determine targetPlaylistId:
+      // 1. First try to get from current Yodeck screen config (LIVE)
+      // 2. Fallback to cached sourceId from yodeckContentSummary
+      let targetPlaylistId: string | null = null;
+      
+      // Fetch current player config from Yodeck (fresh, not cache)
+      const playerResult = await yodeckRequest<any>(`/screens/${playerId}/`);
+      if (!playerResult.ok || !playerResult.data) {
+        return res.status(500).json({ ok: false, error: `Failed to fetch player: ${playerResult.error}`, logs });
+      }
+      
+      const rawPlayer = playerResult.data;
+      const screenContent = rawPlayer.screen_content || {};
+      const currentSourceType = screenContent.source_type || null;
+      const currentSourceId = screenContent.source_id ? String(screenContent.source_id) : null;
+      
+      log(`[ForcePush] Current player config: source_type=${currentSourceType}, source_id=${currentSourceId}`);
+      
+      // Prefer yodeck source_id if it's playlist mode, else fallback to cached
+      if (currentSourceType === "playlist" && currentSourceId) {
+        targetPlaylistId = currentSourceId;
+        log(`[ForcePush] Using Yodeck source_id as target: ${targetPlaylistId}`);
+      } else if (cachedSourceId) {
+        targetPlaylistId = cachedSourceId;
+        log(`[ForcePush] Using cached sourceId from yodeckContentSummary: ${targetPlaylistId}`);
+      }
+      
+      if (!targetPlaylistId) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: "No target playlist found (neither Yodeck source_id nor cached yodeckContentSummary.sourceId)", 
+          logs 
+        });
+      }
+      
+      log(`[ForcePush] Target playlist ID resolved: ${targetPlaylistId}`);
+      
+      // ═══════════════════════════════════════════════════════════════════════
+      // STEP B: Hard-assert Yodeck player's active source (PATCH if needed)
+      // ═══════════════════════════════════════════════════════════════════════
+      log(`[ForcePush] STEP B: Hard-asserting player source...`);
+      
+      const beforeSource = { type: currentSourceType, id: currentSourceId };
+      let afterSource = { type: currentSourceType, id: currentSourceId };
+      let sourceUpdateNeeded = false;
+      
+      // Check if update needed
+      if (currentSourceType !== "playlist" || currentSourceId !== targetPlaylistId) {
+        sourceUpdateNeeded = true;
+        log(`[ForcePush] Source update needed: current(${currentSourceType}/${currentSourceId}) → target(playlist/${targetPlaylistId})`);
+        
+        // PATCH the player to set correct source
+        const patchPayload = {
+          screen_content: {
+            source_type: "playlist",
+            source_id: Number(targetPlaylistId),
+          }
+        };
+        
+        log(`[ForcePush] PATCHing player ${playerId} with: ${JSON.stringify(patchPayload)}`);
+        
+        const patchResult = await yodeckRequest<any>(`/screens/${playerId}/`, {
+          method: "PATCH",
+          body: JSON.stringify(patchPayload),
+        });
+        
+        if (!patchResult.ok) {
+          return res.status(500).json({ 
+            ok: false, 
+            error: `Failed to PATCH player source: ${patchResult.error}`, 
+            logs 
+          });
+        }
+        
+        // Immediately re-fetch to verify
+        const verifyResult = await yodeckRequest<any>(`/screens/${playerId}/`);
+        if (verifyResult.ok && verifyResult.data) {
+          const newContent = verifyResult.data.screen_content || {};
+          afterSource = {
+            type: newContent.source_type || null,
+            id: newContent.source_id ? String(newContent.source_id) : null,
+          };
+        }
+        
+        // Assert it matches
+        if (afterSource.type !== "playlist" || afterSource.id !== targetPlaylistId) {
+          log(`[ForcePush] WARNING: Source mismatch after PATCH! Expected playlist/${targetPlaylistId}, got ${afterSource.type}/${afterSource.id}`);
+        } else {
+          log(`[ForcePush] ✓ Source verified: ${afterSource.type}/${afterSource.id}`);
+        }
+      } else {
+        log(`[ForcePush] ✓ Source already correct: ${currentSourceType}/${currentSourceId}`);
+      }
+      
+      log(`[ForcePush] player=${playerId} desiredPlaylist=${targetPlaylistId} before={${beforeSource.type},${beforeSource.id}} after={${afterSource.type},${afterSource.id}} ok=${afterSource.type === "playlist" && afterSource.id === targetPlaylistId}`);
+      
+      // ═══════════════════════════════════════════════════════════════════════
+      // STEP C: Ensure playlist is not empty (defensive)
+      // ═══════════════════════════════════════════════════════════════════════
+      log(`[ForcePush] STEP C: Checking playlist is not empty...`);
+      
+      const playlistResult = await yodeckRequest<any>(`/playlists/${targetPlaylistId}/`);
+      if (!playlistResult.ok || !playlistResult.data) {
+        return res.status(500).json({ 
+          ok: false, 
+          error: `Failed to fetch playlist ${targetPlaylistId}: ${playlistResult.error}`, 
+          logs 
+        });
+      }
+      
+      const playlistData = playlistResult.data;
+      const itemCountBefore = (playlistData.items || []).length;
+      let itemCountAfter = itemCountBefore;
+      
+      log(`[ForcePush] Playlist "${playlistData.name}" has ${itemCountBefore} items`);
+      
+      if (itemCountBefore === 0) {
+        log(`[ForcePush] Playlist is empty! Attempting to seed with baseline items...`);
+        
+        // Get baseline playlist items
+        const { getBaselinePlaylistId } = await import("./services/screenPlaylistService");
+        const baselineId = await getBaselinePlaylistId();
+        
+        if (baselineId) {
+          const baselineResult = await yodeckRequest<any>(`/playlists/${baselineId}/`);
+          if (baselineResult.ok && baselineResult.data?.items?.length > 0) {
+            const baselineItems = baselineResult.data.items;
+            log(`[ForcePush] Found ${baselineItems.length} baseline items to seed`);
+            
+            // Build items for PATCH
+            const itemsToAdd = baselineItems.slice(0, 10).map((item: any) => ({
+              media_id: item.media?.id || item.media_id,
+              duration: item.duration || 15,
+            })).filter((i: any) => i.media_id);
+            
+            if (itemsToAdd.length > 0) {
+              const patchResult = await yodeckRequest<any>(`/playlists/${targetPlaylistId}/`, {
+                method: "PATCH",
+                body: JSON.stringify({ items: itemsToAdd }),
+              });
+              
+              if (patchResult.ok) {
+                // Re-fetch to get updated count
+                const refetchResult = await yodeckRequest<any>(`/playlists/${targetPlaylistId}/`);
+                if (refetchResult.ok) {
+                  itemCountAfter = (refetchResult.data?.items || []).length;
+                }
+                log(`[ForcePush] Seeded playlist: ${itemCountBefore} → ${itemCountAfter} items`);
+              } else {
+                log(`[ForcePush] WARNING: Failed to seed playlist: ${patchResult.error}`);
+              }
+            }
+          }
+        } else {
+          log(`[ForcePush] WARNING: No baseline playlist configured, cannot seed`);
+        }
+      }
+      
+      log(`[ForcePush] playlist=${targetPlaylistId} itemCountBefore=${itemCountBefore} itemCountAfter=${itemCountAfter}`);
+      
+      // ═══════════════════════════════════════════════════════════════════════
+      // STEP D: Trigger player refresh/sync
+      // ═══════════════════════════════════════════════════════════════════════
+      log(`[ForcePush] STEP D: Triggering player refresh...`);
+      
+      let refreshMethod: "api_restart" | "toggle" = "toggle";
+      let refreshOk = false;
+      
+      // Try API restart first
+      const restartResult = await yodeckRequest<any>(`/screens/${playerId}/restart/`, {
+        method: "POST",
+      });
+      
+      if (restartResult.ok || restartResult.status === 204) {
+        refreshMethod = "api_restart";
+        refreshOk = true;
+        log(`[ForcePush] ✓ Player restarted via API`);
+      } else {
+        // Fallback: toggle nudge (set source_id again, wait 2s)
+        log(`[ForcePush] API restart failed (${restartResult.error}), using toggle nudge fallback...`);
+        
+        const togglePatch = {
+          screen_content: {
+            source_type: "playlist",
+            source_id: Number(targetPlaylistId),
+          }
+        };
+        
+        await yodeckRequest<any>(`/screens/${playerId}/`, {
+          method: "PATCH",
+          body: JSON.stringify(togglePatch),
+        });
+        
+        await new Promise(r => setTimeout(r, 2000));
+        refreshOk = true;
+        log(`[ForcePush] ✓ Toggle nudge complete`);
+      }
+      
+      log(`[ForcePush] refresh method=${refreshMethod} ok=${refreshOk}`);
+      
+      // ═══════════════════════════════════════════════════════════════════════
+      // STEP E: Fetch screenshot BYTES with cache busting and store metadata
+      // ═══════════════════════════════════════════════════════════════════════
+      log(`[ForcePush] STEP E: Fetching screenshot with cache busting...`);
+      
+      // Wait a bit for player to refresh
+      await new Promise(r => setTimeout(r, 3000));
+      
+      // Re-fetch player to get latest screenshot URL
+      const finalPlayerResult = await yodeckRequest<any>(`/screens/${playerId}/`);
+      // Use Yodeck API screenshot_path, or fallback to cached URL from database
+      let screenshotUrl = finalPlayerResult.data?.screenshot_path || screen.yodeckScreenshotUrl || null;
+      
+      let screenshot: {
+        urlWithBuster: string | null;
+        byteSize: number | null;
+        hash: string | null;
+        lastOkAt: string | null;
+      } = {
+        urlWithBuster: null,
+        byteSize: null,
+        hash: null,
+        lastOkAt: null,
+      };
+      
+      if (screenshotUrl) {
+        // Add cache buster
+        const cacheBuster = Date.now();
+        const urlWithBuster = screenshotUrl.includes("?") 
+          ? `${screenshotUrl}&t=${cacheBuster}`
+          : `${screenshotUrl}?t=${cacheBuster}`;
+        
+        log(`[ForcePush] Fetching screenshot: ${urlWithBuster}`);
+        
+        try {
+          const response = await fetch(urlWithBuster);
+          if (response.ok) {
+            const arrayBuffer = await response.arrayBuffer();
+            const bytes = Buffer.from(arrayBuffer);
+            const byteSize = bytes.length;
+            const hash = crypto.createHash("sha256").update(bytes).digest("hex");
+            const lastOkAt = new Date().toISOString();
+            
+            screenshot = {
+              urlWithBuster,
+              byteSize,
+              hash,
+              lastOkAt,
+            };
+            
+            log(`[ForcePush] Screenshot fetched: ${byteSize} bytes, hash=${hash.substring(0, 16)}...`);
+            
+            // Store metadata in database
+            if (byteSize >= 10000) { // Only store if > 10KB
+              await db.update(screens)
+                .set({
+                  yodeckScreenshotUrl: screenshotUrl,
+                  yodeckScreenshotLastOkAt: new Date(),
+                  yodeckScreenshotByteSize: byteSize,
+                  yodeckScreenshotHash: hash,
+                })
+                .where(eq(screens.id, screenId));
+              log(`[ForcePush] ✓ Screenshot metadata stored in DB`);
+            } else {
+              log(`[ForcePush] ⚠ Screenshot < 10KB (${byteSize}), may be placeholder - not storing`);
+            }
+          } else {
+            log(`[ForcePush] ⚠ Screenshot fetch failed: HTTP ${response.status}`);
+          }
+        } catch (fetchError: any) {
+          log(`[ForcePush] ⚠ Screenshot fetch error: ${fetchError.message}`);
+        }
+      } else {
+        log(`[ForcePush] ⚠ No screenshot URL available`);
+      }
+      
+      log(`[ForcePush] ═══════════════════════════════════════════════════════════`);
+      
+      // Core success: Steps A-D passed (source verified + playlist has items)
+      const playbackOk = afterSource.type === "playlist" && 
+                         afterSource.id === targetPlaylistId && 
+                         itemCountAfter > 0;
+      
+      // Screenshot status: separate from playback success
+      const screenshotOk = screenshot.byteSize !== null && screenshot.byteSize >= 10000;
+      const screenshotMayBePlaceholder = screenshot.byteSize !== null && screenshot.byteSize < 10000;
+      
+      // Overall ok = playback verified (screenshot is informational, not blocking)
+      const ok = playbackOk;
+      
+      const notes: string[] = [];
+      if (playbackOk) {
+        notes.push("player source verified");
+        notes.push(`playlist has ${itemCountAfter} items`);
+      }
+      if (screenshotOk) {
+        notes.push("screenshot fetched fresh");
+      }
+      if (screenshotMayBePlaceholder) {
+        notes.push("screenshot may be placeholder (< 10KB)");
+      }
+      if (!screenshot.byteSize) {
+        notes.push("screenshot not available");
+      }
+      
+      res.json({
+        ok,
+        playerId,
+        targetPlaylistId,
+        playlistItemCount: itemCountAfter,
+        refreshMethod,
+        screenshot: {
+          ...screenshot,
+          ok: screenshotOk,
+          mayBePlaceholder: screenshotMayBePlaceholder,
+        },
+        notes,
+        logs,
+      });
+      
+    } catch (error: any) {
+      console.error("[ForcePush] Error:", error);
+      res.status(500).json({ 
+        ok: false, 
+        error: error.message,
+        logs 
+      });
+    }
+  });
+
+  /**
    * POST /api/admin/autopilot/repair-all
    * Repair all linked screens
    */

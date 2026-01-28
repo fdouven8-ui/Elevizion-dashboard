@@ -1,0 +1,78 @@
+We must fix a real-world playback mismatch: our DB/Yodeck sync says playlist 30498772 has 4 items and is assigned, but the Yodeck screenshot still shows “NO CONTENT TO PLAY”. We need a minimal, surgical fix WITHOUT redesigning the system.
+
+GOAL: Add a single “Force Push & Verify” action that guarantees the Yodeck player is actually playing the intended playlist, then refreshes, and produces proof (fresh screenshot bytes + metadata). Keep existing architecture.
+
+CHANGES (minimal):
+
+1) Add endpoint: POST /api/screens/:screenId/force-push
+This endpoint must do ONLY these steps, in order, with strong logging:
+
+Step A — Resolve player
+- Load screen by :screenId, get yodeckPlayerId (e.g. 591896).
+- Determine targetPlaylistId:
+  - Prefer the “active playlist” returned by our yodeck content sync for that player (yodeckContentSummary.sourceId).
+  - If missing, fallback to location.yodeckPlaylistId.
+  - Hard fail with clear error if still missing.
+
+Step B — Hard-assert Yodeck player’s active source
+- Fetch current player config from Yodeck (fresh, not cache). Extract actual screen_content/source fields from the raw payload.
+- If current source_type != "playlist" OR source_id != targetPlaylistId:
+  - Update the Yodeck player to set screen_content/source_type="playlist" AND source_id=targetPlaylistId.
+  - Immediately re-fetch the player config and assert it matches.
+Log:
+[ForcePush] player=591896 desiredPlaylist=30498772 before={type,id} after={type,id} ok=true
+
+Step C — Ensure playlist is not empty (defensive)
+- Fetch playlist items from Yodeck for targetPlaylistId.
+- If itemCount == 0:
+  - Seed it with the 4 known working media IDs from our latest yodeckContentSummary.mediaIds (dedupe).
+  - Re-fetch playlist items and assert itemCount > 0.
+Log:
+[ForcePush] playlist=30498772 itemCountBefore=X itemCountAfter=Y
+
+Step D — Trigger player refresh/sync (best-effort but required)
+- Try any existing Yodeck “sync/refresh/restart” endpoint you already have.
+- If none exists: do a “toggle nudge” fallback:
+  - Set source_id = targetPlaylistId again (same value), wait 2 seconds, then continue.
+Log method used:
+[ForcePush] refresh method=<api|toggle> ok=<true|false>
+
+Step E — Proof: fetch screenshot BYTES with cache busting and store metadata
+- Fetch screenshot URL for player (already in yodeckScreenshotUrl or derived).
+- IMPORTANT: ALWAYS add a cache buster query (?t=Date.now()) when fetching.
+- Download the image bytes server-side and store:
+  - yodeckScreenshotLastOkAt = now
+  - yodeckScreenshotByteSize
+  - yodeckScreenshotHash = sha256(bytes)
+- If byteSize < 10KB -> treat as not ok (Yodeck sometimes returns tiny placeholder)
+Return JSON:
+{
+  ok: true,
+  playerId,
+  targetPlaylistId,
+  playlistItemCount,
+  refreshMethod,
+  screenshot: { urlWithBuster, byteSize, hash, lastOkAt },
+  notes: ["player source verified", "screenshot fetched fresh"]
+}
+
+2) UI: Add a small button “Force push” on the Screen detail page
+- Calls POST /api/screens/:id/force-push
+- After success: re-fetch /api/screens/:id and show updated screenshot using ?t=Date.now() in the <img src>.
+- Also show the returned screenshot byteSize + lastOkAt.
+
+3) Fix current screenshot rendering (1-liner)
+- Everywhere we render yodeckScreenshotUrl, append `?t=${Date.now()}` to prevent browser caching.
+This alone may solve stale “NO CONTENT” images.
+
+4) Do NOT change the autopilot architecture now
+- Leave baseline/combined logic untouched.
+- This is a targeted operational fix to guarantee playback and proof.
+
+Acceptance test:
+- Run force-push for screen 591896.
+- Endpoint logs show player source_id is exactly 30498772 after update.
+- Screenshot fetched server-side has byteSize > 10KB and lastOkAt set.
+- UI screenshot no longer shows “NO CONTENT TO PLAY”.
+
+Implement now with minimal diffs, production-grade logging, and no refactor.

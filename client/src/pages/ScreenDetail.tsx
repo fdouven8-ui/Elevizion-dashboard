@@ -356,6 +356,33 @@ export default function ScreenDetail() {
     },
   });
   
+  // FORCE PUSH mutation - Surgical fix that guarantees playback
+  const forcePushMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", `/api/screens/${screenId}/force-push`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.ok) {
+        toast({ 
+          title: "✓ Force Push OK", 
+          description: `Playlist ${data.targetPlaylistId} met ${data.playlistItemCount} items. Screenshot: ${data.screenshot?.byteSize ? `${Math.round(data.screenshot.byteSize/1024)}KB` : "n/a"}` 
+        });
+      } else {
+        toast({ 
+          title: "⚠️ Force Push onvolledig", 
+          description: data.error || "Controleer logs",
+          variant: "destructive" 
+        });
+      }
+      refetchNowPlaying();
+      queryClient.invalidateQueries({ queryKey: ["screen-now-playing", screenId] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Force Push fout", description: error.message, variant: "destructive" });
+    },
+  });
+  
   const currentContent = screenDetail?.currentContent || [];
   const displayName = getScreenDisplayName(screen, location);
 
@@ -1018,24 +1045,44 @@ export default function ScreenDetail() {
                           )}
                         </Button>
                       </div>
-                      <div className="mt-2">
+                      <div className="mt-2 flex gap-2">
                         <Button
                           variant="outline"
                           size="sm"
                           onClick={() => pushToScreenMutation.mutate()}
-                          disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending || pushToScreenMutation.isPending}
-                          className="w-full"
+                          disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending || pushToScreenMutation.isPending || forcePushMutation.isPending}
+                          className="flex-1"
                           data-testid="btn-push-to-screen"
                         >
                           {pushToScreenMutation.isPending ? (
                             <>
                               <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                              Pushen (~60s)...
+                              Pushen...
                             </>
                           ) : (
                             <>
                               <Upload className="h-4 w-4 mr-2" />
                               Push to Screen
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={() => forcePushMutation.mutate()}
+                          disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending || pushToScreenMutation.isPending || forcePushMutation.isPending}
+                          className="flex-1"
+                          data-testid="btn-force-push"
+                        >
+                          {forcePushMutation.isPending ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                              Force Push...
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="h-4 w-4 mr-2" />
+                              Force Push
                             </>
                           )}
                         </Button>
