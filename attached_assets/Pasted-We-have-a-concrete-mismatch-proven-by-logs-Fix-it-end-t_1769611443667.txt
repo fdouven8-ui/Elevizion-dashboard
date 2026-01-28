@@ -1,0 +1,57 @@
+We have a concrete mismatch proven by logs. Fix it end-to-end so the physical Yodeck screens actually play content.
+
+EVIDENCE (from logs)
+- now-playing: playlistId=30498772, itemCount=0, verificationOk=false ("playlist leeg")
+- content-status / PlaylistItems: playlistId=30461663 has 2 items
+=> We are filling playlist 30461663 but the screen is assigned to 30498772 (empty). That’s why the screen shows no content.
+
+GOAL
+Each screen must have exactly ONE active per-screen playlist that is:
+1) filled with baseline + ads
+2) assigned to the Yodeck screen
+3) pushed to device
+4) verified by reading Yodeck (itemCount>0)
+No more dual-playlist mismatch.
+
+IMPLEMENT FIX (HARD)
+
+1) Single playlist source of truth per screen
+- Add/confirm screen.yodeckActivePlaylistId (or reuse existing field, but ONE field must be the truth).
+- Determine active playlistId from Yodeck screen details (screen content source playlistId).
+- Store it as yodeckActivePlaylistId.
+- Stop using location.ads.playlistId as “the” playlist for playback.
+
+2) Repair/sync must fill THE playlist the screen actually uses
+Implement repairScreen(screenId):
+- Fetch Yodeck screen details -> get actual assigned playlistId (A).
+- Ensure baseline items list (from baseline template playlist) is non-empty, else injectFallback (must be playable).
+- Collect ads for this screen from placements (only approved).
+- Build finalItems = baselineItems + adItems.
+- Write finalItems into playlistId A (clear & repopulate or reconcile).
+- Push/Save to screen.
+- Verify: fetch playlist items from Yodeck for playlistId A and require itemCount>0.
+- Return diagnostics: playlistId, itemCount, baselineCount, adsCount, verificationOk, errorReason.
+
+3) Fix now-playing endpoint to use playlistId truth
+- now-playing must read playlistId from Yodeck (actual assigned) OR yodeckActivePlaylistId, not from legacy fields.
+- itemCount must be fetched for that same playlistId.
+- If itemCount==0, show error with reason + auto-suggest "Force repair".
+
+4) Remove layout-mode confusion (we want simple playlist playback)
+- For locations/screens in playlist-only mode:
+  - Set location.layoutMode = "PLAYLIST" (or equivalent)
+  - Do not require layout assignment.
+- content-status must NOT show LAYOUT_NOT_ASSIGNED as “needsRepair” when we are in playlist-only mode.
+
+5) Update the scheduled AutopilotWorker
+- For each online screen:
+  - call ensureScreenPlaylistFilled(screenId) which fills the active playlistId (from Yodeck)
+  - verify itemCount>0
+- If Yodeck is reachable and screen online but playlist empty -> auto-repair immediately.
+
+ACCEPTANCE TEST (MUST PRINT REAL OUTPUT)
+Pick screenId=241377ce-a25e-4744-9ea7-cd9359515d07:
+- Call repairScreen
+- Show that the playlistId used in now-playing is the same playlistId that gets filled
+- now-playing after repair must return itemCount>0 and verificationOk=true
+- Yodeck screen must stop showing NO CONTENT TO PLAY.
