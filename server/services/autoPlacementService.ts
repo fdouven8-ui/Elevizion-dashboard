@@ -1,20 +1,21 @@
 /**
  * AutoPlacementService - Automatically creates placements after ad approval
  * 
- * When an ad asset is APPROVED:
- * 1. Find the advertiser's active contract
- * 2. Determine target screens (from contract settings, region, or fallback to all)
- * 3. Create placement records for each target screen
- * 4. Trigger per-screen playlist sync to publish immediately
+ * TARGETING RULES:
+ * 1. Primary: Match screens to contract targeting (city/region) and package capacity
+ * 2. Test mode: If TEST_MODE=true OR advertiser is internal/test, allow all online screens
+ * 3. Fallback: Use TEST_SCREEN_ID only (with TEST_FALLBACK_USED flag)
  * 
  * Idempotency: Approving twice does not create duplicate placements
  */
 
 import { db } from "../db";
-import { placements, contracts, screens, advertisers, adAssets } from "@shared/schema";
-import { eq, and, isNotNull, or } from "drizzle-orm";
+import { placements, contracts, screens, advertisers, locations, systemSettings } from "@shared/schema";
+import { eq, and, isNotNull, or, inArray } from "drizzle-orm";
 import { repairScreen } from "./screenPlaylistService";
 import { getYodeckDeviceStatus } from "./unifiedDeviceStatusService";
+
+const TEST_MODE = process.env.TEST_MODE === "TRUE" || process.env.NODE_ENV === "development";
 
 export interface AutoPlacementResult {
   success: boolean;
@@ -23,6 +24,38 @@ export interface AutoPlacementResult {
   targetScreens: string[];
   errors: string[];
   message: string;
+  testFallbackUsed?: boolean;
+  targetingMethod: "CONTRACT_MATCH" | "TEST_MODE_ALL" | "TEST_FALLBACK" | "NO_TARGETS";
+}
+
+interface ScreenWithLocation {
+  id: string;
+  screenId: string | null;
+  name: string;
+  yodeckPlayerId: string;
+  locationId: string | null;
+  locationCity: string | null;
+  locationRegion: string | null;
+}
+
+async function getTestScreenId(): Promise<string | null> {
+  const setting = await db.select()
+    .from(systemSettings)
+    .where(eq(systemSettings.key, "TEST_SCREEN_ID"))
+    .limit(1);
+  return setting[0]?.value || process.env.TEST_SCREEN_ID || null;
+}
+
+async function isAdvertiserTest(advertiserId: string): Promise<boolean> {
+  const advertiser = await db.select({ isInternal: advertisers.isInternal })
+    .from(advertisers)
+    .where(eq(advertisers.id, advertiserId))
+    .limit(1);
+  
+  if (!advertiser[0]) return false;
+  
+  // Check if marked as internal/test
+  return advertiser[0].isInternal === true;
 }
 
 export async function createAutoPlacementsForAsset(
@@ -33,12 +66,19 @@ export async function createAutoPlacementsForAsset(
   let placementsCreated = 0;
   let screensPublished = 0;
   const targetScreenIds: string[] = [];
+  let testFallbackUsed = false;
+  let targetingMethod: AutoPlacementResult["targetingMethod"] = "NO_TARGETS";
 
   try {
     console.log(`[AutoPlacement] Starting for asset ${assetId}, advertiser ${advertiserId}`);
 
-    // 1. Find the advertiser's active contract
-    const activeContracts = await db.select()
+    // 1. Find the advertiser's active contract with targeting info
+    const activeContracts = await db.select({
+      id: contracts.id,
+      status: contracts.status,
+      advertiserId: contracts.advertiserId,
+      packageType: contracts.packageType,
+    })
       .from(contracts)
       .where(and(
         eq(contracts.advertiserId, advertiserId),
@@ -56,24 +96,42 @@ export async function createAutoPlacementsForAsset(
         screensPublished: 0,
         targetScreens: [],
         errors: ["Geen actief contract gevonden voor deze adverteerder"],
-        message: "Geen contract - placements niet aangemaakt"
+        message: "Geen contract - placements niet aangemaakt",
+        targetingMethod: "NO_TARGETS"
       };
     }
 
     const contract = activeContracts[0];
     console.log(`[AutoPlacement] Found contract ${contract.id} (status: ${contract.status})`);
 
-    // 2. Determine target screens (using Yodeck API as source of truth)
-    const allScreensWithYodeck = await db.select({
+    // 2. Get advertiser targeting preferences
+    const advertiserData = await db.select({
+      targetRegionCodes: advertisers.targetRegionCodes,
+      isInternal: advertisers.isInternal,
+      companyName: advertisers.companyName,
+    })
+      .from(advertisers)
+      .where(eq(advertisers.id, advertiserId))
+      .limit(1);
+
+    const advertiser = advertiserData[0];
+    const isTestAdvertiser = advertiser?.isInternal === true;
+    const targetRegions = advertiser?.targetRegionCodes || [];
+    
+    console.log(`[AutoPlacement] Advertiser ${advertiser?.companyName}: regions=${JSON.stringify(targetRegions)}, isInternal=${isTestAdvertiser}`);
+
+    // 3. Get all screens with location info for targeting
+    const allScreensWithLocations = await db.select({
       id: screens.id,
       screenId: screens.screenId,
       name: screens.name,
       yodeckPlayerId: screens.yodeckPlayerId,
+      locationId: screens.locationId,
     })
       .from(screens)
       .where(isNotNull(screens.yodeckPlayerId));
 
-    if (allScreensWithYodeck.length === 0) {
+    if (allScreensWithLocations.length === 0) {
       console.log(`[AutoPlacement] No screens with Yodeck linked`);
       return {
         success: false,
@@ -81,24 +139,44 @@ export async function createAutoPlacementsForAsset(
         screensPublished: 0,
         targetScreens: [],
         errors: ["Geen schermen met Yodeck gekoppeld"],
-        message: "Geen schermen - placements niet aangemaakt"
+        message: "Geen schermen - placements niet aangemaakt",
+        targetingMethod: "NO_TARGETS"
       };
     }
 
-    // Filter to only ONLINE screens using unified device status (Yodeck API as source)
-    const onlineScreens: typeof allScreensWithYodeck = [];
-    for (const screen of allScreensWithYodeck) {
+    // 4. Enrich screens with location data
+    const locationIds = allScreensWithLocations
+      .map(s => s.locationId)
+      .filter((id): id is string => id !== null);
+    
+    const locationsData = locationIds.length > 0 
+      ? await db.select({ id: locations.id, city: locations.city, regionCode: locations.regionCode })
+          .from(locations)
+          .where(inArray(locations.id, locationIds))
+      : [];
+    
+    const locationMap = new Map(locationsData.map(l => [l.id, l]));
+
+    const enrichedScreens: ScreenWithLocation[] = allScreensWithLocations.map(s => ({
+      ...s,
+      yodeckPlayerId: s.yodeckPlayerId!,
+      locationCity: s.locationId ? locationMap.get(s.locationId)?.city || null : null,
+      locationRegion: s.locationId ? locationMap.get(s.locationId)?.regionCode || null : null,
+    }));
+
+    // 5. Filter to ONLINE screens (Yodeck API as source of truth)
+    const onlineScreens: ScreenWithLocation[] = [];
+    for (const screen of enrichedScreens) {
       try {
-        const deviceStatus = await getYodeckDeviceStatus(screen.yodeckPlayerId!);
+        const deviceStatus = await getYodeckDeviceStatus(screen.yodeckPlayerId);
         if (deviceStatus.status === "ONLINE") {
           onlineScreens.push(screen);
         } else {
           console.log(`[AutoPlacement] Screen ${screen.screenId || screen.name} is ${deviceStatus.status} - skipping`);
         }
       } catch (err: any) {
-        // Include screen even if status check fails (fail open for placement)
-        console.warn(`[AutoPlacement] Could not check status for ${screen.screenId}: ${err.message}, including anyway`);
-        onlineScreens.push(screen);
+        console.warn(`[AutoPlacement] Could not check status for ${screen.screenId}: ${err.message}`);
+        // Do NOT fail open - skip screens with unknown status
       }
     }
 
@@ -110,21 +188,68 @@ export async function createAutoPlacementsForAsset(
         screensPublished: 0,
         targetScreens: [],
         errors: ["Geen online schermen gevonden (Yodeck status check)"],
-        message: "Geen online schermen - placements niet aangemaakt"
+        message: "Geen online schermen - placements niet aangemaakt",
+        targetingMethod: "NO_TARGETS"
       };
     }
 
-    // For now: target ALL online screens (fallback behavior)
-    // TODO: Add region/city filtering based on contract settings
-    const targetScreens = onlineScreens;
-    console.log(`[AutoPlacement] Targeting ${targetScreens.length} online screens (of ${allScreensWithYodeck.length} total)`);
+    // 6. Apply targeting rules
+    let targetScreens: ScreenWithLocation[] = [];
 
-    // 3. Create placements for each screen (with idempotency check)
+    // Primary: Match by region if advertiser has targeting
+    if (targetRegions.length > 0) {
+      targetScreens = onlineScreens.filter(s => 
+        s.locationRegion && targetRegions.includes(s.locationRegion)
+      );
+      
+      if (targetScreens.length > 0) {
+        targetingMethod = "CONTRACT_MATCH";
+        console.log(`[AutoPlacement] CONTRACT_MATCH: ${targetScreens.length} screens in regions ${JSON.stringify(targetRegions)}`);
+      }
+    }
+
+    // Fallback 1: TEST_MODE or internal advertiser -> all online screens
+    if (targetScreens.length === 0 && (TEST_MODE || isTestAdvertiser)) {
+      targetScreens = onlineScreens;
+      targetingMethod = "TEST_MODE_ALL";
+      console.log(`[AutoPlacement] TEST_MODE_ALL: Using all ${targetScreens.length} online screens (TEST_MODE=${TEST_MODE}, isInternal=${isTestAdvertiser})`);
+    }
+
+    // Fallback 2: Use TEST_SCREEN_ID only
+    if (targetScreens.length === 0) {
+      const testScreenId = await getTestScreenId();
+      if (testScreenId) {
+        const testScreen = onlineScreens.find(s => s.id === testScreenId || s.screenId === testScreenId);
+        if (testScreen) {
+          targetScreens = [testScreen];
+          testFallbackUsed = true;
+          targetingMethod = "TEST_FALLBACK";
+          console.log(`[AutoPlacement] TEST_FALLBACK: Using test screen ${testScreenId}`);
+        }
+      }
+    }
+
+    // No targets found
+    if (targetScreens.length === 0) {
+      console.log(`[AutoPlacement] No matching screens for targeting`);
+      return {
+        success: false,
+        placementsCreated: 0,
+        screensPublished: 0,
+        targetScreens: [],
+        errors: ["Geen schermen gevonden die matchen met de targeting van dit contract"],
+        message: "Geen matching schermen - placements niet aangemaakt",
+        targetingMethod: "NO_TARGETS"
+      };
+    }
+
+    console.log(`[AutoPlacement] Targeting ${targetScreens.length} screens via ${targetingMethod}`);
+
+    // 7. Create placements for each target screen (with idempotency check)
     const today = new Date().toISOString().split('T')[0];
     
     for (const screen of targetScreens) {
       try {
-        // Check if placement already exists for this contract+screen
         const existingPlacement = await db.select()
           .from(placements)
           .where(and(
@@ -140,17 +265,18 @@ export async function createAutoPlacementsForAsset(
           continue;
         }
 
-        // Create new placement
         const [newPlacement] = await db.insert(placements)
           .values({
             contractId: contract.id,
             screenId: screen.id,
-            source: "auto_approval",
+            source: testFallbackUsed ? "auto_test_fallback" : "auto_approval",
             secondsPerLoop: 10,
             playsPerHour: 6,
             startDate: today,
             isActive: true,
-            notes: `Auto-created on approval of asset ${assetId}`,
+            notes: testFallbackUsed 
+              ? `TEST_FALLBACK: Auto-created for asset ${assetId}`
+              : `Auto-created on approval of asset ${assetId} (${targetingMethod})`,
           })
           .returning();
 
@@ -163,7 +289,7 @@ export async function createAutoPlacementsForAsset(
       }
     }
 
-    // 4. Trigger per-screen playlist sync for each target screen
+    // 8. Trigger per-screen playlist sync for each target screen
     console.log(`[AutoPlacement] Publishing to ${targetScreenIds.length} screens...`);
     
     for (const screenId of targetScreenIds) {
@@ -182,10 +308,10 @@ export async function createAutoPlacementsForAsset(
     }
 
     const message = placementsCreated > 0
-      ? `${placementsCreated} plaatsingen aangemaakt, ${screensPublished} schermen gepubliceerd`
+      ? `${placementsCreated} plaatsingen aangemaakt via ${targetingMethod}, ${screensPublished} schermen gepubliceerd`
       : `Plaatsingen bestonden al, ${screensPublished} schermen gesynchroniseerd`;
 
-    console.log(`[AutoPlacement] Complete: ${placementsCreated} created, ${screensPublished} published`);
+    console.log(`[AutoPlacement] Complete: ${placementsCreated} created, ${screensPublished} published, method=${targetingMethod}`);
 
     return {
       success: true,
@@ -194,6 +320,8 @@ export async function createAutoPlacementsForAsset(
       targetScreens: targetScreenIds,
       errors,
       message,
+      testFallbackUsed,
+      targetingMethod,
     };
   } catch (error: any) {
     console.error("[AutoPlacement] Fatal error:", error);
@@ -204,6 +332,7 @@ export async function createAutoPlacementsForAsset(
       targetScreens: targetScreenIds,
       errors: [error.message],
       message: "Fout bij auto-placement: " + error.message,
+      targetingMethod: "NO_TARGETS"
     };
   }
 }
