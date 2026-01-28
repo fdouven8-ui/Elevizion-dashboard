@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SyncStatusBadge } from "@/components/SyncStatusBadge";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { 
   Wifi, 
   WifiOff, 
@@ -43,7 +44,9 @@ import {
   Database,
   Settings,
   Zap,
-  Link2
+  Link2,
+  ChevronDown,
+  Wrench
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -52,6 +55,7 @@ import { placementsApi } from "@/lib/api";
 import { formatDistanceToNow, format } from "date-fns";
 import { nl } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
+import { useUIMode } from "@/hooks/use-ui-mode";
 import { useState } from "react";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -141,12 +145,14 @@ export default function ScreenDetail() {
   const { screens, locations, placements, advertisers, contracts } = useAppData();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { isAdmin } = useUIMode();
 
   const [activeTab, setActiveTab] = useState("overzicht");
   const [contentSearch, setContentSearch] = useState("");
   const [contentFilter, setContentFilter] = useState<"all" | "ads" | "other">("all");
   const [placementSearch, setPlacementSearch] = useState("");
   const [cityInput, setCityInput] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const screenId = params?.id;
   const screen = screens.find(s => s.id === screenId);
@@ -836,6 +842,91 @@ export default function ScreenDetail() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Geavanceerd panel - alleen zichtbaar in admin mode of via toggle */}
+          {isAdmin && (
+            <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+              <Card className="border-dashed">
+                <CollapsibleTrigger asChild>
+                  <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Wrench className="h-4 w-4 text-muted-foreground" />
+                      Geavanceerd
+                      <ChevronDown className={`h-4 w-4 ml-auto transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
+                    </CardTitle>
+                  </CardHeader>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <CardContent className="pt-0 space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {/* Yodeck Device ID */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Yodeck Device ID</p>
+                        <p className="text-sm font-mono">
+                          {screen.yodeckPlayerId ? `YDK-${screen.yodeckPlayerId}` : "—"}
+                        </p>
+                      </div>
+                      
+                      {/* Screen ID */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Screen ID</p>
+                        <p className="text-sm font-mono">{screen.screenId || "—"}</p>
+                      </div>
+                      
+                      {/* Location ID */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Location ID</p>
+                        <p className="text-sm font-mono">{screen.locationId || "—"}</p>
+                      </div>
+                      
+                      {/* Yodeck Sync Status */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Sync Status</p>
+                        <SyncStatusBadge
+                          status={screen.yodeckSyncStatus}
+                          provider="yodeck"
+                          entityType="screen"
+                          entityId={screen.id}
+                          error={screen.yodeckSyncError}
+                          lastSyncAt={screen.yodeckLastSyncAt}
+                        />
+                      </div>
+                      
+                      {/* Moneybird Contact ID */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Moneybird Contact ID</p>
+                        <p className="text-sm font-mono">{screenDetail?.moneybirdContactId || "—"}</p>
+                      </div>
+                      
+                      {/* Last Seen */}
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground mb-1">Laatst gezien</p>
+                        <p className="text-sm">{formatLastSeen(screen.lastSeenAt)}</p>
+                      </div>
+                    </div>
+                    
+                    {/* Debug actions */}
+                    <div className="pt-4 border-t flex gap-2">
+                      <Button variant="outline" size="sm" onClick={openInYodeck} data-testid="button-open-yodeck-advanced">
+                        <ExternalLink className="h-4 w-4 mr-2" />
+                        Open in Yodeck
+                      </Button>
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => syncMutation.mutate()}
+                        disabled={syncMutation.isPending}
+                        data-testid="button-sync-advanced"
+                      >
+                        <RefreshCw className={`h-4 w-4 mr-2 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
+                        Force Sync
+                      </Button>
+                    </div>
+                  </CardContent>
+                </CollapsibleContent>
+              </Card>
+            </Collapsible>
+          )}
         </TabsContent>
 
         {/* TAB: Content */}
