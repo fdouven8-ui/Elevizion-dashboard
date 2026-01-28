@@ -683,6 +683,18 @@ export const screens = pgTable("screens", {
   yodeckLastSyncAt: timestamp("yodeck_last_sync_at"),
   // === ONBOARDING STATUS ===
   onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | in_progress | completed
+  // === PLAYLIST-ONLY ARCHITECTURE (NEW) ===
+  // Each screen has exactly 1 playlist - this is the SINGLE SOURCE OF TRUTH
+  playlistId: text("playlist_id"), // Yodeck playlist ID assigned to this screen
+  playlistName: text("playlist_name"), // Cached playlist name for display
+  // Push tracking
+  lastPushAt: timestamp("last_push_at"), // When playlist was last pushed to screen
+  lastPushResult: text("last_push_result"), // ok | failed | pending
+  lastPushError: text("last_push_error"), // Error message if push failed
+  // Verification tracking
+  lastVerifyAt: timestamp("last_verify_at"), // When screen source was last verified
+  lastVerifyResult: text("last_verify_result"), // ok | mismatch | failed
+  lastVerifyError: text("last_verify_error"), // Error message if verify failed
   // === COMPUTED/DISPLAY FIELDS ===
   effectiveName: text("effective_name"), // Calculated: Moneybird company > Yodeck device name > screenId
   city: text("city"), // Denormalized from Moneybird for filtering/display

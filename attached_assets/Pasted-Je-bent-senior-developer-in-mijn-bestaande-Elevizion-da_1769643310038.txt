@@ -1,0 +1,121 @@
+Je bent senior developer in mijn bestaande Elevizion dashboard (Node/Express + DB + Yodeck API v2).
+We gaan het extreem simpel maken en ALLES wat oud/complex is uitzetten. Geen layouts, geen schedule, geen tags, geen “auto-playlist-crop” als waarheid.
+Doel: elk SCHERM heeft exact 1 playlist. Die playlist start als kopie van 1 voorbeeld playlist met 4 basis items. Als een video geupload + approved + toegewezen aan een scherm is, dan:
+1) voeg de video toe aan de playlist van dat scherm (dedupe)
+2) push die playlist opnieuw naar dat scherm (force refresh)
+3) verifieer dat Yodeck screen.source_id = playlistId van dat scherm
+
+HUIDIGE PROBLEEM (fixen):
+Het scherm toont "NO CONTENT TO PLAY" en we zien mismatch tussen playlist ids. Dit komt door oude paden die terugschrijven of “actual” verkeerd bepalen. Dat moet stoppen.
+
+=== HARD RULES ===
+- PLAYLIST-ONLY. Elk scherm gebruikt in Yodeck altijd source_type="playlist" + source_id=<playlistId van dat scherm>.
+- screen.playlistId in DB is de enige waarheid.
+- "actual playing" check komt UIT Yodeck screen config: GET /api/v2/screens/{yodeckPlayerId} en lees source_type + source_id.
+- Screenshot is NIET leidend voor OK/FAIL (alleen extra).
+
+=== CONFIG ===
+- Voeg env var toe: YODECK_TEMPLATE_PLAYLIST_ID = <id van de voorbeeld playlist met 4 basis items>
+  (deze playlist bevat de 4 basis media items)
+- Voeg desnoods ook toe: YODECK_TEMPLATE_NAME = "Elevizion Base Template"
+
+=== DATABASE MODEL ===
+Zorg dat in DB op Screen minimaal bestaat:
+- screens.id (uuid)
+- screens.yodeckPlayerId (number/string)
+- screens.playlistId (string/number)  <-- nieuwe/leidende kolom als die nog niet bestaat
+- screens.lastPushAt, screens.lastPushResult, screens.lastVerifyAt, screens.lastVerifyError
+
+(Als playlistId nu op Location staat, verplaats/dupliceer naar Screen. We willen 1 playlist per scherm.)
+
+=== YODECK HELPERS (v2) ===
+Maak helpers in één file (services/yodeckBroadcast.ts):
+1) yodeckGetScreenSource(yodeckPlayerId):
+   GET /api/v2/screens/{id}
+   return {source_type, source_id}
+
+2) yodeckSetScreenPlaylist(yodeckPlayerId, playlistId):
+   PATCH /api/v2/screens/{id}
+   body: { "source_type": "playlist", "source_id": Number(playlistId) }
+   daarna GET nogmaals ter verificatie.
+
+3) yodeckGetPlaylistItems(playlistId):
+   haal playlist items op met de endpoint die in de codebase al bestaat voor playlists.
+   Als er geen bestaat: implementeer een werkende call op basis van bestaande sync code.
+   return lijst mediaIds (in volgorde is niet super belangrijk maar liefst behouden)
+
+4) yodeckAddMediaToPlaylist(playlistId, mediaId):
+   voeg item toe, return ok
+
+5) yodeckClonePlaylistFromTemplate(templatePlaylistId, newName):
+   - Maak nieuwe playlist aan
+   - Lees items uit templatePlaylistId
+   - Voeg dezelfde items toe aan nieuwe playlist (zelfde volgorde)
+   return newPlaylistId
+
+=== CORE LOGIC ===
+A) ensureScreenPlaylist(screenId):
+   - haal screen op uit DB
+   - als screen.playlistId leeg:
+       newPlaylistId = yodeckClonePlaylistFromTemplate(process.env.YODECK_TEMPLATE_PLAYLIST_ID, `Elevizion | Screen | ${screen.yodeckPlayerId}`)
+       sla screen.playlistId = newPlaylistId op
+   - garandeer dat playlist items >0; als 0 -> re-clone of seed opnieuw uit template
+   - return screen.playlistId
+
+B) pushScreen(screenId):
+   - playlistId = ensureScreenPlaylist(screenId)
+   - yodeckSetScreenPlaylist(screen.yodeckPlayerId, playlistId)
+   - verify:
+       actual = yodeckGetScreenSource(screen.yodeckPlayerId)
+       als actual.source_type !== "playlist" of actual.source_id != playlistId -> throw error
+   - schrijf lastPushAt/Result, lastVerifyAt/Error
+
+C) onApprovedVideoAssignedToScreen(screenId, yodeckMediaId):
+   - playlistId = ensureScreenPlaylist(screenId)
+   - dedupe: als yodeckMediaId al in playlist items zit -> skip add
+   - anders yodeckAddMediaToPlaylist(playlistId, yodeckMediaId)
+   - daarna pushScreen(screenId) (force)
+   - log: [VideoAssign] screenId, playlistId, mediaId, pushed=true
+
+=== ENDPOINTS ===
+1) POST /api/admin/screens/:id/repair
+   Doet: ensureScreenPlaylist + pushScreen
+   Return: {ok:true, playlistId, actualSource, verified:true}
+
+2) POST /api/admin/screens/:id/add-media
+   body: { mediaId }
+   Doet: onApprovedVideoAssignedToScreen
+   Return: {ok:true, playlistId, mediaId, verified:true}
+
+3) GET /api/screens/:id/now-playing
+   Return minimaal:
+   { screenId, isOnline, expectedPlaylistId: screen.playlistId, actualSourceType, actualSourceId, mismatch:boolean, verificationOk:boolean }
+   mismatch alleen op basis van Yodeck screen source (niet op screenshot, niet op auto-playlist-crop)
+
+=== LEGACY UITZETTEN (BELANGRIJK) ===
+Zoek in de codebase alle paden die:
+- layoutMode / yodeckLayoutId / schedule / tag based playlistTag gebruiken
+- content sync die “auto-playlist-*-crop” als broadcast bron gebruikt
+ZET ZE UIT:
+- verwijder de calls of maak ze no-op
+- als er endpoints voor bestaan: laat ze 410 teruggeven met error "LEGACY_DISABLED_PLAYLIST_ONLY"
+- zorg dat workers (autopilot/sync) NIETS meer kunnen overschrijven behalve via pushScreen()
+
+=== WORKERS / AUTO ===
+- AutopilotWorker mag alleen nog:
+  - loop over actieve screens
+  - ensureScreenPlaylist
+  - verify actual source
+  - als mismatch -> pushScreen (self-heal)
+Geen andere acties.
+
+=== ACCEPTANCE ===
+- Na POST /repair draait elk scherm gegarandeerd een playlist met minimaal de 4 basis items.
+- Na add-media verschijnt de video in de playlist en wordt direct opnieuw gepusht.
+- Mismatch kan niet terugkomen omdat legacy routes uitstaan en verify alleen naar Yodeck screen source kijkt.
+
+Voer dit uit, commit alle wijzigingen, en zet in de output:
+- welke files zijn aangepast/nieuw
+- welke legacy routes/logic zijn uitgezet
+- welke env var is toegevoegd
+- hoe ik het test met 2 curl calls (repair + add-media)
