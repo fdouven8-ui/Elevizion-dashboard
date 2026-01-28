@@ -38,12 +38,27 @@ The system integrates various advanced functionalities:
 - **City-Based Targeting**: Enables dynamic region selection based on actual location cities.
 - **Waitlist System**: Allows advertisers to join a waitlist when capacity is unavailable, featuring a background watcher, 48-hour claim tokens, and cross-device claim flows.
 - **Ad Publishing Workflow**: Includes video upload portals with token-based authentication, validation, object storage integration, auto-renaming, and transcoding. An admin review workflow (`/video-review`) mandates approval, triggers automatic placement plan creation, and sends notifications.
-- **Autopilot Ad Publishing**: Automatically targets and links approved ads to appropriate locations and their ADS playlists using `findLocationsForAdvertiser()` and `linkAdToLocation()`.
-- **Layout-Based Baseline Content Architecture**: Baseline content (news, weather) is managed via a fixed Yodeck Layout ("Elevizion Baseline") rather than playlist media seeding. The autopilot system assigns this layout and only manages the ADS playlist for advertisements, ensuring content separation and consistency.
-- **Auto-Playlist Provisioning & Cleanup**: Ensures screens have valid, sellable playlists through canonical naming, duplicate resolution, and auto-creation via the Yodeck API.
-- **Tag-Based Publishing**: Utilizes Yodeck media tags for scalable and robust ad publishing, addressing Yodeck API v2 limitations regarding programmatic playlist item additions.
-- **Content Guarantee System**: `seedAdsPlaylist()` ensures ADS playlists are never empty by using a fallback chain (approved ads → self-ad → any available Yodeck video) and leveraging media tagging when direct playlist append fails.
-- **Layout-Based Content Separation**: Implements a 2-zone layout system (30% BASE, 70% ADS) for distinct content types, with admin configuration and API probing.
+- **Combined Playlist Architecture** (NEW - replaces layout-based system): Each location gets ONE combined playlist named "Elevizion | Loop | {LocationName}" containing:
+  - Base items from configured base playlist (news/weather apps)
+  - Advertisements interleaved with base items
+  - Automatic fallback video if no ads available
+  - Screen content set directly to this playlist (no layouts needed)
+- **Combined Playlist Service** (`combinedPlaylistService.ts`):
+  - `ensureCombinedPlaylistForLocation()` - Main autopilot entry point
+  - `getBasePlaylistItems()` - Fetches items from configured base playlist
+  - `getAdsForLocation()` - Gets approved ads via placement→contract→advertiser chain
+  - `buildCombinedItems()` - Interleaves base items with ads (pattern: base, base, ad, ...)
+  - Deduplication strategy: searches by name, uses lowest ID as canonical
+  - Stores `combinedPlaylistId` in locations table for reuse
+- **Autopilot Worker** (Combined Playlist Mode):
+  - Runs every 5 minutes checking all live locations
+  - Syncs combined playlist items via PATCH /playlists/{id}/
+  - Assigns playlist to screen via PATCH /screens/{id}/ with screen_content
+- **Admin Endpoints**:
+  - `GET /api/admin/autopilot/combined-config` - Get base playlist ID
+  - `POST /api/admin/autopilot/combined-config` - Set base playlist ID
+  - `POST /api/admin/autopilot/repair/:locationId` - Force sync location
+  - `GET /api/admin/locations/:id/content-status` - Get content status
 - **Yodeck Screen Mapper**: `yodeckScreenMapper.ts` acts as a central interpreter for Yodeck screen status, handling various API field formats with robust fallbacks.
 - **Canonical Screen Status Model**: `CanonicalScreenStatus` in `shared/schema.ts` defines a standardized live screen state from the Yodeck API, accessible via `/api/admin/canonical-screens`.
 - **Unified Screen Hook**: `useCanonicalScreens` in the frontend provides a single source of truth for live Yodeck screen data, supporting various operations and compliance checks.

@@ -1,10 +1,16 @@
 /**
  * AutopilotWorker - Background worker that ensures all live locations have content
  * 
+ * NEW ARCHITECTURE: Combined Playlist Mode
+ * Each location gets ONE combined playlist containing:
+ * - Base items (news/weather from configured base playlist)
+ * - Ads (interleaved with base items)
+ * - Fallback video if no ads
+ * 
  * Runs every 5 minutes and:
  * 1. Finds all live locations (status: active or readyForAds)
- * 2. Checks if they need repair (missing playlists, empty content)
- * 3. Runs ensureCanonicalSetupForLocation for each one
+ * 2. Checks if they need repair (missing combined playlist, empty content)
+ * 3. Runs ensureCombinedPlaylistForLocation for each one
  * 
  * Features:
  * - Per-location locking to prevent parallel processing
@@ -14,8 +20,11 @@
 
 import { db } from "../db";
 import { locations } from "@shared/schema";
-import { eq, or } from "drizzle-orm";
-import { ensureCanonicalSetupForLocation, getContentStatus } from "../services/yodeckCanonicalService";
+import { eq, or, isNull, sql } from "drizzle-orm";
+import { 
+  ensureCombinedPlaylistForLocation, 
+  getLocationContentStatus 
+} from "../services/combinedPlaylistService";
 
 const WORKER_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const LOCATION_DELAY_MS = 2000; // 2 seconds between locations (rate limit)
@@ -35,14 +44,14 @@ export async function runAutopilotCheck(): Promise<{
   let repaired = 0;
   let errors = 0;
   
-  logs.push(`[AutopilotWorker] Starting autopilot check...`);
+  logs.push(`[AutopilotWorker] Starting autopilot check (Combined Playlist Mode)...`);
   
   // Get all live locations
   const liveLocations = await db.select()
     .from(locations)
     .where(or(
       eq(locations.status, "active"),
-      eq(locations.status, "readyForAds")
+      eq(locations.readyForAds, true)
     ));
   
   logs.push(`[AutopilotWorker] Found ${liveLocations.length} live locations`);
@@ -57,14 +66,16 @@ export async function runAutopilotCheck(): Promise<{
     }
     
     // Check if needs repair
-    const status = await getContentStatus(location.id);
+    const status = await getLocationContentStatus(location.id);
     checked++;
     
     if (!status.needsRepair) {
       continue;
     }
     
-    const repairReason = status.layout?.error || (!status.ads.playlistId ? "geen ADS playlist" : "lege ADS playlist");
+    const repairReason = status.error || 
+      (!status.combinedPlaylistId ? "geen combined playlist" : 
+       status.combinedPlaylistItemCount === 0 ? "lege combined playlist" : "onbekend");
     logs.push(`[AutopilotWorker] ${location.name} needs repair: ${repairReason}`);
     
     // Stop if we've hit max repairs
@@ -77,11 +88,11 @@ export async function runAutopilotCheck(): Promise<{
     processingLocations.add(location.id);
     
     try {
-      const result = await ensureCanonicalSetupForLocation(location.id);
+      const result = await ensureCombinedPlaylistForLocation(location.id);
       
       if (result.ok) {
         repaired++;
-        logs.push(`[AutopilotWorker] ✓ ${location.name} repaired (layout: ${result.layoutAssigned ? "OK" : "-"}, ads: ${result.ads.itemCount})`);
+        logs.push(`[AutopilotWorker] ✓ ${location.name} repaired (playlist: ${result.combinedPlaylistId}, items: ${result.itemCount})`);
       } else {
         errors++;
         logs.push(`[AutopilotWorker] ✗ ${location.name} repair failed: ${result.error}`);

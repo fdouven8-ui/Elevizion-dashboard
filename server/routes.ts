@@ -16616,5 +16616,78 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  // =========================================================================
+  // COMBINED PLAYLIST MODE ENDPOINTS (NEW ARCHITECTURE)
+  // =========================================================================
+
+  /**
+   * GET /api/admin/autopilot/combined-config
+   * Get combined playlist autopilot configuration
+   */
+  app.get("/api/admin/autopilot/combined-config", requireAdminAccess, async (req, res) => {
+    try {
+      const { getBasePlaylistId } = await import("./services/combinedPlaylistService");
+      const basePlaylistId = await getBasePlaylistId();
+      res.json({ 
+        ok: true, 
+        config: {
+          basePlaylistId,
+          mode: "combined_playlist",
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/combined-config
+   * Set combined playlist configuration
+   */
+  app.post("/api/admin/autopilot/combined-config", requireAdminAccess, async (req, res) => {
+    try {
+      const { basePlaylistId } = req.body;
+      if (!basePlaylistId) {
+        return res.status(400).json({ ok: false, error: "basePlaylistId required" });
+      }
+      
+      const { setBasePlaylistId } = await import("./services/combinedPlaylistService");
+      await setBasePlaylistId(String(basePlaylistId));
+      res.json({ ok: true, message: `Base playlist ID set to ${basePlaylistId}` });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/repair/:locationId
+   * Force combined playlist sync + assign for a location
+   */
+  app.post("/api/admin/autopilot/repair/:locationId", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { ensureCombinedPlaylistForLocation } = await import("./services/combinedPlaylistService");
+      const result = await ensureCombinedPlaylistForLocation(locationId);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/locations/:id/content-status
+   * Get combined playlist content status for a location
+   */
+  app.get("/api/admin/locations/:id/content-status", requireAdminAccess, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { getLocationContentStatus } = await import("./services/combinedPlaylistService");
+      const status = await getLocationContentStatus(id);
+      res.json({ ok: true, ...status });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   return httpServer;
 }
