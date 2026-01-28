@@ -186,6 +186,63 @@ export default function ScreenDetail() {
     enabled: !!screen?.locationId,
     staleTime: 60000,
   });
+
+  // Now playing data - single source of truth for what's actually on screen
+  const { data: nowPlaying, isLoading: nowPlayingLoading, refetch: refetchNowPlaying } = useQuery<{
+    ok: boolean;
+    deviceStatus: {
+      status: "ONLINE" | "OFFLINE" | "UNLINKED";
+      isOnline: boolean;
+      lastSeenAt: string | null;
+      lastScreenshotAt: string | null;
+      yodeckDeviceId: string | null;
+      yodeckDeviceName: string | null;
+      source: string;
+      fetchedAt: string;
+      error?: string;
+    };
+    playlistId: string | null;
+    playlistName: string | null;
+    itemCount: number;
+    baselineCount: number;
+    adsCount: number;
+    lastPushAt: string | null;
+    lastPushResult: string | null;
+    mismatch: boolean;
+    mismatchReason?: string;
+    error?: string;
+  }>({
+    queryKey: ["screen-now-playing", screenId],
+    queryFn: async () => {
+      const response = await fetch(`/api/screens/${screenId}/now-playing`, { credentials: "include" });
+      if (!response.ok) throw new Error("Failed to fetch now playing");
+      return response.json();
+    },
+    enabled: !!screenId,
+    staleTime: 30000,
+    refetchInterval: 60000,
+  });
+
+  // Screen repair mutation
+  const repairScreenMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", `/api/admin/screens/${screenId}/repair`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.ok) {
+        toast({ title: "Reparatie voltooid", description: `Playlist ${data.expectedPlaylistId} toegewezen` });
+      } else {
+        toast({ title: "Reparatie mislukt", description: data.errorReason || "Onbekende fout", variant: "destructive" });
+      }
+      refetchNowPlaying();
+      queryClient.invalidateQueries({ queryKey: ["screen-now-playing", screenId] });
+      queryClient.invalidateQueries({ queryKey: ["location-content-status"] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
   
   const currentContent = screenDetail?.currentContent || [];
   const displayName = getScreenDisplayName(screen, location);
@@ -596,6 +653,140 @@ export default function ScreenDetail() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Wat draait nu? - Unified status panel */}
+          <Card data-testid="card-wat-draait-nu" className="border-2 border-primary/20">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Play className="h-5 w-5 text-primary" />
+                Wat draait nu?
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => refetchNowPlaying()}
+                  disabled={nowPlayingLoading}
+                  className="ml-auto"
+                  data-testid="btn-refresh-now-playing"
+                >
+                  <RefreshCw className={`h-4 w-4 ${nowPlayingLoading ? "animate-spin" : ""}`} />
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {nowPlayingLoading ? (
+                <div className="space-y-2">
+                  <Skeleton className="h-8 w-full" />
+                  <Skeleton className="h-8 w-3/4" />
+                </div>
+              ) : (
+                <>
+                  {/* Device Status */}
+                  <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 rounded-full ${
+                        nowPlaying?.deviceStatus?.status === "ONLINE" ? "bg-green-100" :
+                        nowPlaying?.deviceStatus?.status === "OFFLINE" ? "bg-red-100" :
+                        "bg-gray-100"
+                      }`}>
+                        {nowPlaying?.deviceStatus?.status === "ONLINE" ? (
+                          <Wifi className="h-5 w-5 text-green-600" />
+                        ) : nowPlaying?.deviceStatus?.status === "OFFLINE" ? (
+                          <WifiOff className="h-5 w-5 text-red-600" />
+                        ) : (
+                          <Link2 className="h-5 w-5 text-gray-500" />
+                        )}
+                      </div>
+                      <div>
+                        <p className="font-medium">
+                          {nowPlaying?.deviceStatus?.status === "ONLINE" ? "Online" :
+                           nowPlaying?.deviceStatus?.status === "OFFLINE" ? "Offline" :
+                           "Niet gekoppeld"}
+                        </p>
+                        {nowPlaying?.deviceStatus?.lastSeenAt && (
+                          <p className="text-sm text-muted-foreground">
+                            Laatst gezien: {formatLastSeen(nowPlaying.deviceStatus.lastSeenAt)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    {nowPlaying?.deviceStatus?.status === "UNLINKED" && (
+                      <Badge variant="outline" className="bg-gray-50">Yodeck niet gekoppeld</Badge>
+                    )}
+                  </div>
+
+                  {/* Playlist Info */}
+                  {nowPlaying?.deviceStatus?.status !== "UNLINKED" && (
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="p-3 bg-muted/30 rounded-lg">
+                        <p className="text-sm text-muted-foreground">Actieve playlist</p>
+                        <p className="font-medium truncate" title={nowPlaying?.playlistName || undefined}>
+                          {nowPlaying?.playlistName || "Geen playlist"}
+                        </p>
+                        {nowPlaying?.playlistId && (
+                          <p className="text-xs text-muted-foreground">ID: {nowPlaying.playlistId}</p>
+                        )}
+                      </div>
+                      <div className="p-3 bg-muted/30 rounded-lg">
+                        <p className="text-sm text-muted-foreground">Items</p>
+                        <p className="font-medium">{nowPlaying?.itemCount || 0} items</p>
+                        {(nowPlaying?.baselineCount || nowPlaying?.adsCount) ? (
+                          <p className="text-xs text-muted-foreground">
+                            {nowPlaying.baselineCount} basis + {nowPlaying.adsCount} ads
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Mismatch Warning */}
+                  {nowPlaying?.mismatch && (
+                    <div className="flex items-center gap-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                      <AlertCircle className="h-5 w-5 text-amber-600" />
+                      <div>
+                        <p className="font-medium text-amber-800">Mismatch gedetecteerd</p>
+                        <p className="text-sm text-amber-700">{nowPlaying.mismatchReason}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Error Display */}
+                  {nowPlaying?.error && (
+                    <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <XCircle className="h-5 w-5 text-red-600" />
+                      <div>
+                        <p className="font-medium text-red-800">Fout</p>
+                        <p className="text-sm text-red-700">{nowPlaying.error}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Repair Button */}
+                  {isAdmin && nowPlaying?.deviceStatus?.status !== "UNLINKED" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => repairScreenMutation.mutate()}
+                      disabled={repairScreenMutation.isPending}
+                      className="w-full"
+                      data-testid="btn-force-repair"
+                    >
+                      {repairScreenMutation.isPending ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                          Bezig met repareren...
+                        </>
+                      ) : (
+                        <>
+                          <Zap className="h-4 w-4 mr-2" />
+                          Force repair
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Snel beheer - altijd zichtbaar */}
           <Card data-testid="card-snel-beheer">
@@ -1202,12 +1393,20 @@ export default function ScreenDetail() {
                           </TableCell>
                           <TableCell>
                             {isAd && (
-                              <Badge 
-                                variant="outline"
-                                className={isLinked ? "bg-green-50 text-green-700 border-green-200" : "bg-amber-50 text-amber-700 border-amber-200"}
-                              >
-                                {isLinked ? "Gekoppeld" : "Niet gekoppeld"}
-                              </Badge>
+                              <div className="flex flex-col gap-1">
+                                <Badge 
+                                  variant="outline"
+                                  className={isLinked ? "bg-green-50 text-green-700 border-green-200" : "bg-amber-50 text-amber-700 border-amber-200"}
+                                >
+                                  {isLinked ? "Gekoppeld" : "Niet gekoppeld"}
+                                </Badge>
+                                {!isLinked && activePlacements.length === 0 && (
+                                  <span className="text-xs text-muted-foreground">Geen plaatsing</span>
+                                )}
+                                {!isLinked && activePlacements.length > 0 && (
+                                  <span className="text-xs text-muted-foreground">Asset niet approved</span>
+                                )}
+                              </div>
                             )}
                           </TableCell>
                           <TableCell className="text-right text-muted-foreground">
@@ -1243,14 +1442,29 @@ export default function ScreenDetail() {
           <Card>
             <CardContent className="pt-4">
               {filteredPlacements.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Target className="h-10 w-10 mx-auto mb-3 opacity-50" />
-                  <p>{placementSearch ? `Geen resultaten voor "${placementSearch}"` : "Geen plaatsingen op dit scherm"}</p>
-                  <Button variant="outline" size="sm" className="mt-4" asChild>
-                    <Link href={`/onboarding/placement?screenId=${screen.id}`}>
-                      Plaats een advertentie
-                    </Link>
-                  </Button>
+                <div className="text-center py-8">
+                  <Target className="h-12 w-12 mx-auto mb-4 text-muted-foreground/50" />
+                  {placementSearch ? (
+                    <p className="text-muted-foreground">Geen resultaten voor "{placementSearch}"</p>
+                  ) : (
+                    <>
+                      <h3 className="font-semibold text-lg mb-2">Geen plaatsingen</h3>
+                      <p className="text-muted-foreground mb-4 max-w-md mx-auto">
+                        Er zijn nog geen advertenties gekoppeld aan dit scherm. 
+                        Zodra je een plaatsing maakt, zal de advertentie automatisch worden gesynchroniseerd.
+                      </p>
+                      <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground mb-4">
+                        <AlertCircle className="h-4 w-4" />
+                        <span>Dit is de reden waarom ads "Niet gekoppeld" kunnen tonen</span>
+                      </div>
+                      <Button variant="default" size="lg" asChild data-testid="btn-plaats-advertentie">
+                        <Link href={`/onboarding/placement?screenId=${screen.id}`}>
+                          <Target className="h-4 w-4 mr-2" />
+                          Plaats een advertentie
+                        </Link>
+                      </Button>
+                    </>
+                  )}
                 </div>
               ) : (
                 <Table>

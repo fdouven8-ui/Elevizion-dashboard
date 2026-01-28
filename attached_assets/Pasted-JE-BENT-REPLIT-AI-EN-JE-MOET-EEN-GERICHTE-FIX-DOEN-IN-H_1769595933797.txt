@@ -1,0 +1,107 @@
+JE BENT REPLIT AI EN JE MOET EEN GERICHTE FIX DOEN IN HET ELEVIZION DASHBOARD. GEEN HERONTWERP, GEEN NIEUWE FEATURES DIE IK NIET VRAAG. HET DOEL IS: ALLE PROBLEMEN UIT DE SCREENSHOTS OPLOSSEN (ONLINE STATUS INCONSISTENT, “NO CONTENT TO PLAY”, AD “NIET GEKOPPELD”, 0 PLAATSINGEN, EN GEEN “WAT DRAAIT NU” INZICHT).
+
+HOOFDDOEL (EINDRESULTAAT)
+1) De online/offline status is overal hetzelfde en gebaseerd op 1 bron (Yodeck device status).
+2) Elk scherm heeft zijn EIGEN playlist en die playlist wordt ook écht afgespeeld op het fysieke scherm.
+3) Basiscontent + ads draaien samen. Nooit “NO CONTENT TO PLAY”.
+4) Een advertentie toont niet “Niet gekoppeld” zonder duidelijke reden. Als er geen plaatsing is, moet dat expliciet zichtbaar zijn en moet de UI een duidelijke call-to-action bieden.
+5) In het dashboard zie ik per scherm: “Wat draait nu?” (playlist/layout/items/laatste push) zodat ik niet hoef te gokken.
+
+PROBLEMEN UIT SCREENSHOTS (MOETEN OPGELOST)
+- In overzicht staat scherm groen “Online”, maar bij openen staat hij “Offline” + “Yodeck niet gekoppeld”.
+- Yodeck zelf toont “Online / Updated” maar “NO CONTENT TO PLAY”.
+- In dashboard Content-tab staan items, maar ze verschijnen niet op het scherm.
+- Ad toont “Niet gekoppeld” terwijl ik wil dat het systeem automatisch koppelt zodra er een actieve plaatsing is.
+- Plaatsingen-tab toont “0 plaatsingen”, maar de UI/flow is verwarrend (ik wil direct begrijpen waarom de ad niet draait).
+
+A. 1 BRON VAN WAARHEID VOOR ONLINE STATUS (HARD REQUIREMENT)
+- Maak 1 service/functie: getYodeckDeviceStatus(screenId) die live (met caching max 60s) de Yodeck device status ophaalt:
+  - online boolean (of last_seen < X minuten)
+  - lastSeenAt
+  - lastScreenshotAt (indien beschikbaar)
+  - source = "yodeck"
+- Gebruik deze status overal (overzicht én detail). Geen andere flags/caches die “online” kunnen laten zien als device offline is.
+- Als Yodeck niet gekoppeld is (geen geldig yodeckDeviceId): status = UNLINKED (niet online/offline).
+- UI badges:
+  - UNLINKED (grijs) “Yodeck niet gekoppeld”
+  - OFFLINE (rood)
+  - ONLINE (groen)
+
+B. PER SCHERM EIGEN PLAYLIST + ECHT AFGESPEELD (HARD REQUIREMENT)
+- Stop met gedeelde playlists tussen schermen. Elk scherm moet een unieke playlist krijgen.
+- Introduceer/gebruik DB veld: screens.yodeckPlaylistId (en naam).
+- Canonical naam: "Elevizion | Loop | <ScreenIdOrLocationName>" (uniek, deterministic).
+- Implement: ensureScreenPlaylist(screenId):
+  1) Maak playlist aan in Yodeck als hij niet bestaat.
+  2) Sync deterministisch de items:
+     - Baseline items (nieuws/weer/Elevizion filler) MOETEN erin.
+     - Ads items alleen als er actieve plaatsingen zijn voor dit scherm met APPROVED assets.
+  3) Nooit lege playlist: als geen ads, dan baseline-only.
+- Implement: assignAndPushScreenContent(screenId, playlistId):
+  1) Zet in Yodeck bij het scherm: Screen Content → Playlist = playlistId (authoritative).
+  2) Trigger “push/update to screen” (equivalent van Save & Push).
+  3) Log/return errors, geen silent success.
+
+C. POST-PUBLISH VERIFICATIE (MOET)
+Na assignAndPush:
+- Haal screen details opnieuw op van Yodeck en verifieer:
+  - active playlistId == playlistId die wij hebben toegewezen
+  - playlist itemCount > 0
+- Als mismatch:
+  - markeer dashboard status = ERROR met reden (PLAYLIST_MISMATCH / PLAYLIST_EMPTY / PUBLISH_FAILED / SCREEN_OFFLINE)
+  - toon dit in UI als duidelijke status, niet “wordt hersteld” zonder context.
+
+D. AD “NIET GEKOPPELD” + PLAATSINGEN LOGICA (DUIDELIJK EN CORRECT)
+- Een ad mag alleen “Niet gekoppeld” tonen met een expliciete reden:
+  - GEEN_PLAATSING
+  - CONTRACT_NIET_ACTIEF
+  - ASSET_NIET_APPROVED
+  - PUBLISH_FAILED
+- In Scherm → Plaatsingen tab:
+  - Als 0 plaatsingen: toon duidelijke uitleg en 1 knop “Plaats een advertentie” (CTA) die direct naar de flow gaat.
+- In Scherm → Content tab:
+  - Toon per item of het in de ACTIEVE playlist zit (dus “draait op scherm: ja/nee”), niet alleen “in dashboard”.
+  - Als ad asset bestaat maar geen plaatsing: label “Niet gekoppeld — geen plaatsing”.
+
+E. BASISCONTENT MOET ECHT BESTAAN (NO CONTENT TO PLAY FIX)
+- Zorg dat de baseline template (bijv. "Elevizion - Basis") in Yodeck bestaat of automatisch wordt aangemaakt/gecontroleerd.
+- Als je baseline items widgets/apps zijn (RSS/weer):
+  - Verifieer dat ze correct geconfigureerd zijn (feed url / plugin config).
+  - Als baseline item niet kan renderen, voeg fallback toe (bv. Elevizion PNG/MP4 filler) zodat er altijd iets speelt.
+- Yodeck “NO CONTENT TO PLAY” mag nooit voorkomen als device online is:
+  - Als playlist empty → auto repair → baseline-only push.
+
+F. “WAT DRAAIT NU?” PANEL (MUST-HAVE)
+In dashboard Screen Detail → Overzicht:
+Toon een kaart “Wat draait nu?” met:
+- Device status: ONLINE/OFFLINE/UNLINKED + lastSeenAt
+- Actieve Yodeck content source: Playlist name + playlistId
+- Items count + breakdown: baseline X / ads Y
+- Laatste push tijd + resultaat (ok/fail)
+- Als mismatch: toon “Mismatch: scherm speelt <id> maar moet <id>”
+- Admin knop: “Force repair” (calls endpoint hieronder)
+
+G. ENDPOINTS (ADMIN)
+- POST /api/admin/screens/:screenId/repair
+  Doet: ensureScreenPlaylist → assignAndPush → verify
+  Return JSON diagnostics:
+  - expectedPlaylistId, actualPlaylistId, itemCount, baselineCount, adsCount
+  - deviceStatus, publishOk, verificationOk, errorReason (if any)
+- (Optional) GET /api/screens/:screenId/now-playing
+  Voor UI panel.
+
+H. AUTOPILOT WORKER AANPASSING
+- Worker cycle (5 min) moet per screen doen:
+  ensureScreenPlaylist → assignAndPush → verify
+- Respecteer rate limits; cache device status 60s.
+- Idempotent: meerdere runs mogen geen duplicaten maken.
+
+ACCEPTANCE CRITERIA (MOETEN ALLEMAAL GROEN ZIJN)
+1) Overzicht en detail tonen exact dezelfde status voor een scherm.
+2) Als Yodeck online is, speelt het scherm altijd minimaal baseline content (geen “NO CONTENT TO PLAY”).
+3) Elk scherm heeft een unieke playlist en die playlistId is opgeslagen in DB.
+4) “Niet gekoppeld” toont altijd een reden, en als er 0 plaatsingen zijn is dat meteen duidelijk.
+5) “Wat draait nu?” toont playlist/layout/items en laatste push.
+6) Force repair endpoint fixt een screen binnen 1 run en toont diagnostics.
+
+VOER DIT NU UIT IN DE CODEBASE: pas services, DB, worker en UI aan. Behoud bestaande functionaliteit, maar maak bovenstaande leidend en betrouwbaar.

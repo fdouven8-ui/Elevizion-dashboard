@@ -16829,5 +16829,61 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  // =========================================================================
+  // SCREEN REPAIR & NOW PLAYING (PER-SCREEN PLAYLIST ARCHITECTURE)
+  // =========================================================================
+
+  /**
+   * POST /api/admin/screens/:screenId/repair
+   * Full repair cycle: ensureScreenPlaylist → assignAndPush → verify
+   */
+  app.post("/api/admin/screens/:screenId/repair", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { repairScreen } = await import("./services/screenPlaylistService");
+      
+      console.log(`[ScreenRepair] Starting repair for screen: ${screenId}`);
+      const result = await repairScreen(screenId);
+      
+      result.logs.forEach(log => console.log(log));
+      console.log(`[ScreenRepair] Result: ok=${result.ok}, publishOk=${result.publishOk}, verificationOk=${result.verificationOk}`);
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ScreenRepair] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/screens/:screenId/now-playing
+   * Get what's currently playing on a screen
+   */
+  app.get("/api/screens/:screenId/now-playing", requirePermission("view_screens"), async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { getScreenNowPlaying } = await import("./services/screenPlaylistService");
+      const result = await getScreenNowPlaying(screenId);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/screens/:screenId/device-status
+   * Get unified device status (single source of truth for online/offline)
+   */
+  app.get("/api/screens/:screenId/device-status", requirePermission("view_screens"), async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { getYodeckDeviceStatus } = await import("./services/unifiedDeviceStatusService");
+      const status = await getYodeckDeviceStatus(screenId);
+      res.json(status);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message, status: "OFFLINE" });
+    }
+  });
+
   return httpServer;
 }
