@@ -1,0 +1,81 @@
+Je bent Replit AI en je gaat dit als een PRO software engineer definitief goed maken. Geen autodetect, geen “als het ontbreekt dan…”. De basiscontent is ALTIJD één vaste playlist die ik al handmatig in Yodeck heb gemaakt (nieuws/weer/etc). Die basisplaylist is de enige bron voor baseline. Elke screen-playlist moet bij sync exact die baseline-items bevatten + (optioneel) ads, en dit moet direct afspeelbaar zijn op beide schermen.
+
+HARD REQUIREMENTS
+1) Er is exact 1 baseline playlist in Yodeck die door mij beheerd wordt. Die moet altijd worden gekopieerd naar elke per-screen playlist.
+2) Elke screen heeft 1 eigen “combined” playlist (geen layout) die het scherm daadwerkelijk afspeelt.
+3) Combined playlist per screen = baseline items (kopie uit baseline playlist) + ads voor dat screen (op basis van targeting/plaatsingen + APPROVED assets).
+4) De baseline items moeten op ALLE screens staan, ook als er 0 ads/plaatsingen zijn.
+5) Nooit lege playlist, nooit “NO CONTENT TO PLAY”. Als baseline playlist leeg/ongeldig is, moet dat een duidelijke ERROR geven met instructie (maar niet stil falen).
+6) Assign/push/verify moet op EXACT dezelfde playlistId gebeuren (actieve playlist van het scherm uit Yodeck). Geen dubbele playlistIds meer.
+7) UI “Wat draait nu?” moet de waarheid tonen: itemCount, baselineCount, adsCount, expected vs actual playlist, lastPushResult, verificationOk.
+
+CONFIG (SINGLE SOURCE OF TRUTH)
+- Voeg/gebruik 1 setting: AUTOPILOT_BASELINE_PLAYLIST_ID (verplicht).
+- Ook in UI Instellingen: toon naam + ID + “itemCount” van deze baseline playlist zodat ik kan zien dat hij gevuld is.
+- Geen fallback-inject als structurele oplossing; baseline playlist is leidend. (Alleen: als baseline playlist leeg is -> duidelijke error BASELINE_PLAYLIST_EMPTY.)
+
+IMPLEMENTATIE DETAILS (MOET)
+A) Baseline ophalen (kopiëren, niet “raden”)
+Implement getBaselineItemsFromYodeck():
+- Require AUTOPILOT_BASELINE_PLAYLIST_ID.
+- Fetch baseline playlist items from Yodeck.
+- Normalize to a list of playable entries we can add to another playlist (media/app references + duration where needed).
+- Validate: baselineItems.length > 0 else throw BASELINE_PLAYLIST_EMPTY (with instruction: “vul de baseline playlist in Yodeck”).
+
+B) Per-screen combined playlist vullen
+Implement syncScreenCombinedPlaylist(screenId):
+1) Fetch active playlistId from Yodeck for this screen (screen_content.source_id). If none:
+   - Create a new playlist "Elevizion | Loop | {YDK-<deviceId>}" and ASSIGN it to the screen, then re-fetch active playlistId.
+2) Build desiredItems:
+   - baselineItems = getBaselineItemsFromYodeck()  (must be >0)
+   - adItems = getApprovedAdsForScreen(screenId) based on placements/targeting/contract overrides (already implemented)
+   - desiredItems = baselineItems + adItems
+3) Write desiredItems into the active playlistId:
+   - Clear existing playlist items (or reconcile) to avoid duplicates/drift
+   - Add baseline first, then ads
+   - Optionally shuffle order AFTER composition (but keep baseline guaranteed present)
+4) Push/Update screen (“Save & Push to this Screen” equivalent).
+5) Verify:
+   - Fetch playlist itemCount for that same playlistId
+   - Must be >0
+   - Fetch screen details to confirm it still points to that playlistId
+   - verificationOk = exact match + itemCount>0
+
+C) Auto placement after approval (blijft, maar nu correct zichtbaar)
+- On approval: create placements only for matched screens.
+- After placements created: call syncScreenCombinedPlaylist for those screens (so ads get appended).
+
+D) Fix de huidige situatie in logs (direct)
+We currently have:
+- active playlistId for YDK-591896 = 30498772 (empty)
+- baseline exists in Yodeck but not configured in settings
+Action:
+- Add UI input and API to set AUTOPILOT_BASELINE_PLAYLIST_ID to my baseline playlist (the one containing NOS nieuws/weer etc).
+- After setting it, run repairScreen for both screens to fill 30498772 and 30498756 with baseline + ads.
+
+ENDPOINTS (ADMIN)
+- POST /api/admin/screens/:screenId/repair
+  -> must call syncScreenCombinedPlaylist(screenId) and return diagnostics:
+     {screenId, yodeckDeviceId, activePlaylistId, baselinePlaylistId, baselineCount, adsCount, itemCount, verificationOk, lastPushResult, errorReason}
+- GET /api/admin/settings/baseline-status
+  -> returns baselinePlaylistId, baselinePlaylistName, baselineItemCount, lastCheckedAt.
+
+UI CHANGES (MINIMAL, BUT MUST)
+- Instellingen: veld “Baseline playlist (Yodeck)” met:
+  - ID input + “Test” knop (fetch name + itemCount)
+  - waarschuwing rood als itemCount==0
+- ScreenDetail “Wat draait nu?”:
+  - baselineCount/adsCount en foutmelding als baseline missing/empty.
+
+ACCEPTANCE TEST (MUST PROVIDE REAL PROOF)
+1) Configure AUTOPILOT_BASELINE_PLAYLIST_ID (pointing to my existing Yodeck baseline playlist).
+2) Run repair for YDK-591896 and YDK-591895.
+3) Show outputs:
+   - activePlaylistId matches Yodeck
+   - baselineCount > 0
+   - itemCount > 0
+   - verificationOk true
+4) Confirm that on Yodeck both screens stop showing “NO CONTENT TO PLAY” and display baseline content.
+5) Approve 1 ad video and show it gets appended to the correct target screen playlist.
+
+Do this now end-to-end. No more empty playlists, no more mismatch, baseline must always be present on both screens.

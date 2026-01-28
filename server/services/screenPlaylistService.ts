@@ -2,32 +2,85 @@
  * Screen Playlist Service
  * 
  * Per-screen playlist management - each screen gets its own unique playlist.
- * Ensures content is always available (baseline fallback) and ads are synced.
  * 
- * CRITICAL FIX: Always use the ACTUAL playlist assigned to the screen in Yodeck
- * as the source of truth. Never fill a different playlist than what the screen uses.
+ * ARCHITECTURE (HARD REQUIREMENTS):
+ * 1. ONE baseline playlist in Yodeck managed by user (AUTOPILOT_BASELINE_PLAYLIST_ID)
+ * 2. Baseline items are ALWAYS copied to every per-screen playlist
+ * 3. Combined playlist per screen = baseline items + ads
+ * 4. NEVER empty playlists - if baseline is empty, throw error with clear instruction
+ * 5. Same playlistId for assign/push/verify - use screen's actual active playlist
  * 
  * Key functions:
- * - getScreenActivePlaylistId(): Get the actual playlist ID from Yodeck screen
- * - fillPlaylistWithContent(): Fill ANY playlist with baseline + ads
- * - repairScreen(): Full repair cycle - gets actual playlist and fills it
- * - assignAndPushScreenContent(): Assign playlist to screen and push
- * - verifyScreenContent(): Post-publish verification
+ * - getBaselinePlaylistStatus(): Get baseline playlist info for settings UI
+ * - getBaselineItemsFromYodeck(): Fetch baseline items (MUST have items, no fallback)
+ * - syncScreenCombinedPlaylist(): Main sync function - baseline + ads into screen's playlist
+ * - repairScreen(): Full repair cycle using syncScreenCombinedPlaylist
  */
 
 import { db } from "../db";
-import { screens, locations, placements, contracts, adAssets, systemSettings } from "@shared/schema";
-import { eq, and, inArray, desc } from "drizzle-orm";
+import { screens, placements, contracts, adAssets, systemSettings } from "@shared/schema";
+import { eq, and, inArray } from "drizzle-orm";
 import { yodeckRequest } from "./yodeckLayoutService";
 import { getYodeckDeviceStatus, UnifiedDeviceStatus } from "./unifiedDeviceStatusService";
+
+// ============================================================================
+// TYPES
+// ============================================================================
 
 export interface PlaylistItem {
   type: "baseline" | "ad";
   mediaId: number;
   mediaName: string;
   duration: number;
+  itemType?: string; // 'media', 'app', etc
 }
 
+export interface BaselineStatus {
+  configured: boolean;
+  playlistId: string | null;
+  playlistName: string | null;
+  itemCount: number;
+  items: PlaylistItem[];
+  lastCheckedAt: string;
+  error?: string;
+}
+
+export interface ScreenSyncResult {
+  ok: boolean;
+  screenId: string;
+  screenName: string;
+  yodeckDeviceId: string | null;
+  activePlaylistId: string | null;
+  baselinePlaylistId: string | null;
+  baselineCount: number;
+  adsCount: number;
+  itemCount: number;
+  verificationOk: boolean;
+  lastPushResult: string;
+  errorReason?: string;
+  logs: string[];
+}
+
+export interface ScreenRepairResult {
+  ok: boolean;
+  screenId: string;
+  screenName: string;
+  deviceStatus: UnifiedDeviceStatus;
+  expectedPlaylistId: string | null;
+  actualPlaylistId: string | null;
+  baselinePlaylistId: string | null;
+  itemCount: number;
+  baselineCount: number;
+  adsCount: number;
+  publishOk: boolean;
+  verificationOk: boolean;
+  verificationError?: string;
+  baselineError?: string;
+  errorReason?: string;
+  logs: string[];
+}
+
+// Legacy types for compatibility
 export interface ScreenPlaylistResult {
   ok: boolean;
   screenId: string;
@@ -57,48 +110,268 @@ export interface AssignPushResult {
   logs: string[];
 }
 
-export interface ScreenRepairResult {
-  ok: boolean;
-  screenId: string;
-  screenName: string;
-  deviceStatus: UnifiedDeviceStatus;
-  expectedPlaylistId: string | null;
-  actualPlaylistId: string | null;
-  itemCount: number;
-  baselineCount: number;
-  adsCount: number;
-  publishOk: boolean;
-  verificationOk: boolean;
-  verificationError?: string;
-  baselineError?: string;
-  baselineFallbackUsed?: boolean;
-  errorReason?: string;
-  targetingSource?: string;
-  logs: string[];
-}
+// ============================================================================
+// CONSTANTS
+// ============================================================================
 
 const SCREEN_PLAYLIST_PREFIX = "Elevizion | Loop | ";
 const DEFAULT_DURATION = 15;
-
 const CONFIG_KEY_BASELINE_PLAYLIST = "autopilot.baselinePlaylistId";
 
+// ============================================================================
+// BASELINE PLAYLIST FUNCTIONS
+// ============================================================================
+
 /**
- * Get baseline playlist ID from config
+ * Get baseline playlist ID from settings (env or database)
+ * REQUIRED - returns null if not configured
  */
-async function getBaselinePlaylistId(): Promise<string | null> {
+export async function getBaselinePlaylistId(): Promise<string | null> {
+  // Check environment variable first
   const envValue = process.env.AUTOPILOT_BASELINE_PLAYLIST_ID || process.env.AUTOPILOT_BASE_PLAYLIST_ID;
   if (envValue) return envValue;
   
+  // Check database setting
   const [setting] = await db.select().from(systemSettings)
     .where(eq(systemSettings.key, CONFIG_KEY_BASELINE_PLAYLIST));
   return setting?.value || null;
 }
 
 /**
+ * Set baseline playlist ID in database
+ */
+export async function setBaselinePlaylistId(playlistId: string): Promise<void> {
+  const existing = await db.select().from(systemSettings)
+    .where(eq(systemSettings.key, CONFIG_KEY_BASELINE_PLAYLIST));
+  
+  if (existing.length > 0) {
+    await db.update(systemSettings)
+      .set({ value: playlistId, updatedAt: new Date() })
+      .where(eq(systemSettings.key, CONFIG_KEY_BASELINE_PLAYLIST));
+  } else {
+    await db.insert(systemSettings).values({
+      key: CONFIG_KEY_BASELINE_PLAYLIST,
+      value: playlistId,
+      description: "Yodeck baseline playlist ID (news/weather/etc)",
+    });
+  }
+}
+
+/**
+ * Get baseline playlist status for settings UI
+ * Shows: configured, playlistId, playlistName, itemCount, items, lastCheckedAt
+ */
+export async function getBaselinePlaylistStatus(): Promise<BaselineStatus> {
+  const playlistId = await getBaselinePlaylistId();
+  const now = new Date().toISOString();
+  
+  if (!playlistId) {
+    return {
+      configured: false,
+      playlistId: null,
+      playlistName: null,
+      itemCount: 0,
+      items: [],
+      lastCheckedAt: now,
+      error: "BASELINE_NOT_CONFIGURED - Stel AUTOPILOT_BASELINE_PLAYLIST_ID in of configureer via Instellingen",
+    };
+  }
+  
+  // Fetch playlist from Yodeck
+  const result = await yodeckRequest<any>(`/playlists/${playlistId}/`);
+  
+  if (!result.ok || !result.data) {
+    return {
+      configured: true,
+      playlistId,
+      playlistName: null,
+      itemCount: 0,
+      items: [],
+      lastCheckedAt: now,
+      error: `BASELINE_FETCH_ERROR - Kan playlist ${playlistId} niet ophalen: ${result.error}`,
+    };
+  }
+  
+  const playlistItems = result.data.items || [];
+  const items: PlaylistItem[] = [];
+  
+  for (const item of playlistItems) {
+    const mediaId = item.media?.id || item.media_id || item.app?.id || item.app_id || item.id;
+    const mediaName = item.media?.name || item.app?.name || item.name || `Item ${mediaId}`;
+    const duration = item.duration || item.media?.duration || DEFAULT_DURATION;
+    const itemType = item.media ? 'media' : item.app ? 'app' : 'unknown';
+    
+    if (mediaId) {
+      items.push({
+        type: "baseline",
+        mediaId: Number(mediaId),
+        mediaName,
+        duration: Number(duration),
+        itemType,
+      });
+    }
+  }
+  
+  if (items.length === 0) {
+    return {
+      configured: true,
+      playlistId,
+      playlistName: result.data.name || null,
+      itemCount: 0,
+      items: [],
+      lastCheckedAt: now,
+      error: "BASELINE_PLAYLIST_EMPTY - Vul de baseline playlist in Yodeck met nieuws/weer/etc content",
+    };
+  }
+  
+  return {
+    configured: true,
+    playlistId,
+    playlistName: result.data.name || null,
+    itemCount: items.length,
+    items,
+    lastCheckedAt: now,
+  };
+}
+
+/**
+ * Get baseline items from Yodeck - REQUIRED to have items
+ * Throws clear error if not configured or empty
+ */
+async function getBaselineItemsFromYodeck(logs: string[]): Promise<{
+  ok: boolean;
+  playlistId: string | null;
+  items: PlaylistItem[];
+  error?: string;
+}> {
+  const playlistId = await getBaselinePlaylistId();
+  
+  if (!playlistId) {
+    const error = "BASELINE_NOT_CONFIGURED - Stel AUTOPILOT_BASELINE_PLAYLIST_ID in via Instellingen > Autopilot";
+    logs.push(`[Baseline] ✗ ${error}`);
+    return { ok: false, playlistId: null, items: [], error };
+  }
+  
+  logs.push(`[Baseline] Ophalen items van baseline playlist ${playlistId}`);
+  
+  const result = await yodeckRequest<any>(`/playlists/${playlistId}/`);
+  
+  if (!result.ok || !result.data) {
+    const error = `BASELINE_FETCH_ERROR - Kan playlist ${playlistId} niet ophalen: ${result.error}`;
+    logs.push(`[Baseline] ✗ ${error}`);
+    return { ok: false, playlistId, items: [], error };
+  }
+  
+  const playlistItems = result.data.items || [];
+  const items: PlaylistItem[] = [];
+  
+  for (const item of playlistItems) {
+    // Handle both media items and app items (news/weather widgets)
+    const mediaId = item.media?.id || item.media_id || item.app?.id || item.app_id || item.id;
+    const mediaName = item.media?.name || item.app?.name || item.name || `Item ${mediaId}`;
+    const duration = item.duration || item.media?.duration || DEFAULT_DURATION;
+    
+    if (mediaId) {
+      items.push({
+        type: "baseline",
+        mediaId: Number(mediaId),
+        mediaName,
+        duration: Number(duration),
+        itemType: item.media ? 'media' : item.app ? 'app' : 'unknown',
+      });
+    }
+  }
+  
+  if (items.length === 0) {
+    const error = "BASELINE_PLAYLIST_EMPTY - Vul de baseline playlist in Yodeck met nieuws/weer/etc content";
+    logs.push(`[Baseline] ✗ ${error}`);
+    return { ok: false, playlistId, items: [], error };
+  }
+  
+  logs.push(`[Baseline] ✓ ${items.length} baseline items gevonden (${result.data.name})`);
+  return { ok: true, playlistId, items };
+}
+
+// ============================================================================
+// ADS FUNCTIONS
+// ============================================================================
+
+/**
+ * Get approved ads for a screen via placements chain
+ */
+async function getApprovedAdsForScreen(screenId: string, logs: string[]): Promise<PlaylistItem[]> {
+  logs.push(`[Ads] Zoeken approved ads voor scherm ${screenId}`);
+  
+  // Get active placements for this screen
+  const screenPlacements = await db.select({ contractId: placements.contractId })
+    .from(placements)
+    .where(and(
+      eq(placements.screenId, screenId),
+      eq(placements.isActive, true)
+    ));
+  
+  if (screenPlacements.length === 0) {
+    logs.push(`[Ads] Geen actieve plaatsingen voor dit scherm`);
+    return [];
+  }
+  
+  const contractIds = Array.from(new Set(screenPlacements.map(p => p.contractId)));
+  logs.push(`[Ads] ${contractIds.length} contracten met plaatsingen gevonden`);
+  
+  // Get advertisers from active contracts
+  const activeContracts = await db.select({ advertiserId: contracts.advertiserId })
+    .from(contracts)
+    .where(and(
+      inArray(contracts.id, contractIds),
+      inArray(contracts.status, ["active", "signed"])
+    ));
+  
+  const advertiserIds = Array.from(new Set(activeContracts.map(c => c.advertiserId)));
+  
+  if (advertiserIds.length === 0) {
+    logs.push(`[Ads] Geen actieve contracten`);
+    return [];
+  }
+  
+  logs.push(`[Ads] ${advertiserIds.length} adverteerders met actieve contracten`);
+  
+  // Get approved ad assets
+  const approvedAssets = await db.select({
+    yodeckMediaId: adAssets.yodeckMediaId,
+    originalFileName: adAssets.originalFileName,
+  })
+    .from(adAssets)
+    .where(and(
+      inArray(adAssets.advertiserId, advertiserIds),
+      eq(adAssets.approvalStatus, "APPROVED")
+    ));
+  
+  const items: PlaylistItem[] = [];
+  for (const asset of approvedAssets) {
+    if (asset.yodeckMediaId) {
+      items.push({
+        type: "ad",
+        mediaId: asset.yodeckMediaId,
+        mediaName: asset.originalFileName || `Ad ${asset.yodeckMediaId}`,
+        duration: DEFAULT_DURATION,
+        itemType: 'media',
+      });
+    }
+  }
+  
+  logs.push(`[Ads] ${items.length} approved ads gevonden`);
+  return items;
+}
+
+// ============================================================================
+// PLAYLIST HELPERS
+// ============================================================================
+
+/**
  * Get canonical playlist name for a screen
  */
-function getScreenPlaylistName(screenIdOrName: string): string {
-  return `${SCREEN_PLAYLIST_PREFIX}${screenIdOrName}`.trim();
+function getScreenPlaylistName(screenIdOrDeviceId: string): string {
+  return `${SCREEN_PLAYLIST_PREFIX}${screenIdOrDeviceId}`.trim();
 }
 
 /**
@@ -140,218 +413,10 @@ async function createPlaylist(name: string): Promise<{ ok: boolean; playlistId?:
   return { ok: true, playlistId: result.data.id };
 }
 
-interface BaselineResult {
-  items: PlaylistItem[];
-  error?: "BASELINE_TEMPLATE_MISSING" | "BASELINE_TEMPLATE_EMPTY" | "BASELINE_FETCH_ERROR";
-  fallbackUsed: boolean;
-}
-
-// BASELINE GUARANTEE: Always have a fallback - use configured ID or default to 0 (which should be configured)
-const FALLBACK_MEDIA_ID = process.env.FALLBACK_MEDIA_ID ? Number(process.env.FALLBACK_MEDIA_ID) : null;
-const FALLBACK_MEDIA_NAME = "Elevizion Fallback";
-const HARDCODED_FALLBACK_DURATION = 30;
-
 /**
- * Get baseline items from template playlist
- * Guarantees at least fallback content if template is missing/empty
+ * Get the ACTUAL playlist ID assigned to this screen in Yodeck
  */
-async function getBaselineItems(logs: string[]): Promise<BaselineResult> {
-  const baselinePlaylistId = await getBaselinePlaylistId();
-  
-  if (!baselinePlaylistId) {
-    logs.push(`[Baseline] ⚠️ BASELINE_TEMPLATE_MISSING - geen baseline playlist geconfigureerd`);
-    return injectFallback(logs, "BASELINE_TEMPLATE_MISSING");
-  }
-  
-  logs.push(`[Baseline] Ophalen items van playlist ${baselinePlaylistId}`);
-  
-  const result = await yodeckRequest<any>(`/playlists/${baselinePlaylistId}/`);
-  
-  if (!result.ok || !result.data) {
-    logs.push(`[Baseline] ⚠️ BASELINE_FETCH_ERROR: ${result.error}`);
-    return injectFallback(logs, "BASELINE_FETCH_ERROR");
-  }
-  
-  const items: PlaylistItem[] = [];
-  const playlistItems = result.data.items || [];
-  
-  for (const item of playlistItems) {
-    const mediaId = item.media?.id || item.media_id || item.id;
-    const mediaName = item.media?.name || item.name || `Item ${mediaId}`;
-    const duration = item.duration || item.media?.duration || DEFAULT_DURATION;
-    
-    if (mediaId) {
-      items.push({
-        type: "baseline",
-        mediaId: Number(mediaId),
-        mediaName,
-        duration: Number(duration),
-      });
-    }
-  }
-  
-  if (items.length === 0) {
-    logs.push(`[Baseline] ⚠️ BASELINE_TEMPLATE_EMPTY - template playlist is leeg`);
-    return injectFallback(logs, "BASELINE_TEMPLATE_EMPTY");
-  }
-  
-  logs.push(`[Baseline] ✓ ${items.length} items gevonden`);
-  return { items, fallbackUsed: false };
-}
-
-/**
- * Inject fallback media when baseline template is unavailable
- * Returns empty if no FALLBACK_MEDIA_ID configured (allows ads-only playlists)
- */
-function injectFallback(logs: string[], error: BaselineResult["error"]): BaselineResult {
-  // Only use fallback if explicitly configured
-  if (!FALLBACK_MEDIA_ID || FALLBACK_MEDIA_ID <= 0) {
-    logs.push(`[Baseline] ⚠️ Geen baseline/fallback - alleen ads worden afgespeeld (set FALLBACK_MEDIA_ID voor fallback)`);
-    console.warn("[WARN] FALLBACK_MEDIA_ID not configured. Playlist will contain only ads (if any). Set FALLBACK_MEDIA_ID for baseline content.");
-    return {
-      items: [], // No fallback - ads only (or empty if no ads)
-      error,
-      fallbackUsed: false,
-    };
-  }
-  
-  logs.push(`[Baseline] ✓ Fallback media ${FALLBACK_MEDIA_ID} wordt gebruikt`);
-  
-  return {
-    items: [{
-      type: "baseline",
-      mediaId: FALLBACK_MEDIA_ID,
-      mediaName: FALLBACK_MEDIA_NAME,
-      duration: HARDCODED_FALLBACK_DURATION,
-    }],
-    error,
-    fallbackUsed: true,
-  };
-}
-
-/**
- * Get approved ads for a screen via placements chain
- */
-async function getAdsForScreen(screenId: string, logs: string[]): Promise<PlaylistItem[]> {
-  logs.push(`[Ads] Zoeken ads voor scherm ${screenId}`);
-  
-  const screenPlacements = await db.select({ contractId: placements.contractId })
-    .from(placements)
-    .where(and(
-      eq(placements.screenId, screenId),
-      eq(placements.isActive, true)
-    ));
-  
-  if (screenPlacements.length === 0) {
-    logs.push(`[Ads] Geen actieve plaatsingen voor dit scherm`);
-    return [];
-  }
-  
-  const contractIds = Array.from(new Set(screenPlacements.map(p => p.contractId)));
-  logs.push(`[Ads] ${contractIds.length} contracten gevonden`);
-  
-  const activeContracts = await db.select({ advertiserId: contracts.advertiserId })
-    .from(contracts)
-    .where(and(
-      inArray(contracts.id, contractIds),
-      inArray(contracts.status, ["active", "signed"])
-    ));
-  
-  const advertiserIds = Array.from(new Set(activeContracts.map(c => c.advertiserId)));
-  logs.push(`[Ads] ${advertiserIds.length} adverteerders gevonden`);
-  
-  if (advertiserIds.length === 0) {
-    logs.push(`[Ads] Geen actieve contracten`);
-    return [];
-  }
-  
-  const approvedAssets = await db.select({
-    yodeckMediaId: adAssets.yodeckMediaId,
-    originalFileName: adAssets.originalFileName,
-  })
-    .from(adAssets)
-    .where(and(
-      inArray(adAssets.advertiserId, advertiserIds),
-      eq(adAssets.approvalStatus, "APPROVED")
-    ));
-  
-  const items: PlaylistItem[] = [];
-  for (const asset of approvedAssets) {
-    if (asset.yodeckMediaId) {
-      items.push({
-        type: "ad",
-        mediaId: asset.yodeckMediaId,
-        mediaName: asset.originalFileName || `Ad ${asset.yodeckMediaId}`,
-        duration: DEFAULT_DURATION,
-      });
-    }
-  }
-  
-  logs.push(`[Ads] ${items.length} approved ads gevonden`);
-  return items;
-}
-
-/**
- * Build combined playlist items (baseline interleaved with ads)
- */
-function buildCombinedItems(
-  baselineItems: PlaylistItem[],
-  adItems: PlaylistItem[],
-  logs: string[]
-): any[] {
-  const items: any[] = [];
-  
-  if (baselineItems.length === 0 && adItems.length === 0) {
-    logs.push(`[Build] Geen items - playlist blijft leeg`);
-    return [];
-  }
-  
-  if (adItems.length === 0) {
-    logs.push(`[Build] Alleen baseline items (${baselineItems.length})`);
-    for (const item of baselineItems) {
-      items.push({
-        media: item.mediaId,
-        duration: item.duration,
-      });
-    }
-    return items;
-  }
-  
-  logs.push(`[Build] Interleaven: ${baselineItems.length} baseline + ${adItems.length} ads`);
-  
-  let adIndex = 0;
-  for (let i = 0; i < baselineItems.length; i++) {
-    items.push({
-      media: baselineItems[i].mediaId,
-      duration: baselineItems[i].duration,
-    });
-    
-    if ((i + 1) % 2 === 0 && adIndex < adItems.length) {
-      items.push({
-        media: adItems[adIndex].mediaId,
-        duration: adItems[adIndex].duration,
-      });
-      adIndex++;
-    }
-  }
-  
-  while (adIndex < adItems.length) {
-    items.push({
-      media: adItems[adIndex].mediaId,
-      duration: adItems[adIndex].duration,
-    });
-    adIndex++;
-  }
-  
-  logs.push(`[Build] Totaal ${items.length} items`);
-  return items;
-}
-
-/**
- * CRITICAL: Get the ACTUAL playlist ID that's assigned to this screen in Yodeck
- * This is the source of truth - we must fill THIS playlist, not a different one.
- */
-export async function getScreenActivePlaylistId(
+async function getScreenActivePlaylistId(
   yodeckDeviceId: string,
   logs: string[]
 ): Promise<{ playlistId: string | null; playlistName: string | null; error?: string }> {
@@ -392,121 +457,61 @@ export async function getScreenActivePlaylistId(
 }
 
 /**
- * Fill a specific playlist with baseline + ads content
- * This fills THE playlist the screen is actually using
+ * Build playlist items array for Yodeck API
  */
-export async function fillPlaylistWithContent(
-  playlistId: string,
-  screenId: string,
-  logs: string[]
-): Promise<{
-  ok: boolean;
-  itemCount: number;
-  baselineCount: number;
-  adsCount: number;
-  baselineError?: string;
-  baselineFallbackUsed?: boolean;
-  error?: string;
-}> {
-  logs.push(`[FillPlaylist] Vullen playlist ${playlistId} voor scherm ${screenId}`);
+function buildPlaylistItems(baselineItems: PlaylistItem[], adItems: PlaylistItem[]): any[] {
+  const items: any[] = [];
+  let priority = 1;
   
-  // Get baseline items
-  const baselineResult = await getBaselineItems(logs);
-  
-  // Get ads for this screen
-  const adItems = await getAdsForScreen(screenId, logs);
-  
-  // Build combined items
-  const combinedItems = buildCombinedItems(baselineResult.items, adItems, logs);
-  
-  if (combinedItems.length === 0) {
-    logs.push(`[FillPlaylist] ⚠️ Geen content om te vullen - playlist blijft leeg`);
-    return {
-      ok: false,
-      itemCount: 0,
-      baselineCount: baselineResult.items.length,
-      adsCount: adItems.length,
-      baselineError: baselineResult.error,
-      baselineFallbackUsed: baselineResult.fallbackUsed,
-      error: "NO_CONTENT_AVAILABLE",
-    };
+  // Add all baseline items first
+  // Yodeck API requires: id, priority, duration, type (media/app)
+  for (const item of baselineItems) {
+    items.push({
+      id: item.mediaId,
+      priority: priority++,
+      duration: item.duration,
+      type: item.itemType === 'app' ? 'app' : 'media',
+    });
   }
   
-  // PATCH the playlist with content
-  logs.push(`[FillPlaylist] PATCH playlist ${playlistId} met ${combinedItems.length} items`);
-  
-  const patchResult = await yodeckRequest<any>(`/playlists/${playlistId}/`, "PATCH", {
-    items: combinedItems,
-  });
-  
-  if (!patchResult.ok) {
-    const errorDetail = patchResult.error || "Unknown PATCH error";
-    logs.push(`[FillPlaylist] ✗ PATCH mislukt: ${errorDetail}`);
-    console.error(`[FillPlaylist] PATCH /playlists/${playlistId}/ failed: ${errorDetail}`);
-    console.error(`[FillPlaylist] Payload preview: ${JSON.stringify(combinedItems).slice(0, 500)}`);
-    return {
-      ok: false,
-      itemCount: 0,
-      baselineCount: baselineResult.items.length,
-      adsCount: adItems.length,
-      baselineError: baselineResult.error,
-      baselineFallbackUsed: baselineResult.fallbackUsed,
-      error: `PATCH_PLAYLIST_FAILED: ${errorDetail}`,
-    };
+  // Add all ad items (always media type)
+  for (const item of adItems) {
+    items.push({
+      id: item.mediaId,
+      priority: priority++,
+      duration: item.duration,
+      type: 'media',
+    });
   }
   
-  logs.push(`[FillPlaylist] ✓ Playlist gevuld met ${combinedItems.length} items`);
-  
-  return {
-    ok: true,
-    itemCount: combinedItems.length,
-    baselineCount: baselineResult.items.length,
-    adsCount: adItems.length,
-    baselineError: baselineResult.error,
-    baselineFallbackUsed: baselineResult.fallbackUsed,
-  };
+  return items;
 }
 
-/**
- * Verify that a playlist has content
- */
-export async function verifyPlaylistHasContent(
-  playlistId: string,
-  logs: string[]
-): Promise<{ ok: boolean; itemCount: number; error?: string }> {
-  logs.push(`[Verify] Controleren playlist ${playlistId}`);
-  
-  const result = await yodeckRequest<any>(`/playlists/${playlistId}/`);
-  
-  if (!result.ok || !result.data) {
-    logs.push(`[Verify] ✗ Kan playlist niet ophalen: ${result.error}`);
-    return { ok: false, itemCount: 0, error: "PLAYLIST_FETCH_FAILED" };
-  }
-  
-  const items = result.data.items || [];
-  const itemCount = items.length;
-  
-  if (itemCount === 0) {
-    logs.push(`[Verify] ✗ Playlist is LEEG (0 items)`);
-    return { ok: false, itemCount: 0, error: "PLAYLIST_EMPTY" };
-  }
-  
-  logs.push(`[Verify] ✓ Playlist heeft ${itemCount} items`);
-  return { ok: true, itemCount };
-}
+// ============================================================================
+// MAIN SYNC FUNCTION
+// ============================================================================
 
 /**
- * Ensure screen has its own playlist with correct content
- * LEGACY: This creates/finds playlist by name - use repairScreen instead for actual fix
+ * Sync a screen's combined playlist with baseline + ads
+ * This is the main sync function that ensures correct content on screens
+ * 
+ * Flow:
+ * 1. Get baseline items from configured baseline playlist (REQUIRED)
+ * 2. Get active playlistId from Yodeck screen - create if missing
+ * 3. Build desiredItems = baselineItems + adItems
+ * 4. Write items to the active playlist
+ * 5. Push to screen
+ * 6. Verify: itemCount > 0 and correct playlistId
  */
-export async function ensureScreenPlaylist(screenId: string): Promise<ScreenPlaylistResult> {
+export async function syncScreenCombinedPlaylist(screenId: string): Promise<ScreenSyncResult> {
   const logs: string[] = [];
-  logs.push(`[EnsurePlaylist] Start voor scherm ${screenId}`);
+  logs.push(`[Sync] ═══════════════════════════════════════`);
+  logs.push(`[Sync] Start sync voor scherm ${screenId}`);
   
+  // Get screen info
   const [screen] = await db.select({
-    id: screens.id,
-    screenId: screens.screenId,
     name: screens.name,
+    screenId: screens.screenId,
     yodeckPlayerId: screens.yodeckPlayerId,
   }).from(screens).where(eq(screens.id, screenId));
   
@@ -515,258 +520,284 @@ export async function ensureScreenPlaylist(screenId: string): Promise<ScreenPlay
       ok: false,
       screenId,
       screenName: "Onbekend",
-      playlistId: null,
-      playlistName: null,
-      itemCount: 0,
+      yodeckDeviceId: null,
+      activePlaylistId: null,
+      baselinePlaylistId: null,
       baselineCount: 0,
       adsCount: 0,
-      isNew: false,
+      itemCount: 0,
+      verificationOk: false,
+      lastPushResult: "error: scherm niet gevonden",
+      errorReason: "SCREEN_NOT_FOUND",
       logs,
-      error: "SCREEN_NOT_FOUND",
     };
   }
   
-  const playlistName = getScreenPlaylistName(screen.screenId || screen.name);
-  logs.push(`[EnsurePlaylist] Playlist naam: "${playlistName}"`);
+  logs.push(`[Sync] Scherm: ${screen.name}`);
   
-  let playlistId: number;
-  let isNew = false;
-  
-  const existing = await findPlaylistByName(playlistName);
-  
-  if (existing) {
-    playlistId = existing.id;
-    logs.push(`[EnsurePlaylist] Bestaande playlist gevonden: ID ${playlistId}`);
-  } else {
-    const createResult = await createPlaylist(playlistName);
-    if (!createResult.ok || !createResult.playlistId) {
-      return {
-        ok: false,
-        screenId,
-        screenName: screen.name,
-        playlistId: null,
-        playlistName,
-        itemCount: 0,
-        baselineCount: 0,
-        adsCount: 0,
-        isNew: false,
-        logs,
-        error: createResult.error || "CREATE_PLAYLIST_FAILED",
-      };
-    }
-    playlistId = createResult.playlistId;
-    isNew = true;
-    logs.push(`[EnsurePlaylist] Nieuwe playlist aangemaakt: ID ${playlistId}`);
-  }
-  
-  const baselineResult = await getBaselineItems(logs);
-  const adItems = await getAdsForScreen(screenId, logs);
-  const combinedItems = buildCombinedItems(baselineResult.items, adItems, logs);
-  
-  // Track baseline errors for observability
-  const baselineError = baselineResult.error;
-  const baselineFallbackUsed = baselineResult.fallbackUsed;
-  
-  if (combinedItems.length > 0) {
-    logs.push(`[EnsurePlaylist] Syncen ${combinedItems.length} items naar playlist`);
-    
-    const patchResult = await yodeckRequest<any>(`/playlists/${playlistId}/`, "PATCH", {
-      items: combinedItems,
-    });
-    
-    if (!patchResult.ok) {
-      const errorDetail = patchResult.error || "Unknown PATCH error";
-      logs.push(`[EnsurePlaylist] PATCH mislukt: ${errorDetail}`);
-      console.error(`[screenPlaylistService] PATCH /playlists/${playlistId}/ failed: ${errorDetail}`);
-      console.error(`[screenPlaylistService] PATCH payload: ${JSON.stringify(combinedItems).slice(0, 500)}`);
-      return {
-        ok: false,
-        screenId,
-        screenName: screen.name,
-        playlistId: String(playlistId),
-        playlistName,
-        itemCount: 0,
-        baselineCount: baselineResult.items.length,
-        adsCount: adItems.length,
-        isNew,
-        logs,
-        error: `PATCH_PLAYLIST_FAILED: ${errorDetail}`,
-        baselineError,
-        baselineFallbackUsed,
-      };
-    }
-    
-    logs.push(`[EnsurePlaylist] Playlist gesynchroniseerd`);
-  } else {
-    logs.push(`[EnsurePlaylist] ⚠️ Geen items om te syncen - geen baseline of ads beschikbaar`);
-    // Empty playlist is OK if no content configured - better than PATCH error
-  }
-  
-  return {
-    ok: true, // Playlist exists and is synced - even if empty
-    screenId,
-    screenName: screen.name,
-    playlistId: String(playlistId),
-    playlistName,
-    itemCount: combinedItems.length,
-    baselineCount: baselineResult.items.length,
-    adsCount: adItems.length,
-    isNew,
-    baselineError,
-    baselineFallbackUsed,
-    logs,
-  };
-}
-
-/**
- * Assign playlist to screen and push to device
- */
-export async function assignAndPushScreenContent(
-  screenId: string,
-  playlistId: string
-): Promise<AssignPushResult> {
-  const logs: string[] = [];
-  logs.push(`[AssignPush] Start voor scherm ${screenId}, playlist ${playlistId}`);
-  
-  const [screen] = await db.select({
-    yodeckPlayerId: screens.yodeckPlayerId,
-  }).from(screens).where(eq(screens.id, screenId));
-  
-  if (!screen?.yodeckPlayerId) {
+  if (!screen.yodeckPlayerId) {
     return {
       ok: false,
       screenId,
+      screenName: screen.name,
       yodeckDeviceId: null,
-      playlistId,
-      publishOk: false,
+      activePlaylistId: null,
+      baselinePlaylistId: null,
+      baselineCount: 0,
+      adsCount: 0,
+      itemCount: 0,
       verificationOk: false,
-      actualPlaylistId: null,
-      actualItemCount: 0,
+      lastPushResult: "error: geen Yodeck device gekoppeld",
       errorReason: "NO_YODECK_DEVICE",
       logs,
     };
   }
   
   const yodeckDeviceId = screen.yodeckPlayerId;
-  logs.push(`[AssignPush] Yodeck device: ${yodeckDeviceId}`);
+  logs.push(`[Sync] Yodeck device: ${yodeckDeviceId}`);
   
-  const payload = {
+  // STEP 1: Get baseline items (REQUIRED - must have content)
+  const baselineResult = await getBaselineItemsFromYodeck(logs);
+  
+  if (!baselineResult.ok || baselineResult.items.length === 0) {
+    return {
+      ok: false,
+      screenId,
+      screenName: screen.name,
+      yodeckDeviceId,
+      activePlaylistId: null,
+      baselinePlaylistId: baselineResult.playlistId,
+      baselineCount: 0,
+      adsCount: 0,
+      itemCount: 0,
+      verificationOk: false,
+      lastPushResult: `error: ${baselineResult.error}`,
+      errorReason: baselineResult.error,
+      logs,
+    };
+  }
+  
+  // STEP 2: Get or create active playlist for this screen
+  let activePlaylistId: string;
+  
+  const activePlaylist = await getScreenActivePlaylistId(yodeckDeviceId, logs);
+  
+  if (activePlaylist.playlistId) {
+    activePlaylistId = activePlaylist.playlistId;
+    logs.push(`[Sync] ✓ Scherm heeft al playlist: ${activePlaylistId}`);
+  } else {
+    // Create new playlist and assign to screen
+    logs.push(`[Sync] Scherm heeft geen playlist - nieuwe aanmaken`);
+    
+    const playlistName = getScreenPlaylistName(screen.screenId || `YDK-${yodeckDeviceId}`);
+    
+    // First check if our named playlist already exists
+    const existing = await findPlaylistByName(playlistName);
+    
+    if (existing) {
+      activePlaylistId = String(existing.id);
+      logs.push(`[Sync] Bestaande playlist gevonden: ${activePlaylistId} ("${playlistName}")`);
+    } else {
+      const createResult = await createPlaylist(playlistName);
+      if (!createResult.ok || !createResult.playlistId) {
+        return {
+          ok: false,
+          screenId,
+          screenName: screen.name,
+          yodeckDeviceId,
+          activePlaylistId: null,
+          baselinePlaylistId: baselineResult.playlistId,
+          baselineCount: baselineResult.items.length,
+          adsCount: 0,
+          itemCount: 0,
+          verificationOk: false,
+          lastPushResult: `error: playlist aanmaken mislukt - ${createResult.error}`,
+          errorReason: createResult.error || "CREATE_PLAYLIST_FAILED",
+          logs,
+        };
+      }
+      activePlaylistId = String(createResult.playlistId);
+      logs.push(`[Sync] ✓ Nieuwe playlist aangemaakt: ${activePlaylistId} ("${playlistName}")`);
+    }
+    
+    // Assign playlist to screen
+    logs.push(`[Sync] Toewijzen playlist ${activePlaylistId} aan scherm...`);
+    
+    const assignPayload = {
+      screen_content: {
+        source_type: "playlist",
+        source_id: parseInt(activePlaylistId),
+      },
+    };
+    
+    const assignResult = await yodeckRequest<any>(`/screens/${yodeckDeviceId}/`, "PATCH", assignPayload);
+    
+    if (!assignResult.ok) {
+      logs.push(`[Sync] ✗ Toewijzen mislukt: ${assignResult.error}`);
+      return {
+        ok: false,
+        screenId,
+        screenName: screen.name,
+        yodeckDeviceId,
+        activePlaylistId,
+        baselinePlaylistId: baselineResult.playlistId,
+        baselineCount: baselineResult.items.length,
+        adsCount: 0,
+        itemCount: 0,
+        verificationOk: false,
+        lastPushResult: `error: toewijzen mislukt - ${assignResult.error}`,
+        errorReason: "ASSIGN_PLAYLIST_FAILED",
+        logs,
+      };
+    }
+    
+    logs.push(`[Sync] ✓ Playlist toegewezen aan scherm`);
+  }
+  
+  // STEP 3: Get ads for this screen
+  const adItems = await getApprovedAdsForScreen(screenId, logs);
+  
+  // STEP 4: Build and write items to playlist
+  const desiredItems = buildPlaylistItems(baselineResult.items, adItems);
+  const totalItems = desiredItems.length;
+  
+  logs.push(`[Sync] Schrijven ${totalItems} items naar playlist ${activePlaylistId} (${baselineResult.items.length} baseline + ${adItems.length} ads)`);
+  
+  const patchResult = await yodeckRequest<any>(`/playlists/${activePlaylistId}/`, "PATCH", {
+    items: desiredItems,
+  });
+  
+  if (!patchResult.ok) {
+    const errorDetail = patchResult.error || "Unknown PATCH error";
+    logs.push(`[Sync] ✗ PATCH mislukt: ${errorDetail}`);
+    console.error(`[syncScreenCombinedPlaylist] PATCH /playlists/${activePlaylistId}/ failed: ${errorDetail}`);
+    console.error(`[syncScreenCombinedPlaylist] Payload preview: ${JSON.stringify(desiredItems).slice(0, 500)}`);
+    return {
+      ok: false,
+      screenId,
+      screenName: screen.name,
+      yodeckDeviceId,
+      activePlaylistId,
+      baselinePlaylistId: baselineResult.playlistId,
+      baselineCount: baselineResult.items.length,
+      adsCount: adItems.length,
+      itemCount: 0,
+      verificationOk: false,
+      lastPushResult: `error: PATCH mislukt - ${errorDetail}`,
+      errorReason: `PATCH_PLAYLIST_FAILED: ${errorDetail}`,
+      logs,
+    };
+  }
+  
+  logs.push(`[Sync] ✓ Playlist items geschreven`);
+  
+  // STEP 5: Push to screen (Save & Push)
+  logs.push(`[Sync] Push naar scherm...`);
+  
+  // Re-assign to trigger push
+  const pushPayload = {
     screen_content: {
       source_type: "playlist",
-      source_id: parseInt(playlistId),
+      source_id: parseInt(activePlaylistId),
     },
   };
   
-  logs.push(`[AssignPush] PATCH screen content...`);
-  const patchResult = await yodeckRequest<any>(`/screens/${yodeckDeviceId}/`, "PATCH", payload);
+  const pushResult = await yodeckRequest<any>(`/screens/${yodeckDeviceId}/`, "PATCH", pushPayload);
   
-  if (!patchResult.ok) {
-    logs.push(`[AssignPush] PATCH mislukt: ${patchResult.error}`);
-    return {
-      ok: false,
-      screenId,
-      yodeckDeviceId,
-      playlistId,
-      publishOk: false,
-      verificationOk: false,
-      actualPlaylistId: null,
-      actualItemCount: 0,
-      errorReason: "PATCH_SCREEN_FAILED",
-      logs,
-    };
-  }
-  
-  logs.push(`[AssignPush] PATCH succesvol - verificatie scherm...`);
-  
-  const verifyResult = await yodeckRequest<any>(`/screens/${yodeckDeviceId}/`);
-  
-  if (!verifyResult.ok) {
-    logs.push(`[AssignPush] Verificatie scherm mislukt: ${verifyResult.error}`);
-    return {
-      ok: true,
-      screenId,
-      yodeckDeviceId,
-      playlistId,
-      publishOk: true,
-      verificationOk: false,
-      actualPlaylistId: null,
-      actualItemCount: 0,
-      errorReason: "VERIFY_SCREEN_FAILED",
-      logs,
-    };
-  }
-  
-  const content = verifyResult.data?.screen_content;
-  const actualPlaylistId = content?.source_id ? String(content.source_id) : null;
-  const isPlaylistMatch = actualPlaylistId === playlistId;
-  
-  if (!isPlaylistMatch) {
-    logs.push(`[AssignPush] ⚠️ PLAYLIST MISMATCH: verwacht ${playlistId}, actueel ${actualPlaylistId}`);
-    return {
-      ok: false,
-      screenId,
-      yodeckDeviceId,
-      playlistId,
-      publishOk: true,
-      verificationOk: false,
-      actualPlaylistId,
-      actualItemCount: 0,
-      errorReason: "PLAYLIST_MISMATCH",
-      logs,
-    };
-  }
-  
-  logs.push(`[AssignPush] ✓ Playlist toegewezen: ${actualPlaylistId}`);
-  
-  const playlistVerify = await yodeckRequest<any>(`/playlists/${actualPlaylistId}/`);
-  let actualItemCount = 0;
-  let hasContent = false;
-  
-  if (playlistVerify.ok && playlistVerify.data) {
-    const items = playlistVerify.data.items || [];
-    actualItemCount = items.length;
-    hasContent = actualItemCount > 0;
-    
-    if (hasContent) {
-      logs.push(`[AssignPush] ✓ Verificatie OK: playlist ${actualPlaylistId} met ${actualItemCount} items`);
-    } else {
-      logs.push(`[AssignPush] ⚠️ CONTENT WARNING: playlist is leeg!`);
-    }
+  if (!pushResult.ok) {
+    logs.push(`[Sync] ⚠️ Push warning: ${pushResult.error}`);
   } else {
-    logs.push(`[AssignPush] Verificatie playlist items mislukt: ${playlistVerify.error}`);
+    logs.push(`[Sync] ✓ Push naar scherm succesvol`);
   }
+  
+  // STEP 6: Verify
+  logs.push(`[Sync] Verificatie...`);
+  
+  // Verify playlist items
+  const verifyPlaylist = await yodeckRequest<any>(`/playlists/${activePlaylistId}/`);
+  
+  if (!verifyPlaylist.ok || !verifyPlaylist.data) {
+    logs.push(`[Sync] ✗ Verificatie playlist mislukt: ${verifyPlaylist.error}`);
+    return {
+      ok: false,
+      screenId,
+      screenName: screen.name,
+      yodeckDeviceId,
+      activePlaylistId,
+      baselinePlaylistId: baselineResult.playlistId,
+      baselineCount: baselineResult.items.length,
+      adsCount: adItems.length,
+      itemCount: 0,
+      verificationOk: false,
+      lastPushResult: "error: verificatie mislukt",
+      errorReason: "VERIFY_PLAYLIST_FAILED",
+      logs,
+    };
+  }
+  
+  const actualItemCount = Array.isArray(verifyPlaylist.data.items) ? verifyPlaylist.data.items.length : 0;
+  
+  if (actualItemCount === 0) {
+    logs.push(`[Sync] ✗ Playlist is LEEG na schrijven!`);
+    return {
+      ok: false,
+      screenId,
+      screenName: screen.name,
+      yodeckDeviceId,
+      activePlaylistId,
+      baselinePlaylistId: baselineResult.playlistId,
+      baselineCount: baselineResult.items.length,
+      adsCount: adItems.length,
+      itemCount: 0,
+      verificationOk: false,
+      lastPushResult: "error: playlist leeg na schrijven",
+      errorReason: "PLAYLIST_EMPTY_AFTER_WRITE",
+      logs,
+    };
+  }
+  
+  // Verify screen still points to correct playlist
+  const verifyScreen = await yodeckRequest<any>(`/screens/${yodeckDeviceId}/`);
+  const screenPlaylistId = verifyScreen.data?.screen_content?.source_id ? 
+    String(verifyScreen.data.screen_content.source_id) : null;
+  
+  if (screenPlaylistId !== activePlaylistId) {
+    logs.push(`[Sync] ⚠️ MISMATCH: scherm wijst naar ${screenPlaylistId}, verwacht ${activePlaylistId}`);
+  }
+  
+  logs.push(`[Sync] ═══════════════════════════════════════`);
+  logs.push(`[Sync] ✓ SYNC COMPLEET - Playlist ${activePlaylistId} met ${actualItemCount} items`);
   
   return {
-    ok: isPlaylistMatch && hasContent,
+    ok: true,
     screenId,
+    screenName: screen.name,
     yodeckDeviceId,
-    playlistId,
-    publishOk: true,
-    verificationOk: isPlaylistMatch && hasContent,
-    actualPlaylistId,
-    actualItemCount,
-    errorReason: !hasContent ? "PLAYLIST_EMPTY" : undefined,
+    activePlaylistId,
+    baselinePlaylistId: baselineResult.playlistId,
+    baselineCount: baselineResult.items.length,
+    adsCount: adItems.length,
+    itemCount: actualItemCount,
+    verificationOk: actualItemCount > 0 && screenPlaylistId === activePlaylistId,
+    lastPushResult: "ok",
     logs,
   };
 }
 
+// ============================================================================
+// REPAIR SCREEN (WRAPPER FOR SYNC)
+// ============================================================================
+
 /**
  * Full repair cycle for a screen
- * 
- * CRITICAL FIX: This now uses the ACTUAL playlist assigned to the screen
- * instead of creating/finding a different playlist by name.
- * 
- * Flow:
- * 1. Get actual playlist ID from Yodeck screen (screen_content.source_id)
- * 2. If no playlist assigned, create one and assign it
- * 3. Fill THE SAME playlist with baseline + ads
- * 4. Verify playlist has content (itemCount > 0)
+ * Uses syncScreenCombinedPlaylist with additional device status info
  */
 export async function repairScreen(screenId: string): Promise<ScreenRepairResult> {
   const logs: string[] = [];
   logs.push(`[Repair] ═══════════════════════════════════════`);
   logs.push(`[Repair] Start repair voor scherm ${screenId}`);
   
+  // Get screen info
   const [screen] = await db.select({
     name: screens.name,
     screenId: screens.screenId,
@@ -791,6 +822,7 @@ export async function repairScreen(screenId: string): Promise<ScreenRepairResult
       },
       expectedPlaylistId: null,
       actualPlaylistId: null,
+      baselinePlaylistId: null,
       itemCount: 0,
       baselineCount: 0,
       adsCount: 0,
@@ -814,6 +846,7 @@ export async function repairScreen(screenId: string): Promise<ScreenRepairResult
       deviceStatus,
       expectedPlaylistId: null,
       actualPlaylistId: null,
+      baselinePlaylistId: null,
       itemCount: 0,
       baselineCount: 0,
       adsCount: 0,
@@ -824,165 +857,36 @@ export async function repairScreen(screenId: string): Promise<ScreenRepairResult
     };
   }
   
-  // STEP 1: Get the ACTUAL playlist assigned to this screen in Yodeck
-  const activePlaylist = await getScreenActivePlaylistId(screen.yodeckPlayerId, logs);
-  
-  let targetPlaylistId: string;
-  let needsAssignment = false;
-  
-  if (activePlaylist.playlistId) {
-    // Screen already has a playlist assigned - USE THIS ONE
-    targetPlaylistId = activePlaylist.playlistId;
-    logs.push(`[Repair] ✓ Scherm heeft playlist: ${targetPlaylistId} ("${activePlaylist.playlistName}")`);
-  } else {
-    // No playlist assigned - create one and assign it
-    logs.push(`[Repair] ⚠️ Geen playlist toegewezen - nieuwe aanmaken`);
-    
-    const playlistName = getScreenPlaylistName(screen.screenId || screen.name);
-    
-    // First check if our named playlist already exists
-    const existing = await findPlaylistByName(playlistName);
-    
-    if (existing) {
-      targetPlaylistId = String(existing.id);
-      logs.push(`[Repair] Bestaande playlist gevonden: ${targetPlaylistId} ("${playlistName}")`);
-    } else {
-      const createResult = await createPlaylist(playlistName);
-      if (!createResult.ok || !createResult.playlistId) {
-        return {
-          ok: false,
-          screenId,
-          screenName: screen.name,
-          deviceStatus,
-          expectedPlaylistId: null,
-          actualPlaylistId: null,
-          itemCount: 0,
-          baselineCount: 0,
-          adsCount: 0,
-          publishOk: false,
-          verificationOk: false,
-          errorReason: createResult.error || "CREATE_PLAYLIST_FAILED",
-          logs,
-        };
-      }
-      targetPlaylistId = String(createResult.playlistId);
-      logs.push(`[Repair] Nieuwe playlist aangemaakt: ${targetPlaylistId} ("${playlistName}")`);
-    }
-    
-    needsAssignment = true;
-  }
-  
-  // STEP 2: Fill THE target playlist with content
-  const fillResult = await fillPlaylistWithContent(targetPlaylistId, screenId, logs);
-  
-  if (!fillResult.ok) {
-    return {
-      ok: false,
-      screenId,
-      screenName: screen.name,
-      deviceStatus,
-      expectedPlaylistId: targetPlaylistId,
-      actualPlaylistId: activePlaylist.playlistId,
-      itemCount: fillResult.itemCount,
-      baselineCount: fillResult.baselineCount,
-      adsCount: fillResult.adsCount,
-      publishOk: false,
-      verificationOk: false,
-      baselineError: fillResult.baselineError,
-      baselineFallbackUsed: fillResult.baselineFallbackUsed,
-      errorReason: fillResult.error,
-      logs,
-    };
-  }
-  
-  // STEP 3: Assign playlist to screen if needed
-  if (needsAssignment) {
-    logs.push(`[Repair] Toewijzen playlist ${targetPlaylistId} aan scherm...`);
-    
-    const assignPayload = {
-      screen_content: {
-        source_type: "playlist",
-        source_id: parseInt(targetPlaylistId),
-      },
-    };
-    
-    const assignResult = await yodeckRequest<any>(
-      `/screens/${screen.yodeckPlayerId}/`, 
-      "PATCH", 
-      assignPayload
-    );
-    
-    if (!assignResult.ok) {
-      logs.push(`[Repair] ✗ Toewijzen mislukt: ${assignResult.error}`);
-      return {
-        ok: false,
-        screenId,
-        screenName: screen.name,
-        deviceStatus,
-        expectedPlaylistId: targetPlaylistId,
-        actualPlaylistId: null,
-        itemCount: fillResult.itemCount,
-        baselineCount: fillResult.baselineCount,
-        adsCount: fillResult.adsCount,
-        publishOk: false,
-        verificationOk: false,
-        baselineError: fillResult.baselineError,
-        baselineFallbackUsed: fillResult.baselineFallbackUsed,
-        errorReason: "PATCH_SCREEN_FAILED",
-        logs,
-      };
-    }
-    
-    logs.push(`[Repair] ✓ Playlist toegewezen aan scherm`);
-  }
-  
-  // STEP 4: Verify the playlist has content
-  const verifyResult = await verifyPlaylistHasContent(targetPlaylistId, logs);
-  
-  if (!verifyResult.ok) {
-    return {
-      ok: false,
-      screenId,
-      screenName: screen.name,
-      deviceStatus,
-      expectedPlaylistId: targetPlaylistId,
-      actualPlaylistId: targetPlaylistId,
-      itemCount: verifyResult.itemCount,
-      baselineCount: fillResult.baselineCount,
-      adsCount: fillResult.adsCount,
-      publishOk: true,
-      verificationOk: false,
-      baselineError: fillResult.baselineError,
-      baselineFallbackUsed: fillResult.baselineFallbackUsed,
-      errorReason: verifyResult.error,
-      logs,
-    };
-  }
-  
-  logs.push(`[Repair] ═══════════════════════════════════════`);
-  logs.push(`[Repair] ✓ REPAIR COMPLEET - Playlist ${targetPlaylistId} met ${verifyResult.itemCount} items`);
+  // Run the main sync
+  const syncResult = await syncScreenCombinedPlaylist(screenId);
+  logs.push(...syncResult.logs);
   
   return {
-    ok: true,
+    ok: syncResult.ok,
     screenId,
-    screenName: screen.name,
+    screenName: syncResult.screenName,
     deviceStatus,
-    expectedPlaylistId: targetPlaylistId,
-    actualPlaylistId: targetPlaylistId,
-    itemCount: verifyResult.itemCount,
-    baselineCount: fillResult.baselineCount,
-    adsCount: fillResult.adsCount,
-    publishOk: true,
-    verificationOk: true,
-    baselineError: fillResult.baselineError,
-    baselineFallbackUsed: fillResult.baselineFallbackUsed,
+    expectedPlaylistId: syncResult.activePlaylistId,
+    actualPlaylistId: syncResult.activePlaylistId,
+    baselinePlaylistId: syncResult.baselinePlaylistId,
+    itemCount: syncResult.itemCount,
+    baselineCount: syncResult.baselineCount,
+    adsCount: syncResult.adsCount,
+    publishOk: syncResult.ok,
+    verificationOk: syncResult.verificationOk,
+    baselineError: syncResult.errorReason?.startsWith("BASELINE") ? syncResult.errorReason : undefined,
+    errorReason: syncResult.errorReason,
     logs,
   };
 }
 
+// ============================================================================
+// NOW PLAYING STATUS
+// ============================================================================
+
 /**
  * Get what's currently playing on a screen
- * Uses the ACTUAL playlist from Yodeck as source of truth
+ * Shows actual playlist state with clear error messages
  */
 export async function getScreenNowPlaying(screenId: string): Promise<{
   ok: boolean;
@@ -990,6 +894,8 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   playlistId: string | null;
   playlistName: string | null;
   expectedPlaylistName: string | null;
+  baselinePlaylistId: string | null;
+  baselineConfigured: boolean;
   itemCount: number;
   baselineCount: number;
   adsCount: number;
@@ -1002,6 +908,10 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
 }> {
   const deviceStatus = await getYodeckDeviceStatus(screenId);
   
+  // Get baseline status
+  const baselinePlaylistId = await getBaselinePlaylistId();
+  const baselineConfigured = !!baselinePlaylistId;
+  
   if (deviceStatus.status === "UNLINKED") {
     return {
       ok: false,
@@ -1009,6 +919,8 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
       playlistId: null,
       playlistName: null,
       expectedPlaylistName: null,
+      baselinePlaylistId,
+      baselineConfigured,
       itemCount: 0,
       baselineCount: 0,
       adsCount: 0,
@@ -1033,6 +945,8 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
       playlistId: null,
       playlistName: null,
       expectedPlaylistName: getScreenPlaylistName(screen?.screenId || screen?.name || screenId),
+      baselinePlaylistId,
+      baselineConfigured,
       itemCount: 0,
       baselineCount: 0,
       adsCount: 0,
@@ -1055,6 +969,8 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
       playlistId: null,
       playlistName: null,
       expectedPlaylistName,
+      baselinePlaylistId,
+      baselineConfigured,
       itemCount: 0,
       baselineCount: 0,
       adsCount: 0,
@@ -1083,30 +999,33 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   // VERIFICATION: Check if playlist has content
   const hasContent = itemCount > 0;
   
-  // For now, we don't require name match - the important thing is:
+  // Verification is OK if:
   // 1. Screen has a playlist assigned
-  // 2. That playlist has content (itemCount > 0)
+  // 2. Playlist has content (itemCount > 0)
   const verificationOk = playlistId !== null && hasContent;
   
-  // Mismatch is only a warning - not a failure
-  const isNameMatch = playlistName?.toLowerCase().includes("elevizion");
-  const mismatch = playlistName !== null && !isNameMatch;
+  // Mismatch warning (not failure)
+  const isElevizionPlaylist = playlistName?.toLowerCase().includes("elevizion");
+  const mismatch = playlistName !== null && !isElevizionPlaylist;
   
-  // Estimate baseline vs ads (if items exist and names contain patterns)
+  // Estimate baseline vs ads
   let baselineCount = 0;
   let adsCount = 0;
-  if (hasContent) {
-    // For now, estimate roughly based on typical ratio
-    baselineCount = Math.min(2, itemCount);
+  if (hasContent && baselineConfigured) {
+    // Fetch baseline to count
+    const baselineStatus = await getBaselinePlaylistStatus();
+    baselineCount = baselineStatus.itemCount;
     adsCount = Math.max(0, itemCount - baselineCount);
   }
   
-  // Build specific error reason for lastPushResult
+  // Build specific error/status message
   let lastPushResult: string | null = null;
   if (verificationOk) {
     lastPushResult = "ok";
+  } else if (!baselineConfigured) {
+    lastPushResult = "error: baseline playlist niet geconfigureerd - ga naar Instellingen";
   } else if (!playlistId) {
-    lastPushResult = "error: geen playlist toegewezen";
+    lastPushResult = "error: geen playlist toegewezen - klik Force Repair";
   } else if (!hasContent) {
     lastPushResult = `error: playlist ${playlistId} leeg (0 items) - klik Force Repair`;
   }
@@ -1117,6 +1036,8 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     playlistId,
     playlistName,
     expectedPlaylistName,
+    baselinePlaylistId,
+    baselineConfigured,
     itemCount,
     baselineCount,
     adsCount,
@@ -1124,7 +1045,58 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     lastPushResult,
     verificationOk,
     mismatch,
-    mismatchReason: !hasContent ? `Playlist is leeg (0 items) - Force Repair nodig!` : 
+    mismatchReason: !baselineConfigured ? "Baseline playlist niet geconfigureerd" :
+                    !hasContent ? `Playlist is leeg (0 items) - Force Repair nodig!` : 
                     mismatch ? `Let op: playlist heet "${playlistName}"` : undefined,
   };
 }
+
+// ============================================================================
+// LEGACY EXPORTS (for compatibility with existing code)
+// ============================================================================
+
+export async function ensureScreenPlaylist(screenId: string): Promise<ScreenPlaylistResult> {
+  const result = await syncScreenCombinedPlaylist(screenId);
+  return {
+    ok: result.ok,
+    screenId: result.screenId,
+    screenName: result.screenName,
+    playlistId: result.activePlaylistId,
+    playlistName: null,
+    itemCount: result.itemCount,
+    baselineCount: result.baselineCount,
+    adsCount: result.adsCount,
+    isNew: false,
+    logs: result.logs,
+    error: result.errorReason,
+    baselineError: result.errorReason?.startsWith("BASELINE") ? result.errorReason : undefined,
+    baselineFallbackUsed: false,
+  };
+}
+
+export async function assignAndPushScreenContent(
+  screenId: string,
+  playlistId: string
+): Promise<AssignPushResult> {
+  // This is now handled by syncScreenCombinedPlaylist
+  const logs: string[] = [];
+  logs.push(`[AssignPush] Using syncScreenCombinedPlaylist instead`);
+  
+  const result = await syncScreenCombinedPlaylist(screenId);
+  
+  return {
+    ok: result.ok,
+    screenId: result.screenId,
+    yodeckDeviceId: result.yodeckDeviceId,
+    playlistId: result.activePlaylistId || playlistId,
+    publishOk: result.ok,
+    verificationOk: result.verificationOk,
+    actualPlaylistId: result.activePlaylistId,
+    actualItemCount: result.itemCount,
+    errorReason: result.errorReason,
+    logs: [...logs, ...result.logs],
+  };
+}
+
+// Export getScreenActivePlaylistId for external use
+export { getScreenActivePlaylistId };

@@ -11994,6 +11994,98 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   // ============================================================================
   // SYSTEM SETTINGS (Admin configurable values)
   // ============================================================================
+
+  // IMPORTANT: Specific routes MUST come BEFORE parametric routes
+  // Otherwise /api/admin/settings/baseline-status gets matched by /api/admin/settings/:key
+
+  /**
+   * GET /api/admin/settings/baseline-status
+   * Get baseline playlist status for settings UI
+   */
+  app.get("/api/admin/settings/baseline-status", requireAdminAccess, async (req, res) => {
+    try {
+      const { getBaselinePlaylistStatus } = await import("./services/screenPlaylistService");
+      const status = await getBaselinePlaylistStatus();
+      res.json(status);
+    } catch (error: any) {
+      console.error("[BaselineStatus] Error:", error);
+      res.status(500).json({ 
+        configured: false, 
+        playlistId: null, 
+        playlistName: null,
+        itemCount: 0,
+        items: [],
+        lastCheckedAt: new Date().toISOString(),
+        error: error.message 
+      });
+    }
+  });
+
+  /**
+   * POST /api/admin/settings/baseline-playlist
+   * Set baseline playlist ID
+   */
+  app.post("/api/admin/settings/baseline-playlist", requireAdminAccess, async (req, res) => {
+    try {
+      const { playlistId } = req.body;
+      
+      if (!playlistId) {
+        return res.status(400).json({ ok: false, error: "playlistId is required" });
+      }
+      
+      const { setBaselinePlaylistId, getBaselinePlaylistStatus } = await import("./services/screenPlaylistService");
+      
+      await setBaselinePlaylistId(String(playlistId));
+      
+      // Return updated status
+      const status = await getBaselinePlaylistStatus();
+      res.json({ ok: true, ...status });
+    } catch (error: any) {
+      console.error("[SetBaselinePlaylist] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/settings/baseline-playlist/test
+   * Test a baseline playlist ID without saving
+   */
+  app.post("/api/admin/settings/baseline-playlist/test", requireAdminAccess, async (req, res) => {
+    try {
+      const { playlistId } = req.body;
+      
+      if (!playlistId) {
+        return res.status(400).json({ ok: false, error: "playlistId is required" });
+      }
+      
+      const { yodeckRequest } = await import("./services/yodeckLayoutService");
+      
+      const result = await yodeckRequest<any>(`/playlists/${playlistId}/`);
+      
+      if (!result.ok || !result.data) {
+        return res.json({ 
+          ok: false, 
+          playlistId,
+          playlistName: null,
+          itemCount: 0,
+          error: `Playlist ${playlistId} niet gevonden: ${result.error}` 
+        });
+      }
+      
+      const itemCount = Array.isArray(result.data.items) ? result.data.items.length : 0;
+      
+      res.json({
+        ok: itemCount > 0,
+        playlistId,
+        playlistName: result.data.name,
+        itemCount,
+        warning: itemCount === 0 ? "Playlist is LEEG - vul eerst content toe in Yodeck!" : null,
+      });
+    } catch (error: any) {
+      console.error("[TestBaselinePlaylist] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
   
   app.get("/api/admin/settings", requirePermission("manage_users"), async (req, res) => {
     try {
@@ -16882,6 +16974,57 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.json(status);
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message, status: "OFFLINE" });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/repair-all
+   * Repair all linked screens
+   */
+  app.post("/api/admin/autopilot/repair-all", requireAdminAccess, async (req, res) => {
+    try {
+      const { syncScreenCombinedPlaylist } = await import("./services/screenPlaylistService");
+      
+      // Get all screens with Yodeck player linked
+      const linkedScreens = await db.select({ id: screens.id, name: screens.name })
+        .from(screens)
+        .where(and(
+          eq(screens.isActive, true),
+          sql`${screens.yodeckPlayerId} IS NOT NULL`
+        ));
+      
+      console.log(`[RepairAll] Repairing ${linkedScreens.length} screens...`);
+      
+      const results = [];
+      for (const screen of linkedScreens) {
+        console.log(`[RepairAll] Processing: ${screen.name}`);
+        const result = await syncScreenCombinedPlaylist(screen.id);
+        results.push({
+          screenId: screen.id,
+          screenName: screen.name,
+          ok: result.ok,
+          itemCount: result.itemCount,
+          baselineCount: result.baselineCount,
+          adsCount: result.adsCount,
+          error: result.errorReason,
+        });
+      }
+      
+      const successful = results.filter(r => r.ok).length;
+      const failed = results.filter(r => !r.ok).length;
+      
+      console.log(`[RepairAll] Complete: ${successful} success, ${failed} failed`);
+      
+      res.json({ 
+        ok: failed === 0,
+        total: linkedScreens.length,
+        successful,
+        failed,
+        results 
+      });
+    } catch (error: any) {
+      console.error("[RepairAll] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
     }
   });
 
