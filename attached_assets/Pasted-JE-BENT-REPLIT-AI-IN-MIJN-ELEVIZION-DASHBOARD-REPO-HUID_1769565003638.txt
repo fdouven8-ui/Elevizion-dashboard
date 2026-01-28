@@ -1,0 +1,88 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION DASHBOARD REPO.
+
+HUIDIGE BUGS (BEWIJS UIT LOGS):
+1) Baseline playlist blijft leeg:
+   - "[EnsurePlaylist] ✓ Validated: Baseline | Bouwservice Douven (0 items)"
+   Ik heb in Yodeck een template playlist "Elevizion - Basis" gevuld met RSS/weer items.
+   Maar autopilot kopieert die template nog niet naar de per-locatie baseline playlist.
+
+2) FindMedia geeft HTTP 404 met HTML Not Found:
+   - "[FindMedia] Zoekfout: HTTP 404: <!doctype html> ... <title>Not Found</title>"
+   Hierdoor faalt LinkAd:
+   - "[LinkAd] Geen Yodeck media gevonden - upload ad eerst naar Yodeck"
+   Terwijl de media wel in Yodeck staat (ik zie hem in de UI en playlist patch werkt).
+
+DOEL (STABIEL):
+A) Baseline template moet automatisch op ELK scherm staan:
+   - 1x template in Yodeck: "Elevizion - Basis"
+   - Elke locatie heeft baseline playlist "Baseline | <locatie>"
+   - Als baseline leeg is -> kopieer template items EXACT naar baseline playlist
+   - Idempotent: geen duplicates, niet elke run opnieuw copy-pasten als al gevuld.
+
+B) Ads moeten automatisch toegevoegd/gewisseld worden:
+   - Stop met zoeken op naam als er een ID is.
+   - Media die via upload pipeline binnenkomt moet yodeckMediaId opslaan in DB.
+   - LinkAd gebruikt ID-first; alleen fallback-search als ID ontbreekt.
+   - FindMedia search mag NOOIT 404 geven; als 404 -> endpoint is fout, fix base url/route.
+
+CONCRETE FIXES DIE JE NU MOET CODEN:
+
+1) BASE TEMPLATE SYNC
+- Voeg config toe: baseTemplatePlaylistId (nullable).
+- Als baseTemplatePlaylistId leeg is: zoek playlist op exacte naam "Elevizion - Basis" via Yodeck API en sla ID op.
+- Nieuwe functie: syncBaselineFromTemplate(locationId):
+  a) haal template items op (getPlaylistItems(templateId))
+  b) haal baseline items op (getPlaylistItems(baselinePlaylistId))
+  c) als baseline items leeg => PATCH baseline playlist zodat hij EXACT dezelfde items krijgt als template.
+  d) als baseline niet leeg => niets doen.
+- Roep dit aan in autopilot repair bij STAP 1 nadat baselinePlaylistId is gevalideerd.
+- Logging:
+  - "[BaselineSync] template=<id> items=<n>"
+  - "[BaselineSync] baseline=<id> before=<n> after=<n> action=SKIP|PATCH"
+
+2) FIX FINDMEDIA 404 DEFINITIEF
+- Zoek waar FindMedia de request doet en waarom hij 404 HTML terugkrijgt.
+- Maak 1 centrale Yodeck client die:
+  - baseURL EXACT = "https://app.yodeck.com/api/v2"
+  - auth header EXACT: "Authorization: Token <LABEL>:<TOKEN>"
+  - zet Accept: application/json
+  - logt bij errors: status, content-type, first 200 chars body
+- Controleer dat FindMedia niet per ongeluk deze foute routes gebruikt:
+  - "/api/v2/api/v2/..." (dubbel)
+  - "/media/search" als die niet bestaat
+  - ontbrekende trailing slash als Yodeck dit vereist
+- Implementeer media lookup zonder 404:
+  a) als we yodeckMediaId al hebben -> return direct
+  b) anders: GET /media (met paginatie) en filter client-side op name contains (case-insensitive).
+     - Stop na max 5 pagina’s of zodra match gevonden is.
+  c) Als geen match: return null (geen error spam)
+
+3) SLA YODECK MEDIA ID OP BIJ UPLOAD
+- In jullie upload/publish flow komt er een Yodeck mediaId terug.
+- Zorg dat dit mediaId in DB op de ad/asset wordt opgeslagen (yodeckMediaId).
+- Zorg dat LinkAd alleen op yodeckMediaId werkt (primair).
+- Alleen als yodeckMediaId ontbreekt: dan pas FindMedia fallback.
+
+4) VERBETER AUTOPILOT ACCEPTANCE
+Autopilot repair moet na run garanderen:
+- Baseline playlist itemCount > 0 (als template bestaat)
+- Ads playlist itemCount > 0 (minimaal fallback ad)
+- Geen FindMedia 404 meer
+
+5) DEBUG ENDPOINTS
+- GET /api/admin/autopilot/debug/:locationId
+  returns:
+   - templatePlaylistId + templateItemCount
+   - baselinePlaylistId + baselineItemCount
+   - adsPlaylistId + adsItemCount
+   - last errors (incl. http status + url)
+
+LEVER OP:
+- Code + duidelijke logs
+- Bewijs: na autopilot repair zie ik in logs:
+  "[BaselineSync] ... action=PATCH" en baseline items >0
+  en LinkAd gebruikt yodeckMediaId zonder FindMedia 404.
+
+BELANGRIJK:
+- Maak dit zo min mogelijk ingrijpend: behoud bestaande playlist patch methode die al werkt (PATCH /playlists/{id}).
+- Maar fix de basis (template->baseline) en de media lookup (404).

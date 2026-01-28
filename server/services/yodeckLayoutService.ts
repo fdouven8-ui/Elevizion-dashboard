@@ -556,7 +556,7 @@ export async function ensureBaselineAsset(): Promise<{ ok: boolean; mediaId?: st
     formData.append("tags", BASELINE_ASSET_TAG);
     formData.append("file", blob, "elevizion-baseline-1080p.png");
     
-    const response = await fetch(`${YODECK_BASE_URL}/medias/`, {
+    const response = await fetch(`${YODECK_BASE_URL}/media/`, {
       method: "POST",
       headers: {
         "Authorization": `Token ${token}`,

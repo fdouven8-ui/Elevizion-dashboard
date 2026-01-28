@@ -649,7 +649,7 @@ export async function findOrCreateBaselineMedia(): Promise<{
   
   // Search for existing baseline media
   const searchResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
-    `/medias/?search=${encodeURIComponent(BASELINE_MEDIA_NAME)}`
+    `/media/?search=${encodeURIComponent(BASELINE_MEDIA_NAME)}`
   );
   
   if (searchResult.ok && searchResult.data) {
@@ -694,7 +694,7 @@ export async function findOrCreateSelfAdMedia(): Promise<{
   
   // OPTION 2: Search for existing self-ad media by name (fallback)
   const searchResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
-    `/medias/?search=${encodeURIComponent(SELF_AD_MEDIA_NAME)}`
+    `/media/?search=${encodeURIComponent(SELF_AD_MEDIA_NAME)}`
   );
   
   if (searchResult.ok && searchResult.data) {
@@ -712,7 +712,7 @@ export async function findOrCreateSelfAdMedia(): Promise<{
   // OPTION 3: Try to find ANY video in Yodeck as emergency fallback
   logs.push(`[SelfAdMedia] No self-ad found, searching for any video as fallback...`);
   const fallbackResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string; media_type: string }> }>(
-    `/medias/?ordering=-created_at&limit=10`
+    `/media/?ordering=-created_at&limit=10`
   );
   
   if (fallbackResult.ok && fallbackResult.data?.results) {
@@ -1844,7 +1844,7 @@ export async function findYodeckMediaByName(searchTerm: string): Promise<{
   logs.push(`[FindMedia] Zoeken in Yodeck: "${searchTerm}"`);
   
   const searchResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
-    `/medias/?search=${encodeURIComponent(searchTerm)}`
+    `/media/?search=${encodeURIComponent(searchTerm)}`
   );
   
   if (!searchResult.ok) {
@@ -2524,7 +2524,7 @@ async function findMediaByPatterns(patterns: string[]): Promise<{
     
     // Search medias
     const mediaResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
-      `/medias/?search=${encodeURIComponent(pattern)}`
+      `/media/?search=${encodeURIComponent(pattern)}`
     );
     
     if (mediaResult.ok && mediaResult.data?.results && mediaResult.data.results.length > 0) {
