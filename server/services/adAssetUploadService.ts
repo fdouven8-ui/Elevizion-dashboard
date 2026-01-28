@@ -601,6 +601,12 @@ export interface ApproveResult {
   success: boolean;
   message: string;
   placementPlanId?: string;
+  autoPlacement?: {
+    success: boolean;
+    placementsCreated: number;
+    screensPublished: number;
+    message: string;
+  } | null;
 }
 
 export async function approveAsset(
@@ -655,7 +661,22 @@ export async function approveAsset(
       metadata: { notes },
     });
     
-    // Trigger auto-publish workflow (create placement plan)
+    // AUTO-PLACEMENT: Create placements and publish to screens immediately
+    let autoPlacementResult: { success: boolean; placementsCreated: number; screensPublished: number; message: string } | null = null;
+    try {
+      const { createAutoPlacementsForAsset } = await import('./autoPlacementService');
+      autoPlacementResult = await createAutoPlacementsForAsset(assetId, asset.advertiserId);
+      
+      if (autoPlacementResult.success) {
+        console.log(`[AdminReview] Auto-placement success: ${autoPlacementResult.placementsCreated} placements, ${autoPlacementResult.screensPublished} screens`);
+      } else {
+        console.warn('[AdminReview] Auto-placement failed:', autoPlacementResult.message);
+      }
+    } catch (autoPlacementError: any) {
+      console.error('[AdminReview] Auto-placement error:', autoPlacementError.message);
+    }
+    
+    // Legacy: Also trigger placement plan for backward compatibility
     let planId: string | undefined;
     try {
       const { PlacementEngineService } = await import('./placementEngineService');
@@ -665,48 +686,10 @@ export async function approveAsset(
       if (planResult && planResult.planId) {
         console.log('[AdminReview] Placement plan created:', planResult.planId);
         planId = planResult.planId;
-      } else {
-        console.warn('[AdminReview] Asset approved but placement plan creation failed');
       }
     } catch (planError: any) {
-      console.warn('[AdminReview] Placement plan error:', planError.message);
-    }
-    
-    // AUTOPILOT: Add approved ad to targeted locations' ADS playlists
-    let locationsLinked = 0;
-    try {
-      const { findLocationsForAdvertiser, linkAdToLocation, getAllLiveLocations } = await import('./yodeckCanonicalService');
-      
-      // Find all locations that should receive this ad (via placements/contracts)
-      let targetLocations = await findLocationsForAdvertiser(asset.advertiserId);
-      console.log(`[Autopilot] Found ${targetLocations.length} locations for advertiser ${asset.advertiserId}`);
-      
-      // FALLBACK: If no locations via contracts, use ALL live locations (default for testMode or new advertisers)
-      if (targetLocations.length === 0) {
-        console.log(`[Autopilot] Geen locaties via contracten - fallback naar alle live locaties`);
-        const liveLocations = await getAllLiveLocations();
-        targetLocations = liveLocations.map(loc => loc.id);
-        console.log(`[Autopilot] Fallback: ${targetLocations.length} live locaties gevonden`);
-      }
-      
-      // Link ad to each location's ADS playlist
-      for (const locationId of targetLocations) {
-        try {
-          const linkResult = await linkAdToLocation(locationId, assetId);
-          if (linkResult.ok) {
-            locationsLinked++;
-            console.log(`[Autopilot] ✓ Linked ad to location ${locationId}`);
-          } else {
-            console.warn(`[Autopilot] ⚠️ Failed to link ad to location ${locationId}: ${linkResult.error}`);
-          }
-        } catch (linkError: any) {
-          console.warn(`[Autopilot] ⚠️ Error linking to location ${locationId}: ${linkError.message}`);
-        }
-      }
-      
-      console.log(`[Autopilot] Ad ${assetId} linked to ${locationsLinked}/${targetLocations.length} locations`);
-    } catch (autopilotError: any) {
-      console.warn('[Autopilot] Error in ad autopilot:', autopilotError.message);
+      // This is now secondary, auto-placement is primary
+      console.warn('[AdminReview] Placement plan error (secondary):', planError.message);
     }
     
     // Send approval email to advertiser
@@ -722,18 +705,20 @@ export async function approveAsset(
       console.error('[AdminReview] Failed to send approval email:', emailError);
     }
     
-    if (planId) {
-      return { 
-        success: true, 
-        message: 'Video goedgekeurd en plaatsingsplan aangemaakt',
-        placementPlanId: planId,
-      };
-    } else {
-      return { 
-        success: true, 
-        message: 'Video goedgekeurd. Plaatsingsplan wordt handmatig aangemaakt.',
-      };
+    // Build success message with auto-placement info
+    let message = 'Video goedgekeurd';
+    if (autoPlacementResult?.success && autoPlacementResult.placementsCreated > 0) {
+      message += ` en automatisch geplaatst op ${autoPlacementResult.placementsCreated} scherm(en)`;
+    } else if (autoPlacementResult?.success && autoPlacementResult.screensPublished > 0) {
+      message += ` en ${autoPlacementResult.screensPublished} scherm(en) gesynchroniseerd`;
     }
+    
+    return { 
+      success: true, 
+      message,
+      placementPlanId: planId,
+      autoPlacement: autoPlacementResult,
+    };
   } catch (error: any) {
     console.error('[AdminReview] Error approving asset:', error);
     return { success: false, message: 'Fout bij goedkeuren: ' + error.message };

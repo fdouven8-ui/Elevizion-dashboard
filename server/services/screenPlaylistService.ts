@@ -196,7 +196,7 @@ async function getAdsForScreen(screenId: string, logs: string[]): Promise<Playli
     .from(contracts)
     .where(and(
       inArray(contracts.id, contractIds),
-      eq(contracts.status, "active")
+      inArray(contracts.status, ["active", "signed"])
     ));
   
   const advertiserIds = Array.from(new Set(activeContracts.map(c => c.advertiserId)));
