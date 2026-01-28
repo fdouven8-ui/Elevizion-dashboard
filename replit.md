@@ -66,6 +66,14 @@ The system integrates various advanced functionalities:
 - **Canonical Playlist Management**: `yodeckCanonicalService.ts` provides the single control path for screen content operations, featuring a new architecture for layout-based baseline content, `ensureCanonicalSetupForLocation()`, and robust ad linking pipelines.
 - **ELEVIZION_LAYOUT_SPEC**: Defines deterministic layout dimensions and provides helper functions for building and verifying Yodeck layout payloads.
 - **Feature Flags**: Control legacy cleanup and logging for non-canonical data.
+- **Force Repair + Proof System** (`screenPlaylistService.ts`): Production-grade E2E playback enforcement with visual verification:
+  - `ensureScreenPlaysPlaylist()` - Enforces PLAYLIST mode via Yodeck screen_content (source of truth)
+  - `syncScreenCombinedPlaylist()` - Fills active playlist with baseline items + optional ads
+  - `refreshScreenPlayback()` - Forces player sync (API restart or content reassignment fallback)
+  - `fetchScreenshotProof()` - Screenshot verification with NO CONTENT detection via size heuristics (<3KB threshold)
+  - `forceRepairAndProof()` - Complete E2E cycle with 6-poll backoff (5s, 5s, 10s, 10s, 15s, 15s)
+  - Returns complete diagnostics: proofStatus, pollAttempts, refreshMethodUsed, detectedNoContent flag
+  - Endpoint: `POST /api/screens/:id/force-repair-proof`
 
 ## External Dependencies
 
