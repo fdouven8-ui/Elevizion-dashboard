@@ -356,6 +356,33 @@ export default function ScreenDetail() {
     },
   });
   
+  // FORCE BROADCAST mutation - Deterministic playback with known-good content
+  const forceBroadcastMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", `/api/admin/screens/${screenId}/force-broadcast`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.verificationOk) {
+        toast({ 
+          title: "✓ Uitzending geforceerd", 
+          description: `Playlist ${data.effectivePlaylistId}: ${data.playlistItemCount} items. ${data.knownGoodPresent ? "KnownGood aanwezig." : ""}` 
+        });
+      } else {
+        toast({ 
+          title: "⚠️ Enforce onvolledig", 
+          description: `Before: ${data.before?.sourceId}, After: ${data.after?.sourceId}. Items: ${data.playlistItemCount}`,
+          variant: "destructive" 
+        });
+      }
+      refetchNowPlaying();
+      queryClient.invalidateQueries({ queryKey: ["screen-now-playing", screenId] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout bij forceren", description: error.message, variant: "destructive" });
+    },
+  });
+  
   // FORCE PUSH mutation - Surgical fix that guarantees playback
   const forcePushMutation = useMutation({
     mutationFn: async () => {
@@ -1111,7 +1138,7 @@ export default function ScreenDetail() {
                           variant="default"
                           size="sm"
                           onClick={() => forcePushMutation.mutate()}
-                          disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending || pushToScreenMutation.isPending || forcePushMutation.isPending}
+                          disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending || pushToScreenMutation.isPending || forcePushMutation.isPending || forceBroadcastMutation.isPending}
                           className="flex-1"
                           data-testid="btn-force-push"
                         >
@@ -1124,6 +1151,28 @@ export default function ScreenDetail() {
                             <>
                               <Zap className="h-4 w-4 mr-2" />
                               Force Push
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => forceBroadcastMutation.mutate()}
+                          disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending || pushToScreenMutation.isPending || forcePushMutation.isPending || forceBroadcastMutation.isPending}
+                          className="flex-1"
+                          data-testid="btn-force-broadcast"
+                        >
+                          {forceBroadcastMutation.isPending ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                              Forceren...
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="h-4 w-4 mr-2" />
+                              Forceer uitzending (fix)
                             </>
                           )}
                         </Button>

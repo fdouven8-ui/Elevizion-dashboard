@@ -17961,6 +17961,28 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/screens/:screenId/force-broadcast
+   * Broadcast Enforcer - Force deterministic playback with known-good content
+   */
+  app.post("/api/admin/screens/:screenId/force-broadcast", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { enforceBroadcastForScreen } = await import("./services/screenPlaylistService");
+      
+      console.log(`[ForceBroadcast] Starting enforce for screen ${screenId}`);
+      const result = await enforceBroadcastForScreen(screenId);
+      
+      console.log(`[ForceBroadcast] Result: ok=${result.ok}, verificationOk=${result.verificationOk}`);
+      result.logs.forEach(log => console.log(`[ForceBroadcast] ${log}`));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ForceBroadcast] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/autopilot/repair-all
    * Repair all linked screens
    */

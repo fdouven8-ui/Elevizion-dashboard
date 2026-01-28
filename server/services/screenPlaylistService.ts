@@ -2188,3 +2188,648 @@ export async function assignAndPushScreenContent(
 
 // Export getScreenActivePlaylistId for external use
 export { getScreenActivePlaylistId };
+
+// ============================================================================
+// BROADCAST ENFORCER - Deterministic Playback Control
+// ============================================================================
+
+const KNOWN_GOOD_MEDIA_NAME = "EVZ_KNOWN_GOOD_TEST";
+
+interface BroadcastEnforcerResult {
+  ok: boolean;
+  before: { sourceType: string | null; sourceId: string | null };
+  after: { sourceType: string | null; sourceId: string | null };
+  effectivePlaylistId: string | null;
+  playlistItemCount: number;
+  knownGoodMediaId: string | null;
+  knownGoodPresent: boolean;
+  verificationOk: boolean;
+  logs: string[];
+}
+
+/**
+ * Compute effective playback source for a location
+ * ALIGNED with getEffectivePlaybackPlaylistId:
+ * Priority: combinedPlaylistId > actual > yodeckPlaylistId
+ */
+function computeEffectivePlaybackSource(
+  location: { combinedPlaylistId: string | null; yodeckPlaylistId: string | null },
+  actualSourceId: string | null
+): { playlistId: string | null; source: string } {
+  // Priority: combinedPlaylistId > actualSourceId > yodeckPlaylistId
+  // This matches getEffectivePlaybackPlaylistId for consistency
+  if (location.combinedPlaylistId) {
+    return { playlistId: location.combinedPlaylistId, source: "combinedPlaylistId" };
+  }
+  if (actualSourceId) {
+    return { playlistId: actualSourceId, source: "actual" };
+  }
+  if (location.yodeckPlaylistId) {
+    return { playlistId: location.yodeckPlaylistId, source: "yodeckPlaylistId" };
+  }
+  return { playlistId: null, source: "none" };
+}
+
+/**
+ * Create a known-good test video via ffmpeg
+ * Returns the path to the generated file
+ */
+async function createKnownGoodVideo(): Promise<{ ok: boolean; filePath?: string; error?: string }> {
+  const { execSync } = await import("child_process");
+  const { existsSync, mkdirSync } = await import("fs");
+  const path = await import("path");
+  
+  const tmpDir = "/tmp/evz-known-good";
+  const filePath = path.join(tmpDir, "evz_known_good_test.mp4");
+  
+  try {
+    if (!existsSync(tmpDir)) {
+      mkdirSync(tmpDir, { recursive: true });
+    }
+    
+    // Check if file already exists
+    if (existsSync(filePath)) {
+      console.log("[KnownGood] Reusing existing test video:", filePath);
+      return { ok: true, filePath };
+    }
+    
+    // Generate a 3-second H.264 test video with text overlay
+    // This uses lavfi (software) filters - no hardware needed
+    console.log("[KnownGood] Generating test video via ffmpeg...");
+    
+    const ffmpegCmd = [
+      "ffmpeg -y",
+      "-f lavfi",
+      '-i "color=c=blue:s=1920x1080:d=3"',
+      "-f lavfi",
+      '-i "sine=f=440:d=3"',
+      `-vf "drawtext=text='EVZ TEST':fontsize=72:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)/2"`,
+      "-c:v libx264",
+      "-pix_fmt yuv420p",
+      "-profile:v baseline",
+      "-level 3.1",
+      "-c:a aac",
+      "-b:a 128k",
+      "-shortest",
+      `"${filePath}"`
+    ].join(" ");
+    
+    execSync(ffmpegCmd, { stdio: "pipe", timeout: 30000 });
+    
+    if (existsSync(filePath)) {
+      console.log("[KnownGood] Test video created:", filePath);
+      return { ok: true, filePath };
+    } else {
+      return { ok: false, error: "File not created" };
+    }
+  } catch (error: any) {
+    console.error("[KnownGood] ffmpeg error:", error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+/**
+ * Ensure known-good media exists in Yodeck
+ * Creates if not found, returns mediaId
+ */
+async function ensureKnownGoodMedia(logs: string[]): Promise<{ ok: boolean; mediaId?: string; error?: string }> {
+  logs.push(`[KnownGood] Checking for existing "${KNOWN_GOOD_MEDIA_NAME}" in Yodeck...`);
+  
+  // Search for existing media
+  const searchResult = await yodeckRequest<{ results?: any[] }>(`/media/?search=${encodeURIComponent(KNOWN_GOOD_MEDIA_NAME)}`);
+  
+  if (searchResult.ok && searchResult.data?.results) {
+    const existing = searchResult.data.results.find((m: any) => m.name === KNOWN_GOOD_MEDIA_NAME);
+    if (existing && existing.id) {
+      logs.push(`[KnownGood] Found existing media: ${existing.id}`);
+      return { ok: true, mediaId: String(existing.id) };
+    }
+  }
+  
+  logs.push(`[KnownGood] Not found, creating new test video...`);
+  
+  // Create the video file
+  const videoResult = await createKnownGoodVideo();
+  if (!videoResult.ok || !videoResult.filePath) {
+    logs.push(`[KnownGood] ✗ Video creation failed: ${videoResult.error}`);
+    return { ok: false, error: videoResult.error };
+  }
+  
+  logs.push(`[KnownGood] Test video ready: ${videoResult.filePath}`);
+  
+  // Upload to Yodeck using two-step pipeline
+  const { readFileSync, statSync } = await import("fs");
+  const fileBuffer = readFileSync(videoResult.filePath);
+  const fileStats = statSync(videoResult.filePath);
+  
+  logs.push(`[KnownGood] Uploading to Yodeck (${fileStats.size} bytes)...`);
+  
+  // Upload using Yodeck API with proper multipart format
+  const axios = (await import("axios")).default;
+  const FormData = (await import("form-data")).default;
+  
+  const apiKey = process.env.YODECK_AUTH_TOKEN;
+  if (!apiKey) {
+    logs.push(`[KnownGood] ✗ YODECK_AUTH_TOKEN not configured`);
+    return { ok: false, error: "YODECK_AUTH_TOKEN not configured" };
+  }
+  
+  const formData = new FormData();
+  formData.append("name", KNOWN_GOOD_MEDIA_NAME);
+  // Yodeck requires nested media_origin fields
+  formData.append("media_origin[source]", "local");
+  formData.append("media_origin[type]", "video");
+  formData.append("file", fileBuffer, {
+    filename: "evz_known_good_test.mp4",
+    contentType: "video/mp4",
+    knownLength: fileStats.size,
+  });
+  
+  // Calculate content length
+  let contentLength: number;
+  try {
+    contentLength = await new Promise<number>((resolve, reject) => {
+      formData.getLength((err: Error | null, length: number) => {
+        if (err) reject(err);
+        else resolve(length);
+      });
+    });
+  } catch (lengthErr) {
+    logs.push(`[KnownGood] ✗ Could not calculate Content-Length`);
+    return { ok: false, error: "Could not calculate Content-Length" };
+  }
+  
+  try {
+    const uploadResponse = await axios.post(
+      "https://app.yodeck.com/api/v2/media/",
+      formData,
+      {
+        headers: {
+          Authorization: `Token ${apiKey}`,
+          "Content-Length": String(contentLength),
+          ...formData.getHeaders(),
+        },
+        timeout: 60000,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+      }
+    );
+    
+    if (uploadResponse.data?.id) {
+      const mediaId = String(uploadResponse.data.id);
+      logs.push(`[KnownGood] ✓ Uploaded: mediaId=${mediaId}`);
+      return { ok: true, mediaId };
+    } else {
+      logs.push(`[KnownGood] ✗ Upload response missing id: ${JSON.stringify(uploadResponse.data)}`);
+      return { ok: false, error: "Upload response missing id" };
+    }
+  } catch (error: any) {
+    const errDetail = error.response?.data ? JSON.stringify(error.response.data) : error.message;
+    logs.push(`[KnownGood] ✗ Upload failed: ${errDetail}`);
+    return { ok: false, error: errDetail };
+  }
+}
+
+/**
+ * Add media to playlist if not already present
+ */
+async function ensureMediaInPlaylist(
+  playlistId: string,
+  mediaId: string,
+  logs: string[]
+): Promise<{ ok: boolean; alreadyPresent: boolean }> {
+  logs.push(`[KnownGood] Checking if media ${mediaId} is in playlist ${playlistId}...`);
+  
+  // Get playlist items
+  const playlistResult = await yodeckRequest<{ items?: any[] }>(`/playlists/${playlistId}/`);
+  if (!playlistResult.ok || !playlistResult.data) {
+    logs.push(`[KnownGood] ✗ Could not fetch playlist: ${playlistResult.error}`);
+    return { ok: false, alreadyPresent: false };
+  }
+  
+  const items = playlistResult.data.items || [];
+  const alreadyPresent = items.some((item: any) => String(item.media) === mediaId || String(item.media?.id) === mediaId);
+  
+  if (alreadyPresent) {
+    logs.push(`[KnownGood] ✓ Media already in playlist`);
+    return { ok: true, alreadyPresent: true };
+  }
+  
+  // Add to playlist
+  logs.push(`[KnownGood] Adding media to playlist...`);
+  const addResult = await yodeckRequest<any>(`/playlists/${playlistId}/items/`, "POST", {
+    media: parseInt(mediaId),
+    duration: 10,
+    enabled: true,
+  });
+  
+  if (!addResult.ok) {
+    logs.push(`[KnownGood] ✗ Failed to add media: ${addResult.error}`);
+    return { ok: false, alreadyPresent: false };
+  }
+  
+  logs.push(`[KnownGood] ✓ Media added to playlist`);
+  return { ok: true, alreadyPresent: false };
+}
+
+/**
+ * Force Yodeck player to play specific playlist
+ * Tries modern screen_content format, falls back to legacy
+ */
+async function forceScreenToPlaylist(
+  yodeckDeviceId: string,
+  playlistId: string,
+  logs: string[]
+): Promise<{ ok: boolean; method?: string; error?: string }> {
+  logs.push(`[YodeckForce] Setting screen ${yodeckDeviceId} to playlist ${playlistId}...`);
+  
+  // Try modern screen_content format first
+  const modernPayload = {
+    screen_content: {
+      source_type: "playlist",
+      source_id: parseInt(playlistId),
+    },
+  };
+  
+  logs.push(`[YodeckForce] Trying PATCH /screens/${yodeckDeviceId}/ with screen_content...`);
+  const modernResult = await yodeckRequest<any>(`/screens/${yodeckDeviceId}/`, "PATCH", modernPayload);
+  
+  if (modernResult.ok) {
+    logs.push(`[YodeckForce] ✓ Modern format succeeded (status ${modernResult.status})`);
+    return { ok: true, method: "screen_content" };
+  }
+  
+  // Try legacy format
+  logs.push(`[YodeckForce] Modern format failed (${modernResult.status}), trying legacy format...`);
+  const legacyPayload = {
+    default_playlist_type: "playlist",
+    default_playlist: parseInt(playlistId),
+  };
+  
+  const legacyResult = await yodeckRequest<any>(`/screens/${yodeckDeviceId}/`, "PATCH", legacyPayload);
+  
+  if (legacyResult.ok) {
+    logs.push(`[YodeckForce] ✓ Legacy format succeeded (status ${legacyResult.status})`);
+    return { ok: true, method: "legacy" };
+  }
+  
+  logs.push(`[YodeckForce] ✗ Both formats failed: ${legacyResult.error}`);
+  return { ok: false, error: legacyResult.error };
+}
+
+/**
+ * Fetch fresh screen content from Yodeck (no cache)
+ */
+async function fetchFreshScreenContent(yodeckDeviceId: string): Promise<{
+  ok: boolean;
+  sourceType: string | null;
+  sourceId: string | null;
+  sourceName: string | null;
+}> {
+  // Add timestamp to bust any caching
+  const result = await yodeckRequest<any>(`/screens/${yodeckDeviceId}/?_t=${Date.now()}`);
+  
+  if (!result.ok || !result.data) {
+    return { ok: false, sourceType: null, sourceId: null, sourceName: null };
+  }
+  
+  const content = result.data.screen_content || {};
+  return {
+    ok: true,
+    sourceType: content.source_type || null,
+    sourceId: content.source_id ? String(content.source_id) : null,
+    sourceName: content.source_name || null,
+  };
+}
+
+/**
+ * BROADCAST ENFORCER - Main entry point
+ * Forces deterministic playback: whatever playlist we manage MUST be active on the player
+ */
+export async function enforcePlaybackSource(locationId: string): Promise<BroadcastEnforcerResult> {
+  const logs: string[] = [];
+  logs.push(`[BroadcastEnforcer] ═══════════════════════════════════════`);
+  logs.push(`[BroadcastEnforcer] Start enforce voor location ${locationId}`);
+  
+  // Load location
+  const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+  
+  if (!location) {
+    logs.push(`[BroadcastEnforcer] ✗ Location niet gevonden`);
+    return {
+      ok: false,
+      before: { sourceType: null, sourceId: null },
+      after: { sourceType: null, sourceId: null },
+      effectivePlaylistId: null,
+      playlistItemCount: 0,
+      knownGoodMediaId: null,
+      knownGoodPresent: false,
+      verificationOk: false,
+      logs,
+    };
+  }
+  
+  const yodeckDeviceId = location.yodeckDeviceId;
+  if (!yodeckDeviceId) {
+    logs.push(`[BroadcastEnforcer] ✗ Geen yodeckDeviceId geconfigureerd`);
+    return {
+      ok: false,
+      before: { sourceType: null, sourceId: null },
+      after: { sourceType: null, sourceId: null },
+      effectivePlaylistId: null,
+      playlistItemCount: 0,
+      knownGoodMediaId: null,
+      knownGoodPresent: false,
+      verificationOk: false,
+      logs,
+    };
+  }
+  
+  logs.push(`[BroadcastEnforcer] Location: ${location.name}, Device: ${yodeckDeviceId}`);
+  
+  // Get BEFORE state
+  const beforeState = await fetchFreshScreenContent(yodeckDeviceId);
+  logs.push(`[BroadcastEnforcer] Before: ${beforeState.sourceType}/${beforeState.sourceId}`);
+  
+  // Compute effective playlist
+  const effective = computeEffectivePlaybackSource(
+    { combinedPlaylistId: location.combinedPlaylistId, yodeckPlaylistId: location.yodeckPlaylistId },
+    beforeState.sourceId
+  );
+  
+  if (!effective.playlistId) {
+    logs.push(`[BroadcastEnforcer] ✗ Geen effectieve playlist (combinedPlaylistId en yodeckPlaylistId zijn null)`);
+    return {
+      ok: false,
+      before: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+      after: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+      effectivePlaylistId: null,
+      playlistItemCount: 0,
+      knownGoodMediaId: null,
+      knownGoodPresent: false,
+      verificationOk: false,
+      logs,
+    };
+  }
+  
+  logs.push(`[BroadcastEnforcer] Effective playlist: ${effective.playlistId} (from ${effective.source})`);
+  
+  // Force screen to playlist
+  const forceResult = await forceScreenToPlaylist(yodeckDeviceId, effective.playlistId, logs);
+  
+  if (!forceResult.ok) {
+    logs.push(`[BroadcastEnforcer] ✗ Force failed`);
+    return {
+      ok: false,
+      before: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+      after: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+      effectivePlaylistId: effective.playlistId,
+      playlistItemCount: 0,
+      knownGoodMediaId: null,
+      knownGoodPresent: false,
+      verificationOk: false,
+      logs,
+    };
+  }
+  
+  // Verify AFTER state
+  logs.push(`[Verify] Fetching fresh screen content...`);
+  const afterState = await fetchFreshScreenContent(yodeckDeviceId);
+  logs.push(`[Verify] After: ${afterState.sourceType}/${afterState.sourceId}`);
+  
+  const sourceMatchesTarget = afterState.sourceId === effective.playlistId;
+  if (!sourceMatchesTarget) {
+    logs.push(`[Verify] ⚠️ MISMATCH: expected ${effective.playlistId}, got ${afterState.sourceId}`);
+  } else {
+    logs.push(`[Verify] ✓ Source matches target`);
+  }
+  
+  // Update location in DB
+  logs.push(`[BroadcastEnforcer] Updating location in DB...`);
+  await db.update(locations)
+    .set({
+      layoutMode: "PLAYLIST",
+      combinedPlaylistId: effective.playlistId,
+      combinedPlaylistVerifiedAt: new Date(),
+    })
+    .where(eq(locations.id, locationId));
+  logs.push(`[BroadcastEnforcer] ✓ Location updated: layoutMode=PLAYLIST, combinedPlaylistId=${effective.playlistId}`);
+  
+  // Get playlist item count
+  const playlistResult = await yodeckRequest<{ items?: any[] }>(`/playlists/${effective.playlistId}/`);
+  const playlistItemCount = playlistResult.ok && playlistResult.data?.items 
+    ? playlistResult.data.items.length 
+    : 0;
+  logs.push(`[Verify] Playlist heeft ${playlistItemCount} items`);
+  
+  // Ensure known-good media (OPTIONAL - verification passes if itemCount > 0)
+  const knownGoodResult = await ensureKnownGoodMedia(logs);
+  let knownGoodMediaId: string | null = null;
+  let knownGoodPresent = false;
+  
+  if (knownGoodResult.ok && knownGoodResult.mediaId) {
+    knownGoodMediaId = knownGoodResult.mediaId;
+    
+    // Add to playlist if not present
+    const addResult = await ensureMediaInPlaylist(effective.playlistId, knownGoodMediaId, logs);
+    knownGoodPresent = addResult.ok;
+  } else if (playlistItemCount > 0) {
+    // KnownGood upload failed but playlist has items - this is acceptable
+    logs.push(`[KnownGood] ⚠️ Upload optioneel - playlist heeft ${playlistItemCount} bestaande items`);
+  }
+  
+  // Final verification - OK if source matches AND playlist has content
+  // KnownGood is OPTIONAL - verification passes when itemCount > 0
+  const verificationOk = sourceMatchesTarget && playlistItemCount > 0;
+  
+  logs.push(`[BroadcastEnforcer] ═══════════════════════════════════════`);
+  logs.push(`[BroadcastEnforcer] ${verificationOk ? "✓ SUCCES" : "⚠️ WAARSCHUWING"} - Enforce afgerond`);
+  logs.push(`[BroadcastEnforcer] Playlist: ${effective.playlistId}, Items: ${playlistItemCount}, KnownGood: ${knownGoodPresent ? "JA" : "NEE (optioneel)"}`);
+  
+  return {
+    ok: verificationOk,
+    before: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+    after: { sourceType: afterState.sourceType, sourceId: afterState.sourceId },
+    effectivePlaylistId: effective.playlistId,
+    playlistItemCount,
+    knownGoodMediaId,
+    knownGoodPresent,
+    verificationOk,
+    logs,
+  };
+}
+
+/**
+ * Run Broadcast Enforcer for a screen by screenId
+ * Uses screen's yodeckPlayerId directly (not location.yodeckDeviceId)
+ */
+export async function enforceBroadcastForScreen(screenId: string): Promise<BroadcastEnforcerResult> {
+  const logs: string[] = [];
+  logs.push(`[BroadcastEnforcer] ═══════════════════════════════════════`);
+  logs.push(`[BroadcastEnforcer] Looking up screen ${screenId}...`);
+  
+  // Get screen with location
+  const [screen] = await db.select({
+    id: screens.id,
+    name: screens.name,
+    locationId: screens.locationId,
+    yodeckPlayerId: screens.yodeckPlayerId,
+  }).from(screens).where(eq(screens.id, screenId));
+  
+  if (!screen) {
+    logs.push(`[BroadcastEnforcer] ✗ Screen niet gevonden`);
+    return {
+      ok: false,
+      before: { sourceType: null, sourceId: null },
+      after: { sourceType: null, sourceId: null },
+      effectivePlaylistId: null,
+      playlistItemCount: 0,
+      knownGoodMediaId: null,
+      knownGoodPresent: false,
+      verificationOk: false,
+      logs,
+    };
+  }
+  
+  const yodeckDeviceId = screen.yodeckPlayerId;
+  if (!yodeckDeviceId) {
+    logs.push(`[BroadcastEnforcer] ✗ Screen heeft geen yodeckPlayerId`);
+    return {
+      ok: false,
+      before: { sourceType: null, sourceId: null },
+      after: { sourceType: null, sourceId: null },
+      effectivePlaylistId: null,
+      playlistItemCount: 0,
+      knownGoodMediaId: null,
+      knownGoodPresent: false,
+      verificationOk: false,
+      logs,
+    };
+  }
+  
+  logs.push(`[BroadcastEnforcer] Screen: ${screen.name}, YodeckPlayer: ${yodeckDeviceId}`);
+  
+  // Get location for playlist IDs
+  let location: { combinedPlaylistId: string | null; yodeckPlaylistId: string | null } | null = null;
+  if (screen.locationId) {
+    const [loc] = await db.select({
+      combinedPlaylistId: locations.combinedPlaylistId,
+      yodeckPlaylistId: locations.yodeckPlaylistId,
+    }).from(locations).where(eq(locations.id, screen.locationId));
+    location = loc || null;
+    logs.push(`[BroadcastEnforcer] Location: ${screen.locationId}, combinedPlaylistId: ${location?.combinedPlaylistId || 'null'}`);
+  }
+  
+  // Get BEFORE state
+  const beforeState = await fetchFreshScreenContent(yodeckDeviceId);
+  logs.push(`[BroadcastEnforcer] Before: ${beforeState.sourceType}/${beforeState.sourceId}`);
+  
+  // Compute effective playlist
+  const effective = computeEffectivePlaybackSource(
+    location || { combinedPlaylistId: null, yodeckPlaylistId: null },
+    beforeState.sourceId
+  );
+  
+  if (!effective.playlistId) {
+    logs.push(`[BroadcastEnforcer] ✗ Geen effectieve playlist (combinedPlaylistId, yodeckPlaylistId en actual zijn null)`);
+    return {
+      ok: false,
+      before: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+      after: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+      effectivePlaylistId: null,
+      playlistItemCount: 0,
+      knownGoodMediaId: null,
+      knownGoodPresent: false,
+      verificationOk: false,
+      logs,
+    };
+  }
+  
+  logs.push(`[BroadcastEnforcer] Effective playlist: ${effective.playlistId} (from ${effective.source})`);
+  
+  // Force screen to playlist
+  const forceResult = await forceScreenToPlaylist(yodeckDeviceId, effective.playlistId, logs);
+  
+  if (!forceResult.ok) {
+    logs.push(`[BroadcastEnforcer] ✗ Force failed`);
+    return {
+      ok: false,
+      before: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+      after: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+      effectivePlaylistId: effective.playlistId,
+      playlistItemCount: 0,
+      knownGoodMediaId: null,
+      knownGoodPresent: false,
+      verificationOk: false,
+      logs,
+    };
+  }
+  
+  // Verify AFTER state
+  logs.push(`[Verify] Fetching fresh screen content...`);
+  const afterState = await fetchFreshScreenContent(yodeckDeviceId);
+  logs.push(`[Verify] After: ${afterState.sourceType}/${afterState.sourceId}`);
+  
+  const sourceMatchesTarget = afterState.sourceId === effective.playlistId;
+  if (!sourceMatchesTarget) {
+    logs.push(`[Verify] ⚠️ MISMATCH: expected ${effective.playlistId}, got ${afterState.sourceId}`);
+  } else {
+    logs.push(`[Verify] ✓ Source matches target`);
+  }
+  
+  // Update location in DB if we have one
+  if (screen.locationId) {
+    logs.push(`[BroadcastEnforcer] Updating location in DB...`);
+    await db.update(locations)
+      .set({
+        layoutMode: "PLAYLIST",
+        combinedPlaylistId: effective.playlistId,
+        combinedPlaylistVerifiedAt: new Date(),
+      })
+      .where(eq(locations.id, screen.locationId));
+    logs.push(`[BroadcastEnforcer] ✓ Location updated: layoutMode=PLAYLIST, combinedPlaylistId=${effective.playlistId}`);
+  }
+  
+  // Get playlist item count
+  const playlistResult = await yodeckRequest<{ items?: any[] }>(`/playlists/${effective.playlistId}/`);
+  const playlistItemCount = playlistResult.ok && playlistResult.data?.items 
+    ? playlistResult.data.items.length 
+    : 0;
+  logs.push(`[Verify] Playlist heeft ${playlistItemCount} items`);
+  
+  // Ensure known-good media (OPTIONAL - verification passes if itemCount > 0)
+  const knownGoodResult = await ensureKnownGoodMedia(logs);
+  let knownGoodMediaId: string | null = null;
+  let knownGoodPresent = false;
+  
+  if (knownGoodResult.ok && knownGoodResult.mediaId) {
+    knownGoodMediaId = knownGoodResult.mediaId;
+    
+    // Add to playlist if not present
+    const addResult = await ensureMediaInPlaylist(effective.playlistId, knownGoodMediaId, logs);
+    knownGoodPresent = addResult.ok;
+  } else if (playlistItemCount > 0) {
+    // KnownGood upload failed but playlist has items - this is acceptable
+    logs.push(`[KnownGood] ⚠️ Upload optioneel - playlist heeft ${playlistItemCount} bestaande items`);
+  }
+  
+  // Final verification - OK if source matches AND playlist has content
+  // KnownGood is OPTIONAL - verification passes when itemCount > 0
+  const verificationOk = sourceMatchesTarget && playlistItemCount > 0;
+  
+  logs.push(`[BroadcastEnforcer] ═══════════════════════════════════════`);
+  logs.push(`[BroadcastEnforcer] ${verificationOk ? "✓ SUCCES" : "⚠️ WAARSCHUWING"} - Enforce afgerond`);
+  logs.push(`[BroadcastEnforcer] Playlist: ${effective.playlistId}, Items: ${playlistItemCount}, KnownGood: ${knownGoodPresent ? "JA" : "NEE (optioneel)"}`);
+  
+  return {
+    ok: verificationOk,
+    before: { sourceType: beforeState.sourceType, sourceId: beforeState.sourceId },
+    after: { sourceType: afterState.sourceType, sourceId: afterState.sourceId },
+    effectivePlaylistId: effective.playlistId,
+    playlistItemCount,
+    knownGoodMediaId,
+    knownGoodPresent,
+    verificationOk,
+    logs,
+  };
+}

@@ -1,0 +1,67 @@
+We have a real-world issue: Yodeck API shows playlist 30498772 contains 4 media items, and /now-playing confirms actual source is playlist/30498772, but the screen visually shows “NO CONTENT TO PLAY”. Also DB expects layoutId 7694728 (layoutMode=LAYOUT) which mismatches actual playlist.
+
+Goal: make broadcasting deterministic: whatever playlist our system manages MUST be the active playback source on the Yodeck player, and we must be able to prove it via Yodeck API (not screenshot).
+
+Implement a “Broadcast Enforcer” with these requirements:
+
+A) Single source of truth for playback
+- For each Location with yodeckDeviceId, we define an “effectivePlaybackSource”:
+  1) If location.combinedPlaylistId exists -> playbackType=playlist, id=combinedPlaylistId
+  2) Else if location.yodeckPlaylistId exists -> playbackType=playlist, id=yodeckPlaylistId
+  3) Else fallback to actual source from Yodeck
+- We will prefer PLAYLIST mode (not layout) for now to guarantee playback.
+
+B) Force the Yodeck player to the effective playlist (HARD FIX)
+- Add service function enforcePlaybackSource(locationId):
+  1) Load location from DB, ensure yodeckDeviceId exists.
+  2) Determine effective playlistId (prefer combinedPlaylistId, else yodeckPlaylistId).
+  3) Call Yodeck API v2 to set the screen’s content source explicitly to that playlist.
+     - Use the correct endpoint for updating screen content in Yodeck v2.
+     - If the v2 endpoint differs in your codebase, implement a resilient method:
+       - try PATCH /api/v2/screens/{screenId}/ with payload including source_type:"playlist", source_id:<playlistId>
+       - if that fails, try the legacy/alternate endpoint used elsewhere in this project that sets screen_content or content_mode.
+     - Log which method succeeded and the response status.
+  4) Immediately refetch the screen’s source from Yodeck (fresh, no cache) and verify it matches playlistId.
+  5) Persist in DB:
+     - set location.layoutMode="PLAYLIST"
+     - set location.combinedPlaylistId = playlistId (string)
+     - set combinedPlaylistVerifiedAt = now()
+     - DO NOT delete old yodeckLayoutId; keep it but ignore for now.
+
+C) “Known-good content” injection (to eliminate “bad media” edge cases)
+Sometimes Yodeck shows media assignments but playback can still be empty if items are invalid, expired, or not really in the playlist.
+So after enforcing playback:
+  1) Ensure the playlist contains at least ONE “known-good” media item that we control.
+     - Implement ensureKnownGoodMedia():
+       - If a media named "EVZ_KNOWN_GOOD_TEST" exists, reuse it.
+       - Else create/upload a tiny valid MP4 (e.g. 2-3 seconds, 1920x1080 H.264 yuv420p) generated server-side via ffmpeg (no external downloads).
+       - Upload it to Yodeck via the existing two-step upload pipeline (create media -> get upload url -> PUT binary -> status poll).
+  2) Ensure that known-good media is added to the effective playlist (30498772 or whichever).
+  3) After adding, refetch playlist items from Yodeck and confirm the known-good mediaId is present.
+
+D) API-proof based verification (no screenshots)
+Update /api/screens/:id/now-playing:
+- verificationOk should be TRUE if:
+  - device is online AND
+  - actual source matches effectivePlayback playlistId AND
+  - Yodeck playlist items count > 0 (fetched from Yodeck playlist endpoint) AND
+  - known-good media is present OR at least one item has valid duration>0 (if endpoint provides).
+- If screenshot missing/too small, DO NOT fail verification. Treat screenshot as OPTIONAL proof only.
+
+E) Add one admin endpoint + UI button
+- POST /api/admin/screens/:screenId/force-broadcast
+  - Finds locationId, runs enforcePlaybackSource(locationId), runs ensureKnownGoodMedia + add to playlist,
+  - returns JSON: { ok, before:{actualSource}, after:{actualSource}, playlistId, playlistItemCount, knownGoodMediaId, logs[] }
+- In the screen detail page, add button: “Forceer uitzending (fix)”
+  - calls endpoint and shows result.
+
+Acceptance criteria for this exact case:
+- For screenId 241377ce... (device 591896), after clicking button:
+  - Yodeck actual source becomes playlist/30498772 (or the chosen canonical playlist),
+  - playlist items count >= 1 and includes EVZ_KNOWN_GOOD_TEST,
+  - /now-playing returns verificationOk=true even if screenshot unavailable.
+
+Make sure all Yodeck calls that check source/playlist use fresh fetch (no cache) inside this endpoint.
+Add clear logs with prefixes:
+[BroadcastEnforcer] [KnownGood] [YodeckForce] [Verify]
+so we can trace it in production logs.
