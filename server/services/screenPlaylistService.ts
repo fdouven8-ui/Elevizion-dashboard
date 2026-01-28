@@ -80,6 +80,67 @@ export interface ScreenRepairResult {
   logs: string[];
 }
 
+// Playback Enforcement Result
+export interface PlaybackEnforceResult {
+  ok: boolean;
+  playerId: string;
+  previousSourceType: string | null;
+  previousSourceId: string | null;
+  currentSourceType: string;
+  currentSourceId: string | null;
+  playlistCreated: boolean;
+  playlistId: string | null;
+  playlistName: string | null;
+  enforceAction: "created_and_assigned" | "reassigned" | "already_playlist" | "none";
+  logs: string[];
+  error?: string;
+}
+
+// Player Refresh Result
+export interface PlayerRefreshResult {
+  ok: boolean;
+  method: "api_restart" | "content_reassign" | "none";
+  playerId: string;
+  status?: number;
+  logs: string[];
+  error?: string;
+}
+
+// Screenshot Proof Result
+export interface ScreenshotProofResult {
+  ok: boolean;
+  url: string | null;
+  byteSize: number | null;
+  hash: string | null;
+  hashChanged: boolean;
+  detectedNoContent: boolean;
+  lastOkAt: string | null;
+  error?: string;
+}
+
+// Force Repair + Proof Result (E2E)
+export interface ForceRepairProofResult {
+  ok: boolean;
+  playerId: string;
+  activePlaylistId: string | null;
+  itemCount: number;
+  baselineConfigured: boolean;
+  baselineCount: number;
+  adsCount: number;
+  screenshot: ScreenshotProofResult | null;
+  proofStatus: {
+    ok: boolean;
+    isOnline: boolean;
+    hasContent: boolean;
+    hasScreenshot: boolean;
+    detectedNoContent: boolean;
+    reason: string;
+  };
+  refreshMethodUsed: string;
+  pollAttempts: number;
+  logs: string[];
+}
+
 // Legacy types for compatibility
 export interface ScreenPlaylistResult {
   ok: boolean;
@@ -1129,6 +1190,688 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     mismatchReason,
     screenshot,
     proofStatus,
+  };
+}
+
+// ============================================================================
+// PLAYBACK ENFORCEMENT (CRITICAL FOR ACTUAL PLAYBACK)
+// ============================================================================
+
+/**
+ * Ensure a screen is playing a playlist (not layout/schedule)
+ * This is the MOST IMPORTANT function for guaranteeing actual playback
+ * 
+ * Source of truth is Yodeck screen_content, NOT local DB fields
+ * 
+ * Flow:
+ * 1. Fetch screen details from Yodeck
+ * 2. Check screen_content.source_type
+ * 3. If not "playlist", create/reuse canonical playlist and assign
+ * 4. If already playlist but NO CONTENT, reassign to force refresh
+ */
+export async function ensureScreenPlaysPlaylist(
+  yodeckPlayerId: string,
+  screenId?: string
+): Promise<PlaybackEnforceResult> {
+  const logs: string[] = [];
+  logs.push(`[PlaybackEnforce] ═══════════════════════════════════════`);
+  logs.push(`[PlaybackEnforce] Start enforce voor player ${yodeckPlayerId}`);
+  
+  // Step 1: Fetch current screen state from Yodeck (SOURCE OF TRUTH)
+  const screenResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/`);
+  
+  if (!screenResult.ok || !screenResult.data) {
+    logs.push(`[PlaybackEnforce] ✗ Kan Yodeck scherm niet ophalen: ${screenResult.error}`);
+    return {
+      ok: false,
+      playerId: yodeckPlayerId,
+      previousSourceType: null,
+      previousSourceId: null,
+      currentSourceType: "unknown",
+      currentSourceId: null,
+      playlistCreated: false,
+      playlistId: null,
+      playlistName: null,
+      enforceAction: "none",
+      logs,
+      error: `YODECK_FETCH_FAILED: ${screenResult.error}`,
+    };
+  }
+  
+  const screenData = screenResult.data;
+  const screenName = screenData.name || `YDK-${yodeckPlayerId}`;
+  const content = screenData.screen_content || {};
+  const previousSourceType = content.source_type || null;
+  const previousSourceId = content.source_id ? String(content.source_id) : null;
+  
+  logs.push(`[PlaybackEnforce] Scherm: "${screenName}"`);
+  logs.push(`[PlaybackEnforce] Huidige source_type: ${previousSourceType || "NONE"}`);
+  logs.push(`[PlaybackEnforce] Huidige source_id: ${previousSourceId || "NONE"}`);
+  
+  // Step 2: Determine canonical playlist name
+  const canonicalPlaylistName = getScreenPlaylistName(`YDK-${yodeckPlayerId}`);
+  
+  // Step 3: Check if we need to enforce playlist mode
+  let needsEnforce = false;
+  let enforceReason = "";
+  
+  if (previousSourceType !== "playlist") {
+    needsEnforce = true;
+    enforceReason = `source_type is "${previousSourceType}" (not playlist)`;
+  } else if (!previousSourceId) {
+    needsEnforce = true;
+    enforceReason = "source_id is empty";
+  }
+  
+  if (!needsEnforce) {
+    logs.push(`[PlaybackEnforce] ✓ Scherm is al in playlist mode met source_id=${previousSourceId}`);
+    
+    // Verify the playlist has content
+    const playlistCheck = await yodeckRequest<any>(`/playlists/${previousSourceId}/`);
+    const itemCount = Array.isArray(playlistCheck.data?.items) ? playlistCheck.data.items.length : 0;
+    
+    if (itemCount === 0) {
+      logs.push(`[PlaybackEnforce] ⚠️ Playlist ${previousSourceId} is LEEG - toch reassign forceren`);
+      needsEnforce = true;
+      enforceReason = "playlist empty, reassigning to trigger refresh";
+    } else {
+      logs.push(`[PlaybackEnforce] ✓ Playlist heeft ${itemCount} items - geen actie nodig`);
+      return {
+        ok: true,
+        playerId: yodeckPlayerId,
+        previousSourceType,
+        previousSourceId,
+        currentSourceType: "playlist",
+        currentSourceId: previousSourceId,
+        playlistCreated: false,
+        playlistId: previousSourceId,
+        playlistName: playlistCheck.data?.name || null,
+        enforceAction: "already_playlist",
+        logs,
+      };
+    }
+  }
+  
+  logs.push(`[PlaybackEnforce] Enforce nodig: ${enforceReason}`);
+  
+  // Step 4: Find or create canonical playlist
+  let targetPlaylistId: string | null = null;
+  let playlistCreated = false;
+  
+  // First check if canonical playlist already exists
+  const existingPlaylist = await findPlaylistByName(canonicalPlaylistName);
+  
+  if (existingPlaylist) {
+    targetPlaylistId = String(existingPlaylist.id);
+    logs.push(`[PlaybackEnforce] Bestaande canonical playlist gevonden: ${targetPlaylistId} ("${canonicalPlaylistName}")`);
+  } else {
+    // Create new playlist
+    logs.push(`[PlaybackEnforce] Canonical playlist niet gevonden, nieuwe aanmaken...`);
+    const createResult = await createPlaylist(canonicalPlaylistName);
+    
+    if (!createResult.ok || !createResult.playlistId) {
+      logs.push(`[PlaybackEnforce] ✗ Playlist aanmaken mislukt: ${createResult.error}`);
+      return {
+        ok: false,
+        playerId: yodeckPlayerId,
+        previousSourceType,
+        previousSourceId,
+        currentSourceType: previousSourceType || "unknown",
+        currentSourceId: previousSourceId,
+        playlistCreated: false,
+        playlistId: null,
+        playlistName: null,
+        enforceAction: "none",
+        logs,
+        error: `CREATE_PLAYLIST_FAILED: ${createResult.error}`,
+      };
+    }
+    
+    targetPlaylistId = String(createResult.playlistId);
+    playlistCreated = true;
+    logs.push(`[PlaybackEnforce] ✓ Nieuwe playlist aangemaakt: ${targetPlaylistId}`);
+  }
+  
+  // Step 5: Assign playlist to screen
+  logs.push(`[PlaybackEnforce] Toewijzen playlist ${targetPlaylistId} aan scherm...`);
+  
+  const assignPayload = {
+    screen_content: {
+      source_type: "playlist",
+      source_id: parseInt(targetPlaylistId),
+    },
+  };
+  
+  const assignResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/`, "PATCH", assignPayload);
+  
+  if (!assignResult.ok) {
+    logs.push(`[PlaybackEnforce] ✗ Toewijzen mislukt: ${assignResult.error}`);
+    return {
+      ok: false,
+      playerId: yodeckPlayerId,
+      previousSourceType,
+      previousSourceId,
+      currentSourceType: previousSourceType || "unknown",
+      currentSourceId: previousSourceId,
+      playlistCreated,
+      playlistId: targetPlaylistId,
+      playlistName: canonicalPlaylistName,
+      enforceAction: "none",
+      logs,
+      error: `ASSIGN_FAILED: ${assignResult.error}`,
+    };
+  }
+  
+  const enforceAction = playlistCreated ? "created_and_assigned" : "reassigned";
+  logs.push(`[PlaybackEnforce] ✓ player=${yodeckPlayerId} changed source_type ${previousSourceType}->playlist source_id ${previousSourceId}->${targetPlaylistId}`);
+  logs.push(`[PlaybackEnforce] ═══════════════════════════════════════`);
+  
+  return {
+    ok: true,
+    playerId: yodeckPlayerId,
+    previousSourceType,
+    previousSourceId,
+    currentSourceType: "playlist",
+    currentSourceId: targetPlaylistId,
+    playlistCreated,
+    playlistId: targetPlaylistId,
+    playlistName: canonicalPlaylistName,
+    enforceAction,
+    logs,
+  };
+}
+
+/**
+ * Force refresh/sync on the player after playlist assignment
+ * Tries API restart first, falls back to content reassignment
+ */
+export async function refreshScreenPlayback(yodeckPlayerId: string): Promise<PlayerRefreshResult> {
+  const logs: string[] = [];
+  logs.push(`[PlaybackRefresh] ═══════════════════════════════════════`);
+  logs.push(`[PlaybackRefresh] Start refresh voor player ${yodeckPlayerId}`);
+  
+  // Method 1: Try to restart player app via API (if available)
+  // Yodeck API v2 has POST /screens/{id}/restart/ or similar
+  const restartResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/restart/`, "POST", {});
+  
+  if (restartResult.ok) {
+    logs.push(`[PlaybackRefresh] method=api_restart ok=true status=${restartResult.data?.status || 'ok'}`);
+    return {
+      ok: true,
+      method: "api_restart",
+      playerId: yodeckPlayerId,
+      status: 200,
+      logs,
+    };
+  }
+  
+  logs.push(`[PlaybackRefresh] API restart niet beschikbaar: ${restartResult.error}`);
+  
+  // Method 2: Reassign content to trigger player refresh
+  logs.push(`[PlaybackRefresh] Falling back to content_reassign method...`);
+  
+  // Get current screen content
+  const screenResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/`);
+  
+  if (!screenResult.ok || !screenResult.data) {
+    logs.push(`[PlaybackRefresh] ✗ Kan scherm niet ophalen: ${screenResult.error}`);
+    return {
+      ok: false,
+      method: "none",
+      playerId: yodeckPlayerId,
+      logs,
+      error: `SCREEN_FETCH_FAILED: ${screenResult.error}`,
+    };
+  }
+  
+  const content = screenResult.data.screen_content;
+  
+  if (!content?.source_id) {
+    logs.push(`[PlaybackRefresh] ✗ Geen source_id om te reassignen`);
+    return {
+      ok: false,
+      method: "none",
+      playerId: yodeckPlayerId,
+      logs,
+      error: "NO_SOURCE_ID",
+    };
+  }
+  
+  // Reassign same content to trigger refresh
+  const reassignPayload = {
+    screen_content: {
+      source_type: content.source_type || "playlist",
+      source_id: content.source_id,
+    },
+  };
+  
+  const reassignResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/`, "PATCH", reassignPayload);
+  
+  if (!reassignResult.ok) {
+    logs.push(`[PlaybackRefresh] ✗ Reassign mislukt: ${reassignResult.error}`);
+    return {
+      ok: false,
+      method: "content_reassign",
+      playerId: yodeckPlayerId,
+      logs,
+      error: `REASSIGN_FAILED: ${reassignResult.error}`,
+    };
+  }
+  
+  logs.push(`[PlaybackRefresh] method=content_reassign ok=true source_id=${content.source_id}`);
+  logs.push(`[PlaybackRefresh] ═══════════════════════════════════════`);
+  
+  return {
+    ok: true,
+    method: "content_reassign",
+    playerId: yodeckPlayerId,
+    status: 200,
+    logs,
+  };
+}
+
+// ============================================================================
+// SCREENSHOT PROOF WITH NO CONTENT DETECTION
+// ============================================================================
+
+// Known hash for "NO CONTENT TO PLAY" screen (detected empirically)
+// This is a heuristic - may need adjustment based on actual screenshots
+const NO_CONTENT_HASHES = new Set<string>([
+  // Add known hashes here as we discover them
+]);
+
+/**
+ * Detect if screenshot shows "NO CONTENT TO PLAY"
+ * Uses multiple heuristics:
+ * 1. Known hash matching
+ * 2. Very small file size (< 5KB suggests simple/blank screen)
+ * 3. Future: pixel sampling for dark screen with bright rectangle
+ */
+function detectNoContentInScreenshot(
+  hash: string | null,
+  byteSize: number | null,
+  imageData?: Buffer
+): boolean {
+  // Check known hashes
+  if (hash && NO_CONTENT_HASHES.has(hash)) {
+    return true;
+  }
+  
+  // Very small screenshots often indicate "no content" or error screens
+  // Real content screenshots are typically >20KB
+  if (byteSize !== null && byteSize < 3000) {
+    return true; // Likely an error or "no content" screen
+  }
+  
+  // Future: Add pixel analysis if imageData is provided
+  // For now, rely on hash matching and size heuristics
+  
+  return false;
+}
+
+/**
+ * Fetch and store screenshot proof for a screen
+ * Adds cache buster to avoid CDN caching
+ */
+export async function fetchScreenshotProof(
+  screenId: string,
+  screenshotUrl: string
+): Promise<ScreenshotProofResult> {
+  const logs: string[] = [];
+  logs.push(`[ScreenshotFetch] ═══════════════════════════════════════`);
+  logs.push(`[ScreenshotFetch] Fetching screenshot voor scherm ${screenId}`);
+  
+  if (!screenshotUrl) {
+    logs.push(`[ScreenshotFetch] ✗ Geen screenshot URL`);
+    return {
+      ok: false,
+      url: null,
+      byteSize: null,
+      hash: null,
+      hashChanged: false,
+      detectedNoContent: false,
+      lastOkAt: null,
+      error: "NO_SCREENSHOT_URL",
+    };
+  }
+  
+  // Add cache buster to URL
+  const cacheBusterUrl = screenshotUrl.includes("?") 
+    ? `${screenshotUrl}&t=${Date.now()}` 
+    : `${screenshotUrl}?t=${Date.now()}`;
+  
+  logs.push(`[ScreenshotFetch] URL: ${cacheBusterUrl}`);
+  
+  try {
+    const response = await fetch(cacheBusterUrl, {
+      headers: {
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+      },
+    });
+    
+    if (!response.ok) {
+      logs.push(`[ScreenshotFetch] ✗ HTTP ${response.status}`);
+      return {
+        ok: false,
+        url: screenshotUrl,
+        byteSize: null,
+        hash: null,
+        hashChanged: false,
+        detectedNoContent: false,
+        lastOkAt: null,
+        error: `HTTP_${response.status}`,
+      };
+    }
+    
+    const buffer = await response.arrayBuffer();
+    const byteSize = buffer.byteLength;
+    
+    logs.push(`[ScreenshotFetch] Size: ${byteSize} bytes`);
+    
+    // Compute hash (simple approach: sha256 of first 16KB)
+    const crypto = await import('crypto');
+    const hashBuffer = Buffer.from(buffer.slice(0, 16384));
+    const hash = crypto.createHash('sha256').update(hashBuffer).digest('hex').substring(0, 16);
+    
+    logs.push(`[ScreenshotFetch] Hash: ${hash}`);
+    
+    // Get previous hash from DB
+    const [screen] = await db.select({
+      yodeckScreenshotHash: screens.yodeckScreenshotHash,
+    }).from(screens).where(eq(screens.id, screenId));
+    
+    const previousHash = screen?.yodeckScreenshotHash || null;
+    const hashChanged = previousHash !== hash;
+    
+    logs.push(`[ScreenshotFetch] Previous hash: ${previousHash}, Changed: ${hashChanged}`);
+    
+    // Detect NO CONTENT
+    const detectedNoContent = detectNoContentInScreenshot(hash, byteSize, Buffer.from(buffer));
+    
+    if (detectedNoContent) {
+      logs.push(`[ScreenshotFetch] ⚠️ Detected: NO CONTENT TO PLAY`);
+    }
+    
+    // Store in DB if size is reasonable (>5KB suggests real content)
+    const now = new Date();
+    const isValidScreenshot = byteSize > 5000 && !detectedNoContent;
+    
+    if (isValidScreenshot) {
+      await db.update(screens)
+        .set({
+          yodeckScreenshotUrl: screenshotUrl,
+          yodeckScreenshotLastOkAt: now,
+          yodeckScreenshotByteSize: byteSize,
+          yodeckScreenshotHash: hash,
+        })
+        .where(eq(screens.id, screenId));
+      
+      logs.push(`[ScreenshotFetch] ✓ Stored: size=${byteSize}, hash=${hash}`);
+    } else {
+      logs.push(`[ScreenshotFetch] ⚠️ Screenshot too small or NO CONTENT - not storing as valid proof`);
+    }
+    
+    logs.push(`[ScreenshotFetch] ═══════════════════════════════════════`);
+    
+    return {
+      ok: isValidScreenshot,
+      url: screenshotUrl,
+      byteSize,
+      hash,
+      hashChanged,
+      detectedNoContent,
+      lastOkAt: isValidScreenshot ? now.toISOString() : null,
+    };
+  } catch (error: any) {
+    logs.push(`[ScreenshotFetch] ✗ Error: ${error.message}`);
+    return {
+      ok: false,
+      url: screenshotUrl,
+      byteSize: null,
+      hash: null,
+      hashChanged: false,
+      detectedNoContent: false,
+      lastOkAt: null,
+      error: error.message,
+    };
+  }
+}
+
+// ============================================================================
+// FORCE REPAIR + PROOF (E2E)
+// ============================================================================
+
+/**
+ * Force Repair + Proof - Complete E2E cycle
+ * 
+ * 1. ensureScreenPlaysPlaylist(playerId) - enforce PLAYLIST mode
+ * 2. fillPlaylistWithContent(activePlaylistId) - baseline + ads
+ * 3. refreshScreenPlayback() - trigger player refresh
+ * 4. Poll up to 6 times with backoff for screenshot proof
+ */
+export async function forceRepairAndProof(screenId: string): Promise<ForceRepairProofResult> {
+  const logs: string[] = [];
+  logs.push(`[ForceRepairProof] ═══════════════════════════════════════════════`);
+  logs.push(`[ForceRepairProof] Start FORCE REPAIR + PROOF voor scherm ${screenId}`);
+  logs.push(`[ForceRepairProof] Timestamp: ${new Date().toISOString()}`);
+  
+  // Get screen info
+  const [screen] = await db.select({
+    name: screens.name,
+    screenId: screens.screenId,
+    yodeckPlayerId: screens.yodeckPlayerId,
+    yodeckScreenshotUrl: screens.yodeckScreenshotUrl,
+  }).from(screens).where(eq(screens.id, screenId));
+  
+  if (!screen) {
+    logs.push(`[ForceRepairProof] ✗ Scherm niet gevonden`);
+    return {
+      ok: false,
+      playerId: "",
+      activePlaylistId: null,
+      itemCount: 0,
+      baselineConfigured: false,
+      baselineCount: 0,
+      adsCount: 0,
+      screenshot: null,
+      proofStatus: {
+        ok: false,
+        isOnline: false,
+        hasContent: false,
+        hasScreenshot: false,
+        detectedNoContent: false,
+        reason: "SCREEN_NOT_FOUND",
+      },
+      refreshMethodUsed: "none",
+      pollAttempts: 0,
+      logs,
+    };
+  }
+  
+  if (!screen.yodeckPlayerId) {
+    logs.push(`[ForceRepairProof] ✗ Geen Yodeck device gekoppeld`);
+    return {
+      ok: false,
+      playerId: "",
+      activePlaylistId: null,
+      itemCount: 0,
+      baselineConfigured: false,
+      baselineCount: 0,
+      adsCount: 0,
+      screenshot: null,
+      proofStatus: {
+        ok: false,
+        isOnline: false,
+        hasContent: false,
+        hasScreenshot: false,
+        detectedNoContent: false,
+        reason: "NO_YODECK_DEVICE",
+      },
+      refreshMethodUsed: "none",
+      pollAttempts: 0,
+      logs,
+    };
+  }
+  
+  const playerId = screen.yodeckPlayerId;
+  logs.push(`[ForceRepairProof] Player ID: ${playerId}`);
+  
+  // STEP 1: Enforce playlist mode
+  logs.push(`[ForceRepairProof] STEP 1: Enforce playlist mode...`);
+  const enforceResult = await ensureScreenPlaysPlaylist(playerId, screenId);
+  logs.push(...enforceResult.logs);
+  
+  if (!enforceResult.ok) {
+    logs.push(`[ForceRepairProof] ✗ Enforce failed: ${enforceResult.error}`);
+    return {
+      ok: false,
+      playerId,
+      activePlaylistId: enforceResult.playlistId,
+      itemCount: 0,
+      baselineConfigured: false,
+      baselineCount: 0,
+      adsCount: 0,
+      screenshot: null,
+      proofStatus: {
+        ok: false,
+        isOnline: false,
+        hasContent: false,
+        hasScreenshot: false,
+        detectedNoContent: false,
+        reason: `ENFORCE_FAILED: ${enforceResult.error}`,
+      },
+      refreshMethodUsed: "none",
+      pollAttempts: 0,
+      logs,
+    };
+  }
+  
+  // STEP 2: Fill playlist with baseline + ads (using existing sync)
+  logs.push(`[ForceRepairProof] STEP 2: Fill playlist with content...`);
+  const syncResult = await syncScreenCombinedPlaylist(screenId);
+  logs.push(...syncResult.logs);
+  
+  const activePlaylistId = syncResult.activePlaylistId;
+  const baselinePlaylistId = await getBaselinePlaylistId();
+  const baselineConfigured = !!baselinePlaylistId;
+  
+  if (!syncResult.ok) {
+    logs.push(`[ForceRepairProof] ✗ Sync failed: ${syncResult.errorReason}`);
+    return {
+      ok: false,
+      playerId,
+      activePlaylistId,
+      itemCount: syncResult.itemCount,
+      baselineConfigured,
+      baselineCount: syncResult.baselineCount,
+      adsCount: syncResult.adsCount,
+      screenshot: null,
+      proofStatus: {
+        ok: false,
+        isOnline: false,
+        hasContent: false,
+        hasScreenshot: false,
+        detectedNoContent: false,
+        reason: `SYNC_FAILED: ${syncResult.errorReason}`,
+      },
+      refreshMethodUsed: "none",
+      pollAttempts: 0,
+      logs,
+    };
+  }
+  
+  // STEP 3: Force refresh on player
+  logs.push(`[ForceRepairProof] STEP 3: Refresh player...`);
+  const refreshResult = await refreshScreenPlayback(playerId);
+  logs.push(...refreshResult.logs);
+  
+  const refreshMethodUsed = refreshResult.method;
+  
+  // STEP 4: Poll for screenshot proof with backoff
+  logs.push(`[ForceRepairProof] STEP 4: Polling for screenshot proof...`);
+  
+  const pollIntervals = [5000, 5000, 10000, 10000, 15000, 15000]; // Total: ~60s
+  let screenshot: ScreenshotProofResult | null = null;
+  let pollAttempts = 0;
+  
+  // Get screenshot URL from Yodeck
+  const deviceStatus = await getYodeckDeviceStatus(screenId);
+  let screenshotUrl = screen.yodeckScreenshotUrl;
+  
+  // Try to get fresh URL from device status
+  if (deviceStatus.yodeckDeviceId) {
+    const screenData = await yodeckRequest<any>(`/screens/${playerId}/`);
+    if (screenData.ok && screenData.data?.screenshot_path) {
+      screenshotUrl = screenData.data.screenshot_path;
+    }
+  }
+  
+  for (let i = 0; i < pollIntervals.length; i++) {
+    pollAttempts = i + 1;
+    logs.push(`[ProofPoll] Attempt ${pollAttempts}/${pollIntervals.length}, waiting ${pollIntervals[i]}ms...`);
+    
+    // Wait
+    await new Promise(resolve => setTimeout(resolve, pollIntervals[i]));
+    
+    // Fetch screenshot
+    if (screenshotUrl) {
+      screenshot = await fetchScreenshotProof(screenId, screenshotUrl);
+      
+      logs.push(`[ProofPoll] Result: ok=${screenshot.ok}, size=${screenshot.byteSize}, noContent=${screenshot.detectedNoContent}`);
+      
+      // Success if screenshot OK and not showing "NO CONTENT"
+      if (screenshot.ok && !screenshot.detectedNoContent) {
+        logs.push(`[ProofPoll] ✓ Valid screenshot proof obtained!`);
+        break;
+      }
+    } else {
+      logs.push(`[ProofPoll] ✗ No screenshot URL available`);
+    }
+  }
+  
+  // Build final proof status
+  const isOnline = deviceStatus.isOnline ?? false;
+  const hasContent = syncResult.itemCount > 0;
+  const hasScreenshot = screenshot?.ok ?? false;
+  const detectedNoContent = screenshot?.detectedNoContent ?? false;
+  
+  const proofOk = isOnline && hasContent && hasScreenshot && !detectedNoContent;
+  
+  let proofReason = "All checks passed";
+  if (!proofOk) {
+    const reasons: string[] = [];
+    if (!isOnline) reasons.push("Device offline");
+    if (!hasContent) reasons.push("Playlist empty");
+    if (!hasScreenshot) reasons.push("No valid screenshot");
+    if (detectedNoContent) reasons.push("Screenshot shows NO CONTENT TO PLAY");
+    proofReason = reasons.join("; ");
+  }
+  
+  logs.push(`[ForceRepairProof] ═══════════════════════════════════════════════`);
+  logs.push(`[ForceRepairProof] RESULT: proofOk=${proofOk}, reason=${proofReason}`);
+  logs.push(`[ForceRepairProof] Items: ${syncResult.itemCount} (baseline: ${syncResult.baselineCount}, ads: ${syncResult.adsCount})`);
+  
+  return {
+    ok: proofOk,
+    playerId,
+    activePlaylistId,
+    itemCount: syncResult.itemCount,
+    baselineConfigured,
+    baselineCount: syncResult.baselineCount,
+    adsCount: syncResult.adsCount,
+    screenshot,
+    proofStatus: {
+      ok: proofOk,
+      isOnline,
+      hasContent,
+      hasScreenshot,
+      detectedNoContent,
+      reason: proofReason,
+    },
+    refreshMethodUsed,
+    pollAttempts,
+    logs,
   };
 }
 

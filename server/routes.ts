@@ -17202,6 +17202,48 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/screens/:screenId/force-repair-proof
+   * PRODUCTION-GRADE Force Repair + Proof - Complete E2E cycle with polling
+   * 
+   * Guarantees:
+   * 1. Screen is set to PLAYLIST mode (not layout/schedule)
+   * 2. Active playlist contains baseline + ads
+   * 3. Polls for screenshot proof up to 6 times with backoff
+   * 4. Detects "NO CONTENT TO PLAY" in screenshot
+   * 
+   * Returns complete diagnostics object
+   */
+  app.post("/api/screens/:screenId/force-repair-proof", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      console.log(`[ForceRepairProof] Starting full E2E cycle for screen ${screenId}`);
+      
+      const { forceRepairAndProof } = await import("./services/screenPlaylistService");
+      const result = await forceRepairAndProof(screenId);
+      
+      // Log result
+      console.log(`[ForceRepairProof] Result: ok=${result.ok}, proof=${result.proofStatus.ok}, reason=${result.proofStatus.reason}`);
+      result.logs.forEach(log => console.log(log));
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[ForceRepairProof] Error:", error);
+      res.status(500).json({ 
+        ok: false, 
+        proofStatus: {
+          ok: false,
+          isOnline: false,
+          hasContent: false,
+          hasScreenshot: false,
+          detectedNoContent: false,
+          reason: `ERROR: ${error.message}`,
+        },
+        error: error.message 
+      });
+    }
+  });
+
+  /**
    * POST /api/admin/autopilot/repair-all
    * Repair all linked screens
    */

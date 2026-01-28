@@ -263,7 +263,7 @@ export default function ScreenDetail() {
     },
   });
   
-  // Repair + Proof mutation (full cycle: repair, verify, screenshot)
+  // Quick Repair + Proof mutation (fast cycle)
   const repairAndProofMutation = useMutation({
     mutationFn: async () => {
       const response = await apiRequest("POST", `/api/screens/${screenId}/repair-and-proof`);
@@ -279,6 +279,39 @@ export default function ScreenDetail() {
         toast({ 
           title: "Proof onvolledig", 
           description: data.proof?.reason || "Onbekende fout",
+          variant: "destructive" 
+        });
+      }
+      refetchNowPlaying();
+      queryClient.invalidateQueries({ queryKey: ["screen-now-playing", screenId] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+  
+  // FORCE Repair + Proof mutation (FULL E2E cycle with polling + NO CONTENT detection)
+  const forceRepairProofMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", `/api/screens/${screenId}/force-repair-proof`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.proofStatus?.ok) {
+        toast({ 
+          title: "✓ PROOF OK - Scherm speelt content af", 
+          description: `Playlist: ${data.itemCount} items (${data.baselineCount} baseline + ${data.adsCount} ads). Polls: ${data.pollAttempts}` 
+        });
+      } else if (data.proofStatus?.detectedNoContent) {
+        toast({ 
+          title: "✗ NO CONTENT gedetecteerd", 
+          description: "Screenshot toont nog steeds 'NO CONTENT TO PLAY'. Probeer later opnieuw.",
+          variant: "destructive" 
+        });
+      } else {
+        toast({ 
+          title: "⚠️ Proof onvolledig", 
+          description: data.proofStatus?.reason || "Controleer screenshot handmatig",
           variant: "destructive" 
         });
       }
@@ -836,7 +869,7 @@ export default function ScreenDetail() {
                         {nowPlaying?.screenshot?.url ? (
                           <div className="space-y-2">
                             <img 
-                              src={nowPlaying.screenshot.url} 
+                              src={`${nowPlaying.screenshot.url}${nowPlaying.screenshot.url.includes('?') ? '&' : '?'}t=${Date.now()}`} 
                               alt="Screenshot" 
                               className="w-full max-h-48 object-contain rounded border bg-black"
                               data-testid="screen-screenshot"
@@ -933,20 +966,20 @@ export default function ScreenDetail() {
                       <Button
                         variant="default"
                         size="sm"
-                        onClick={() => repairAndProofMutation.mutate()}
-                        disabled={repairScreenMutation.isPending || repairAndProofMutation.isPending}
+                        onClick={() => forceRepairProofMutation.mutate()}
+                        disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending}
                         className="flex-1"
-                        data-testid="btn-repair-and-proof"
+                        data-testid="btn-force-repair-proof"
                       >
-                        {repairAndProofMutation.isPending ? (
+                        {forceRepairProofMutation.isPending ? (
                           <>
                             <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                            Bewijzen...
+                            E2E Proof (~60s)...
                           </>
                         ) : (
                           <>
                             <Zap className="h-4 w-4 mr-2" />
-                            Repair + Proof
+                            Force Repair + Proof
                           </>
                         )}
                       </Button>

@@ -1,0 +1,118 @@
+We have a critical issue: our backend shows the screen playlist contains items (itemCount=4) but the Yodeck screenshot displays “NO CONTENT TO PLAY”. That means the player is NOT actually playing the playlist we think it is (source mismatch / layout mode / schedule) OR the player is not synced.
+
+I want you to implement a production-grade “Playback Repair + Proof” system that guarantees actual playback on the physical screens, not just playlist counts.
+
+NON-NEGOTIABLE OUTCOME:
+After pressing “Force Repair + Proof”, within 1–2 minutes:
+- Screen is set to PLAYLIST mode (not layout/schedule)
+- The active playlist assigned to the screen contains baseline items + optional ads
+- The Yodeck screenshot no longer shows “NO CONTENT TO PLAY”
+- We store screenshot hash/size/timestamp so proof becomes OK
+
+CURRENT FACTS:
+- Active playlist IDs detected: 30498772 (YDK-591896) and 30498756 (YDK-591895)
+- Playlist items exist (4 media IDs).
+- UI screenshot shows “NO CONTENT TO PLAY” despite itemCount=4.
+- Some DB records still have layoutMode=LAYOUT and yodeckLayoutId set. That likely means the screen is still in layout/schedule mode on Yodeck, so our playlist is not the actual playback source.
+
+IMPLEMENTATION PLAN
+
+A) Hard enforce playback source (most important)
+Create function ensureScreenPlaysPlaylist(yodeckPlayerId):
+1) Fetch screen/player details from Yodeck v2.
+2) Determine current screen_content (source_type + source_id).
+3) If source_type != "playlist" OR source_id is null:
+   - Create or reuse canonical playlist for this screen:
+     name: "Elevizion | Loop | YDK-<playerId>"
+   - Assign the screen_content to source_type="playlist" and source_id=<that playlist id>
+   - Log:
+     [PlaybackEnforce] player=<id> changed source_type <old>->playlist source_id <old>-><new>
+4) If source_type="playlist" but screenshot still says NO CONTENT, we STILL re-assign the same playlist to force refresh (idempotent).
+   - Log:
+     [PlaybackEnforce] player=<id> reasserted playlist assignment source_id=<id>
+
+Important: do NOT rely on local DB fields like location.layoutMode to decide this. The source of truth is Yodeck screen_content.
+
+B) Baseline seeding must be real + playable
+We already have a baseline playlist created manually in Yodeck. Implement setting AUTOPILOT_BASELINE_PLAYLIST_ID (DB settings table).
+- Endpoint to set it already exists or create it.
+- Implement getBaselinePlaylistItems() from Yodeck (cache 5 min).
+- On fill, copy baseline media items into the screen’s active playlist (dedupe, preserve order).
+
+C) Fill must target the playlist actually assigned to the screen
+Update repairScreen flow:
+1) activePlaylistId = getScreenActivePlaylistId(playerId) (from Yodeck screen_content)
+2) ensureScreenPlaysPlaylist(playerId) (this may change activePlaylistId, so re-fetch after)
+3) fillPlaylistWithContent(activePlaylistId, baselineItems, adsForScreen)
+4) Verify by re-fetching playlist items from Yodeck, ensure count>0
+5) Persist lastPushAt + lastPushResult
+
+D) Force SYNC / refresh on the player (best-effort)
+After assignment + fill:
+- Try to call a Yodeck API “sync now / refresh / reboot / restart player app” if available.
+- If API is not available, implement a “soft refresh” by reassigning source_id again + waiting and refetching.
+- Log what method was used:
+  [PlaybackRefresh] method=<api_command|reassign_only> ok=<true|false> status=<code>
+
+E) Screenshot proof pipeline (must be reliable)
+We already have screenshot URL like:
+https://dsbackend.s3.amazonaws.com/screenshots/<uuid>.png
+
+Implement server-side screenshot fetch:
+- GET the screenshot bytes with a cache buster query string (?t=timestamp) so we don’t get stale CDN cache.
+- If response is 200 and byteSize > 10KB:
+   - Compute sha256 hash, store:
+     yodeckScreenshotLastOkAt, yodeckScreenshotByteSize, yodeckScreenshotHash
+- If too small or error:
+   - store screenshotError separately (do not overwrite content status)
+- Update now-playing response to include screenshot {url(with cache buster), lastOkAt, byteSize, hash}
+
+Add detection for “NO CONTENT TO PLAY”:
+- Lightweight approach: keep a knownHash list OR do a very cheap pixel sampling heuristic:
+  - If screenshot is mostly dark + has a large bright rectangle center, mark as likely NO_CONTENT.
+- If detected, set proofStatus.ok=false and reason="Yodeck shows NO CONTENT TO PLAY"
+(Do not OCR unless absolutely necessary.)
+
+F) “Force Repair + Proof” endpoint (E2E)
+Add:
+POST /api/screens/:id/force-repair-proof
+Behavior:
+1) ensureScreenPlaysPlaylist(playerId)
+2) fillPlaylistWithContent(activePlaylistId)
+3) attempt PlaybackRefresh
+4) Poll up to 6 times with backoff (e.g. 5s, 5s, 10s, 10s, 15s, 15s):
+   - refreshScreenshot (GET bytes + hash)
+   - fetch now-playing playlist itemCount
+   - stop early if screenshot is OK and not NO_CONTENT
+Return a compact diagnostics object:
+{
+  playerId,
+  activePlaylistId,
+  itemCount,
+  baselineConfigured,
+  baselineCount,
+  adsCount,
+  screenshot: {byteSize, hash, lastOkAt, detectedNoContent},
+  proofStatus: {ok, reason},
+  refreshMethodUsed
+}
+
+G) UI fixes (small but important)
+- When showing screenshot in UI, always append ?t=<Date.now()> to avoid browser caching.
+- Show Proof badge states:
+  - PROOF_OK: online + itemCount>0 + screenshotOk + notNoContent
+  - PROOF_FAIL: screenshot says no content or screenshot missing
+  - PROOF_PENDING: repair started but waiting
+
+ACCEPTANCE TESTS (must be shown in logs)
+1) For both players, logs show PlaybackEnforce confirming source ensured playlist
+2) Force repair returns proof ok true
+3) Screenshot hash stored (non-null) and detectedNoContent=false
+4) UI screenshot no longer shows “NO CONTENT TO PLAY”
+
+IMPLEMENT SAFELY:
+- Idempotent: multiple repairs should not duplicate playlist items (dedupe by mediaId).
+- Don’t break existing flows; only enhance repair + proof.
+- Add clear structured logs with prefixes: [PlaybackEnforce], [PlaybackRefresh], [ScreenshotFetch], [ProofPoll]
+
+Now implement this end-to-end.
