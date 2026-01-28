@@ -1,0 +1,57 @@
+We have a misleading situation: Yodeck confirms player=591896 is ONLINE and source_type=playlist source_id=30498772 with itemCount=4, but our UI screenshot shows "NO CONTENT" and proofStatus fails because screenshot metadata is null.
+
+This is NOT a playlist push issue anymore. We must make screenshot/proof reliable.
+
+Implement a minimal fix:
+
+1) Add endpoint GET /api/screens/:id/proof that ALWAYS fetches a FRESH screenshot server-side and returns diagnostics.
+
+Implementation details:
+- Load screen by :id, get yodeckScreenshotUrl (currently dsbackend.s3...png). Also load yodeckPlayerId.
+- Build urlWithBuster = `${yodeckScreenshotUrl}?t=${Date.now()}`
+- Fetch screenshot bytes with:
+  - headers: { "Cache-Control": "no-cache", "Pragma":"no-cache" }
+  - timeout 10s
+  - follow redirects
+- Capture diagnostics:
+  - httpStatus, contentType, contentLengthHeader
+  - byteSize = buffer.length
+  - sha256 hash of buffer
+  - magicBytes = buffer.slice(0,16).toString('hex')
+- Valid screenshot rules:
+  - httpStatus must be 200
+  - contentType must include image/png or image/jpeg
+  - byteSize must be >= 10_000 (10KB). If smaller -> treat as placeholder/invalid.
+- Store on screen row:
+  - yodeckScreenshotLastOkAt = now (only if valid)
+  - yodeckScreenshotByteSize
+  - yodeckScreenshotHash
+  - also store lastAttemptAt, lastAttemptStatus, lastAttemptByteSize, lastAttemptError (new fields OR reuse yodeckContentError-like field)
+- Return JSON:
+{
+  ok: true/false,
+  urlWithBuster,
+  httpStatus,
+  contentType,
+  byteSize,
+  hash,
+  magicBytes,
+  valid: true/false,
+  reason: "too_small" | "bad_status" | "not_image" | "fetch_failed"
+}
+
+2) UI change (tiny):
+- On screen detail page, add button "Ververs bewijs".
+- It calls GET /api/screens/:id/proof.
+- Then set <img src> to response.urlWithBuster to prevent browser caching.
+- Show proof diagnostics in small text: byteSize, lastOkAt, reason if invalid.
+
+3) Fix canonical parse bug:
+- In CanonicalParse derived object, do NOT set layoutId=sourceId when source_type=playlist. layoutId must be null unless source_type=layout. Keep playlistId separate.
+
+Acceptance:
+- Calling /api/screens/:id/proof shows byteSize > 10KB and valid=true when screenshots work.
+- If screenshots are placeholders, valid=false with reason=too_small, but playback status remains OK.
+- UI no longer implies "no content" based on screenshot alone.
+
+Do not refactor autopilot. This is purely proof/screenshot reliability.

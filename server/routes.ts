@@ -17833,6 +17833,112 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * GET /api/screens/:screenId/proof
+   * Fetch a fresh screenshot server-side and return full diagnostics
+   */
+  app.get("/api/screens/:screenId/proof", requireAdminAccess, async (req, res) => {
+    const { screenId } = req.params;
+    
+    try {
+      const screen = await storage.getScreen(screenId);
+      if (!screen) {
+        return res.status(404).json({ ok: false, error: "Screen not found" });
+      }
+      
+      const screenshotUrl = screen.yodeckScreenshotUrl;
+      if (!screenshotUrl) {
+        return res.json({
+          ok: false,
+          valid: false,
+          reason: "no_url",
+          urlWithBuster: null,
+          httpStatus: null,
+          contentType: null,
+          byteSize: null,
+          hash: null,
+          magicBytes: null,
+        });
+      }
+      
+      const urlWithBuster = `${screenshotUrl}?t=${Date.now()}`;
+      
+      let httpStatus: number | null = null;
+      let contentType: string | null = null;
+      let byteSize: number | null = null;
+      let hash: string | null = null;
+      let magicBytes: string | null = null;
+      let valid = false;
+      let reason: string | null = null;
+      
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 10000);
+        
+        const response = await fetch(urlWithBuster, {
+          headers: {
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+          },
+          signal: controller.signal,
+          redirect: "follow",
+        });
+        
+        clearTimeout(timeout);
+        
+        httpStatus = response.status;
+        contentType = response.headers.get("content-type");
+        
+        if (httpStatus !== 200) {
+          reason = "bad_status";
+        } else if (!contentType || (!contentType.includes("image/png") && !contentType.includes("image/jpeg"))) {
+          reason = "not_image";
+        } else {
+          const buffer = Buffer.from(await response.arrayBuffer());
+          byteSize = buffer.length;
+          magicBytes = buffer.slice(0, 16).toString("hex");
+          
+          const crypto = await import("crypto");
+          hash = crypto.createHash("sha256").update(buffer).digest("hex");
+          
+          if (byteSize < 10000) {
+            reason = "too_small";
+          } else {
+            valid = true;
+          }
+        }
+      } catch (fetchError: any) {
+        reason = "fetch_failed";
+        console.error("[Proof] Fetch error:", fetchError.message);
+      }
+      
+      // Update screen with proof metadata
+      const now = new Date();
+      await db.update(screens).set({
+        yodeckScreenshotByteSize: byteSize,
+        yodeckScreenshotHash: hash,
+        ...(valid ? { yodeckScreenshotLastOkAt: now } : {}),
+      }).where(eq(screens.id, screenId));
+      
+      res.json({
+        ok: valid,
+        valid,
+        reason: valid ? null : reason,
+        urlWithBuster,
+        httpStatus,
+        contentType,
+        byteSize,
+        hash,
+        magicBytes,
+        lastOkAt: valid ? now.toISOString() : screen.yodeckScreenshotLastOkAt?.toISOString() || null,
+      });
+      
+    } catch (error: any) {
+      console.error("[Proof] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/autopilot/repair-all
    * Repair all linked screens
    */

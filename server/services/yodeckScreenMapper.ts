@@ -379,41 +379,49 @@ export function mapYodeckScreen(raw: any): MappedScreen {
   }
 
   // ========== LAYOUT ID AND NAME ==========
-  // Always try to extract layout info - useful for verification even when contentMode is unknown
+  // Only extract layout info when contentMode is NOT playlist
+  // Bug fix: layoutId must be null when source_type=playlist
   let layoutId: string | null = null;
   let layoutName: string | null = null;
   
-  // Check nested screen_content FIRST - include source_id which is the actual API field
-  const layoutCheckOrder = [
-    "screen_content.source_id",  // Actual field found in API
-    "screen_content.layout",
-    "screen_content.default_playlist",
-    "screen_content.item",
-    "screen_content.content",
-    // Nested in state
-    "state.layout",
-    "state.default_playlist",
-    // Top-level fallback
-    "layout",
-    "current_layout",
-    "assigned_layout",
-    "default_layout",
-    "default_playlist",
-  ];
-  
-  for (const path of layoutCheckOrder) {
-    const val = getNestedValue(raw, path);
-    if (val !== undefined && val !== null) {
-      const extractedId = extractId(val);
-      if (extractedId) {
-        layoutId = extractedId;
-        rawKeysUsed.layoutIdField = typeof val === "object" && val.id ? `${path}.id` : path;
-        const extractedName = extractName(val);
-        if (extractedName && typeof val === "object") {
-          layoutName = extractedName;
-          rawKeysUsed.layoutNameField = `${path}.name`;
+  // Only search for layout ID if contentMode is "layout" or "unknown"
+  // When contentMode is "playlist", layoutId should remain null
+  if (contentMode !== "playlist") {
+    const layoutCheckOrder = [
+      "screen_content.layout",
+      "screen_content.default_playlist",
+      "screen_content.item",
+      "screen_content.content",
+      // Nested in state
+      "state.layout",
+      "state.default_playlist",
+      // Top-level fallback
+      "layout",
+      "current_layout",
+      "assigned_layout",
+      "default_layout",
+      "default_playlist",
+    ];
+    
+    // Also check source_id ONLY when contentMode is layout
+    if (contentMode === "layout") {
+      layoutCheckOrder.unshift("screen_content.source_id");
+    }
+    
+    for (const path of layoutCheckOrder) {
+      const val = getNestedValue(raw, path);
+      if (val !== undefined && val !== null) {
+        const extractedId = extractId(val);
+        if (extractedId) {
+          layoutId = extractedId;
+          rawKeysUsed.layoutIdField = typeof val === "object" && val.id ? `${path}.id` : path;
+          const extractedName = extractName(val);
+          if (extractedName && typeof val === "object") {
+            layoutName = extractedName;
+            rawKeysUsed.layoutNameField = `${path}.name`;
+          }
+          break;
         }
-        break;
       }
     }
   }

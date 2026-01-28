@@ -383,6 +383,47 @@ export default function ScreenDetail() {
     },
   });
   
+  // PROOF mutation - Fresh screenshot with full diagnostics
+  const [proofResult, setProofResult] = useState<{
+    valid: boolean;
+    byteSize: number | null;
+    reason: string | null;
+    lastOkAt: string | null;
+    urlWithBuster: string | null;
+  } | null>(null);
+  
+  const proofMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("GET", `/api/screens/${screenId}/proof`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setProofResult({
+        valid: data.valid,
+        byteSize: data.byteSize,
+        reason: data.reason,
+        lastOkAt: data.lastOkAt,
+        urlWithBuster: data.urlWithBuster,
+      });
+      if (data.valid) {
+        toast({ 
+          title: "✓ Bewijs vernieuwd", 
+          description: `Screenshot ${Math.round((data.byteSize || 0)/1024)}KB - geldig` 
+        });
+      } else {
+        toast({ 
+          title: "⚠️ Screenshot ongeldig", 
+          description: data.reason === "too_small" ? "Te klein (< 10KB)" : data.reason || "Onbekend",
+          variant: "destructive" 
+        });
+      }
+      queryClient.invalidateQueries({ queryKey: ["screen-now-playing", screenId] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Bewijs fout", description: error.message, variant: "destructive" });
+    },
+  });
+  
   const currentContent = screenDetail?.currentContent || [];
   const displayName = getScreenDisplayName(screen, location);
 
@@ -926,10 +967,10 @@ export default function ScreenDetail() {
                           )}
                         </div>
                         
-                        {nowPlaying?.screenshot?.url ? (
+                        {(proofResult?.urlWithBuster || nowPlaying?.screenshot?.url) ? (
                           <div className="space-y-2">
                             <img 
-                              src={`${nowPlaying.screenshot.url}${nowPlaying.screenshot.url.includes('?') ? '&' : '?'}t=${Date.now()}`} 
+                              src={proofResult?.urlWithBuster || `${nowPlaying.screenshot.url}${nowPlaying.screenshot.url.includes('?') ? '&' : '?'}t=${Date.now()}`} 
                               alt="Screenshot" 
                               className="w-full max-h-48 object-contain rounded border bg-black"
                               data-testid="screen-screenshot"
@@ -1086,7 +1127,36 @@ export default function ScreenDetail() {
                             </>
                           )}
                         </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => proofMutation.mutate()}
+                          disabled={proofMutation.isPending}
+                          className="flex-1"
+                          data-testid="btn-refresh-proof"
+                        >
+                          {proofMutation.isPending ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                              Laden...
+                            </>
+                          ) : (
+                            <>
+                              <Image className="h-4 w-4 mr-2" />
+                              Ververs bewijs
+                            </>
+                          )}
+                        </Button>
                       </div>
+                      {proofResult && (
+                        <div className="mt-2 text-xs text-muted-foreground">
+                          <span className={proofResult.valid ? "text-green-600" : "text-red-600"}>
+                            {proofResult.valid ? "✓ Geldig" : `✗ Ongeldig: ${proofResult.reason}`}
+                          </span>
+                          {proofResult.byteSize && <span className="ml-2">{Math.round(proofResult.byteSize/1024)}KB</span>}
+                          {proofResult.lastOkAt && <span className="ml-2">Laatst OK: {formatDistanceToNow(new Date(proofResult.lastOkAt), { addSuffix: true, locale: nl })}</span>}
+                        </div>
+                      )}
                     </>
                   )}
                 </>
