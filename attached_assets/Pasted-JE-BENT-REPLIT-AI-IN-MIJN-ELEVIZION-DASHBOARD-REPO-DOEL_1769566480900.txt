@@ -1,0 +1,68 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION DASHBOARD REPO.
+
+DOEL:
+Maak het dashboard extreem overzichtelijk. Alles moet automatisch. Ik wil in de UI alleen zien wat nodig is:
+- Schermen (hoofdpagina)
+- Advertenties (upload/goedkeuren/plaatsen)
+- (optioneel) Locaties/Onboarding (schermlocaties toevoegen)
+Alles zoals Systemcheck, Yodeck Debug, Layouts, Publicatie Wachtrij, losse logs etc. moet VERBORGEN worden voor normale weergave.
+
+CONCRETE REQUIREMENTS:
+
+1) INTRODUCE "OPERATOR MODE"
+- Voeg een app setting toe: UI_MODE = "operator" | "admin"
+- Default: "operator"
+- Alleen als UI_MODE="admin" mogen geavanceerde menu-items zichtbaar zijn.
+
+2) SIMPLIFY SIDEBAR NAVIGATION (operator)
+- Toon alleen:
+  - Home (optioneel)
+  - Schermen  (primary)
+  - Adverteerders/Advertenties (primary)
+  - Onboarding (alleen als nodig voor nieuwe schermlocatie)
+  - Financieel (optioneel, mag hidden)
+- Verberg volledig in operator:
+  - Instellingen
+  - Systeemcheck
+  - Publicatie Wachtrij
+  - Video Beoordelen (of verplaats onder Advertenties als tab "Goedkeuren")
+  - Layouts
+  - Yodeck Debug
+  - Alle debug/health routes in menu
+
+3) MOVE ESSENTIAL ACTIONS INTO "SCHERMEN"
+- Op scherm detail pagina moet ik ALTIJD kunnen:
+  - zien: basiscontent status (OK / ontbreekt)
+  - zien: ads status (aantal items, welke ads)
+  - knop: "Synchroniseren"
+  - knop: "Plaats Ad"
+- Verwijder alle niet-noodzakelijke info van deze pagina (zoals interne IDs/logs), behalve achter een collapsible "Geavanceerd" (alleen admin mode).
+
+4) FIX STATUS LABELS: "NIET GEKOPPELD"
+- In Scherm > Content lijst:
+  - "Niet gekoppeld" moet betekenen: deze ad staat wel in DB als approved maar is nog niet toegevoegd aan de juiste Yodeck playlist voor dit scherm.
+  - Zodra autopilot deze media in de ADS playlist heeft staan, label moet automatisch "Gekoppeld" / "Draait" worden.
+- Implementatie:
+  - Gebruik bestaande content-status endpoint of voeg een endpoint toe dat per locatie:
+    - desiredAds (DB selectie)
+    - currentAds (yodeck playlist items)
+    - diff => status per ad
+  - UI toont status op basis van diff.
+
+5) KEEP ADVANCED TOOLS ACCESSIBLE BUT HIDDEN
+- Maak een verborgen route "/admin" of "/advanced" waar admin tooling staat.
+- In operator mode: geen link in menu.
+- In admin mode: menu item "Geavanceerd" dat naar /advanced gaat.
+
+6) DO NOT BREAK BACKEND
+- Alleen UI/Navigation en status mapping aanpassen.
+- Backend autopilot blijft werken; als er endpoints nodig zijn voor status mapping, voeg ze klein en gericht toe.
+
+DELIVERABLES:
+- Update sidebar component + routes
+- Add UI_MODE setting (env or config table)
+- Update Screen detail UI: minimal + 1 collapsible advanced panel (admin only)
+- Implement "Niet gekoppeld" status based on desired vs actual playlist items
+
+LET OP:
+Hou het super clean. Geen extra knoppen toevoegen. Minder is beter.

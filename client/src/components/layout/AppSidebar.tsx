@@ -41,9 +41,11 @@ import {
   PlaySquare,
   LayoutGrid,
   Bug,
+  Wrench,
 } from "lucide-react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/hooks/use-auth";
+import { useUIMode } from "@/hooks/use-ui-mode";
 import { PERMISSIONS } from "@shared/models/auth";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
@@ -82,6 +84,7 @@ const onboardingSubItems = [
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, isAuthenticated, isLoading, logout, hasPermission, hasAnyPermission } = useAuth();
+  const { isAdmin } = useUIMode();
   const [onboardingOpen, setOnboardingOpen] = useState(
     location.startsWith("/onboarding") || location === "/leads" || location === "/wachtlijst"
   );
@@ -294,13 +297,13 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Administrator Section */}
-        {canViewSettings && (
+        {/* Administrator Section - Only visible in admin mode */}
+        {canViewSettings && isAdmin && (
           <>
             <SidebarSeparator className="my-3 opacity-30" />
             <SidebarGroup className="py-1">
               <SidebarGroupLabel className="text-[10px] uppercase tracking-wider text-sidebar-foreground/40 px-3 mb-1">
-                Admin
+                Geavanceerd
               </SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu className="gap-0.5">

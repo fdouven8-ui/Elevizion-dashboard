@@ -11712,6 +11712,18 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     });
   });
 
+  // Public UI config endpoint - controls operator/admin mode
+  // Default: "operator" for clean, minimal interface
+  app.get("/api/public/ui-config", async (_req, res) => {
+    try {
+      const setting = await storage.getSystemSetting("ui.mode");
+      const uiMode = setting?.value === "admin" ? "admin" : "operator";
+      res.json({ uiMode });
+    } catch {
+      res.json({ uiMode: "operator" });
+    }
+  });
+
   app.get("/api/public/company-profile", async (req, res) => {
     try {
       const profile = await storage.getCompanyProfile();
