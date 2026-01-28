@@ -396,12 +396,16 @@ export const locations = pgTable("locations", {
   currentAdLoadSeconds: integer("current_ad_load_seconds").default(0), // Current ad load in seconds
   loopDurationSeconds: integer("loop_duration_seconds").default(300), // Total loop duration (5 min default)
   exclusivityMode: text("exclusivity_mode").notNull().default("STRICT"), // STRICT = max 1 per competitorGroup, RELAXED = max 2
-  yodeckPlaylistId: text("yodeck_playlist_id"), // Ad playlist for this location
-  // Layout configuration for baseline + ads separation
-  yodeckLayoutId: text("yodeck_layout_id"), // Yodeck layout ID for this screen
-  yodeckBaselinePlaylistId: text("yodeck_baseline_playlist_id"), // Baseline playlist (news/weather/placeholder)
-  layoutMode: text("layout_mode").notNull().default("FALLBACK_SCHEDULE"), // LAYOUT | FALLBACK_SCHEDULE
-  // Tag-based playlist configuration
+  yodeckPlaylistId: text("yodeck_playlist_id"), // DEPRECATED: Ad playlist for this location
+  // Layout configuration for baseline + ads separation (DEPRECATED - use combined playlist)
+  yodeckLayoutId: text("yodeck_layout_id"), // DEPRECATED: Yodeck layout ID for this screen
+  yodeckBaselinePlaylistId: text("yodeck_baseline_playlist_id"), // DEPRECATED: Baseline playlist (news/weather/placeholder)
+  layoutMode: text("layout_mode").notNull().default("FALLBACK_SCHEDULE"), // DEPRECATED: LAYOUT | FALLBACK_SCHEDULE
+  // NEW: Combined playlist architecture - single playlist per location with base + ads
+  combinedPlaylistId: text("combined_playlist_id"), // Yodeck playlist ID: "Elevizion | Loop | {LocationName}"
+  combinedPlaylistVerifiedAt: timestamp("combined_playlist_verified_at"), // Last sync time
+  combinedPlaylistItemCount: integer("combined_playlist_item_count").default(0), // Items in playlist
+  // Tag-based playlist configuration (DEPRECATED)
   playlistMode: text("playlist_mode").notNull().default("TAG_BASED"), // TAG_BASED | CLASSIC
   playlistTag: text("playlist_tag"), // e.g., "elevizion:location:{locationId}"
   yodeckPlaylistVerifiedAt: timestamp("yodeck_playlist_verified_at"), // Last verification time
