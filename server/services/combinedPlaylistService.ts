@@ -62,6 +62,9 @@ const BASE_ITEMS_BETWEEN_ADS = 2;
 // ============================================================================
 
 const CONFIG_KEY_BASE_PLAYLIST = "autopilot.basePlaylistId";
+const CONFIG_KEY_BASE_TEMPLATE = "autopilot.baseTemplatePlaylistId";
+const BASE_TEMPLATE_NAME = "Elevizion - Basis";
+const BASELINE_PLAYLIST_PREFIX = "Baseline | ";
 
 /**
  * Get the configured base playlist ID from autopilot config
@@ -76,6 +79,57 @@ export async function getBasePlaylistId(): Promise<string | null> {
   // Then check database
   const [setting] = await db.select().from(systemSettings).where(eq(systemSettings.key, CONFIG_KEY_BASE_PLAYLIST));
   return setting?.value || null;
+}
+
+/**
+ * Get the configured base TEMPLATE playlist ID (for copying items to per-location baselines)
+ * If not set, automatically searches for "Elevizion - Basis" in Yodeck and caches it
+ */
+export async function getBaseTemplatePlaylistId(): Promise<string | null> {
+  // Check database first
+  const [setting] = await db.select().from(systemSettings).where(eq(systemSettings.key, CONFIG_KEY_BASE_TEMPLATE));
+  if (setting?.value) {
+    return setting.value;
+  }
+  
+  // Auto-discover by searching for template playlist by name
+  console.log(`[CombinedPlaylist] No template ID configured, searching for "${BASE_TEMPLATE_NAME}"...`);
+  const matches = await searchPlaylistsByName(BASE_TEMPLATE_NAME);
+  
+  if (matches.length > 0) {
+    // Use the one with lowest ID (canonical)
+    const sorted = [...matches].sort((a, b) => a.id - b.id);
+    const templateId = String(sorted[0].id);
+    
+    // Cache in database for next time
+    await setBaseTemplatePlaylistId(templateId);
+    console.log(`[CombinedPlaylist] Auto-discovered and cached template ID: ${templateId}`);
+    return templateId;
+  }
+  
+  console.log(`[CombinedPlaylist] Template playlist "${BASE_TEMPLATE_NAME}" not found in Yodeck`);
+  return null;
+}
+
+/**
+ * Set the base template playlist ID in config
+ */
+export async function setBaseTemplatePlaylistId(playlistId: string): Promise<void> {
+  const existing = await db.select().from(systemSettings).where(eq(systemSettings.key, CONFIG_KEY_BASE_TEMPLATE));
+  
+  if (existing.length > 0) {
+    await db.update(systemSettings)
+      .set({ value: playlistId, updatedAt: new Date() })
+      .where(eq(systemSettings.key, CONFIG_KEY_BASE_TEMPLATE));
+  } else {
+    await db.insert(systemSettings).values({
+      key: CONFIG_KEY_BASE_TEMPLATE,
+      value: playlistId,
+      description: "Base TEMPLATE playlist ID - items are copied to per-location baseline playlists",
+      category: "autopilot",
+    });
+  }
+  console.log(`[CombinedPlaylist] Base template playlist ID set to: ${playlistId}`);
 }
 
 /**
@@ -733,5 +787,415 @@ export async function getLocationContentStatus(locationId: string): Promise<{
     lastSyncAt: location.combinedPlaylistVerifiedAt,
     needsRepair,
     error: location.lastYodeckVerifyError || undefined,
+  };
+}
+
+// ============================================================================
+// BASELINE FROM TEMPLATE - Core feature for syncing template items to per-location baselines
+// ============================================================================
+
+export interface BaselineSyncResult {
+  ok: boolean;
+  locationId: string;
+  locationName: string;
+  baselinePlaylistId: string | null;
+  baselinePlaylistName: string;
+  templatePlaylistId: string | null;
+  templateItemCount: number;
+  baselineItemCount: number;
+  itemsSynced: boolean;
+  logs: string[];
+  error?: string;
+}
+
+/**
+ * Get the canonical baseline playlist name for a location
+ */
+export function getBaselinePlaylistName(locationName: string): string {
+  return `${BASELINE_PLAYLIST_PREFIX}${locationName}`.trim();
+}
+
+/**
+ * Ensure a location's baseline playlist exists and is filled from the template
+ * 
+ * This is the KEY function that:
+ * 1. Finds or creates the per-location baseline playlist (e.g. "Baseline | Bouwservice Douven")
+ * 2. Checks if baseline is empty
+ * 3. If empty, copies ALL items from the template playlist ("Elevizion - Basis")
+ * 
+ * IDEMPOTENT: Can be called multiple times safely
+ */
+export async function ensureBaselineFromTemplate(locationId: string): Promise<BaselineSyncResult> {
+  const logs: string[] = [];
+  logs.push(`[BaselineSync] ═══════════════════════════════════════`);
+  logs.push(`[BaselineSync] Baseline-from-Template voor locatie ${locationId}`);
+  
+  // Step 0: Get location data
+  const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+  
+  if (!location) {
+    return {
+      ok: false,
+      locationId,
+      locationName: "Onbekend",
+      baselinePlaylistId: null,
+      baselinePlaylistName: "",
+      templatePlaylistId: null,
+      templateItemCount: 0,
+      baselineItemCount: 0,
+      itemsSynced: false,
+      logs,
+      error: "LOCATION_NOT_FOUND",
+    };
+  }
+  
+  logs.push(`[BaselineSync] Locatie: ${location.name}`);
+  const baselinePlaylistName = getBaselinePlaylistName(location.name);
+  logs.push(`[BaselineSync] Baseline playlist naam: "${baselinePlaylistName}"`);
+  
+  // Step 1: Get the template playlist ID
+  logs.push(`[BaselineSync] ─── STAP 1: Template ophalen ───`);
+  const templateId = await getBaseTemplatePlaylistId();
+  
+  if (!templateId) {
+    logs.push(`[BaselineSync] ❌ Geen template playlist gevonden`);
+    logs.push(`[BaselineSync] Maak playlist "Elevizion - Basis" in Yodeck of configureer via admin`);
+    return {
+      ok: false,
+      locationId,
+      locationName: location.name,
+      baselinePlaylistId: location.yodeckBaselinePlaylistId || null,
+      baselinePlaylistName,
+      templatePlaylistId: null,
+      templateItemCount: 0,
+      baselineItemCount: 0,
+      itemsSynced: false,
+      logs,
+      error: "TEMPLATE_NOT_FOUND",
+    };
+  }
+  logs.push(`[BaselineSync] ✓ Template playlist ID: ${templateId}`);
+  
+  // Step 2: Fetch template items
+  logs.push(`[BaselineSync] ─── STAP 2: Template items ophalen ───`);
+  const templateResult = await getPlaylistById(templateId);
+  
+  if (!templateResult.ok || !templateResult.playlist) {
+    logs.push(`[BaselineSync] ❌ Kon template playlist niet ophalen: ${templateResult.error}`);
+    return {
+      ok: false,
+      locationId,
+      locationName: location.name,
+      baselinePlaylistId: location.yodeckBaselinePlaylistId || null,
+      baselinePlaylistName,
+      templatePlaylistId: templateId,
+      templateItemCount: 0,
+      baselineItemCount: 0,
+      itemsSynced: false,
+      logs,
+      error: "TEMPLATE_FETCH_FAILED",
+    };
+  }
+  
+  const templateItems = templateResult.playlist.items || [];
+  logs.push(`[BaselineSync] ✓ Template heeft ${templateItems.length} items`);
+  
+  // Step 3: Find or create baseline playlist for this location
+  logs.push(`[BaselineSync] ─── STAP 3: Baseline playlist zoeken/maken ───`);
+  let baselinePlaylistId = location.yodeckBaselinePlaylistId;
+  let baselineCreated = false;
+  
+  if (!baselinePlaylistId) {
+    // Search for existing baseline playlist by name
+    const existingBaselines = await searchPlaylistsByName(baselinePlaylistName);
+    
+    if (existingBaselines.length > 0) {
+      // Use canonical (lowest ID)
+      const sorted = [...existingBaselines].sort((a, b) => a.id - b.id);
+      baselinePlaylistId = String(sorted[0].id);
+      logs.push(`[BaselineSync] ✓ Bestaande baseline gevonden: ID ${baselinePlaylistId}`);
+      
+      if (sorted.length > 1) {
+        logs.push(`[BaselineSync] ⚠️ ${sorted.length - 1} duplicate baselines genegeerd`);
+      }
+    } else {
+      // Create new baseline playlist
+      logs.push(`[BaselineSync] Creating baseline playlist: "${baselinePlaylistName}"`);
+      const createResult = await createClassicPlaylist(baselinePlaylistName);
+      
+      if (!createResult.ok || !createResult.playlistId) {
+        logs.push(`[BaselineSync] ❌ Baseline aanmaken mislukt: ${createResult.error}`);
+        return {
+          ok: false,
+          locationId,
+          locationName: location.name,
+          baselinePlaylistId: null,
+          baselinePlaylistName,
+          templatePlaylistId: templateId,
+          templateItemCount: templateItems.length,
+          baselineItemCount: 0,
+          itemsSynced: false,
+          logs,
+          error: "BASELINE_CREATE_FAILED",
+        };
+      }
+      
+      baselinePlaylistId = String(createResult.playlistId);
+      baselineCreated = true;
+      logs.push(`[BaselineSync] ✓ Baseline aangemaakt: ID ${baselinePlaylistId}`);
+    }
+    
+    // Store baseline ID in location record
+    await db.update(locations).set({
+      yodeckBaselinePlaylistId: baselinePlaylistId,
+    }).where(eq(locations.id, locationId));
+    logs.push(`[BaselineSync] ✓ Baseline ID opgeslagen in DB`);
+  } else {
+    logs.push(`[BaselineSync] ✓ Baseline playlist ID uit DB: ${baselinePlaylistId}`);
+  }
+  
+  // Step 4: Check current baseline items
+  logs.push(`[BaselineSync] ─── STAP 4: Baseline items controleren ───`);
+  const baselineResult = await getPlaylistById(baselinePlaylistId);
+  
+  if (!baselineResult.ok || !baselineResult.playlist) {
+    logs.push(`[BaselineSync] ⚠️ Baseline playlist niet gevonden in Yodeck (mogelijk verwijderd)`);
+    // Clear the stored ID and retry
+    await db.update(locations).set({
+      yodeckBaselinePlaylistId: null,
+    }).where(eq(locations.id, locationId));
+    
+    return {
+      ok: false,
+      locationId,
+      locationName: location.name,
+      baselinePlaylistId: null,
+      baselinePlaylistName,
+      templatePlaylistId: templateId,
+      templateItemCount: templateItems.length,
+      baselineItemCount: 0,
+      itemsSynced: false,
+      logs,
+      error: "BASELINE_NOT_FOUND_IN_YODECK",
+    };
+  }
+  
+  const currentBaselineItems = baselineResult.playlist.items || [];
+  logs.push(`[BaselineSync] Baseline heeft ${currentBaselineItems.length} items`);
+  
+  // Step 5: Sync items if baseline is empty (or newly created)
+  logs.push(`[BaselineSync] ─── STAP 5: Items synchroniseren ───`);
+  let itemsSynced = false;
+  
+  if (currentBaselineItems.length === 0 && templateItems.length > 0) {
+    logs.push(`[BaselineSync] Baseline is leeg - kopieer ${templateItems.length} items van template`);
+    
+    // Convert template items to the format needed for PATCH
+    const itemsPayload = templateItems.map((item, index) => ({
+      id: extractMediaId(item) || item.id,
+      type: extractMediaType(item) || "media",
+      priority: index + 1,
+      duration: item.duration || 10,
+    }));
+    
+    logs.push(`[BaselineSync] PATCH payload: ${itemsPayload.length} items`);
+    
+    const patchResult = await yodeckRequest<any>(`/playlists/${baselinePlaylistId}/`, "PATCH", { items: itemsPayload });
+    
+    if (!patchResult.ok) {
+      logs.push(`[BaselineSync] ❌ PATCH mislukt: ${patchResult.error?.substring(0, 200)}`);
+      return {
+        ok: false,
+        locationId,
+        locationName: location.name,
+        baselinePlaylistId,
+        baselinePlaylistName,
+        templatePlaylistId: templateId,
+        templateItemCount: templateItems.length,
+        baselineItemCount: currentBaselineItems.length,
+        itemsSynced: false,
+        logs,
+        error: "BASELINE_PATCH_FAILED",
+      };
+    }
+    
+    logs.push(`[BaselineSync] ✓ Items gekopieerd naar baseline`);
+    itemsSynced = true;
+  } else if (currentBaselineItems.length > 0) {
+    logs.push(`[BaselineSync] ✓ Baseline is al gevuld (${currentBaselineItems.length} items) - geen actie`);
+  } else if (templateItems.length === 0) {
+    logs.push(`[BaselineSync] ⚠️ Template is leeg - niets te kopiëren`);
+  }
+  
+  // Verify final state
+  const verifyResult = await getPlaylistById(baselinePlaylistId);
+  const finalItemCount = verifyResult.ok ? (verifyResult.playlist?.items?.length || 0) : currentBaselineItems.length;
+  
+  logs.push(`[BaselineSync] ═══════════════════════════════════════`);
+  logs.push(`[BaselineSync] ✓ Baseline sync voltooid`);
+  logs.push(`[BaselineSync]   Baseline: ${baselinePlaylistName} (${baselinePlaylistId})`);
+  logs.push(`[BaselineSync]   Template items: ${templateItems.length}`);
+  logs.push(`[BaselineSync]   Baseline items: ${finalItemCount}`);
+  logs.push(`[BaselineSync]   Items gesynct: ${itemsSynced ? "ja" : "nee"}`);
+  
+  return {
+    ok: true,
+    locationId,
+    locationName: location.name,
+    baselinePlaylistId,
+    baselinePlaylistName,
+    templatePlaylistId: templateId,
+    templateItemCount: templateItems.length,
+    baselineItemCount: finalItemCount,
+    itemsSynced,
+    logs,
+  };
+}
+
+/**
+ * Debug function: Get template vs baseline comparison for a location
+ */
+export async function getTemplateBaselineDiff(locationId: string): Promise<{
+  ok: boolean;
+  locationName: string;
+  templatePlaylistId: string | null;
+  templatePlaylistName: string | null;
+  templateItems: Array<{ id: number; type: string; duration: number }>;
+  baselinePlaylistId: string | null;
+  baselinePlaylistName: string | null;
+  baselineItems: Array<{ id: number; type: string; duration: number }>;
+  baselineSynced: boolean;
+  diff: {
+    missingInBaseline: number[];
+    extraInBaseline: number[];
+  };
+  error?: string;
+}> {
+  // Get location
+  const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
+  
+  if (!location) {
+    return {
+      ok: false,
+      locationName: "Onbekend",
+      templatePlaylistId: null,
+      templatePlaylistName: null,
+      templateItems: [],
+      baselinePlaylistId: null,
+      baselinePlaylistName: null,
+      baselineItems: [],
+      baselineSynced: false,
+      diff: { missingInBaseline: [], extraInBaseline: [] },
+      error: "LOCATION_NOT_FOUND",
+    };
+  }
+  
+  // Get template
+  const templateId = await getBaseTemplatePlaylistId();
+  let templateItems: Array<{ id: number; type: string; duration: number }> = [];
+  let templateName: string | null = null;
+  
+  if (templateId) {
+    const templateResult = await getPlaylistById(templateId);
+    if (templateResult.ok && templateResult.playlist) {
+      templateName = templateResult.playlist.name;
+      templateItems = (templateResult.playlist.items || []).map(item => ({
+        id: extractMediaId(item) || 0,
+        type: extractMediaType(item) || "media",
+        duration: item.duration || 10,
+      })).filter(i => i.id > 0);
+    }
+  }
+  
+  // Get baseline
+  let baselineItems: Array<{ id: number; type: string; duration: number }> = [];
+  let baselineName: string | null = null;
+  
+  if (location.yodeckBaselinePlaylistId) {
+    const baselineResult = await getPlaylistById(location.yodeckBaselinePlaylistId);
+    if (baselineResult.ok && baselineResult.playlist) {
+      baselineName = baselineResult.playlist.name;
+      baselineItems = (baselineResult.playlist.items || []).map(item => ({
+        id: extractMediaId(item) || 0,
+        type: extractMediaType(item) || "media",
+        duration: item.duration || 10,
+      })).filter(i => i.id > 0);
+    }
+  }
+  
+  // Calculate diff
+  const templateIds = new Set(templateItems.map(i => i.id));
+  const baselineIds = new Set(baselineItems.map(i => i.id));
+  
+  const missingInBaseline = [...templateIds].filter(id => !baselineIds.has(id));
+  const extraInBaseline = [...baselineIds].filter(id => !templateIds.has(id));
+  
+  const baselineSynced = missingInBaseline.length === 0 && templateItems.length > 0;
+  
+  return {
+    ok: true,
+    locationName: location.name,
+    templatePlaylistId: templateId,
+    templatePlaylistName: templateName,
+    templateItems,
+    baselinePlaylistId: location.yodeckBaselinePlaylistId || null,
+    baselinePlaylistName: baselineName,
+    baselineItems,
+    baselineSynced,
+    diff: {
+      missingInBaseline,
+      extraInBaseline,
+    },
+  };
+}
+
+/**
+ * Get full autopilot config status for admin dashboard
+ */
+export async function getAutopilotConfigStatus(): Promise<{
+  basePlaylistId: string | null;
+  baseTemplatePlaylistId: string | null;
+  baseTemplateName: string | null;
+  baseTemplateItemCount: number;
+  configuredViaDatabaseOrEnv: "database" | "env" | "auto-discovered" | "not_set";
+}> {
+  // Check base playlist (for combined mode)
+  const basePlaylistId = await getBasePlaylistId();
+  
+  // Check template playlist
+  const [templateSetting] = await db.select().from(systemSettings).where(eq(systemSettings.key, CONFIG_KEY_BASE_TEMPLATE));
+  const storedTemplateId = templateSetting?.value;
+  
+  // Get template info if we have an ID
+  let templateName: string | null = null;
+  let templateItemCount = 0;
+  let configSource: "database" | "env" | "auto-discovered" | "not_set" = "not_set";
+  
+  if (storedTemplateId) {
+    configSource = "database";
+    const templateResult = await getPlaylistById(storedTemplateId);
+    if (templateResult.ok && templateResult.playlist) {
+      templateName = templateResult.playlist.name;
+      templateItemCount = templateResult.playlist.items?.length || 0;
+    }
+  } else {
+    // Try auto-discovery (this will also cache the result)
+    const autoId = await getBaseTemplatePlaylistId();
+    if (autoId) {
+      configSource = "auto-discovered";
+      const templateResult = await getPlaylistById(autoId);
+      if (templateResult.ok && templateResult.playlist) {
+        templateName = templateResult.playlist.name;
+        templateItemCount = templateResult.playlist.items?.length || 0;
+      }
+    }
+  }
+  
+  return {
+    basePlaylistId,
+    baseTemplatePlaylistId: storedTemplateId || null,
+    baseTemplateName: templateName,
+    baseTemplateItemCount: templateItemCount,
+    configuredViaDatabaseOrEnv: configSource,
   };
 }

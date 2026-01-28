@@ -16689,5 +16689,133 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  // =========================================================================
+  // AUTOPILOT: BASELINE FROM TEMPLATE
+  // =========================================================================
+
+  /**
+   * GET /api/admin/autopilot/config
+   * Get full autopilot configuration including baseTemplatePlaylistId
+   */
+  app.get("/api/admin/autopilot/config", requireAdminAccess, async (req, res) => {
+    try {
+      const { getAutopilotConfigStatus } = await import("./services/combinedPlaylistService");
+      const config = await getAutopilotConfigStatus();
+      res.json({ ok: true, config });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/config
+   * Set autopilot configuration (baseTemplatePlaylistId)
+   */
+  app.post("/api/admin/autopilot/config", requireAdminAccess, async (req, res) => {
+    try {
+      const { baseTemplatePlaylistId } = req.body;
+      
+      if (!baseTemplatePlaylistId) {
+        return res.status(400).json({ ok: false, error: "baseTemplatePlaylistId required" });
+      }
+      
+      const { setBaseTemplatePlaylistId, getPlaylistById } = await import("./services/combinedPlaylistService");
+      const { getPlaylistById: fetchPlaylist } = await import("./services/yodeckPlaylistItemsService");
+      
+      // Validate the playlist exists
+      const validateResult = await fetchPlaylist(String(baseTemplatePlaylistId));
+      if (!validateResult.ok) {
+        return res.status(400).json({ ok: false, error: `Playlist ${baseTemplatePlaylistId} not found in Yodeck` });
+      }
+      
+      await setBaseTemplatePlaylistId(String(baseTemplatePlaylistId));
+      res.json({ 
+        ok: true, 
+        message: `Base template playlist ID set to ${baseTemplatePlaylistId}`,
+        playlistName: validateResult.playlist?.name,
+        itemCount: validateResult.playlist?.items?.length || 0,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/sync-baseline/:locationId
+   * Sync a location's baseline playlist from template (if empty)
+   */
+  app.post("/api/admin/autopilot/sync-baseline/:locationId", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { ensureBaselineFromTemplate } = await import("./services/combinedPlaylistService");
+      const result = await ensureBaselineFromTemplate(locationId);
+      
+      // Log to console for visibility
+      result.logs.forEach(log => console.log(log));
+      
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/yodeck/debug/template-baseline/:locationId
+   * Debug endpoint: compare template items vs baseline items for a location
+   */
+  app.get("/api/admin/yodeck/debug/template-baseline/:locationId", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.params;
+      const { getTemplateBaselineDiff } = await import("./services/combinedPlaylistService");
+      const diff = await getTemplateBaselineDiff(locationId);
+      res.json(diff);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/sync-all-baselines
+   * Sync all live locations' baselines from template
+   */
+  app.post("/api/admin/autopilot/sync-all-baselines", requireAdminAccess, async (req, res) => {
+    try {
+      const { ensureBaselineFromTemplate } = await import("./services/combinedPlaylistService");
+      
+      // Get all live locations
+      const liveLocations = await db.select({ id: locations.id, name: locations.name })
+        .from(locations)
+        .where(
+          sql`(${locations.status} = 'active' OR ${locations.readyForAds} = true)`
+        );
+      
+      const results: Array<{ locationId: string; locationName: string; ok: boolean; itemsSynced: boolean; baselineItemCount: number; error?: string }> = [];
+      
+      for (const loc of liveLocations) {
+        const result = await ensureBaselineFromTemplate(loc.id);
+        result.logs.forEach(log => console.log(log));
+        results.push({
+          locationId: loc.id,
+          locationName: loc.name,
+          ok: result.ok,
+          itemsSynced: result.itemsSynced,
+          baselineItemCount: result.baselineItemCount,
+          error: result.error,
+        });
+      }
+      
+      const syncedCount = results.filter(r => r.itemsSynced).length;
+      const okCount = results.filter(r => r.ok).length;
+      
+      res.json({
+        ok: true,
+        message: `Synced ${syncedCount} baselines, ${okCount}/${liveLocations.length} locations OK`,
+        results,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   return httpServer;
 }

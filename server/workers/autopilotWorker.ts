@@ -23,7 +23,8 @@ import { locations } from "@shared/schema";
 import { eq, or, isNull, sql } from "drizzle-orm";
 import { 
   ensureCombinedPlaylistForLocation, 
-  getLocationContentStatus 
+  getLocationContentStatus,
+  ensureBaselineFromTemplate
 } from "../services/combinedPlaylistService";
 
 const WORKER_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -88,6 +89,16 @@ export async function runAutopilotCheck(): Promise<{
     processingLocations.add(location.id);
     
     try {
+      // STEP 0: First ensure baseline playlist is filled from template
+      // This is the KEY fix - fill empty baselines from "Elevizion - Basis"
+      const baselineResult = await ensureBaselineFromTemplate(location.id);
+      if (baselineResult.itemsSynced) {
+        logs.push(`[AutopilotWorker] ✓ ${location.name} baseline synced (${baselineResult.baselineItemCount} items from template)`);
+      } else if (!baselineResult.ok) {
+        logs.push(`[AutopilotWorker] ⚠️ ${location.name} baseline sync issue: ${baselineResult.error}`);
+      }
+      
+      // STEP 1: Then ensure combined playlist with base items + ads
       const result = await ensureCombinedPlaylistForLocation(location.id);
       
       if (result.ok) {

@@ -1,0 +1,73 @@
+JE BENT REPLIT AI IN MIJN ELEVIZION DASHBOARD REPO.
+
+SITUATIE:
+- Ik heb in Yodeck al een template playlist gemaakt: "Elevizion - Basis" (Classic playlist) en daar staan vaste items in (nieuws RSS, weer app, etc).
+- In mijn app heeft elke locatie ook een eigen baseline playlist (bijv. "Baseline | Bouwservice Douven" met ID 30461645) maar die is leeg (0 items).
+- Ik wil dat autopilot dit AUTOMATISCH goed zet: elk scherm moet altijd die basis-items hebben + ads moeten automatisch toegevoegd/gewisseld worden.
+
+DOEL:
+1) Maak één centrale “BASIS TEMPLATE” playlist in Yodeck leidend (naam: "Elevizion - Basis").
+2) Voor ELKE live locatie:
+   - Zorg dat er een per-locatie baseline playlist bestaat (Baseline | <locatie>)
+   - Als die baseline playlist leeg is (of mismatch), kopieer de items uit "Elevizion - Basis" naar die per-locatie baseline playlist.
+3) Ads blijven automatisch beheerd (jullie huidige ADS playlist flow mag blijven), maar basis moet nooit leeg zijn.
+4) Alles idempotent: geen duplicates spammen, geen 70 playlist duplicates meer.
+
+CONCREET TE BOUWEN:
+
+A) CONFIG / INSTELLING
+- Voeg een autopilot config veld toe: baseTemplatePlaylistId (string/int).
+- Voeg admin endpoint toe:
+  POST /api/admin/autopilot/config { "baseTemplatePlaylistId": <id> }
+- Voeg een fallback: als baseTemplatePlaylistId niet gezet is, zoek in Yodeck playlists op exacte naam "Elevizion - Basis" en sla ID op.
+
+B) YODECK API: TEMPLATE ITEMS OPHALEN
+- Implementeer: getPlaylistItems(playlistId) via Yodeck v2.
+- Let op: playlist items kunnen "media" en "app" items zijn. Bewaar alle velden die nodig zijn om ze 1-op-1 terug te zetten (type, duration, priority/order en item identificatie).
+- Geen 404/HTML. Log status + content-type als het geen JSON is.
+
+C) BASELINE PLAYLIST VULLEN (DE BELANGRIJKSTE FIX)
+- Nieuwe functie: ensureBaselineFromTemplate(location)
+  1) Bepaal location.baselinePlaylistId (bestaat al).
+  2) Haal items op uit location baseline playlist.
+  3) Haal items op uit template playlist (Elevizion - Basis).
+  4) Als baseline leeg is => PATCH baseline playlist met EXACT de template items.
+  5) Als baseline niet leeg is => laat met rust (of optioneel: sync als hash anders is).
+- Zorg dat dit gebeurt in de Autopilot repair flow bij STAP 1 (BASE playlist).
+
+D) DUPLICATE PLAYLISTS STOPPEN
+- In ensurePlaylist() zit nu "WARNING: 70 duplicates found".
+- Fix dit door:
+  - Als er meerdere playlists met dezelfde naam zijn: kies 1 (laagste ID) en markeer de rest als “ignored” in DB zodat je niet steeds opnieuw detecteert en logt.
+  - Voeg ook in DB een UNIQUE mapping per locatie toe: baselinePlaylistId + adsPlaylistId moeten 1 vaste waarde zijn.
+  - Zorg dat autopilot nooit opnieuw playlists aanmaakt als IDs al bestaan.
+
+E) ADS TOEVOEGEN (LAAT BESTAANDE FLOW, MAAR FIX MEDIA LOOKUP)
+- Hou jullie huidige ADS playlist flow (die patch naar /playlists/{id} werkt).
+- Maar: FindMedia 404 probleem moet weg:
+  - Base URL moet https://app.yodeck.com/api/v2 zijn
+  - Zoek media via GET /media list (met paginatie) als yodeckMediaId ontbreekt
+  - Sla yodeckMediaId op bij upload zodat LinkAd ID-first kan werken
+
+F) STATUS UI / DEBUG
+- Update content-status endpoint zodat het toont:
+  - baseTemplatePlaylistId gezet? ja/nee
+  - baseline playlist itemCount
+  - template itemCount
+  - “baselineSynced”: true/false
+- Voeg debug endpoint toe:
+  GET /api/admin/yodeck/debug/template-baseline/:locationId
+  -> toont template items + baseline items + diff.
+
+ACCEPTANCE (MOET WERKEN):
+1) Ik zet 1x in Yodeck de playlist "Elevizion - Basis" met apps (nieuws/weer).
+2) Ik zet baseTemplatePlaylistId in config (of hij vindt hem op naam).
+3) Autopilot repair op locatie:
+   - baseline playlist wordt automatisch gevuld met template items als hij leeg is
+   - ads playlist blijft werken zoals nu
+4) Scherm speelt nooit “NO CONTENT TO PLAY” als er template bestaat + ads fallback bestaat.
+
+LEVER OP:
+- Code changes + duidelijke logs
+- Nieuwe endpoints
+- Bewijs in logs dat baseline playlist itemCount >0 wordt na repair.
