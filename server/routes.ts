@@ -17719,28 +17719,26 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * POST /api/admin/screens/:screenId/force-broadcast
-   * Broadcast Enforcer - Now uses canonical playlist architecture
-   * Redirects to canonical repair for single source of truth
+   * PLAYLIST-ONLY ARCHITECTURE: Push screen's playlist to Yodeck
    */
   app.post("/api/admin/screens/:screenId/force-broadcast", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.params;
-      const { repairBroadcast } = await import("./services/canonicalBroadcastService");
+      const { pushScreen } = await import("./services/yodeckBroadcast");
       
-      console.log(`[ForceBroadcast] Using canonical repair for screen ${screenId}`);
-      const result = await repairBroadcast(screenId);
+      console.log(`[ForceBroadcast] Pushing screen ${screenId}`);
+      const result = await pushScreen(screenId);
       
-      console.log(`[ForceBroadcast] Canonical result: ok=${result.ok}, verified=${result.verified}`);
+      console.log(`[ForceBroadcast] Result: ok=${result.ok}, verified=${result.verified}`);
       result.logs.forEach(log => console.log(`[ForceBroadcast] ${log}`));
       
-      // Map to legacy response format for backward compatibility
       res.json({
         ok: result.ok,
-        verificationOk: result.verified,
+        verified: result.verified,
         playlistId: result.playlistId,
-        itemCount: result.itemCount,
+        actualSource: result.actualSource,
         logs: result.logs,
-        message: result.ok ? "Canonical broadcast repair completed" : result.error,
+        message: result.ok ? "Screen pushed successfully" : result.error,
       });
     } catch (error: any) {
       console.error("[ForceBroadcast] Error:", error);
@@ -17750,13 +17748,12 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * POST /api/admin/autopilot/repair-all
-   * Repair all linked screens
+   * PLAYLIST-ONLY ARCHITECTURE: Push all linked screens
    */
   app.post("/api/admin/autopilot/repair-all", requireAdminAccess, async (req, res) => {
     try {
-      const { syncScreenCombinedPlaylist } = await import("./services/screenPlaylistService");
+      const { pushScreen } = await import("./services/yodeckBroadcast");
       
-      // Get all screens with Yodeck player linked
       const linkedScreens = await db.select({ id: screens.id, name: screens.name })
         .from(screens)
         .where(and(
@@ -17764,20 +17761,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           sql`${screens.yodeckPlayerId} IS NOT NULL`
         ));
       
-      console.log(`[RepairAll] Repairing ${linkedScreens.length} screens...`);
+      console.log(`[RepairAll] Pushing ${linkedScreens.length} screens...`);
       
       const results = [];
       for (const screen of linkedScreens) {
         console.log(`[RepairAll] Processing: ${screen.name}`);
-        const result = await syncScreenCombinedPlaylist(screen.id);
+        const result = await pushScreen(screen.id);
         results.push({
           screenId: screen.id,
           screenName: screen.name,
           ok: result.ok,
-          itemCount: result.itemCount,
-          baselineCount: result.baselineCount,
-          adsCount: result.adsCount,
-          error: result.errorReason,
+          verified: result.verified,
+          playlistId: result.playlistId,
+          error: result.error,
         });
       }
       
@@ -17801,15 +17797,15 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * POST /api/admin/screens/:screenId/canonical-repair
-   * Canonical Broadcast Repair - ensures screen plays location's canonical playlist
+   * PLAYLIST-ONLY ARCHITECTURE: Alias for force-broadcast
    */
   app.post("/api/admin/screens/:screenId/canonical-repair", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.params;
-      const { repairBroadcast } = await import("./services/canonicalBroadcastService");
+      const { pushScreen } = await import("./services/yodeckBroadcast");
       
-      console.log(`[CanonicalRepair] Starting repair for screen ${screenId}`);
-      const result = await repairBroadcast(screenId);
+      console.log(`[CanonicalRepair] Pushing screen ${screenId}`);
+      const result = await pushScreen(screenId);
       
       console.log(`[CanonicalRepair] Result: ok=${result.ok}, verified=${result.verified}`);
       result.logs.forEach(log => console.log(`[CanonicalRepair] ${log}`));
@@ -17822,19 +17818,17 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
-   * GET /api/admin/canonical-broadcast/config
-   * Get canonical broadcast configuration
+   * GET /api/admin/broadcast/config
+   * Get broadcast configuration (template playlist ID)
    */
-  app.get("/api/admin/canonical-broadcast/config", requireAdminAccess, async (req, res) => {
+  app.get("/api/admin/broadcast/config", requireAdminAccess, async (req, res) => {
     try {
-      const { getBaseTemplatePlaylistId } = await import("./services/canonicalBroadcastService");
-      const templateId = await getBaseTemplatePlaylistId();
-      
+      const templateId = process.env.YODECK_TEMPLATE_PLAYLIST_ID;
       res.json({
         ok: true,
-        baseTemplatePlaylistId: templateId,
+        templatePlaylistId: templateId || null,
         configured: !!templateId,
-        envVarName: "YODECK_BASE_TEMPLATE_PLAYLIST_ID",
+        envVarName: "YODECK_TEMPLATE_PLAYLIST_ID",
       });
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message });
@@ -17842,46 +17836,73 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
-   * POST /api/admin/canonical-broadcast/config
-   * Set canonical broadcast configuration
+   * GET /api/admin/screens/:screenId/now-playing
+   * Get current playback status for a screen
    */
-  app.post("/api/admin/canonical-broadcast/config", requireAdminAccess, async (req, res) => {
+  app.get("/api/admin/screens/:screenId/now-playing", requireAdminAccess, async (req, res) => {
     try {
-      const { baseTemplatePlaylistId } = req.body;
-      if (!baseTemplatePlaylistId) {
-        return res.status(400).json({ ok: false, error: "baseTemplatePlaylistId is required" });
+      const { screenId } = req.params;
+      const { getScreenNowPlaying } = await import("./services/yodeckBroadcast");
+      
+      const result = await getScreenNowPlaying(screenId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[NowPlaying] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/:screenId/add-media
+   * Add a media item to screen's playlist
+   */
+  app.post("/api/admin/screens/:screenId/add-media", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { mediaId } = req.body;
+      
+      if (!mediaId || typeof mediaId !== "number") {
+        return res.status(400).json({ ok: false, error: "mediaId (number) is required" });
       }
       
-      const { setBaseTemplatePlaylistId } = await import("./services/canonicalBroadcastService");
-      await setBaseTemplatePlaylistId(baseTemplatePlaylistId);
+      const { onApprovedVideoAssignedToScreen } = await import("./services/yodeckBroadcast");
+      const result = await onApprovedVideoAssignedToScreen(screenId, mediaId);
       
-      res.json({ ok: true, baseTemplatePlaylistId });
+      res.json(result);
     } catch (error: any) {
+      console.error("[AddMedia] Error:", error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });
 
   /**
-   * POST /api/admin/canonical-broadcast/run-worker
-   * Manually trigger canonical broadcast worker
+   * GET /api/admin/canonical-broadcast/config (LEGACY ALIAS)
+   * Get canonical broadcast configuration - redirects to new endpoint
+   */
+  app.get("/api/admin/canonical-broadcast/config", requireAdminAccess, async (req, res) => {
+    res.redirect(301, "/api/admin/broadcast/config");
+  });
+
+  /**
+   * POST /api/admin/canonical-broadcast/config (LEGACY - 410 Gone)
+   */
+  app.post("/api/admin/canonical-broadcast/config", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      ok: false, 
+      error: "LEGACY_CANONICAL_SYSTEM_DISABLED",
+      message: "Set YODECK_TEMPLATE_PLAYLIST_ID environment variable directly",
+    });
+  });
+
+  /**
+   * POST /api/admin/canonical-broadcast/run-worker (LEGACY - 410 Gone)
    */
   app.post("/api/admin/canonical-broadcast/run-worker", requireAdminAccess, async (req, res) => {
-    try {
-      const { runBroadcastWorker } = await import("./services/canonicalBroadcastService");
-      
-      console.log(`[CanonicalWorker] Manual trigger...`);
-      const result = await runBroadcastWorker();
-      
-      console.log(`[CanonicalWorker] Done: ${result.screensOk}/${result.screensProcessed} OK`);
-      
-      res.json({
-        ok: result.screensFailed === 0,
-        ...result,
-      });
-    } catch (error: any) {
-      console.error("[CanonicalWorker] Error:", error);
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({ 
+      ok: false, 
+      error: "LEGACY_CANONICAL_SYSTEM_DISABLED",
+      message: "Use /api/admin/autopilot/repair-all instead",
+    });
   });
 
   return httpServer;
