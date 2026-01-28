@@ -493,14 +493,151 @@ export default function ScreenDetail() {
           </TabsTrigger>
         </TabsList>
 
-        {/* TAB: Overzicht - 3 secties: Advertentie-instellingen + Scherm (Yodeck) + Bedrijf (Moneybird) */}
+        {/* TAB: Overzicht - Status tiles + Instellingen */}
         <TabsContent value="overzicht" className="space-y-6 mt-6">
-          {/* Advertentie-instellingen card - full width at top */}
+          {/* Status overzicht - 3 status tiles */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Status: Scherm */}
+            <Card data-testid="status-scherm">
+              <CardContent className="py-4">
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-full ${screen.status === "online" ? "bg-green-100" : "bg-red-100"}`}>
+                    {screen.status === "online" ? (
+                      <Wifi className="h-5 w-5 text-green-600" />
+                    ) : (
+                      <WifiOff className="h-5 w-5 text-red-600" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">Scherm</p>
+                    <p className={`font-semibold ${screen.status === "online" ? "text-green-700" : "text-red-700"}`}>
+                      {screen.status === "online" ? "Online" : "Offline"}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Status: Basiscontent */}
+            <Card data-testid="status-basiscontent">
+              <CardContent className="py-4">
+                <div className="flex items-center gap-3">
+                  {contentStatus?.ok && !contentStatus?.needsRepair ? (
+                    <>
+                      <div className="p-2 rounded-full bg-green-100">
+                        <CheckCircle className="h-5 w-5 text-green-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Basiscontent</p>
+                        <p className="font-semibold text-green-700">OK</p>
+                      </div>
+                    </>
+                  ) : contentStatus?.needsRepair ? (
+                    <>
+                      <div className="p-2 rounded-full bg-amber-100">
+                        <AlertCircle className="h-5 w-5 text-amber-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Basiscontent</p>
+                        <p className="font-semibold text-amber-700">Wordt hersteld</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="p-2 rounded-full bg-gray-100">
+                        <AlertCircle className="h-5 w-5 text-gray-500" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Basiscontent</p>
+                        <p className="font-semibold text-gray-600">Onbekend</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Status: Advertenties */}
+            <Card data-testid="status-advertenties">
+              <CardContent className="py-4">
+                <div className="flex items-center gap-3">
+                  {activePlacements.length > 0 ? (
+                    <>
+                      <div className="p-2 rounded-full bg-green-100">
+                        <Target className="h-5 w-5 text-green-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Advertenties</p>
+                        <p className="font-semibold text-green-700">{activePlacements.length} actief</p>
+                      </div>
+                    </>
+                  ) : location?.readyForAds ? (
+                    <>
+                      <div className="p-2 rounded-full bg-blue-100">
+                        <Target className="h-5 w-5 text-blue-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Advertenties</p>
+                        <p className="font-semibold text-blue-700">Klaar voor ads</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="p-2 rounded-full bg-gray-100">
+                        <Target className="h-5 w-5 text-gray-500" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-muted-foreground">Advertenties</p>
+                        <p className="font-semibold text-gray-600">Niet actief</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Snel beheer - altijd zichtbaar */}
+          <Card data-testid="card-snel-beheer">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Settings className="h-5 w-5" />
+                Beheer
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-6">
+                {/* Locatie */}
+                <div>
+                  <p className="text-sm text-muted-foreground">Locatie</p>
+                  <p className="font-medium">{location?.city || location?.name || "—"}</p>
+                </div>
+                {/* Ads pauzeren */}
+                <div className="flex items-center gap-3">
+                  <Switch
+                    id="pause-ads-toggle"
+                    data-testid="switch-pause-ads"
+                    checked={location?.pausedByAdmin === true}
+                    onCheckedChange={(checked) => {
+                      locationUpdateMutation.mutate({ pausedByAdmin: checked });
+                    }}
+                    disabled={locationUpdateMutation.isPending}
+                  />
+                  <Label htmlFor="pause-ads-toggle" className="text-sm">
+                    {location?.pausedByAdmin ? "Ads gepauzeerd" : "Ads actief"}
+                  </Label>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Geavanceerde instellingen - alleen voor admin */}
+          {isAdmin && (
           <Card data-testid="card-advertentie-instellingen">
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
-                <Settings className="h-5 w-5" />
-                Advertentie-instellingen
+                <Wrench className="h-5 w-5" />
+                Geavanceerde instellingen
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -533,11 +670,11 @@ export default function ScreenDetail() {
 
                 {/* Advertenties pauzeren toggle */}
                 <div className="space-y-2">
-                  <Label htmlFor="pause-ads-toggle">Advertenties pauzeren</Label>
+                  <Label htmlFor="pause-ads-toggle-2">Advertenties pauzeren</Label>
                   <div className="flex items-center gap-3 py-1">
                     <Switch
-                      id="pause-ads-toggle"
-                      data-testid="switch-pause-ads"
+                      id="pause-ads-toggle-2"
+                      data-testid="switch-pause-ads-2"
                       checked={location?.pausedByAdmin === true}
                       onCheckedChange={(checked) => {
                         locationUpdateMutation.mutate({ pausedByAdmin: checked });
@@ -613,7 +750,10 @@ export default function ScreenDetail() {
               )}
             </CardContent>
           </Card>
+          )}
 
+          {/* Technische details - alleen voor admin */}
+          {isAdmin && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* SECTIE A: Scherm (Yodeck) */}
             <Card>
@@ -830,8 +970,10 @@ export default function ScreenDetail() {
               </CardContent>
             </Card>
           </div>
-          
-          {/* Quick stats row */}
+          )}
+
+          {/* Quick stats row - alleen voor admin */}
+          {isAdmin && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Card>
               <CardContent className="pt-4">
@@ -877,6 +1019,7 @@ export default function ScreenDetail() {
               </CardContent>
             </Card>
           </div>
+          )}
 
           {/* Geavanceerd panel - alleen zichtbaar in admin mode of via toggle */}
           {isAdmin && (

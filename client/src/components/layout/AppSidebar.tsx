@@ -68,6 +68,11 @@ const mainMenuItems: MenuItem[] = [
   { title: "Plaatsingen", url: "/placements", icon: Target, requiredPermissions: [PERMISSIONS.VIEW_PLACEMENTS] },
 ];
 
+const workflowMenuItems: MenuItem[] = [
+  { title: "Video Beoordelen", url: "/video-review", icon: PlaySquare, requiredPermissions: [PERMISSIONS.VIEW_PLACEMENTS] },
+  { title: "Wachtrij", url: "/publish-queue", icon: Send, requiredPermissions: [PERMISSIONS.VIEW_PLACEMENTS] },
+];
+
 const financieelSubItems = [
   { title: "Uitbetalingen", url: "/payouts", icon: Wallet },
   { title: "Contracten", url: "/contracts", icon: FileText },
@@ -259,6 +264,22 @@ export function AppSidebar() {
                 </SidebarMenuItem>
               ))}
 
+              {/* Workflow items: Video Beoordelen + Wachtrij - always visible */}
+              {workflowMenuItems.filter(canViewItem).map((item) => (
+                <SidebarMenuItem key={item.title}>
+                  <SidebarMenuButton 
+                    asChild 
+                    tooltip={item.title}
+                    className={`h-9 rounded-lg transition-colors ${isActive(item.url) ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
+                  >
+                    <Link href={item.url} data-testid={`nav-${item.url.replace(/\//g, '')}`}>
+                      <item.icon className="h-4 w-4" />
+                      <span className="text-[13px]">{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
+
               {/* Financieel with collapsible subitems */}
               {canViewFinance && (
                 <Collapsible open={financieelOpen} onOpenChange={setFinancieelOpen} className="group/collapsible">
@@ -297,13 +318,13 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Administrator Section - Only visible in admin mode */}
+        {/* Diagnostiek - Only visible in admin mode */}
         {canViewSettings && isAdmin && (
           <>
             <SidebarSeparator className="my-3 opacity-30" />
             <SidebarGroup className="py-1">
               <SidebarGroupLabel className="text-[10px] uppercase tracking-wider text-sidebar-foreground/40 px-3 mb-1">
-                Geavanceerd
+                Diagnostiek
               </SidebarGroupLabel>
               <SidebarGroupContent>
                 <SidebarMenu className="gap-0.5">
@@ -328,30 +349,6 @@ export function AppSidebar() {
                       <Link href="/system-health" data-testid="nav-system-health">
                         <Activity className="h-4 w-4" />
                         <span className="text-[13px]">Systeemcheck</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton 
-                      asChild 
-                      tooltip="Publicatie Wachtrij"
-                      className={`h-9 rounded-lg transition-colors ${isActive("/publish-queue") ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
-                    >
-                      <Link href="/publish-queue" data-testid="nav-publish-queue">
-                        <Send className="h-4 w-4" />
-                        <span className="text-[13px]">Publicatie Wachtrij</span>
-                      </Link>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                  <SidebarMenuItem>
-                    <SidebarMenuButton 
-                      asChild 
-                      tooltip="Video Beoordelen"
-                      className={`h-9 rounded-lg transition-colors ${isActive("/video-review") ? 'bg-sidebar-primary/15 text-sidebar-primary font-medium' : 'text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50'}`}
-                    >
-                      <Link href="/video-review" data-testid="nav-video-review">
-                        <PlaySquare className="h-4 w-4" />
-                        <span className="text-[13px]">Video Beoordelen</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>

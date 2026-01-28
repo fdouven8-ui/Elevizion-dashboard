@@ -351,36 +351,20 @@ export default function PublishQueue() {
   const getStatusBadge = (status: string, plan?: PlacementPlan) => {
     switch (status) {
       case "PROPOSED":
-        return <Badge variant="outline"><Clock className="h-3 w-3 mr-1" />Voorstel</Badge>;
-      case "SIMULATED_OK":
-        return <Badge className="bg-green-100 text-green-800"><CheckCircle2 className="h-3 w-3 mr-1" />Simulatie OK</Badge>;
       case "SIMULATED_FAIL":
-        return <Badge className="bg-red-100 text-red-800"><XCircle className="h-3 w-3 mr-1" />Simulatie Gefaald</Badge>;
+        return <Badge variant="outline" className="bg-gray-50"><Clock className="h-3 w-3 mr-1" />Wacht</Badge>;
+      case "SIMULATED_OK":
       case "APPROVED":
-        return <Badge className="bg-blue-100 text-blue-800"><CheckCircle2 className="h-3 w-3 mr-1" />Goedgekeurd</Badge>;
       case "PUBLISHING":
-        return <Badge className="bg-amber-100 text-amber-800"><Loader2 className="h-3 w-3 mr-1 animate-spin" />Bezig...</Badge>;
+        return <Badge className="bg-blue-600 text-white"><CheckCircle2 className="h-3 w-3 mr-1" />Gepland</Badge>;
       case "PUBLISHED":
-        return <Badge className="bg-green-100 text-green-800"><Send className="h-3 w-3 mr-1" />Gepubliceerd</Badge>;
+        return <Badge className="bg-green-600 text-white"><CheckCircle2 className="h-3 w-3 mr-1" />Live</Badge>;
       case "FAILED":
-        const retryCount = plan?.retryCount || 0;
-        return (
-          <div className="flex flex-col gap-1">
-            <Badge className="bg-red-100 text-red-800" title={plan?.lastErrorMessage}>
-              <XCircle className="h-3 w-3 mr-1" />
-              Mislukt{retryCount > 0 ? ` (${retryCount}x)` : ""}
-            </Badge>
-            {plan?.lastErrorCode && (
-              <span className="text-xs text-muted-foreground">{plan.lastErrorCode}</span>
-            )}
-          </div>
-        );
       case "CANCELED":
-        return <Badge className="bg-gray-100 text-gray-600"><XCircle className="h-3 w-3 mr-1" />Geannuleerd</Badge>;
       case "ROLLED_BACK":
-        return <Badge className="bg-orange-100 text-orange-800"><AlertTriangle className="h-3 w-3 mr-1" />Teruggedraaid</Badge>;
+        return <Badge className="bg-red-600 text-white"><XCircle className="h-3 w-3 mr-1" />Error</Badge>;
       default:
-        return <Badge variant="outline">{status}</Badge>;
+        return <Badge variant="outline"><Clock className="h-3 w-3 mr-1" />Wacht</Badge>;
     }
   };
 
@@ -407,7 +391,10 @@ export default function PublishQueue() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Publicatie Wachtrij</h1>
+        <div>
+          <h1 className="text-3xl font-bold">Wachtrij</h1>
+          <p className="text-muted-foreground">Goedgekeurde advertenties die wachten op plaatsing</p>
+        </div>
         <Button variant="outline" onClick={() => refetch()} data-testid="button-refresh-queue">
           <RefreshCw className="h-4 w-4 mr-2" />
           Vernieuwen

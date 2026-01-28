@@ -1,0 +1,53 @@
+Je werkt aan het Elevizion dashboard. De UI is onoverzichtelijk geworden doordat er te veel technische/diagnostische onderdelen zichtbaar zijn. Maak de app weer overzichtelijk, maar verwijder GEEN essentiële functionaliteit uit de workflow.
+
+HOOFDDOEL
+De kernflow moet volledig blijven werken en duidelijk vindbaar zijn:
+Video upload → Video beoordelen → Na goedkeuren naar Wachtrij → Automatisch koppelen aan 1+ schermen → Live publiceren → Altijd gecombineerd met basiscontent (weer/nieuws/filler/Elevizion).
+
+WAT MOET BLIJVEN (essentieel, zichtbaar)
+1) Video beoordelen (Advertentie Review)
+- Video preview
+- Goedkeuren / Afkeuren + reden
+- Na goedkeuren: status APPROVED en automatisch door naar de Wachtrij
+
+2) Wachtrij (plaatsings-queue)
+- Lijst van goedgekeurde ads die nog geplaatst moeten worden
+- Statussen: WACHT_OP_PLAATSING / GEPLAND / LIVE / ERROR
+- Bij elke ad: target (stad/regio), pakket (1/3/10), en aan welke schermen hij gekoppeld is (of wordt)
+
+3) Schermen-overzicht + scherm-detail
+- Per scherm: Online/Offline, stad/regio, “ready for ads”, aantal actieve ads
+- In scherm-detail moet ik kunnen zien: basiscontent OK + ads OK + wat er nu draait (conceptueel, geen technische rommel)
+
+4) Automatische plaatsing/publicatie
+- Als een ad in wachtrij komt: automatisch geschikte schermen kiezen op basis van regio/stad + capaciteit
+- Daarna automatisch publiceren naar Yodeck (geen handmatige playlist-knoppen nodig voor de normale flow)
+- Basiscontent is verplicht en ads worden toegevoegd (niet vervangen). Playlists mogen nooit leeg zijn.
+- Als basiscontent ontbreekt: automatisch seeden/herstellen in de achtergrond.
+
+WAT MOET VERDWIJNEN UIT MIJN ZICHT (maar mag intern/admin blijven)
+Alles wat bedoeld is voor systeemchecks/diagnostics/debug moet NIET in het hoofdmenu of standaard UI staan, zoals:
+- System health / checks
+- Logs / debug pagina’s
+- Test tools
+- Technische integratie-details (ruwe Yodeck IDs, API responses, worker status)
+Dit mag alleen toegankelijk zijn via een verborgen route of admin-only “Diagnostiek” sectie, niet als standaard navigatie.
+
+UI/UX RICHTLIJN
+- Maak een “Werkmodus” navigatie: alleen werk-items zichtbaar die nodig zijn voor de flow.
+- Techniek/diagnostiek alleen voor admin en uit beeld.
+- Knoppen beperken tot acties die ik echt moet doen (review → approve/reject; eventueel “force re-publish” admin-only).
+- Overzicht boven details: duidelijke status badges (OK/Waarschuwing/Error) met korte uitleg.
+
+IMPLEMENTATIE
+- Pas routing + sidebar aan: verplaats technische pagina’s naar admin-only/hidden.
+- Zorg dat bestaande endpoints/flows blijven werken (review → queue → publish).
+- Voeg waar nodig een centrale Queue service toe die publish triggert na approve.
+- Scherm-detail moet de gecombineerde status tonen: Baseline aanwezig + Ads aanwezig + laatste publish tijd (zonder logs).
+
+EINDRESULTAAT
+Ik kan zonder technische rommel:
+- videos beoordelen,
+- ze automatisch in de wachtrij zien komen,
+- zien dat ze gekoppeld en gepubliceerd worden naar 1+ schermen,
+- en dat het scherm altijd basiscontent + ads samen draait.
