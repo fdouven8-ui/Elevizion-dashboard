@@ -74,6 +74,15 @@ The system integrates various advanced functionalities:
   - `forceRepairAndProof()` - Complete E2E cycle with 6-poll backoff (5s, 5s, 10s, 10s, 15s, 15s)
   - Returns complete diagnostics: proofStatus, pollAttempts, refreshMethodUsed, detectedNoContent flag
   - Endpoint: `POST /api/screens/:id/force-repair-proof`
+- **Broadcast Enforcer** (`screenPlaylistService.ts`): Deterministic playback control system:
+  - `enforceBroadcastForScreen(screenId)` - Forces Yodeck player to correct playlist via API
+  - Priority: combinedPlaylistId > actual > yodeckPlaylistId (aligned with getEffectivePlaybackPlaylistId)
+  - Fetches BEFORE state, forces via PATCH /screens/{id}/, verifies AFTER state
+  - Auto-updates Location DB: layoutMode=PLAYLIST, combinedPlaylistId, combinedPlaylistVerifiedAt
+  - verificationOk = sourceMatchesTarget && playlistItemCount > 0
+  - KnownGood media upload is optional (Yodeck API limitation)
+  - Endpoint: `POST /api/admin/screens/:id/force-broadcast`
+  - UI: "Forceer uitzending (fix)" button in ScreenDetail page
 
 ## External Dependencies
 
