@@ -263,6 +263,33 @@ export default function ScreenDetail() {
     },
   });
   
+  // Repair + Proof mutation (full cycle: repair, verify, screenshot)
+  const repairAndProofMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", `/api/screens/${screenId}/repair-and-proof`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.ok) {
+        toast({ 
+          title: "Repair + Proof succesvol", 
+          description: `Items: ${data.verification?.itemCount || 0}, Screenshot: ${data.screenshot?.ok ? "OK" : "niet beschikbaar"}` 
+        });
+      } else {
+        toast({ 
+          title: "Proof onvolledig", 
+          description: data.proof?.reason || "Onbekende fout",
+          variant: "destructive" 
+        });
+      }
+      refetchNowPlaying();
+      queryClient.invalidateQueries({ queryKey: ["screen-now-playing", screenId] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+  
   const currentContent = screenDetail?.currentContent || [];
   const displayName = getScreenDisplayName(screen, location);
 
@@ -790,6 +817,53 @@ export default function ScreenDetail() {
                           )}
                         </div>
                       </div>
+                      
+                      {/* Screenshot Thumbnail + Proof Status */}
+                      <div className="border rounded-lg p-3 space-y-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium">Visueel bewijs</p>
+                          {nowPlaying?.proofStatus && (
+                            <Badge 
+                              variant={nowPlaying.proofStatus.ok ? "default" : "secondary"}
+                              className={nowPlaying.proofStatus.ok ? "bg-green-600" : ""}
+                              data-testid="proof-badge"
+                            >
+                              {nowPlaying.proofStatus.ok ? "PROOF OK" : "PROOF ONVOLLEDIG"}
+                            </Badge>
+                          )}
+                        </div>
+                        
+                        {nowPlaying?.screenshot?.url ? (
+                          <div className="space-y-2">
+                            <img 
+                              src={nowPlaying.screenshot.url} 
+                              alt="Screenshot" 
+                              className="w-full max-h-48 object-contain rounded border bg-black"
+                              data-testid="screen-screenshot"
+                            />
+                            <div className="flex items-center justify-between text-xs text-muted-foreground">
+                              <span>
+                                {nowPlaying.screenshot.lastOkAt 
+                                  ? `Laatst: ${new Date(nowPlaying.screenshot.lastOkAt).toLocaleString('nl-NL')}`
+                                  : "Geen timestamp"}
+                              </span>
+                              <span>
+                                {nowPlaying.screenshot.byteSize 
+                                  ? `${Math.round((nowPlaying.screenshot.byteSize || 0) / 1024)}KB`
+                                  : ""}
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-center h-32 bg-muted/50 rounded border border-dashed">
+                            <span className="text-muted-foreground text-sm">Geen screenshot beschikbaar</span>
+                          </div>
+                        )}
+                        
+                        {nowPlaying?.proofStatus && !nowPlaying.proofStatus.ok && (
+                          <p className="text-xs text-amber-600">{nowPlaying.proofStatus.reason}</p>
+                        )}
+                      </div>
                     </>
                   )}
 
@@ -833,28 +907,50 @@ export default function ScreenDetail() {
                     </div>
                   )}
 
-                  {/* Repair Button */}
+                  {/* Repair Buttons */}
                   {isAdmin && nowPlaying?.deviceStatus?.status !== "UNLINKED" && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => repairScreenMutation.mutate()}
-                      disabled={repairScreenMutation.isPending}
-                      className="w-full"
-                      data-testid="btn-force-repair"
-                    >
-                      {repairScreenMutation.isPending ? (
-                        <>
-                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                          Bezig met repareren...
-                        </>
-                      ) : (
-                        <>
-                          <Zap className="h-4 w-4 mr-2" />
-                          Force repair
-                        </>
-                      )}
-                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => repairScreenMutation.mutate()}
+                        disabled={repairScreenMutation.isPending || repairAndProofMutation.isPending}
+                        className="flex-1"
+                        data-testid="btn-force-repair"
+                      >
+                        {repairScreenMutation.isPending ? (
+                          <>
+                            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                            Repareren...
+                          </>
+                        ) : (
+                          <>
+                            <Wrench className="h-4 w-4 mr-2" />
+                            Force repair
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => repairAndProofMutation.mutate()}
+                        disabled={repairScreenMutation.isPending || repairAndProofMutation.isPending}
+                        className="flex-1"
+                        data-testid="btn-repair-and-proof"
+                      >
+                        {repairAndProofMutation.isPending ? (
+                          <>
+                            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                            Bewijzen...
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="h-4 w-4 mr-2" />
+                            Repair + Proof
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   )}
                 </>
               )}

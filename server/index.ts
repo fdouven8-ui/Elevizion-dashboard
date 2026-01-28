@@ -390,6 +390,23 @@ app.use((req, res, next) => {
         }
       })();
       
+      // Log baseline playlist configuration status at startup
+      (async () => {
+        try {
+          const { getBaselinePlaylistId, getBaselinePlaylistStatus } = await import("./services/screenPlaylistService");
+          const baselinePlaylistId = await getBaselinePlaylistId();
+          
+          if (baselinePlaylistId) {
+            const status = await getBaselinePlaylistStatus();
+            console.log(`[BOOT][BaselineConfig] baselinePlaylistId=${baselinePlaylistId} configured=true items=${status.itemCount} name="${status.playlistName || 'unknown'}"`);
+          } else {
+            console.log(`[BOOT][BaselineConfig] baselinePlaylistId=null configured=false - Configure via Settings > Autopilot`);
+          }
+        } catch (err: any) {
+          console.log(`[BOOT][BaselineConfig] Error checking baseline config: ${err.message}`);
+        }
+      })();
+      
       // Start scheduled Yodeck sync (15 minute interval)
       // Run first sync after 30 seconds to allow server to stabilize
       setTimeout(() => {

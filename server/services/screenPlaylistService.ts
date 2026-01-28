@@ -906,6 +906,19 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   mismatch: boolean;
   mismatchLevel?: "error" | "warning" | "info";
   mismatchReason?: string;
+  screenshot?: {
+    url: string | null;
+    lastOkAt: string | null;
+    byteSize: number | null;
+    hash: string | null;
+  };
+  proofStatus?: {
+    ok: boolean;
+    isOnline: boolean;
+    hasContent: boolean;
+    hasScreenshot: boolean;
+    reason?: string;
+  };
   error?: string;
 }> {
   const deviceStatus = await getYodeckDeviceStatus(screenId);
@@ -938,6 +951,10 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     yodeckPlayerId: screens.yodeckPlayerId,
     screenId: screens.screenId,
     name: screens.name,
+    yodeckScreenshotUrl: screens.yodeckScreenshotUrl,
+    yodeckScreenshotLastOkAt: screens.yodeckScreenshotLastOkAt,
+    yodeckScreenshotByteSize: screens.yodeckScreenshotByteSize,
+    yodeckScreenshotHash: screens.yodeckScreenshotHash,
   }).from(screens).where(eq(screens.id, screenId));
   
   if (!screen?.yodeckPlayerId) {
@@ -1068,6 +1085,30 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     mismatchLevel = "warning";
   }
   
+  // Build screenshot info
+  const screenshot = {
+    url: screen.yodeckScreenshotUrl || null,
+    lastOkAt: screen.yodeckScreenshotLastOkAt?.toISOString() || null,
+    byteSize: screen.yodeckScreenshotByteSize || null,
+    hash: screen.yodeckScreenshotHash || null,
+  };
+  
+  // Build proof status
+  const proofIsOnline = deviceStatus.isOnline ?? false;
+  const proofHasContent = itemCount > 0;
+  const proofHasScreenshot = (screen.yodeckScreenshotByteSize || 0) > 5000; // >5KB suggests real content
+  
+  const proofOk = proofIsOnline && proofHasContent && proofHasScreenshot;
+  const proofStatus = {
+    ok: proofOk,
+    isOnline: proofIsOnline,
+    hasContent: proofHasContent,
+    hasScreenshot: proofHasScreenshot,
+    reason: !proofOk 
+      ? (!proofIsOnline ? "Device offline" : !proofHasContent ? "Playlist empty" : "Screenshot not available or too small")
+      : "All checks passed",
+  };
+  
   return {
     ok: verificationOk,
     deviceStatus,
@@ -1086,6 +1127,8 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     mismatch: mismatchLevel === "error" || mismatchLevel === "warning",
     mismatchLevel,
     mismatchReason,
+    screenshot,
+    proofStatus,
   };
 }
 

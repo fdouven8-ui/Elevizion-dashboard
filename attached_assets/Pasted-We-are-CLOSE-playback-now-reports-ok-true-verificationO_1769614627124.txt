@@ -1,0 +1,102 @@
+We are CLOSE: playback now reports ok:true + verificationOk:true and both screens have itemCount=4. However our observability is still lying (baselineConfigured=false, baselinePlaylistId=null, adsCount=4) and we still don’t reliably SEE proof on the physical screens/Yodeck (screenshots/lastSeen etc).
+
+I want you to fix this like a production-grade SaaS engineer: correct the baseline plumbing, correct baseline-vs-ads classification, and add a hard E2E “proof of playback” loop that confirms we actually have visuals.
+
+GOALS (must all be true):
+1) Baseline playlist is configured once (Yodeck playlist ID I created manually) and is the canonical baseline for ALL screens.
+2) Each screen uses its ACTIVE Yodeck assigned playlist (source_id from screen_content) as the real playlist to fill (never fill an unrelated legacy playlist).
+3) Autopilot fills each screen playlist with: baseline items (copied from baseline playlist) + matched ads (from placements/contracts/targeting).
+4) UI reporting is trustworthy:
+   - baselineConfigured true when baseline is set
+   - baselineCount and adsCount are correct (not “adsCount=itemCount” when baseline is unknown)
+   - if baseline is not configured, show “contentCount” and mark ads/baseline as unknown.
+5) We get VISUAL CONFIRMATION:
+   - pull and display the latest Yodeck screenshot URL per screen
+   - store screenshot hash/size/lastOkAt so we can see it changed after a repair
+   - add a “Force Screenshot Refresh” action + a “Proof” status: screenshot present AND playlist itemCount>0 AND device online.
+
+CONTEXT FROM LOGS:
+- now-playing returns baselinePlaylistId:null baselineConfigured:false baselineCountUnknown:true but itemCount=4 and verificationOk=true.
+- /api/screens shows playlistId 30498772 + 4 media items; /content-status now shows mode=PLAYLIST and needsRepair=false. Great.
+- We must finish baseline config + correct classification + ensure actual playback visuals.
+
+IMPLEMENTATION REQUIREMENTS
+
+A) Baseline settings: single source of truth
+- Add DB-backed settings key: AUTOPILOT_BASELINE_PLAYLIST_ID (string/number).
+- Ensure ALL codepaths read from the same place:
+  - getScreenNowPlaying()
+  - repairScreen()/repairAll
+  - baseline-status endpoint
+  - UI settings page
+- Add server-start log line:
+  [BaselineConfig] baselinePlaylistId=<id or null> configured=<true/false>
+
+B) Baseline media set + correct counting
+- Implement getBaselineMediaIds():
+  - If baselinePlaylistId configured:
+    - fetch playlist items from Yodeck
+    - build Set<number> baselineMediaIds (cache 5 minutes)
+  - If not configured: return null
+- In getScreenNowPlaying():
+  - Fetch ACTIVE screen playlistId from Yodeck (screen_content.source_id) and list its items (media ids).
+  - If baselineMediaIds available:
+      baselineCount = count(mediaId in baseline set)
+      adsCount = itemCount - baselineCount
+      baselineCountUnknown=false
+    Else:
+      baselineCount = null
+      adsCount = null
+      baselineCountUnknown=true
+      mismatchLevel="info"
+      mismatchReason="Baseline playlist niet geconfigureerd - telling onbekend"
+- DO NOT mark verification/mismatch as failure if itemCount>0 and device online. Only warn.
+
+C) Remove legacy confusion / correct endpoints
+- content-status (/api/admin/locations/:id/content-status) must:
+  - report per-screen ACTIVE playlistId (same as playback), not legacy location playlist fields.
+  - mode should be PLAYLIST when we use playlists; skip layout checks completely.
+  - needsRepair only if (device online AND itemCount==0) OR (push failed) OR (verificationOk==false).
+
+D) Autopilot “fillPlaylistWithContent” must actually ensure playback
+- For each screen:
+  1) Resolve activePlaylistId via getScreenActivePlaylistId()
+  2) Get baseline items from baselinePlaylistId (list of media items)
+  3) Determine ads to add:
+     - prefer placements/contracts when present and matching targeting
+     - in TEST_MODE if no placements: allow showing approved test ad only if explicitly enabled (keep safety).
+  4) Build final desired media list: baseline + ads (dedupe by mediaId, preserve baseline order, ads appended)
+  5) Write to active playlist in Yodeck (clear then add, or diff-update to avoid flicker)
+  6) Verify by re-fetching playlist items and ensure count>0
+  7) Save lastPushAt + lastPushResult in DB.
+
+E) VISUAL PROOF: screenshot ingestion + UI
+- On every sync cycle, fetch screenshotUrl for each screen (already available) AND also fetch the actual image bytes HEAD/GET:
+  - store screenshotByteSize, screenshotHash (sha256), yodeckScreenshotLastOkAt
+  - if fetch fails, store yodeckContentError or screenshot error separately
+- Add endpoint:
+  POST /api/screens/:id/refresh-screenshot
+  - triggers immediate screenshot fetch + stores hash/size/time
+- Update Screen detail “Wat draait nu?” panel:
+  - Show screenshot thumbnail and “last screenshot at”
+  - Show Proof badge:
+      PROOF_OK if (device online) AND (itemCount>0) AND (screenshotHash exists) AND (screenshot updated within last N minutes after last repair)
+  - Add button “Force Repair + Proof” that:
+      runs repairScreen
+      waits briefly (poll 3x with backoff) to see playlist count
+      refresh screenshot
+      returns a compact diagnostics object (playlistId, itemCount, baselineCount, adsCount, screenshotHashChanged).
+
+F) Fix categories / labeling
+- Baseline items should be labeled category="baseline" or "non_ad"
+- Only items tied to placements/contracts should be category="ad"
+- Do NOT rely on Yodeck’s category field for KPI; derive based on our baselineMediaIds/placement links.
+
+TEST/ACCEPTANCE (must be demonstrated in logs and UI)
+1) baseline-status endpoint returns configured baseline playlist id + name + itemCount
+2) now-playing shows baselineConfigured=true, baselinePlaylistId set, baselineCount>0 and adsCount correct
+3) content-status uses active playlistId (30498772 etc) and does NOT mention old 30461663
+4) “Force Repair + Proof” results in screenshotHash present and ideally changed after repair
+5) Both screens show a screenshot thumbnail in the UI and are visibly playing content.
+
+IMPORTANT: Do not remove features or hide pages. Only make observability truthful and the autoplay reliable. Do not introduce new DB columns without safe migrations and backwards compatibility (handle missing columns gracefully).

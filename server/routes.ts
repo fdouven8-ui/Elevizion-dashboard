@@ -16585,6 +16585,29 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   // =========================================================================
 
   /**
+   * GET /api/admin/autopilot/baseline-status
+   * Alias for /api/admin/settings/baseline-status - Get baseline playlist status
+   */
+  app.get("/api/admin/autopilot/baseline-status", requireAdminAccess, async (req, res) => {
+    try {
+      const { getBaselinePlaylistStatus } = await import("./services/screenPlaylistService");
+      const status = await getBaselinePlaylistStatus();
+      res.json(status);
+    } catch (error: any) {
+      console.error("[AutopilotBaselineStatus] Error:", error);
+      res.status(500).json({ 
+        configured: false, 
+        playlistId: null, 
+        playlistName: null,
+        itemCount: 0,
+        items: [],
+        lastCheckedAt: new Date().toISOString(),
+        error: error.message 
+      });
+    }
+  });
+
+  /**
    * GET /api/admin/autopilot/config
    * Get all Yodeck autopilot configuration
    */
@@ -16974,6 +16997,207 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.json(status);
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message, status: "OFFLINE" });
+    }
+  });
+
+  /**
+   * POST /api/screens/:screenId/refresh-screenshot
+   * Force refresh screenshot from Yodeck and store hash/size
+   */
+  app.post("/api/screens/:screenId/refresh-screenshot", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      
+      // Get screen with Yodeck player ID
+      const [screen] = await db.select({
+        id: screens.id,
+        yodeckPlayerId: screens.yodeckPlayerId,
+        yodeckScreenshotUrl: screens.yodeckScreenshotUrl,
+        yodeckScreenshotHash: screens.yodeckScreenshotHash,
+      }).from(screens).where(eq(screens.id, screenId));
+      
+      if (!screen || !screen.yodeckPlayerId) {
+        return res.status(404).json({ ok: false, error: "Screen not found or not linked to Yodeck" });
+      }
+      
+      // Fetch fresh screenshot URL from Yodeck
+      const { yodeckRequest } = await import("./services/yodeckLayoutService");
+      const yodeckScreen = await yodeckRequest<any>(`/screens/${screen.yodeckPlayerId}/`);
+      
+      if (!yodeckScreen.ok || !yodeckScreen.data) {
+        return res.json({ ok: false, error: "Could not fetch Yodeck screen data" });
+      }
+      
+      const screenshotUrl = yodeckScreen.data.screenshot_url;
+      
+      if (!screenshotUrl) {
+        return res.json({ ok: false, error: "No screenshot URL available from Yodeck" });
+      }
+      
+      // Fetch screenshot and compute hash
+      let byteSize = 0;
+      let newHash: string | null = null;
+      
+      try {
+        const response = await fetch(screenshotUrl);
+        if (response.ok) {
+          const buffer = await response.arrayBuffer();
+          byteSize = buffer.byteLength;
+          
+          // Compute simple hash
+          const crypto = await import("crypto");
+          newHash = crypto.createHash("sha256").update(Buffer.from(buffer)).digest("hex").substring(0, 16);
+        }
+      } catch (fetchErr: any) {
+        console.error("[RefreshScreenshot] Fetch error:", fetchErr.message);
+      }
+      
+      const previousHash = screen.yodeckScreenshotHash;
+      const hashChanged = previousHash !== newHash && newHash !== null;
+      
+      // Update DB
+      await db.update(screens).set({
+        yodeckScreenshotUrl: screenshotUrl,
+        yodeckScreenshotByteSize: byteSize,
+        yodeckScreenshotHash: newHash,
+        yodeckScreenshotLastOkAt: byteSize > 0 ? new Date() : null,
+        updatedAt: new Date(),
+      }).where(eq(screens.id, screenId));
+      
+      res.json({
+        ok: true,
+        screenshotUrl,
+        byteSize,
+        hash: newHash,
+        previousHash,
+        hashChanged,
+        lastOkAt: byteSize > 0 ? new Date().toISOString() : null,
+      });
+    } catch (error: any) {
+      console.error("[RefreshScreenshot] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/screens/:screenId/repair-and-proof
+   * Force repair screen + verify + refresh screenshot = complete proof cycle
+   */
+  app.post("/api/screens/:screenId/repair-and-proof", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const logs: string[] = [];
+      
+      logs.push(`[RepairAndProof] Starting repair cycle for screen ${screenId}`);
+      
+      // 1. Run repair (sync combined playlist)
+      const { syncScreenCombinedPlaylist, getScreenNowPlaying } = await import("./services/screenPlaylistService");
+      const repairResult = await syncScreenCombinedPlaylist(screenId);
+      logs.push(`[RepairAndProof] Repair completed: ok=${repairResult.ok}, items=${repairResult.itemCount}`);
+      
+      if (!repairResult.ok) {
+        return res.json({
+          ok: false,
+          phase: "repair",
+          error: repairResult.errorReason,
+          logs,
+        });
+      }
+      
+      // 2. Wait briefly for Yodeck to process (3 seconds)
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // 3. Verify content
+      const nowPlaying = await getScreenNowPlaying(screenId);
+      logs.push(`[RepairAndProof] Verification: ok=${nowPlaying.ok}, items=${nowPlaying.itemCount}`);
+      
+      // 4. Get screen for screenshot data
+      const [screen] = await db.select({
+        yodeckPlayerId: screens.yodeckPlayerId,
+        yodeckScreenshotUrl: screens.yodeckScreenshotUrl,
+        yodeckScreenshotHash: screens.yodeckScreenshotHash,
+      }).from(screens).where(eq(screens.id, screenId));
+      
+      // 5. Refresh screenshot
+      let screenshotResult = { ok: false as boolean, hash: null as string | null, hashChanged: false, byteSize: 0 };
+      
+      if (screen?.yodeckPlayerId) {
+        const { yodeckRequest } = await import("./services/yodeckLayoutService");
+        const yodeckScreen = await yodeckRequest<any>(`/screens/${screen.yodeckPlayerId}/`);
+        
+        if (yodeckScreen.ok && yodeckScreen.data?.screenshot_url) {
+          try {
+            const response = await fetch(yodeckScreen.data.screenshot_url);
+            if (response.ok) {
+              const buffer = await response.arrayBuffer();
+              const byteSize = buffer.byteLength;
+              const crypto = await import("crypto");
+              const newHash = crypto.createHash("sha256").update(Buffer.from(buffer)).digest("hex").substring(0, 16);
+              
+              const previousHash = screen.yodeckScreenshotHash;
+              screenshotResult = {
+                ok: true,
+                hash: newHash,
+                hashChanged: previousHash !== newHash && newHash !== null,
+                byteSize,
+              };
+              
+              // Update DB
+              await db.update(screens).set({
+                yodeckScreenshotUrl: yodeckScreen.data.screenshot_url,
+                yodeckScreenshotByteSize: byteSize,
+                yodeckScreenshotHash: newHash,
+                yodeckScreenshotLastOkAt: byteSize > 0 ? new Date() : null,
+                updatedAt: new Date(),
+              }).where(eq(screens.id, screenId));
+              
+              logs.push(`[RepairAndProof] Screenshot: hash=${newHash}, changed=${screenshotResult.hashChanged}, size=${byteSize}bytes`);
+            }
+          } catch (fetchErr: any) {
+            logs.push(`[RepairAndProof] Screenshot fetch error: ${fetchErr.message}`);
+          }
+        }
+      }
+      
+      // 6. Determine proof status
+      const isOnline = nowPlaying.deviceStatus?.isOnline ?? false;
+      const hasContent = nowPlaying.itemCount > 0;
+      const hasScreenshot = screenshotResult.ok && screenshotResult.byteSize > 5000;
+      
+      const proofOk = isOnline && hasContent && hasScreenshot;
+      
+      res.json({
+        ok: proofOk,
+        repair: {
+          ok: repairResult.ok,
+          playlistId: repairResult.activePlaylistId,
+          itemCount: repairResult.itemCount,
+          baselineCount: repairResult.baselineCount,
+          adsCount: repairResult.adsCount,
+        },
+        verification: {
+          ok: nowPlaying.ok,
+          playlistId: nowPlaying.playlistId,
+          itemCount: nowPlaying.itemCount,
+          baselineCount: nowPlaying.baselineCount,
+          adsCount: nowPlaying.adsCount,
+          verificationOk: nowPlaying.verificationOk,
+        },
+        screenshot: screenshotResult,
+        proof: {
+          ok: proofOk,
+          isOnline,
+          hasContent,
+          hasScreenshot,
+          reason: !proofOk 
+            ? (!isOnline ? "Device offline" : !hasContent ? "Playlist empty" : "Screenshot not available")
+            : "All checks passed",
+        },
+        logs,
+      });
+    } catch (error: any) {
+      console.error("[RepairAndProof] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
     }
   });
 
