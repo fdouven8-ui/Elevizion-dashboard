@@ -16015,12 +16015,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         else if (mapped.isOnline === false) onlineStatus = "offline";
         
         // Determine sourceId based on content mode
+        // CRITICAL: Use mapped.playlistId when mode is playlist (fixes sourceId=null bug)
         let sourceId: string | null = null;
         if (mapped.contentMode === "layout") {
           sourceId = mapped.layoutId;
         } else if (mapped.contentMode === "playlist") {
           sourceId = mapped.playlistId;
         }
+        
+        // Log raw vs derived for debugging (one-time diagnostic)
+        const rawSourceType = raw.screen_content?.source_type || null;
+        const rawSourceId = raw.screen_content?.source_id || null;
+        const rawSourceName = raw.screen_content?.source_name || null;
+        console.log(`[CanonicalParse] player=${mapped.screenId} raw={source_type=${rawSourceType}, source_id=${rawSourceId}, source_name="${rawSourceName}"} derived={sourceType=${mapped.contentMode}, sourceId=${sourceId}, playlistId=${mapped.playlistId}, layoutId=${mapped.layoutId}}`);
         
         canonicalScreens.push({
           // locationId: Elevizion's location UUID or YODECK-{id} if not linked
@@ -17236,6 +17243,200 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           hasContent: false,
           hasScreenshot: false,
           detectedNoContent: false,
+          reason: `ERROR: ${error.message}`,
+        },
+        error: error.message 
+      });
+    }
+  });
+
+  /**
+   * POST /api/screens/:screenId/push-to-screen
+   * PRODUCTION-GRADE Push To Screen - Ensures player has assigned playlist with content
+   * 
+   * NON-NEGOTIABLE OUTCOME:
+   * 1. Yodeck player MUST have screen_content.source_type="playlist"
+   * 2. Yodeck player MUST have screen_content.source_id = correct Elevizion loop playlist id
+   * 3. Player refreshes/syncs so it starts playing
+   * 4. Screenshot proof updates and shows actual content (not "NO CONTENT TO PLAY")
+   * 
+   * Returns complete diagnostics with verification
+   */
+  app.post("/api/screens/:screenId/push-to-screen", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      console.log(`[PushToScreen] ═══════════════════════════════════════════════`);
+      console.log(`[PushToScreen] Starting push for screen ${screenId}`);
+      console.log(`[PushToScreen] Timestamp: ${new Date().toISOString()}`);
+      
+      // Import required functions
+      const { 
+        getActiveSourceFromYodeck, 
+        ensureScreenPlaysPlaylist, 
+        syncScreenCombinedPlaylist,
+        refreshScreenPlayback,
+        fetchScreenshotProof 
+      } = await import("./services/screenPlaylistService");
+      
+      // Resolve screen to get yodeckPlayerId
+      const [screen] = await db.select({ 
+        id: screens.id, 
+        name: screens.name,
+        yodeckPlayerId: screens.yodeckPlayerId 
+      })
+      .from(screens)
+      .where(eq(screens.id, screenId));
+      
+      if (!screen) {
+        return res.status(404).json({ ok: false, error: "Screen not found" });
+      }
+      
+      if (!screen.yodeckPlayerId) {
+        return res.status(400).json({ ok: false, error: "Screen has no Yodeck player linked" });
+      }
+      
+      const playerId = screen.yodeckPlayerId;
+      console.log(`[PushToScreen] Screen "${screen.name}" -> Player ${playerId}`);
+      
+      const logs: string[] = [];
+      logs.push(`[PushToScreen] Screen: ${screen.name}, Player: ${playerId}`);
+      
+      // STEP 1: Get current source (BEFORE)
+      console.log(`[PushToScreen] STEP 1: Reading current source (BEFORE)...`);
+      const beforeSource = await getActiveSourceFromYodeck(playerId);
+      logs.push(`[PushToScreen] BEFORE: source_type=${beforeSource.data?.sourceType}, source_id=${beforeSource.data?.sourceId}`);
+      
+      // STEP 2: Ensure playlist is assigned
+      console.log(`[PushToScreen] STEP 2: Ensuring playlist is assigned...`);
+      const enforceResult = await ensureScreenPlaysPlaylist(playerId, screenId);
+      logs.push(...enforceResult.logs);
+      
+      if (!enforceResult.ok) {
+        console.log(`[PushToScreen] FAILED at enforce: ${enforceResult.error}`);
+        return res.json({
+          ok: false,
+          playerId,
+          beforeSource: beforeSource.data,
+          afterSource: null,
+          activePlaylistId: null,
+          playlistItemCount: 0,
+          baselineCount: 0,
+          adsCount: 0,
+          refreshMethodUsed: null,
+          screenshot: null,
+          proofStatus: { ok: false, reason: `ENFORCE_FAILED: ${enforceResult.error}` },
+          logs,
+        });
+      }
+      
+      const activePlaylistId = enforceResult.playlistId;
+      logs.push(`[PushToScreen] Playlist assigned: ${activePlaylistId}`);
+      
+      // STEP 3: Fill playlist with baseline + ads
+      console.log(`[PushToScreen] STEP 3: Filling playlist with content...`);
+      const syncResult = await syncScreenCombinedPlaylist(screenId);
+      logs.push(...syncResult.logs);
+      
+      // STEP 4: Refresh player to force sync
+      console.log(`[PushToScreen] STEP 4: Refreshing player...`);
+      const refreshResult = await refreshScreenPlayback(playerId, activePlaylistId);
+      logs.push(...refreshResult.logs);
+      
+      // STEP 5: Get current source (AFTER)
+      console.log(`[PushToScreen] STEP 5: Reading current source (AFTER)...`);
+      const afterSource = await getActiveSourceFromYodeck(playerId);
+      logs.push(`[PushToScreen] AFTER: source_type=${afterSource.data?.sourceType}, source_id=${afterSource.data?.sourceId}`);
+      
+      // STEP 6: Poll for screenshot proof (max 6 attempts over ~60s)
+      console.log(`[PushToScreen] STEP 6: Polling for screenshot proof...`);
+      const pollDelays = [5000, 5000, 10000, 10000, 15000, 15000];
+      let screenshotResult: Awaited<ReturnType<typeof fetchScreenshotProof>> | null = null;
+      let pollAttempts = 0;
+      
+      // Get screenshot URL from Yodeck API
+      const yodeckRequest = (await import("./services/yodeckLayoutService")).yodeckRequest;
+      const screenData = await yodeckRequest<any>(`/screens/${playerId}/`);
+      let screenshotUrl = screenData.data?.screenshot_path || null;
+      logs.push(`[PushToScreen] Screenshot URL: ${screenshotUrl || "NOT AVAILABLE"}`);
+      
+      for (let i = 0; i < pollDelays.length; i++) {
+        pollAttempts++;
+        logs.push(`[ProofPoll] Attempt ${pollAttempts}/${pollDelays.length}, waiting ${pollDelays[i]}ms...`);
+        await new Promise(r => setTimeout(r, pollDelays[i]));
+        
+        if (screenshotUrl) {
+          screenshotResult = await fetchScreenshotProof(screenId, screenshotUrl);
+          logs.push(`[ProofPoll] Result: ok=${screenshotResult?.ok}, size=${screenshotResult?.byteSize}, noContent=${screenshotResult?.detectedNoContent}`);
+          
+          // Stop early if we got a valid screenshot that doesn't show NO CONTENT
+          if (screenshotResult?.ok && screenshotResult?.byteSize && screenshotResult.byteSize > 3000 && !screenshotResult.detectedNoContent) {
+            logs.push(`[ProofPoll] ✓ Valid screenshot proof obtained!`);
+            break;
+          }
+        } else {
+          logs.push(`[ProofPoll] ✗ No screenshot URL available`);
+        }
+      }
+      
+      // Build proof status
+      const hasScreenshot = screenshotResult?.ok && screenshotResult?.byteSize ? screenshotResult.byteSize > 0 : false;
+      const detectedNoContent = screenshotResult?.detectedNoContent || false;
+      const sourceOk = afterSource.data?.sourceType === "playlist" && afterSource.data?.sourceId != null;
+      
+      const proofStatus = {
+        ok: sourceOk && hasScreenshot && !detectedNoContent,
+        sourceType: afterSource.data?.sourceType || null,
+        sourceId: afterSource.data?.sourceId || null,
+        hasScreenshot,
+        detectedNoContent,
+        reason: !sourceOk 
+          ? `SOURCE_NOT_PLAYLIST: source_type=${afterSource.data?.sourceType}, source_id=${afterSource.data?.sourceId}`
+          : detectedNoContent
+            ? "Yodeck shows NO CONTENT TO PLAY"
+            : !hasScreenshot
+              ? "No screenshot available"
+              : "All checks passed",
+      };
+      
+      console.log(`[PushToScreen] ═══════════════════════════════════════════════`);
+      console.log(`[PushToScreen] RESULT: ok=${proofStatus.ok}, reason=${proofStatus.reason}`);
+      console.log(`[PushToScreen] Items: ${syncResult.itemCount} (baseline: ${syncResult.baselineCount}, ads: ${syncResult.adsCount})`);
+      
+      res.json({
+        ok: proofStatus.ok,
+        playerId,
+        beforeSource: {
+          sourceType: beforeSource.data?.sourceType,
+          sourceId: beforeSource.data?.sourceId,
+          sourceName: beforeSource.data?.sourceName,
+        },
+        afterSource: {
+          sourceType: afterSource.data?.sourceType,
+          sourceId: afterSource.data?.sourceId,
+          sourceName: afterSource.data?.sourceName,
+        },
+        activePlaylistId,
+        playlistItemCount: syncResult.itemCount,
+        baselineCount: syncResult.baselineCount,
+        adsCount: syncResult.adsCount,
+        refreshMethodUsed: refreshResult.method,
+        pollAttempts,
+        screenshot: screenshotResult ? {
+          url: screenshotResult.url,
+          byteSize: screenshotResult.byteSize,
+          hash: screenshotResult.hash,
+          detectedNoContent: screenshotResult.detectedNoContent,
+          lastOkAt: screenshotResult.lastOkAt,
+        } : null,
+        proofStatus,
+        logs,
+      });
+    } catch (error: any) {
+      console.error("[PushToScreen] Error:", error);
+      res.status(500).json({ 
+        ok: false, 
+        proofStatus: {
+          ok: false,
           reason: `ERROR: ${error.message}`,
         },
         error: error.message 

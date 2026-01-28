@@ -326,27 +326,46 @@ export function mapYodeckScreen(raw: any): MappedScreen {
   let playlistName: string | null = null;
   
   if (contentMode === "playlist" || contentMode === "unknown") {
-    // Check nested screen_content FIRST
-    const playlistCheckOrder = [
-      "screen_content.default_playlist",
-      "screen_content.playlist",
-      "screen_content.item",
-      "screen_content.content",
-      // Top-level fallback
-      "default_playlist",
-      "playlist_id",
-      "playlist",
-      "assigned_playlist",
-    ];
+    // CRITICAL FIX: Check screen_content.source_id FIRST when source_type is playlist
+    // This is the actual Yodeck API field that contains the playlist ID
+    const sourceId = getNestedValue(raw, "screen_content.source_id");
+    const sourceType = getNestedValue(raw, "screen_content.source_type");
     
-    for (const path of playlistCheckOrder) {
-      const val = getNestedValue(raw, path);
-      if (val !== undefined && val !== null) {
-        playlistId = extractId(val);
-        if (playlistId) {
-          rawKeysUsed.playlistIdField = typeof val === "object" && val.id ? `${path}.id` : path;
-          playlistName = extractName(val);
-          break;
+    if (sourceType === "playlist" && sourceId !== undefined && sourceId !== null) {
+      playlistId = extractId(sourceId);
+      if (playlistId) {
+        rawKeysUsed.playlistIdField = "screen_content.source_id";
+        // Also get source_name if available
+        const sourceName = getNestedValue(raw, "screen_content.source_name");
+        if (sourceName && typeof sourceName === "string") {
+          playlistName = sourceName;
+        }
+      }
+    }
+    
+    // Fallback to other fields if source_id not found
+    if (!playlistId) {
+      const playlistCheckOrder = [
+        "screen_content.default_playlist",
+        "screen_content.playlist",
+        "screen_content.item",
+        "screen_content.content",
+        // Top-level fallback
+        "default_playlist",
+        "playlist_id",
+        "playlist",
+        "assigned_playlist",
+      ];
+      
+      for (const path of playlistCheckOrder) {
+        const val = getNestedValue(raw, path);
+        if (val !== undefined && val !== null) {
+          playlistId = extractId(val);
+          if (playlistId) {
+            rawKeysUsed.playlistIdField = typeof val === "object" && val.id ? `${path}.id` : path;
+            playlistName = extractName(val);
+            break;
+          }
         }
       }
     }
@@ -354,7 +373,8 @@ export function mapYodeckScreen(raw: any): MappedScreen {
     // Try to get playlist name from separate fields
     if (!playlistName) {
       playlistName = raw.default_playlist_name || raw.playlist_name || 
-        getNestedValue(raw, "screen_content.default_playlist_name") || null;
+        getNestedValue(raw, "screen_content.default_playlist_name") || 
+        getNestedValue(raw, "screen_content.source_name") || null;
     }
   }
 

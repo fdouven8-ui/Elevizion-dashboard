@@ -180,6 +180,64 @@ const DEFAULT_DURATION = 15;
 const CONFIG_KEY_BASELINE_PLAYLIST = "autopilot.baselinePlaylistId";
 
 // ============================================================================
+// ACTIVE SOURCE FROM YODECK (SINGLE SOURCE OF TRUTH)
+// ============================================================================
+
+export interface ActiveSourceInfo {
+  sourceType: string | null;
+  sourceId: string | null;
+  sourceName: string | null;
+  screenName: string | null;
+  rawScreenContent: any;
+}
+
+/**
+ * Get active source from Yodeck API - SINGLE SOURCE OF TRUTH
+ * 
+ * This function reads directly from Yodeck API (never DB) and correctly
+ * parses the screen_content fields to return the actual source_type and source_id.
+ * 
+ * CRITICAL: This is the authoritative source for what a screen is currently playing.
+ */
+export async function getActiveSourceFromYodeck(playerId: string): Promise<{ ok: boolean; data?: ActiveSourceInfo; error?: string }> {
+  console.log(`[ActiveSource] Fetching source from Yodeck for player ${playerId}`);
+  
+  const screenResult = await yodeckRequest<any>(`/screens/${playerId}/`);
+  
+  if (!screenResult.ok || !screenResult.data) {
+    console.log(`[ActiveSource] FAILED: ${screenResult.error}`);
+    return { ok: false, error: screenResult.error || "Failed to fetch screen" };
+  }
+  
+  const raw = screenResult.data;
+  const screenContent = raw.screen_content || {};
+  
+  // Extract from screen_content - these are the actual Yodeck API fields
+  const sourceType = screenContent.source_type || null;
+  const sourceId = screenContent.source_id ? String(screenContent.source_id) : null;
+  const sourceName = screenContent.source_name || null;
+  const screenName = raw.name || null;
+  
+  console.log(`[ActiveSource] player=${playerId} raw={source_type=${sourceType}, source_id=${sourceId}, source_name="${sourceName}"}`);
+  
+  // CRITICAL: If source_type is "playlist" but source_id is null, something is wrong
+  if (sourceType === "playlist" && !sourceId) {
+    console.log(`[ActiveSource] WARNING: player=${playerId} has source_type=playlist but source_id=null!`);
+  }
+  
+  return {
+    ok: true,
+    data: {
+      sourceType,
+      sourceId,
+      sourceName,
+      screenName,
+      rawScreenContent: screenContent,
+    },
+  };
+}
+
+// ============================================================================
 // BASELINE PLAYLIST FUNCTIONS
 // ============================================================================
 

@@ -47,7 +47,8 @@ import {
   Zap,
   Link2,
   ChevronDown,
-  Wrench
+  Wrench,
+  Upload
 } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -320,6 +321,38 @@ export default function ScreenDetail() {
     },
     onError: (error: any) => {
       toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+  
+  // PUSH TO SCREEN mutation - Production-grade playlist assignment + content push
+  const pushToScreenMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest("POST", `/api/screens/${screenId}/push-to-screen`);
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.proofStatus?.ok) {
+        toast({ 
+          title: "✓ PUSH OK - Content gepusht naar scherm", 
+          description: `source_id: ${data.afterSource?.sourceId}, ${data.playlistItemCount} items. Polls: ${data.pollAttempts}` 
+        });
+      } else if (data.afterSource?.sourceId) {
+        toast({ 
+          title: "✓ Playlist toegewezen", 
+          description: `source_id: ${data.afterSource.sourceId}. ${data.proofStatus?.reason || "Screenshot niet beschikbaar"}`,
+        });
+      } else {
+        toast({ 
+          title: "⚠️ Push onvolledig", 
+          description: data.proofStatus?.reason || "Controleer configuratie",
+          variant: "destructive" 
+        });
+      }
+      refetchNowPlaying();
+      queryClient.invalidateQueries({ queryKey: ["screen-now-playing", screenId] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout bij push", description: error.message, variant: "destructive" });
     },
   });
   
@@ -942,48 +975,72 @@ export default function ScreenDetail() {
 
                   {/* Repair Buttons */}
                   {isAdmin && nowPlaying?.deviceStatus?.status !== "UNLINKED" && (
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => repairScreenMutation.mutate()}
-                        disabled={repairScreenMutation.isPending || repairAndProofMutation.isPending}
-                        className="flex-1"
-                        data-testid="btn-force-repair"
-                      >
-                        {repairScreenMutation.isPending ? (
-                          <>
-                            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                            Repareren...
-                          </>
-                        ) : (
-                          <>
-                            <Wrench className="h-4 w-4 mr-2" />
-                            Force repair
-                          </>
-                        )}
-                      </Button>
-                      <Button
-                        variant="default"
-                        size="sm"
-                        onClick={() => forceRepairProofMutation.mutate()}
-                        disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending}
-                        className="flex-1"
-                        data-testid="btn-force-repair-proof"
-                      >
-                        {forceRepairProofMutation.isPending ? (
-                          <>
-                            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
-                            E2E Proof (~60s)...
-                          </>
-                        ) : (
-                          <>
-                            <Zap className="h-4 w-4 mr-2" />
-                            Force Repair + Proof
-                          </>
-                        )}
-                      </Button>
-                    </div>
+                    <>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => repairScreenMutation.mutate()}
+                          disabled={repairScreenMutation.isPending || repairAndProofMutation.isPending}
+                          className="flex-1"
+                          data-testid="btn-force-repair"
+                        >
+                          {repairScreenMutation.isPending ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                              Repareren...
+                            </>
+                          ) : (
+                            <>
+                              <Wrench className="h-4 w-4 mr-2" />
+                              Force repair
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          variant="default"
+                          size="sm"
+                          onClick={() => forceRepairProofMutation.mutate()}
+                          disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending || pushToScreenMutation.isPending}
+                          className="flex-1"
+                          data-testid="btn-force-repair-proof"
+                        >
+                          {forceRepairProofMutation.isPending ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                              E2E Proof (~60s)...
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="h-4 w-4 mr-2" />
+                              Force Repair + Proof
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                      <div className="mt-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => pushToScreenMutation.mutate()}
+                          disabled={repairScreenMutation.isPending || forceRepairProofMutation.isPending || pushToScreenMutation.isPending}
+                          className="w-full"
+                          data-testid="btn-push-to-screen"
+                        >
+                          {pushToScreenMutation.isPending ? (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                              Pushen (~60s)...
+                            </>
+                          ) : (
+                            <>
+                              <Upload className="h-4 w-4 mr-2" />
+                              Push to Screen
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </>
                   )}
                 </>
               )}

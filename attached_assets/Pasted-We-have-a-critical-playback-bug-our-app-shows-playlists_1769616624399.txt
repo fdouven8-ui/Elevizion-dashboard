@@ -1,0 +1,107 @@
+We have a critical playback bug: our app shows playlists with items, but Yodeck screenshot shows “NO CONTENT TO PLAY”. Logs prove the root cause:
+
+/api/admin/canonical-screens returns:
+sourceType="playlist" BUT sourceId=null for both players.
+That means the Yodeck player has NO active playlist assigned (no source_id), so it will play nothing.
+
+We must implement a production-grade “Push To Screen + Force Sync + Proof” pipeline that guarantees actual playback.
+
+NON-NEGOTIABLE OUTCOME:
+After running “Push to screen” for a screen:
+1) Yodeck player MUST have screen_content.source_type="playlist"
+2) Yodeck player MUST have screen_content.source_id = the correct Elevizion loop playlist id (30498772 for 591896, 30498756 for 591895, or computed)
+3) Player must refresh/sync so it starts playing
+4) Screenshot proof in our UI must update (cache-busted) and no longer show “NO CONTENT TO PLAY”
+5) We persist screenshot size/hash/timestamp so proof can be OK.
+
+IMPLEMENTATION DETAILS
+
+A) Fix canonical screen parsing + source id detection
+Our canonical-screens endpoint currently returns sourceId=null while other endpoints show sourceId=30498772.
+This is a bug. Update the Yodeck response parsing so that:
+- sourceId is correctly derived from the actual Yodeck screen_content fields.
+- Log both raw payload fields and the derived result for 1 deploy to confirm:
+  [CanonicalParse] player=591896 raw=<...> derived source_type=... source_id=...
+
+B) Create a single source-of-truth function: getActiveSourceFromYodeck(playerId)
+Implement:
+async function getActiveSourceFromYodeck(playerId) -> { sourceType, sourceId, sourceName }
+It must read from Yodeck API (not DB), and it must never return null sourceId when mode is playlist (unless Yodeck truly returns null).
+
+C) Implement ensureActivePlaylistAssigned(playerId)
+If sourceType != "playlist" OR sourceId is null:
+1) Determine the target playlist:
+   - Prefer existing playlist named: "Elevizion | Loop | YDK-<playerId>"
+   - If not found, create it.
+2) Update the player’s screen_content to:
+   - source_type="playlist"
+   - source_id=<targetPlaylistId>
+3) Re-fetch player screen_content after update and assert:
+   - source_id matches
+4) Log:
+   [PushToScreen] player=<id> set source_type playlist, source_id=<playlistId> ok=<true|false>
+
+D) Implement fillPlaylist(targetPlaylistId)
+We already have media items. Ensure playlist has at least baseline items:
+- For now, if baseline is not configured, still seed with the known working media IDs already detected (the 4 items).
+- Dedupe by mediaId so repeated pushes don’t duplicate.
+- Verify by fetching playlist items from Yodeck:
+  [PlaylistVerify] playlist=<id> itemCount=<n> mediaIds=<...>
+
+E) Force refresh/sync on the player (best effort, but MUST happen)
+Add attemptRefreshPlayer(playerId):
+- Try known Yodeck endpoints for "sync/restart/reboot/refresh content".
+- If no official endpoint available or fails, implement a deterministic fallback:
+  - Re-assign the same source_id again (toggle)
+  - Wait 3 seconds
+  - Re-fetch screenshot and content
+Log:
+  [PlayerRefresh] player=<id> method=<api|reassign> ok=<true|false> status=<code>
+
+F) Implement endpoint: POST /api/screens/:screenId/push-to-screen
+This is the single button/action the operator needs.
+Flow:
+1) Resolve yodeckPlayerId from screen
+2) ensureActivePlaylistAssigned(playerId)
+3) fillPlaylist(activePlaylistId)
+4) attemptRefreshPlayer(playerId)
+5) Poll proof up to 6 times over ~60s:
+   - Fetch screenshot bytes with cache buster ?t=<timestamp>
+   - Store byteSize + sha256 hash + lastOkAt if byteSize > 10KB
+   - If screenshot contains “NO CONTENT TO PLAY” (heuristic):
+       - mark proof FAIL reason="Yodeck shows NO CONTENT TO PLAY"
+   - Stop early if proof OK
+Return diagnostics JSON:
+{
+  playerId,
+  activePlaylistId,
+  playlistItemCount,
+  refreshMethodUsed,
+  screenshot: {url, byteSize, hash, lastOkAt, detectedNoContent},
+  proofStatus: {ok, reason}
+}
+
+G) UI changes (important)
+- When rendering screenshot in the dashboard, ALWAYS append ?t=Date.now() to avoid stale cached images.
+- Add a “Push to screen” button next to the screen status (operator-friendly).
+- Proof badge logic:
+  - OK if screenshotOk && !detectedNoContent
+  - FAIL if detectedNoContent or screenshot missing for >2 minutes
+
+H) Logging (must be explicit)
+Add structured logs:
+[CanonicalParse]
+[PushToScreen]
+[PlaylistVerify]
+[PlayerRefresh]
+[ProofPoll]
+So we can see exactly where it fails.
+
+ACCEPTANCE TEST (must pass on deploy)
+For player 591896:
+- Before push: canonical-screens sourceId=null
+- After push: canonical-screens sourceId=30498772 (or the chosen playlist)
+- Screenshot updates and does NOT show “NO CONTENT TO PLAY”
+- ProofStatus.ok becomes true
+
+Now implement all changes end-to-end.
