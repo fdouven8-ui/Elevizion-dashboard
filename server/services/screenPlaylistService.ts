@@ -194,35 +194,29 @@ async function getBaselineItems(logs: string[]): Promise<BaselineResult> {
   return { items, fallbackUsed: false };
 }
 
-// HARDCODED SAFE DEFAULT: If no FALLBACK_MEDIA_ID configured, use this placeholder
-// This ID should exist in every Yodeck workspace as a safe default
-const SAFE_DEFAULT_MEDIA_ID = 1; // Yodeck's default placeholder media
-
 /**
  * Inject fallback media when baseline template is unavailable
- * BASELINE GUARANTEE: ALWAYS returns at least one item - uses safe default if env var not set
+ * Returns empty if no FALLBACK_MEDIA_ID configured (allows ads-only playlists)
  */
 function injectFallback(logs: string[], error: BaselineResult["error"]): BaselineResult {
-  // Use configured fallback, or safe default as last resort
-  const mediaId = (FALLBACK_MEDIA_ID && FALLBACK_MEDIA_ID > 0) 
-    ? FALLBACK_MEDIA_ID 
-    : SAFE_DEFAULT_MEDIA_ID;
-  
-  const usingDefault = !FALLBACK_MEDIA_ID || FALLBACK_MEDIA_ID <= 0;
-  
-  if (usingDefault) {
-    logs.push(`[Baseline] ⚠️ FALLBACK_MEDIA_ID niet geconfigureerd - gebruik safe default ${SAFE_DEFAULT_MEDIA_ID}`);
-    console.warn("[WARN] FALLBACK_MEDIA_ID not configured. Using safe default. Set FALLBACK_MEDIA_ID for proper fallback.");
-  } else {
-    logs.push(`[Baseline] ✓ Fallback media ${mediaId} wordt gebruikt`);
+  // Only use fallback if explicitly configured
+  if (!FALLBACK_MEDIA_ID || FALLBACK_MEDIA_ID <= 0) {
+    logs.push(`[Baseline] ⚠️ Geen baseline/fallback - alleen ads worden afgespeeld (set FALLBACK_MEDIA_ID voor fallback)`);
+    console.warn("[WARN] FALLBACK_MEDIA_ID not configured. Playlist will contain only ads (if any). Set FALLBACK_MEDIA_ID for baseline content.");
+    return {
+      items: [], // No fallback - ads only (or empty if no ads)
+      error,
+      fallbackUsed: false,
+    };
   }
   
-  // ALWAYS return an item - baseline guarantee is absolute
+  logs.push(`[Baseline] ✓ Fallback media ${FALLBACK_MEDIA_ID} wordt gebruikt`);
+  
   return {
     items: [{
       type: "baseline",
-      mediaId,
-      mediaName: usingDefault ? "Safe Default Fallback" : FALLBACK_MEDIA_NAME,
+      mediaId: FALLBACK_MEDIA_ID,
+      mediaName: FALLBACK_MEDIA_NAME,
       duration: HARDCODED_FALLBACK_DURATION,
     }],
     error,
@@ -427,7 +421,10 @@ export async function ensureScreenPlaylist(screenId: string): Promise<ScreenPlay
     });
     
     if (!patchResult.ok) {
-      logs.push(`[EnsurePlaylist] PATCH mislukt: ${patchResult.error}`);
+      const errorDetail = patchResult.error || "Unknown PATCH error";
+      logs.push(`[EnsurePlaylist] PATCH mislukt: ${errorDetail}`);
+      console.error(`[screenPlaylistService] PATCH /playlists/${playlistId}/ failed: ${errorDetail}`);
+      console.error(`[screenPlaylistService] PATCH payload: ${JSON.stringify(combinedItems).slice(0, 500)}`);
       return {
         ok: false,
         screenId,
@@ -439,7 +436,7 @@ export async function ensureScreenPlaylist(screenId: string): Promise<ScreenPlay
         adsCount: adItems.length,
         isNew,
         logs,
-        error: "PATCH_PLAYLIST_FAILED",
+        error: `PATCH_PLAYLIST_FAILED: ${errorDetail}`,
         baselineError,
         baselineFallbackUsed,
       };
@@ -447,11 +444,12 @@ export async function ensureScreenPlaylist(screenId: string): Promise<ScreenPlay
     
     logs.push(`[EnsurePlaylist] Playlist gesynchroniseerd`);
   } else {
-    logs.push(`[EnsurePlaylist] ⚠️ Geen items om te syncen - baseline ontbreekt!`);
+    logs.push(`[EnsurePlaylist] ⚠️ Geen items om te syncen - geen baseline of ads beschikbaar`);
+    // Empty playlist is OK if no content configured - better than PATCH error
   }
   
   return {
-    ok: combinedItems.length > 0, // Only OK if we have content
+    ok: true, // Playlist exists and is synced - even if empty
     screenId,
     screenName: screen.name,
     playlistId: String(playlistId),

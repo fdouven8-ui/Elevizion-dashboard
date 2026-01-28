@@ -1,0 +1,78 @@
+Los dit NU volledig op end-to-end. Geen gedeeltelijke fixes, geen samenvattingen. Het systeem moet weer stabiel draaien, schermen moeten zichtbaar zijn, status moet up-to-date zijn, en content moet daadwerkelijk op het fysieke Yodeck scherm afspelen.
+
+PROBLEEM (HARD)
+De server crasht met Postgres error 42703: column "target_cities" does not exist (getAdvertisers). Daardoor valt de app om en zie ik geen schermen meer. Daarnaast moeten schermstatus + playlists + content weer betrouwbaar zijn (no "NO CONTENT TO PLAY", geen 0 schermen door statusfouten).
+
+DOEL (EINDRESULTAAT)
+1) App crasht niet meer (geen missing column errors).
+2) Schermen-overzicht toont ALLE schermen uit de database, altijd (ook als Yodeck tijdelijk faalt).
+3) Yodeck status is “best effort”: als live status niet beschikbaar is -> schermen blijven zichtbaar met status UNKNOWN/verouderd + timestamp.
+4) Per scherm: “Wat draait nu?” toont correcte, up-to-date info (online/offline, playlist naam/id, itemCount, baselineCount, adsCount, lastPushResult).
+5) Content draait ook echt op het fysieke scherm: per-screen playlist is gevuld (minstens baseline), toegewezen aan het scherm, gepusht, en geverifieerd.
+6) Ads workflow blijft veilig: targeting precedence CITY_MATCH → REGION_MATCH → TEST_MODE_ALL (alleen als geen targeting) → TEST_FALLBACK.
+7) Approval → automatische plaatsingen + publish werkt, maar alleen op gematchte schermen (niet “alle online schermen” tenzij expliciet toegestaan volgens de veiligheidsregels).
+
+TAKEN (MOETEN ALLEMAAL GEDAAN WORDEN)
+
+A) DATABASE / MIGRATIES (CRASH FIX)
+- Voeg DB migraties toe zodat alle kolommen die de nieuwe targeting code gebruikt ECHT bestaan.
+- Minimaal:
+  - advertisers.target_cities (snake_case exact)
+  - advertisers.target_region_codes (als code dit gebruikt)
+  - contracts.target_cities_override
+  - contracts.target_region_codes_override
+- Kies datatype consistent met ons schema (TEXT of TEXT[] of JSONB), maar maak mapping in code correct.
+- Zorg dat de migraties automatisch runnen bij deploy/start (of via bestaande migrate stap).
+- Voeg een startup check toe: als kolom ontbreekt -> log "DB_MIGRATION_REQUIRED" en val terug naar lege targeting i.p.v. crashen (catch 42703 als extra safety).
+
+B) SCREENS LIST MAG NOOIT LEEG WORDEN DOOR YODECK
+- Zorg dat de Screens list endpoint altijd uit de lokale DB komt.
+- Yodeck live status is alleen enrichment:
+  - bij failure: return screens + status UNKNOWN/verouderd + lastKnownStatus (indien beschikbaar)
+  - UI toont banner, maar schermen blijven zichtbaar.
+- Fix filters:
+  - UNKNOWN schermen blijven zichtbaar in default view.
+  - Alleen verbergen bij expliciet online/offline filter.
+
+C) BASELINE + PER-SCREEN PLAYLIST (NO CONTENT TO PLAY FIX)
+- 1 baseline template playlist in Yodeck (instelbaar via Settings, bv "Elevizion | Basis").
+- Per scherm: 1 playlist "Elevizion | Loop | {ScreenIdOrYodeckId}" die ALTIJD gevuld wordt:
+  - items = baselineItems + adsForThatScreen
+  - als baseline template faalt: injectFallback() moet altijd een speelbaar item leveren.
+  - filter invalid/0-duration items; als alles wegvalt -> inject fallback.
+- Assign per-screen playlist aan screen (playlist mode, geen layout mode) + push.
+- Verification na push (Yodeck als bron van waarheid):
+  - exact playlist name match (expected == actual)
+  - itemCount > 0
+  - anders ERROR met reason (PLAYLIST_EMPTY / MISMATCH / PUBLISH_FAILED / OFFLINE)
+
+D) AUTO-PLACEMENT OP APPROVAL (CORRECT EN VEILIG)
+- Bij adAsset approval:
+  - bepaal target screens op basis van targeting rules (contract overrides > advertiser defaults; CITY_MATCH > REGION_MATCH; TEST_MODE_ALL alleen als géén targeting; anders TEST_FALLBACK of fail).
+  - maak placements idempotent (geen duplicates).
+  - publish direct naar target screens (ensure playlist -> assign/push -> verify).
+- UI statuses:
+  - “Geen plaatsing” alleen als er echt geen placement record is.
+  - Na approval moet “Gekoppeld” verschijnen op de target schermen.
+
+E) OBSERVABILITY / UI (ZODAT IK ALLES WEER KAN ZIEN)
+- In ScreenDetail:
+  - “Wat draait nu?” met: device status + lastSeen + expected vs actual playlist + itemCount + baselineCount + adsCount + lastPushResult + error reason
+  - Force Repair knop: POST /api/admin/screens/:screenId/repair met volledige diagnostics.
+- In Screens overview:
+  - Toon schermen altijd; status badge kan UNKNOWN/verouderd zijn.
+  - Voeg “Opnieuw proberen” knop die live status refresh triggert maar niet de lijst breekt.
+
+F) E2E TESTS MET BEWIJS (GEEN VINKJES)
+Voer na implementatie deze tests uit en print echte outputs (JSON) in je antwoord:
+1) Server start zonder 42703 errors.
+2) GET screens endpoint retourneert >= 1 screen uit DB.
+3) Force repair op 1 online screen -> verificationOk=true en itemCount>0.
+4) Yodeck API check: screen content gebruikt de expected playlist en playlist heeft items.
+5) Approval van 1 video -> placements created >0 (of duidelijke no-match reason) en publish results per screen.
+
+DELIVERABLE
+- Fix code + DB migrations + UI adjustments + endpoints.
+- Geef daarna testresultaten met echte IDs/counts/reasons en PASS/FAIL per test.
+
+Begin nu met de crash fix (DB), want zonder dat werkt niets. Daarna de screens list fallback, daarna baseline/playlist publish en verification.
