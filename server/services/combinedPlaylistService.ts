@@ -41,6 +41,16 @@ export interface CombinedPlaylistResult {
   screenAssigned: boolean;
   logs: string[];
   error?: string;
+  ads?: {
+    playlistId: string | null;
+    desiredCount: number;
+    currentCount: number;
+    adsAdded: number;
+    adsRemoved: number;
+    adsRepaired: boolean;
+    adsStatus: "OK" | "PATCHED" | "FALLBACK_ONLY" | "ERROR";
+    source: "placements" | "global" | "none";
+  };
 }
 
 export interface PlaylistSearchResult {
@@ -680,29 +690,38 @@ export async function ensureCombinedPlaylistForLocation(locationId: string): Pro
   // 3A: Get base items
   const baseItems = await getBasePlaylistItems(logs);
   
-  // 3B: Get ads for location
-  const { mediaIds: adMediaIds, durations: adDurations } = await getAdsForLocation(locationId, logs);
+  // 3B: Get ads for location (authoritative - only from placements unless config allows global)
+  const adsResult = await getAdsForLocation(locationId, logs);
+  const { mediaIds: adMediaIds, durations: adDurations, source: adsSource } = adsResult;
+  
+  logs.push(`[AdsSync] Ads bron: ${adsSource} (${adMediaIds.length} items)`);
+  if (adMediaIds.length > 0) {
+    logs.push(`[AdsSync] desiredMediaIds=[${adMediaIds.slice(0, 5).join(", ")}${adMediaIds.length > 5 ? "..." : ""}]`);
+  }
   
   // 3C: Get fallback if no ads AND no base items
   let finalAdIds = adMediaIds;
   let finalAdDurations = adDurations;
+  let adsStatus: "OK" | "FALLBACK_ONLY" | "PATCHED" = adMediaIds.length > 0 ? "OK" : "FALLBACK_ONLY";
   
   if (baseItems.length === 0 && adMediaIds.length === 0) {
-    logs.push(`[Autopilot] ⚠️ Geen content - fallback video toevoegen`);
+    logs.push(`[AdsSync] ⚠️ Geen content - fallback video toevoegen`);
     const fallbackId = await getFallbackMedia(logs);
     if (fallbackId) {
       finalAdIds = [fallbackId];
       finalAdDurations = [DEFAULT_AD_DURATION];
+      adsStatus = "FALLBACK_ONLY";
     }
   }
   
   // Also add fallback if we have base but no ads
   if (baseItems.length > 0 && adMediaIds.length === 0) {
-    logs.push(`[Autopilot] ⚠️ Geen ads - fallback video toevoegen als ad`);
+    logs.push(`[AdsSync] ⚠️ Geen ads - fallback video toevoegen als ad`);
     const fallbackId = await getFallbackMedia(logs);
     if (fallbackId) {
       finalAdIds = [fallbackId];
       finalAdDurations = [DEFAULT_AD_DURATION];
+      adsStatus = "FALLBACK_ONLY";
     }
   }
   
@@ -771,9 +790,13 @@ export async function ensureCombinedPlaylistForLocation(locationId: string): Pro
   logs.push(`[Autopilot] ✓ Combined playlist sync voltooid`);
   logs.push(`[Autopilot]   Playlist: ${playlistResult.playlistName}`);
   logs.push(`[Autopilot]   Items: ${combinedItems.length} (${baseItems.length} base + ${finalAdIds.length} ads)`);
+  logs.push(`[Autopilot]   Ads bron: ${adsSource}, status: ${adsStatus}`);
   logs.push(`[Autopilot]   Scherm: ${screenAssigned ? "toegewezen" : "niet toegewezen"}`);
   
   const isOk = combinedItems.length > 0;
+  
+  // Ads are "repaired" if playlist is in desired state (even if nothing was added)
+  const adsRepaired = isOk;
   
   return {
     ok: isOk,
@@ -787,6 +810,16 @@ export async function ensureCombinedPlaylistForLocation(locationId: string): Pro
     screenAssigned,
     logs,
     error: isOk ? undefined : "NO_CONTENT",
+    ads: {
+      playlistId: playlistResult.playlistId,
+      desiredCount: finalAdIds.length,
+      currentCount: finalAdIds.length, // After sync, current = desired
+      adsAdded: 0, // Combined playlist is always replaced, not incremental
+      adsRemoved: 0,
+      adsRepaired,
+      adsStatus,
+      source: adsSource,
+    },
   };
 }
 
@@ -1171,8 +1204,8 @@ export async function getTemplateBaselineDiff(locationId: string): Promise<{
   const templateIds = new Set(templateItems.map(i => i.id));
   const baselineIds = new Set(baselineItems.map(i => i.id));
   
-  const missingInBaseline = [...templateIds].filter(id => !baselineIds.has(id));
-  const extraInBaseline = [...baselineIds].filter(id => !templateIds.has(id));
+  const missingInBaseline = Array.from(templateIds).filter(id => !baselineIds.has(id));
+  const extraInBaseline = Array.from(baselineIds).filter(id => !templateIds.has(id));
   
   const baselineSynced = missingInBaseline.length === 0 && templateItems.length > 0;
   
