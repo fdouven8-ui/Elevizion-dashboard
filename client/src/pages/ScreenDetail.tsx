@@ -223,7 +223,7 @@ export default function ScreenDetail() {
     refetchInterval: 60000,
   });
 
-  // Screen repair mutation
+  // Screen repair mutation with extended observability
   const repairScreenMutation = useMutation({
     mutationFn: async () => {
       const response = await apiRequest("POST", `/api/admin/screens/${screenId}/repair`);
@@ -231,9 +231,23 @@ export default function ScreenDetail() {
     },
     onSuccess: (data) => {
       if (data.ok) {
-        toast({ title: "Reparatie voltooid", description: `Playlist ${data.expectedPlaylistId} toegewezen` });
+        let description = `Baseline: ${data.baselineCount || 0}, Ads: ${data.adsCount || 0}`;
+        if (data.baselineFallbackUsed) {
+          description += " (Fallback content)";
+        }
+        if (data.verificationOk) {
+          description += " ✓ Verified";
+        }
+        toast({ title: "Reparatie voltooid", description });
       } else {
-        toast({ title: "Reparatie mislukt", description: data.errorReason || "Onbekende fout", variant: "destructive" });
+        let errorDesc = data.errorReason || "Onbekende fout";
+        if (data.baselineError) {
+          errorDesc = `Baseline: ${data.baselineError}. ${errorDesc}`;
+        }
+        if (data.verificationError) {
+          errorDesc += ` Verificatie: ${data.verificationError}`;
+        }
+        toast({ title: "Reparatie mislukt", description: errorDesc, variant: "destructive" });
       }
       refetchNowPlaying();
       queryClient.invalidateQueries({ queryKey: ["screen-now-playing", screenId] });

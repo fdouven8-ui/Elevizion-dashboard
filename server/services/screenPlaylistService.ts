@@ -36,6 +36,8 @@ export interface ScreenPlaylistResult {
   isNew: boolean;
   logs: string[];
   error?: string;
+  baselineError?: string;
+  baselineFallbackUsed?: boolean;
 }
 
 export interface AssignPushResult {
@@ -46,6 +48,7 @@ export interface AssignPushResult {
   publishOk: boolean;
   verificationOk: boolean;
   actualPlaylistId: string | null;
+  actualItemCount: number;
   errorReason?: string;
   logs: string[];
 }
@@ -62,6 +65,9 @@ export interface ScreenRepairResult {
   adsCount: number;
   publishOk: boolean;
   verificationOk: boolean;
+  verificationError?: string;
+  baselineError?: string;
+  baselineFallbackUsed?: boolean;
   errorReason?: string;
   logs: string[];
 }
@@ -129,15 +135,25 @@ async function createPlaylist(name: string): Promise<{ ok: boolean; playlistId?:
   return { ok: true, playlistId: result.data.id };
 }
 
+interface BaselineResult {
+  items: PlaylistItem[];
+  error?: "BASELINE_TEMPLATE_MISSING" | "BASELINE_TEMPLATE_EMPTY" | "BASELINE_FETCH_ERROR";
+  fallbackUsed: boolean;
+}
+
+const FALLBACK_MEDIA_ID = process.env.FALLBACK_MEDIA_ID ? Number(process.env.FALLBACK_MEDIA_ID) : null;
+const FALLBACK_MEDIA_NAME = "Elevizion Fallback";
+
 /**
  * Get baseline items from template playlist
+ * Guarantees at least fallback content if template is missing/empty
  */
-async function getBaselineItems(logs: string[]): Promise<PlaylistItem[]> {
+async function getBaselineItems(logs: string[]): Promise<BaselineResult> {
   const baselinePlaylistId = await getBaselinePlaylistId();
   
   if (!baselinePlaylistId) {
-    logs.push(`[Baseline] Geen baseline playlist geconfigureerd`);
-    return [];
+    logs.push(`[Baseline] ⚠️ BASELINE_TEMPLATE_MISSING - geen baseline playlist geconfigureerd`);
+    return injectFallback(logs, "BASELINE_TEMPLATE_MISSING");
   }
   
   logs.push(`[Baseline] Ophalen items van playlist ${baselinePlaylistId}`);
@@ -145,8 +161,8 @@ async function getBaselineItems(logs: string[]): Promise<PlaylistItem[]> {
   const result = await yodeckRequest<any>(`/playlists/${baselinePlaylistId}/`);
   
   if (!result.ok || !result.data) {
-    logs.push(`[Baseline] Fout bij ophalen: ${result.error}`);
-    return [];
+    logs.push(`[Baseline] ⚠️ BASELINE_FETCH_ERROR: ${result.error}`);
+    return injectFallback(logs, "BASELINE_FETCH_ERROR");
   }
   
   const items: PlaylistItem[] = [];
@@ -167,8 +183,35 @@ async function getBaselineItems(logs: string[]): Promise<PlaylistItem[]> {
     }
   }
   
-  logs.push(`[Baseline] ${items.length} items gevonden`);
-  return items;
+  if (items.length === 0) {
+    logs.push(`[Baseline] ⚠️ BASELINE_TEMPLATE_EMPTY - template playlist is leeg`);
+    return injectFallback(logs, "BASELINE_TEMPLATE_EMPTY");
+  }
+  
+  logs.push(`[Baseline] ✓ ${items.length} items gevonden`);
+  return { items, fallbackUsed: false };
+}
+
+/**
+ * Inject fallback media when baseline template is unavailable
+ */
+function injectFallback(logs: string[], error: BaselineResult["error"]): BaselineResult {
+  if (FALLBACK_MEDIA_ID) {
+    logs.push(`[Baseline] Fallback media ${FALLBACK_MEDIA_ID} wordt gebruikt`);
+    return {
+      items: [{
+        type: "baseline",
+        mediaId: FALLBACK_MEDIA_ID,
+        mediaName: FALLBACK_MEDIA_NAME,
+        duration: DEFAULT_DURATION,
+      }],
+      error,
+      fallbackUsed: true,
+    };
+  }
+  
+  logs.push(`[Baseline] ⚠️ Geen fallback media geconfigureerd - playlist kan leeg zijn!`);
+  return { items: [], error, fallbackUsed: false };
 }
 
 /**
@@ -352,9 +395,13 @@ export async function ensureScreenPlaylist(screenId: string): Promise<ScreenPlay
     logs.push(`[EnsurePlaylist] Nieuwe playlist aangemaakt: ID ${playlistId}`);
   }
   
-  const baselineItems = await getBaselineItems(logs);
+  const baselineResult = await getBaselineItems(logs);
   const adItems = await getAdsForScreen(screenId, logs);
-  const combinedItems = buildCombinedItems(baselineItems, adItems, logs);
+  const combinedItems = buildCombinedItems(baselineResult.items, adItems, logs);
+  
+  // Track baseline errors for observability
+  const baselineError = baselineResult.error;
+  const baselineFallbackUsed = baselineResult.fallbackUsed;
   
   if (combinedItems.length > 0) {
     logs.push(`[EnsurePlaylist] Syncen ${combinedItems.length} items naar playlist`);
@@ -372,29 +419,33 @@ export async function ensureScreenPlaylist(screenId: string): Promise<ScreenPlay
         playlistId: String(playlistId),
         playlistName,
         itemCount: 0,
-        baselineCount: baselineItems.length,
+        baselineCount: baselineResult.items.length,
         adsCount: adItems.length,
         isNew,
         logs,
         error: "PATCH_PLAYLIST_FAILED",
+        baselineError,
+        baselineFallbackUsed,
       };
     }
     
     logs.push(`[EnsurePlaylist] Playlist gesynchroniseerd`);
   } else {
-    logs.push(`[EnsurePlaylist] Geen items om te syncen - baseline ontbreekt?`);
+    logs.push(`[EnsurePlaylist] ⚠️ Geen items om te syncen - baseline ontbreekt!`);
   }
   
   return {
-    ok: true,
+    ok: combinedItems.length > 0, // Only OK if we have content
     screenId,
     screenName: screen.name,
     playlistId: String(playlistId),
     playlistName,
     itemCount: combinedItems.length,
-    baselineCount: baselineItems.length,
+    baselineCount: baselineResult.items.length,
     adsCount: adItems.length,
     isNew,
+    baselineError,
+    baselineFallbackUsed,
     logs,
   };
 }
@@ -455,12 +506,12 @@ export async function assignAndPushScreenContent(
     };
   }
   
-  logs.push(`[AssignPush] PATCH succesvol - verificatie...`);
+  logs.push(`[AssignPush] PATCH succesvol - verificatie scherm...`);
   
   const verifyResult = await yodeckRequest<any>(`/screens/${yodeckDeviceId}/`);
   
   if (!verifyResult.ok) {
-    logs.push(`[AssignPush] Verificatie mislukt: ${verifyResult.error}`);
+    logs.push(`[AssignPush] Verificatie scherm mislukt: ${verifyResult.error}`);
     return {
       ok: true,
       screenId,
@@ -469,30 +520,63 @@ export async function assignAndPushScreenContent(
       publishOk: true,
       verificationOk: false,
       actualPlaylistId: null,
-      errorReason: "VERIFY_FAILED",
+      actualItemCount: 0,
+      errorReason: "VERIFY_SCREEN_FAILED",
       logs,
     };
   }
   
   const content = verifyResult.data?.screen_content;
   const actualPlaylistId = content?.source_id ? String(content.source_id) : null;
-  const isMatch = actualPlaylistId === playlistId;
+  const isPlaylistMatch = actualPlaylistId === playlistId;
   
-  if (isMatch) {
-    logs.push(`[AssignPush] Verificatie OK: playlist ${actualPlaylistId}`);
+  if (!isPlaylistMatch) {
+    logs.push(`[AssignPush] ⚠️ PLAYLIST MISMATCH: verwacht ${playlistId}, actueel ${actualPlaylistId}`);
+    return {
+      ok: false,
+      screenId,
+      yodeckDeviceId,
+      playlistId,
+      publishOk: true,
+      verificationOk: false,
+      actualPlaylistId,
+      actualItemCount: 0,
+      errorReason: "PLAYLIST_MISMATCH",
+      logs,
+    };
+  }
+  
+  // Post-publish verification: check playlist has items
+  logs.push(`[AssignPush] Verificatie playlist items...`);
+  const playlistVerify = await yodeckRequest<any>(`/playlists/${playlistId}/`);
+  
+  let actualItemCount = 0;
+  let hasContent = false;
+  
+  if (playlistVerify.ok && playlistVerify.data) {
+    const items = playlistVerify.data.items || [];
+    actualItemCount = items.length;
+    hasContent = actualItemCount > 0;
+    
+    if (hasContent) {
+      logs.push(`[AssignPush] ✓ Verificatie OK: playlist ${actualPlaylistId} met ${actualItemCount} items`);
+    } else {
+      logs.push(`[AssignPush] ⚠️ CONTENT WARNING: playlist is leeg!`);
+    }
   } else {
-    logs.push(`[AssignPush] MISMATCH: verwacht ${playlistId}, actueel ${actualPlaylistId}`);
+    logs.push(`[AssignPush] Verificatie playlist items mislukt: ${playlistVerify.error}`);
   }
   
   return {
-    ok: isMatch,
+    ok: isPlaylistMatch && hasContent,
     screenId,
     yodeckDeviceId,
     playlistId,
     publishOk: true,
-    verificationOk: isMatch,
+    verificationOk: isPlaylistMatch && hasContent,
     actualPlaylistId,
-    errorReason: isMatch ? undefined : "PLAYLIST_MISMATCH",
+    actualItemCount,
+    errorReason: !hasContent ? "PLAYLIST_EMPTY" : undefined,
     logs,
   };
 }
@@ -598,6 +682,9 @@ export async function repairScreen(screenId: string): Promise<ScreenRepairResult
     adsCount: playlistResult.adsCount,
     publishOk: pushResult.publishOk,
     verificationOk: pushResult.verificationOk,
+    verificationError: pushResult.errorReason,
+    baselineError: playlistResult.baselineError,
+    baselineFallbackUsed: playlistResult.baselineFallbackUsed,
     errorReason: pushResult.errorReason,
     logs,
   };

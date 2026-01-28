@@ -47,15 +47,22 @@ async function getTestScreenId(): Promise<string | null> {
 }
 
 async function isAdvertiserTest(advertiserId: string): Promise<boolean> {
-  const advertiser = await db.select({ isInternal: advertisers.isInternal })
+  const advertiser = await db.select({ 
+    companyName: advertisers.companyName,
+    notes: advertisers.notes,
+    status: advertisers.status,
+  })
     .from(advertisers)
     .where(eq(advertisers.id, advertiserId))
     .limit(1);
   
   if (!advertiser[0]) return false;
   
-  // Check if marked as internal/test
-  return advertiser[0].isInternal === true;
+  // Check if marked as internal/test via notes or company name
+  const name = advertiser[0].companyName?.toLowerCase() || "";
+  const notes = advertiser[0].notes?.toLowerCase() || "";
+  return name.includes("test") || name.includes("internal") || 
+         notes.includes("[test]") || notes.includes("[internal]");
 }
 
 export async function createAutoPlacementsForAsset(
@@ -72,12 +79,11 @@ export async function createAutoPlacementsForAsset(
   try {
     console.log(`[AutoPlacement] Starting for asset ${assetId}, advertiser ${advertiserId}`);
 
-    // 1. Find the advertiser's active contract with targeting info
+    // 1. Find the advertiser's active contract
     const activeContracts = await db.select({
       id: contracts.id,
       status: contracts.status,
       advertiserId: contracts.advertiserId,
-      packageType: contracts.packageType,
     })
       .from(contracts)
       .where(and(
@@ -107,18 +113,18 @@ export async function createAutoPlacementsForAsset(
     // 2. Get advertiser targeting preferences
     const advertiserData = await db.select({
       targetRegionCodes: advertisers.targetRegionCodes,
-      isInternal: advertisers.isInternal,
       companyName: advertisers.companyName,
+      notes: advertisers.notes,
     })
       .from(advertisers)
       .where(eq(advertisers.id, advertiserId))
       .limit(1);
 
     const advertiser = advertiserData[0];
-    const isTestAdvertiser = advertiser?.isInternal === true;
+    const isTestAdvertiser = await isAdvertiserTest(advertiserId);
     const targetRegions = advertiser?.targetRegionCodes || [];
     
-    console.log(`[AutoPlacement] Advertiser ${advertiser?.companyName}: regions=${JSON.stringify(targetRegions)}, isInternal=${isTestAdvertiser}`);
+    console.log(`[AutoPlacement] Advertiser ${advertiser?.companyName}: regions=${JSON.stringify(targetRegions)}, isTest=${isTestAdvertiser}`);
 
     // 3. Get all screens with location info for targeting
     const allScreensWithLocations = await db.select({
