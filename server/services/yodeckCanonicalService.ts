@@ -948,6 +948,143 @@ export async function seedAdsPlaylist(playlistId: string): Promise<{
 }
 
 // ============================================================================
+// PER-LOCATION LAYOUT MANAGEMENT
+// ============================================================================
+
+/**
+ * Ensure a location has its own layout (not shared with other locations)
+ * Uses stored ID if available, searches by name if not, creates new if needed
+ */
+export async function ensureLocationLayout(
+  locationId: string,
+  locationName: string,
+  basePlaylistId: string,
+  adsPlaylistId: string,
+  existingLayoutId: string | null
+): Promise<{
+  ok: boolean;
+  layoutId: string | null;
+  layoutName: string | null;
+  created: boolean;
+  error?: string;
+  logs: string[];
+}> {
+  const logs: string[] = [];
+  const canonicalLayoutName = `Elevizion Standard | ${locationName}`;
+  logs.push(`[EnsureLayout] Zoeken naar layout voor locatie: ${locationName}`);
+  
+  // STRATEGY 1: Use stored layout ID if available
+  if (existingLayoutId) {
+    logs.push(`[EnsureLayout] Stored layout ID: ${existingLayoutId}`);
+    
+    const verifyResult = await yodeckRequest<any>(`/layouts/${existingLayoutId}/`);
+    
+    if (verifyResult.ok && verifyResult.data) {
+      logs.push(`[EnsureLayout] ✓ Layout gevalideerd: ${verifyResult.data.name}`);
+      
+      // Check if bindings are correct, fix if needed
+      const currentRegions = verifyResult.data.regions || [];
+      let needsUpdate = false;
+      
+      for (const region of currentRegions) {
+        const item = region.item || {};
+        const playlistId = item.id || region.playlist;
+        
+        // Check if this is bound to our playlists
+        if (playlistId && String(playlistId) !== basePlaylistId && String(playlistId) !== adsPlaylistId) {
+          needsUpdate = true;
+          logs.push(`[EnsureLayout] Region ${region.id} heeft verkeerde binding: ${playlistId}`);
+        }
+      }
+      
+      if (needsUpdate || currentRegions.length === 0) {
+        logs.push(`[EnsureLayout] Bindings updaten...`);
+        const fixResult = await fixLayoutBindings(existingLayoutId, basePlaylistId, adsPlaylistId);
+        logs.push(...fixResult.logs);
+      }
+      
+      return {
+        ok: true,
+        layoutId: existingLayoutId,
+        layoutName: verifyResult.data.name,
+        created: false,
+        logs,
+      };
+    } else {
+      logs.push(`[EnsureLayout] ⚠️ Stored layout ${existingLayoutId} niet gevonden - zoeken op naam`);
+    }
+  }
+  
+  // STRATEGY 2: Search by canonical name
+  logs.push(`[EnsureLayout] Zoeken op naam: "${canonicalLayoutName}"`);
+  const searchResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>("/layouts");
+  
+  if (searchResult.ok && searchResult.data) {
+    const layouts = searchResult.data.results || [];
+    const normalizedSearch = canonicalLayoutName.toLowerCase().trim();
+    
+    // Find exact or partial match for this location
+    const exactMatch = layouts.find(l => l.name.toLowerCase().trim() === normalizedSearch);
+    const partialMatch = layouts.find(l => l.name.toLowerCase().includes(locationName.toLowerCase()));
+    
+    const foundLayout = exactMatch || partialMatch;
+    
+    if (foundLayout) {
+      logs.push(`[EnsureLayout] ✓ Bestaande layout gevonden: "${foundLayout.name}" (ID ${foundLayout.id})`);
+      
+      // Fix bindings
+      const fixResult = await fixLayoutBindings(String(foundLayout.id), basePlaylistId, adsPlaylistId);
+      logs.push(...fixResult.logs);
+      
+      return {
+        ok: true,
+        layoutId: String(foundLayout.id),
+        layoutName: foundLayout.name,
+        created: false,
+        logs,
+      };
+    }
+    
+    // Check for duplicates and log them
+    const duplicates = layouts.filter(l => 
+      l.name.toLowerCase().includes(locationName.toLowerCase()) || 
+      l.name.toLowerCase().includes("elevizion")
+    );
+    if (duplicates.length > 1) {
+      logs.push(`[EnsureLayout] ⚠️ ${duplicates.length} mogelijke layouts gevonden - eerste kiezen`);
+    }
+  }
+  
+  // STRATEGY 3: Create new layout for this location
+  logs.push(`[EnsureLayout] Nieuwe layout aanmaken: "${canonicalLayoutName}"`);
+  
+  const layoutPayload = buildElevizionLayoutPayload(canonicalLayoutName, basePlaylistId, adsPlaylistId);
+  const createResult = await yodeckRequest<{ id: number }>("/layouts/", "POST", layoutPayload);
+  
+  if (!createResult.ok || !createResult.data) {
+    logs.push(`[EnsureLayout] ❌ Layout aanmaken mislukt: ${createResult.error}`);
+    return {
+      ok: false,
+      layoutId: null,
+      layoutName: null,
+      created: false,
+      error: createResult.error || "Layout creation failed",
+      logs,
+    };
+  }
+  
+  logs.push(`[EnsureLayout] ✓ Layout aangemaakt: ID ${createResult.data.id}`);
+  
+  return {
+    ok: true,
+    layoutId: String(createResult.data.id),
+    layoutName: canonicalLayoutName,
+    created: true,
+    logs,
+  };
+}
+
+// ============================================================================
 // LAYOUT BINDING VERIFICATION
 // ============================================================================
 
@@ -2584,29 +2721,34 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   logs.push(`[Autopilot] Locatie: ${location.name}`);
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 1: Find baseline layout (MUST exist in Yodeck)
+  // STEP 1: Ensure BASE playlist exists (for location-specific layout)
   // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 1: Baseline layout zoeken ───`);
-  const layoutResult = await findBaselineLayout();
-  logs.push(...layoutResult.logs);
+  logs.push(`[Autopilot] ─── STAP 1: BASE playlist ───`);
+  const baseResult = await ensureCanonicalPlaylist(location.name, "BASE", {
+    existingPlaylistId: location.yodeckBaselinePlaylistId
+  });
+  logs.push(...baseResult.logs);
   
-  if (!layoutResult.ok || !layoutResult.layoutId) {
-    logs.push(`[Autopilot] ❌ Baseline layout ontbreekt in Yodeck`);
+  if (!baseResult.ok) {
     return {
       ok: false,
       locationId,
       locationName: location.name,
       layoutAssigned: false,
       adsRepaired: false,
-      layout: { layoutId: null, layoutName: BASELINE_LAYOUT_NAME },
+      layout: { layoutId: null, layoutName: null },
       ads: { playlistId: null, itemCount: 0, adsAdded: 0 },
       pushed: false,
       logs,
-      error: `BASELINE_LAYOUT_MISSING: Maak layout "${BASELINE_LAYOUT_NAME}" aan in Yodeck met nieuws en weer apps.`,
+      error: `BASE playlist fout: ${baseResult.error}`,
     };
   }
   
-  logs.push(`[Autopilot] ✓ Baseline layout gevonden: ${layoutResult.layoutName} (ID ${layoutResult.layoutId})`);
+  // Update location if needed
+  if (location.yodeckBaselinePlaylistId !== baseResult.playlistId) {
+    await db.update(locations).set({ yodeckBaselinePlaylistId: baseResult.playlistId }).where(eq(locations.id, locationId));
+    logs.push(`[Autopilot] ✓ BASE playlist ID opgeslagen: ${baseResult.playlistId}`);
+  }
   
   // ═══════════════════════════════════════════════════════════════════════════
   // STEP 2: Ensure ADS playlist exists (use stored ID if available)
@@ -2624,7 +2766,7 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
       locationName: location.name,
       layoutAssigned: false,
       adsRepaired: false,
-      layout: { layoutId: layoutResult.layoutId, layoutName: layoutResult.layoutName },
+      layout: { layoutId: null, layoutName: null },
       ads: { playlistId: null, itemCount: 0, adsAdded: 0 },
       pushed: false,
       logs,
@@ -2639,33 +2781,30 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   }
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 2.5: Bind ADS region in layout to ADS playlist (NEW - critical step!)
+  // STEP 3: Ensure location-specific layout (per locatie, niet gedeeld!)
   // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 2.5: ADS region binding ───`);
+  logs.push(`[Autopilot] ─── STAP 3: Locatie layout ───`);
+  const layoutResult = await ensureLocationLayout(location.id, location.name, baseResult.playlistId, adsResult.playlistId, location.yodeckLayoutId);
+  logs.push(...layoutResult.logs);
+  
   let adsRegionBound = false;
-  if (layoutResult.layoutId && adsResult.playlistId) {
-    try {
-      const { ensureAdsRegionBound } = await import("./yodeckAutopilotHelpers");
-      const regionResult = await ensureAdsRegionBound(layoutResult.layoutId, parseInt(adsResult.playlistId));
-      logs.push(...regionResult.logs);
-      
-      if (regionResult.ok) {
-        adsRegionBound = true;
-        logs.push(`[Autopilot] ✓ ADS region gebonden aan playlist ${adsResult.playlistId}`);
-      } else {
-        logs.push(`[Autopilot] ⚠️ ADS region binding: ${regionResult.error || "onbekende fout"}`);
-      }
-    } catch (bindError: any) {
-      logs.push(`[Autopilot] ⚠️ ADS region binding fout: ${bindError.message}`);
-    }
+  if (!layoutResult.ok) {
+    logs.push(`[Autopilot] ⚠️ Layout fout: ${layoutResult.error}`);
   } else {
-    logs.push(`[Autopilot] ⚠️ Overslaan ADS region binding - geen layout of playlist`);
+    adsRegionBound = true;
+    logs.push(`[Autopilot] ✓ Layout ${layoutResult.layoutId} met BASE/ADS regions gebonden`);
+    
+    // Update DB if layout ID changed
+    if (location.yodeckLayoutId !== layoutResult.layoutId) {
+      await db.update(locations).set({ yodeckLayoutId: layoutResult.layoutId }).where(eq(locations.id, locationId));
+      logs.push(`[Autopilot] ✓ Layout ID opgeslagen: ${layoutResult.layoutId}`);
+    }
   }
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 3: Seed ADS with approved ads from database
+  // STEP 4: Seed ADS with approved ads from database
   // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 3: Approved ads toevoegen ───`);
+  logs.push(`[Autopilot] ─── STAP 4: Approved ads toevoegen ───`);
   let adsAdded = 0;
   
   // First seed with fallback
@@ -2714,9 +2853,9 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
   logs.push(`[Autopilot] ✓ ADS playlist heeft ${finalAdsCount} items`);
   
   // ═══════════════════════════════════════════════════════════════════════════
-  // STEP 4: Assign layout to screen with ADS playlist
+  // STEP 5: Assign layout to screen
   // ═══════════════════════════════════════════════════════════════════════════
-  logs.push(`[Autopilot] ─── STAP 4: Layout toewijzen aan scherm ───`);
+  logs.push(`[Autopilot] ─── STAP 5: Layout toewijzen aan scherm ───`);
   let pushed = false;
   let layoutAssigned = false;
   let yodeckDeviceId = location.yodeckDeviceId;
@@ -2733,19 +2872,28 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
     }
   }
   
-  if (yodeckDeviceId) {
+  if (yodeckDeviceId && layoutResult.layoutId) {
     const screenId = parseInt(yodeckDeviceId);
-    const adsPlaylistIdNum = parseInt(adsResult.playlistId);
+    const layoutIdNum = parseInt(layoutResult.layoutId);
     
-    if (!isNaN(screenId) && !isNaN(adsPlaylistIdNum)) {
-      const assignResult = await ensureBaselineLayoutOnScreen(screenId, adsPlaylistIdNum);
-      logs.push(...assignResult.logs);
+    if (!isNaN(screenId) && !isNaN(layoutIdNum)) {
+      // Assign the location-specific layout to the screen
+      logs.push(`[Autopilot] Layout ${layoutIdNum} toewijzen aan scherm ${screenId}...`);
       
-      layoutAssigned = assignResult.ok;
-      pushed = assignResult.ok;
+      const assignResult = await yodeckRequest<any>(`/screens/${screenId}/`, "PATCH", {
+        default_layout: layoutIdNum
+      });
       
-      if (!assignResult.ok) {
-        logs.push(`[Autopilot] ⚠️ Layout toewijzing niet gelukt: ${assignResult.error}`);
+      if (assignResult.ok) {
+        layoutAssigned = true;
+        logs.push(`[Autopilot] ✓ Layout toegewezen`);
+        
+        // Push screen to apply changes
+        const pushResult = await pushScreen(yodeckDeviceId);
+        pushed = pushResult.ok;
+        logs.push(`[Autopilot] Push: ${pushed ? "GESLAAGD" : pushResult.error}`);
+      } else {
+        logs.push(`[Autopilot] ⚠️ Layout toewijzing mislukt: ${assignResult.error}`);
       }
     } else {
       logs.push(`[Autopilot] ⚠️ Ongeldige screen/playlist ID`);
@@ -2800,7 +2948,10 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
     locationName: location.name,
     layoutAssigned,
     adsRepaired: adsAdded > 0 || adsSeedResult.seeded,
-    layout: { layoutId: layoutResult.layoutId, layoutName: layoutResult.layoutName },
+    layout: { 
+      layoutId: layoutResult.layoutId ? parseInt(layoutResult.layoutId) : null, 
+      layoutName: layoutResult.layoutName 
+    },
     ads: { playlistId: adsResult.playlistId, itemCount: finalAdsCount, adsAdded },
     pushed,
     logs,

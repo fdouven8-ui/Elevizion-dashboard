@@ -1,0 +1,170 @@
+DOEL
+Maak Elevizion/Yodeck “Autopilot” stabiel en idempotent:
+- Ieder scherm (Yodeck screen) krijgt een eigen layout + eigen BASE playlist + eigen ADS playlist.
+- Layout bevat nieuws+weer (zelfde opzet voor alle screens), maar geconfigureerd per locatie (stad/plaats).
+- ADS region in die layout is gebonden aan de ADS-playlist van die locatie.
+- ADS playlist vult zich automatisch met goedgekeurde uploads (placements) en als er geen placements zijn komt er automatisch fallback content zodat het scherm nooit “NO CONTENT TO PLAY” toont.
+- Geen 70+ duplicate playlists/layouts meer. Alles hergebruikt wat al bestaat.
+- Dashboard “content-status” moet dezelfde waarheid tonen als Yodeck (geen itemCount mismatch).
+
+HUIDIGE PROBLEMEN (uit logs)
+1) POST /playlist_items/ geeft 404 => die endpoint gebruiken we NIET meer. Alleen Yodeck v2 aanpak:
+   - GET /api/v2/playlists/{id}
+   - PATCH /api/v2/playlists/{id} met items array
+2) ensurePlaylist maakt tientallen duplicates. We moeten per locatie playlistId’s opslaan en re-gebruiken.
+3) Eén gedeelde layout (“Elevizion Standard | Bouwservice Douven”) draait op meerdere screens. Daardoor is ADS region binding niet per screen uniek.
+4) content-status itemCount mismatch: endpoint gebruikt niet live Yodeck data of overschrijft het verkeerd.
+
+WAT JE MOET BOUWEN (HARD REQUIREMENTS)
+
+A) CANONICAL STRUCTUUR PER LOCATIE (in DB)
+Breid locations tabel/entiteit uit (of gebruik bestaande kolommen) met:
+- yodeckBasePlaylistId (string/int)
+- yodeckAdsPlaylistId (string/int)
+- yodeckLayoutId (string/int)
+- yodeckWorkspaceId (optioneel, maar handig)
+- yodeckFolderId (optioneel)
+Zorg dat autopilot altijd eerst deze IDs gebruikt. Als ze leeg zijn: aanmaken en opslaan.
+
+B) ÉÉN MASTER TEMPLATE LAYOUT (globaal)
+Er is één “MASTER” layout in Yodeck (handmatig of via code) bv:
+- "Elevizion Baseline" of "Elevizion Master Template"
+Deze layout bevat 2 regions:
+1) BASE region (playlist) => nieuws/weer/basis content
+2) ADS region (playlist) => advertenties
+Autopilot mag NOOIT live screens laten draaien op de master template.
+Voor elke locatie maken we een CLONE layout:
+- "Elevizion Standard | <LocatieNaam>"
+en die clone krijgt de juiste playlists gekoppeld.
+
+C) LAYOUT CLONEN + REGIONS BINDEN (per locatie)
+Implementeer:
+- findMasterLayout(): zoekt exact “Elevizion Baseline” of “Elevizion Master Template”
+- cloneLayoutForLocation(masterLayoutId, location): maakt nieuwe layout met dezelfde regions/settings
+- bindRegionToPlaylist(layoutId, regionSelector, playlistId):
+   - Zoek in layout.regions welke region de ADS region is (op basis van item.type=playlist + region name/position; als je al een vaste id hebt: gebruik die).
+   - Zet region.item = { type:"playlist", id:<playlistId> }
+- idem voor BASE region naar basePlaylistId
+
+Belangrijk:
+- Geen “float problemen” meer: gebruik echte IDs/integers en update via PUT/PATCH layouts endpoint zoals jullie al doen.
+- Maak region-binding deterministisch: ADS region altijd dezelfde “slot” (bv rechts/onder) en BASE region de andere.
+
+D) PLAYLISTS AANMAKEN/REPAIR ZONDER DUPLICATES
+Schrijf ensureCanonicalPlaylists(location):
+- Als location.yodeckAdsPlaylistId bestaat => verify via GET /playlists/{id}. Als 404 => reset en opnieuw aanmaken.
+- Zelfde voor basePlaylistId.
+- Als IDs niet bestaan => zoek playlist op naam:
+   - "Ads | <LocationName>"
+   - "Base | <LocationName>"
+  Filter op workspace/folder als je die gebruikt.
+- Als er meerdere gevonden worden => kies LOWEST id als canonical, sla die op, en markeer de rest in logs als duplicates.
+  (Optioneel: verwijder duplicates via API als dat veilig is; anders alleen “ignore”.)
+
+Cruciaal: ensurePlaylist mag NIET blind create() doen als naam net anders gespaced is.
+Maak een normalizeName() en match case-insensitive + trim.
+Sla de gekozen ID altijd in DB op zodat volgende runs niet opnieuw gaan zoeken/aanmaken.
+
+E) ITEMS TOEVOEGEN AAN PLAYLIST (correcte v2 manier)
+Verwijder alle code die POST /playlist_items/ aanroept.
+Implementeer addMediaToPlaylist(playlistId, mediaId, durationSec):
+- GET /api/v2/playlists/{id} => haal bestaande items array op
+- Check of mediaId al bestaat in items (type="media" && id==mediaId) => zo ja: return ok (idempotent)
+- Voeg item toe met:
+  { "id": <mediaId>, "type":"media", "priority": nextPriority, "duration": durationSec }
+- PATCH /api/v2/playlists/{id} met volledige items array (bestaand + nieuw)
+- Daarna opnieuw GET /playlists/{id} en verify itemcount >= 1 en dat mediaId erin zit
+Log duidelijk: beforeCount, afterCount.
+
+LET OP: sommige APIs verwachten “items” met “id” als mediaId. Gebruik exact zoals jullie al loggen:
+PATCH payload: {"items":[{"id":29408113,"type":"media","priority":2,"duration":15}]}
+
+Maar: overschrijf niet per ongeluk alle items. Altijd read-modify-write.
+
+F) CONTENT GUARANTEE (NOOIT LEEG)
+Voor ADS playlist:
+- Als er placements/approved ads zijn => plaats die items
+- Als er geen placements zijn => zorg minimaal 1 fallback media item:
+  - Eerst probeer self-ad (config variabele mag bestaan maar is NIET verplicht)
+  - Anders: pak “eerste bruikbare video” (status finished) uit /media list en gebruik die
+  - Als echt geen enkele video bestaat => upload één standaard placeholder asset (maar die upload flow moet correct zijn via /media + /media/{id}/upload + upload/complete)
+Voor BASE playlist:
+- Zorg dat base playlist minimaal 1 “baseline” item heeft (kan een stille placeholder of een korte elevizion slide zijn), zodat layout altijd iets heeft voor de base playlist region (naast widgets).
+- Widgets (nieuws/weer) zitten in layout; playlists moeten tóch niet leeg zijn.
+
+G) SCREEN ASSIGNMENT (per locatie)
+Zorg dat screen altijd content draait:
+- PATCH/PUT /api/v2/screens/{screenId} met screen_content:
+  { source_type:"layout", source_id:<locationLayoutId>, source_name:"..." }
+- Daarna (als API/omgeving dat vereist) “push” of “save & push” equivalent uitvoeren als er endpoint voor is; anders vertrouwen op Yodeck update.
+
+H) “CONTENT STATUS” EINDBOSS FIX (geen mismatch)
+Fix /api/admin/locations/:id/content-status en /playlist-items:
+- itemCount moet komen uit LIVE Yodeck GET /playlists/{id} (of jullie cache die net gesynct is, maar dan moet cache exact van Yodeck komen).
+- Verwijder dubbel telwerk (niet DB-based gokken).
+- Als PATCH net is gedaan: markeer pendingSync=false en update lastSyncAt.
+
+I) AUTOPILOT WORKER LOGICA (idempotent + locks)
+Autopilot cycle per live locatie:
+1) ensureCanonicalPlaylists(location)
+2) ensureLocationLayout(location) -> clone master indien nodig + bind base/ads region
+3) assignLayoutToScreen(location.yodeckDeviceId, location.yodeckLayoutId)
+4) syncAdsForLocation(location):
+   - haal placements/approved ads uit DB
+   - update ADS playlist items (read-modify-write)
+   - content guarantee (fallback) als placements leeg
+5) verify:
+   - GET playlist items count
+   - GET screen content
+   - sla yodeck_playlist_verified_at en status op
+
+LOCKING:
+- per locationId lock (jullie hebben al per-resource locking): houd dat.
+- Maak alle stappen safe om meerdere keren achter elkaar te draaien zonder nieuwe playlists/layouts te maken.
+
+J) OPSCHONEN KNOPPEN / CHAOS
+- Laat debug endpoints bestaan, maar UI moet “1 status kaart” tonen:
+  “OK / needs repair”
+  en een “Repair now” knop alleen voor admin.
+- Haal onnodige handmatige knoppen weg die dezelfde repair doen.
+
+ACCEPTANCE CRITERIA (moet je testen)
+1) Voeg 2e screen toe met eigen yodeckDeviceId.
+   - Autopilot maakt: Ads | <Loc2> playlist, Base | <Loc2> playlist, Elevizion Standard | <Loc2> layout.
+   - Screen draait die layout.
+   - Ads playlist van loc1 en loc2 hebben eigen items.
+2) Run autopilot 10x:
+   - Aantal playlists/layouts blijft gelijk (geen duplicates).
+3) Als placements leeg zijn:
+   - Ads playlist heeft toch 1 fallback item
+   - Screen toont nooit “NO CONTENT TO PLAY”
+4) /content-status toont hetzelfde itemCount als GET /playlists/{id}.
+
+IMPLEMENTATIE DETAILS
+- Gebruik bestaande Yodeck client (Authorization: Token <label>:<token>).
+- Endpoints die je gebruikt:
+  GET/POST/PATCH /api/v2/playlists
+  GET/PATCH /api/v2/layouts/{id} (of PUT)
+  GET/PATCH /api/v2/screens/{id}
+  GET /api/v2/media (voor fallback video selectie)
+  (Upload flow alleen als echt nodig)
+- Schrijf duidelijke logs:
+  [EnsurePlaylists], [EnsureLayout], [BindRegions], [AssignScreen], [SyncAds], [ContentGuarantee], [Verify]
+
+BEGIN MET FIXES IN CODE
+1) Verwijder POST /playlist_items/ codepad volledig (dit veroorzaakt 404).
+2) Maak ensureCanonicalPlaylists + DB opslag.
+3) Maak per locatie layout clone + region bind.
+4) Update addMediaToPlaylist read-modify-write.
+5) Fix content-status itemCount bron (live yodeck playlist GET).
+6) Voeg “no duplicates” guard toe: als duplicates gevonden, kies 1 canonical en log rest.
+
+LEVER OP
+- PR/commit met bovenstaande aanpassingen
+- En een korte README in /docs/autopilot.md met:
+  - Master layout naming
+  - Wat autopilot maakt per locatie
+  - Hoe je een nieuwe locatie/screen toevoegt
+  - Troubleshooting (playlist empty, screen no content, duplicates)
+
+GA NU AAN DE SLAG EN PAS DIT TOE OP DE HUIDIGE LOCATIE “Bouwservice Douven” + screen 591896 EN bereid de code voor voor meerdere screens.
