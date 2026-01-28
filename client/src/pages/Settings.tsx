@@ -225,6 +225,248 @@ const FIELD_NAMES: Record<string, string> = {
   "telefoon": "Telefoon"
 };
 
+interface BaselineStatus {
+  configured: boolean;
+  playlistId: string | null;
+  playlistName: string | null;
+  itemCount: number;
+  items: Array<{ id: number; name: string; type: string; duration: number }>;
+  error?: string;
+}
+
+function BaselinePlaylistSettings() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [newPlaylistId, setNewPlaylistId] = useState("");
+  const [isTestDialogOpen, setIsTestDialogOpen] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; playlistName?: string; itemCount?: number; items?: Array<{ name: string }>; error?: string } | null>(null);
+
+  const { data: baselineStatus, isLoading, refetch } = useQuery<BaselineStatus>({
+    queryKey: ["baseline-status"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/settings/baseline-status", { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch baseline status");
+      return res.json();
+    },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: async (playlistId: string) => {
+      const res = await fetch("/api/admin/settings/baseline-playlist/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playlistId }),
+        credentials: "include",
+      });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setTestResult(data);
+    },
+    onError: (error: any) => {
+      toast({ variant: "destructive", title: "Test mislukt", description: error.message });
+    },
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: async (playlistId: string) => {
+      const res = await fetch("/api/admin/settings/baseline-playlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playlistId }),
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Baseline playlist opgeslagen" });
+      queryClient.invalidateQueries({ queryKey: ["baseline-status"] });
+      setIsTestDialogOpen(false);
+      setNewPlaylistId("");
+      setTestResult(null);
+    },
+    onError: (error: any) => {
+      toast({ variant: "destructive", title: "Opslaan mislukt", description: error.message });
+    },
+  });
+
+  const repairAllMutation = useMutation({
+    mutationFn: async () => {
+      const res = await fetch("/api/admin/autopilot/repair-all", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) throw new Error("Failed to repair");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ title: `Alle schermen gesynchroniseerd`, description: `${data.successCount} geslaagd, ${data.errorCount} mislukt` });
+    },
+    onError: (error: any) => {
+      toast({ variant: "destructive", title: "Sync mislukt", description: error.message });
+    },
+  });
+
+  return (
+    <div>
+      <h3 className="font-medium mb-4 flex items-center gap-2">
+        <Monitor className="h-4 w-4" />
+        Autopilot Baseline Playlist
+      </h3>
+      <div className="space-y-4">
+        <div className="p-4 border rounded-lg bg-muted/30">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="font-medium">Bron Playlist (Yodeck)</p>
+              <p className="text-sm text-muted-foreground">
+                Nieuwstickers, weer apps en andere basis content voor alle schermen
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {baselineStatus?.configured ? (
+                <Badge className="bg-green-100 text-green-800" data-testid="badge-baseline-configured">
+                  <CheckCircle className="h-3 w-3 mr-1" /> Geconfigureerd
+                </Badge>
+              ) : (
+                <Badge variant="destructive" data-testid="badge-baseline-not-configured">
+                  <XCircle className="h-3 w-3 mr-1" /> Niet geconfigureerd
+                </Badge>
+              )}
+            </div>
+          </div>
+
+          {isLoading ? (
+            <Skeleton className="h-20 w-full" />
+          ) : baselineStatus?.error ? (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+              <p className="text-sm text-red-700">{baselineStatus.error}</p>
+            </div>
+          ) : baselineStatus?.configured ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <span className="text-muted-foreground">Playlist ID:</span>
+                  <span className="ml-2 font-mono">{baselineStatus.playlistId}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Naam:</span>
+                  <span className="ml-2">{baselineStatus.playlistName}</span>
+                </div>
+              </div>
+              <div>
+                <span className="text-sm text-muted-foreground">Items ({baselineStatus.itemCount}):</span>
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {baselineStatus.items.map((item) => (
+                    <Badge key={item.id} variant="outline" className="text-xs">
+                      {item.name} ({item.duration}s)
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              Geen baseline playlist geconfigureerd. Voeg een Yodeck playlist ID toe.
+            </p>
+          )}
+
+          <div className="flex items-center gap-2 mt-4">
+            <Dialog open={isTestDialogOpen} onOpenChange={setIsTestDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="sm" data-testid="btn-configure-baseline">
+                  <Search className="h-4 w-4 mr-2" />
+                  {baselineStatus?.configured ? "Wijzigen" : "Configureren"}
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Baseline Playlist Configureren</DialogTitle>
+                  <DialogDescription>
+                    Voer het Yodeck playlist ID in. Deze playlist wordt gebruikt als basis voor alle schermen.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Yodeck playlist ID (bijv. 30400683)"
+                      value={newPlaylistId}
+                      onChange={(e) => setNewPlaylistId(e.target.value)}
+                      data-testid="input-baseline-playlist-id"
+                    />
+                    <Button
+                      variant="outline"
+                      onClick={() => testMutation.mutate(newPlaylistId)}
+                      disabled={!newPlaylistId || testMutation.isPending}
+                      data-testid="btn-test-baseline"
+                    >
+                      {testMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin" /> : "Test"}
+                    </Button>
+                  </div>
+                  {testResult && (
+                    <div className={`p-3 rounded-lg ${testResult.ok ? "bg-green-50 border border-green-200" : "bg-red-50 border border-red-200"}`}>
+                      {testResult.ok ? (
+                        <div className="space-y-2">
+                          <p className="font-medium text-green-800">Playlist gevonden</p>
+                          <p className="text-sm text-green-700">
+                            "{testResult.playlistName}" - {testResult.itemCount} items
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {testResult.items?.slice(0, 5).map((item, i) => (
+                              <Badge key={i} variant="outline" className="text-xs">{item.name}</Badge>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-red-700">{testResult.error}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsTestDialogOpen(false)}>Annuleren</Button>
+                  <Button
+                    onClick={() => saveMutation.mutate(newPlaylistId)}
+                    disabled={!testResult?.ok || saveMutation.isPending}
+                    data-testid="btn-save-baseline"
+                  >
+                    {saveMutation.isPending ? <RefreshCw className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}
+                    Opslaan
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              data-testid="btn-refresh-baseline"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+            {baselineStatus?.configured && (
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => repairAllMutation.mutate()}
+                disabled={repairAllMutation.isPending}
+                data-testid="btn-repair-all-screens"
+              >
+                {repairAllMutation.isPending ? (
+                  <RefreshCw className="h-4 w-4 animate-spin mr-2" />
+                ) : (
+                  <Zap className="h-4 w-4 mr-2" />
+                )}
+                Alle Schermen Synchroniseren
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function formatTemplateBody(body: string): string {
   return body.replace(/\{\{([^}]+)\}\}/g, (_, varName) => {
     const friendlyName = FIELD_NAMES[varName.trim()] || varName;
@@ -2409,6 +2651,10 @@ export default function Settings() {
                   ))}
                 </div>
               </div>
+
+              <Separator />
+
+              <BaselinePlaylistSettings />
             </CardContent>
           </Card>
         </TabsContent>
