@@ -12,6 +12,7 @@
 import { db } from "../db";
 import { screens } from "@shared/schema";
 import { eq } from "drizzle-orm";
+import { getYodeckToken } from "./yodeckClient";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 
@@ -19,16 +20,16 @@ async function yodeckRequest<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<{ ok: boolean; data?: T; error?: string }> {
-  const token = process.env.YODECK_AUTH_TOKEN;
-  if (!token) {
-    return { ok: false, error: "YODECK_AUTH_TOKEN not configured" };
+  const token = await getYodeckToken();
+  if (!token.isValid || !token.value) {
+    return { ok: false, error: token.error || "YODECK_AUTH_TOKEN not configured" };
   }
 
   try {
     const response = await fetch(`${YODECK_BASE_URL}${path}`, {
       ...options,
       headers: {
-        "Authorization": `Bearer ${token}`,
+        "Authorization": `Token ${token.value}`,
         "Content-Type": "application/json",
         ...options.headers,
       },
@@ -167,7 +168,7 @@ export async function yodeckAddMediaToPlaylist(
   const result = await yodeckRequest<any>(`/playlists/${playlistId}/`, {
     method: "PATCH",
     body: JSON.stringify({
-      items: newItems.map(id => ({ media_id: id })),
+      items: newItems.map((id, index) => ({ media_id: id, priority: index + 1 })),
     }),
   });
 
@@ -194,13 +195,20 @@ export async function yodeckClonePlaylistFromTemplate(
     return { ok: false, error: `Failed to get template items: ${templateItems.error}` };
   }
 
-  // Create new playlist
+  // Step 1: Create empty playlist first
+  const createPayload = {
+    name: newName,
+    type: "regular",
+    items: [] as any[],
+    add_gaps: false,
+    shuffle_content: false,
+  };
+  
+  console.log(`[YodeckBroadcast] Creating playlist with payload: ${JSON.stringify(createPayload)}`);
+  
   const createResult = await yodeckRequest<any>("/playlists/", {
     method: "POST",
-    body: JSON.stringify({
-      name: newName,
-      items: templateItems.items.map(id => ({ media_id: id })),
-    }),
+    body: JSON.stringify(createPayload),
   });
 
   if (!createResult.ok || !createResult.data?.id) {
@@ -208,7 +216,28 @@ export async function yodeckClonePlaylistFromTemplate(
   }
 
   const newPlaylistId = String(createResult.data.id);
-  console.log(`[YodeckBroadcast] Created playlist ${newPlaylistId} with ${templateItems.items.length} items`);
+  console.log(`[YodeckBroadcast] Created empty playlist ${newPlaylistId}`);
+
+  // Step 2: Add items via PATCH
+  if (templateItems.items.length > 0) {
+    const patchPayload = {
+      items: templateItems.items.map((id, index) => ({ media_id: id, priority: index + 1 })),
+    };
+    
+    console.log(`[YodeckBroadcast] Adding ${templateItems.items.length} items to playlist ${newPlaylistId}`);
+    
+    const patchResult = await yodeckRequest<any>(`/playlists/${newPlaylistId}/`, {
+      method: "PATCH",
+      body: JSON.stringify(patchPayload),
+    });
+    
+    if (!patchResult.ok) {
+      console.warn(`[YodeckBroadcast] Failed to add items to playlist: ${patchResult.error}`);
+      // Continue anyway - empty playlist is better than nothing
+    } else {
+      console.log(`[YodeckBroadcast] Added ${templateItems.items.length} items successfully`);
+    }
+  }
 
   return { ok: true, playlistId: newPlaylistId };
 }
