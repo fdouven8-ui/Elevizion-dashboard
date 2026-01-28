@@ -168,6 +168,24 @@ export default function ScreenDetail() {
     enabled: !!screenId,
     staleTime: 30000,
   });
+
+  const { data: contentStatus } = useQuery<{
+    ok: boolean;
+    combinedPlaylistId: string | null;
+    combinedPlaylistItemCount: number;
+    needsRepair: boolean;
+    lastSyncAt: string | null;
+    error?: string;
+  }>({
+    queryKey: ["location-content-status", screen?.locationId],
+    queryFn: async () => {
+      const response = await fetch(`/api/admin/locations/${screen?.locationId}/content-status`, { credentials: "include" });
+      if (!response.ok) return { ok: false, combinedPlaylistId: null, combinedPlaylistItemCount: 0, needsRepair: true };
+      return response.json();
+    },
+    enabled: !!screen?.locationId,
+    staleTime: 60000,
+  });
   
   const currentContent = screenDetail?.currentContent || [];
   const displayName = getScreenDisplayName(screen, location);
@@ -651,12 +669,29 @@ export default function ScreenDetail() {
                   ) : currentContent.length === 0 ? (
                     <p className="text-sm text-muted-foreground">Geen content gedetecteerd</p>
                   ) : (
-                    <p className="text-sm">
-                      {adsCount} ads, {nonAdsCount} overig
-                      {adsUnlinkedCount > 0 && (
-                        <span className="text-amber-600 ml-2">({adsUnlinkedCount} niet gekoppeld)</span>
+                    <div className="space-y-1">
+                      <p className="text-sm">
+                        {adsCount} ads, {nonAdsCount} overig
+                      </p>
+                      {/* Ads sync status based on desired vs actual */}
+                      {contentStatus && !contentStatus.needsRepair && adsCount === activePlacements.length && adsCount > 0 && (
+                        <Badge className="bg-green-600 text-white text-xs">
+                          <CheckCircle className="h-3 w-3 mr-1" />
+                          Ads gesynchroniseerd
+                        </Badge>
                       )}
-                    </p>
+                      {contentStatus && contentStatus.needsRepair && (
+                        <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
+                          <AlertCircle className="h-3 w-3 mr-1" />
+                          Sync in behandeling
+                        </Badge>
+                      )}
+                      {adsUnlinkedCount > 0 && (
+                        <p className="text-xs text-amber-600">
+                          {adsUnlinkedCount} ads niet in systeem bekend
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
                 
