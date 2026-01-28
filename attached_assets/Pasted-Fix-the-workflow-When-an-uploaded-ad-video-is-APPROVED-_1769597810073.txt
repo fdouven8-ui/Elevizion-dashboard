@@ -1,0 +1,41 @@
+Fix the workflow: When an uploaded ad video is APPROVED by me, it must automatically result in a placement and be published to screens. Right now the UI shows "Niet gekoppeld — Geen plaatsing" even though the asset is approved. That means we are missing the auto-placement step.
+
+GOAL
+APPROVE = automatically create placements + publish, without me manually adding placements.
+
+CURRENT STATE
+- Ad asset exists and is APPROVED (uploaded via portal and approved)
+- Content tab shows the asset, but status says "Geen plaatsing"
+- Per-screen playlist shows 0 items and screen plays nothing
+
+IMPLEMENT THIS AUTOMATION
+
+1) On adAsset approval event:
+- Create or update an AutoPlacementPlan for that advertiser/contract:
+  - Determine target screens using the existing rules (contract/package/region/cities)
+  - If no targets are selected/available, use a safe fallback for TESTING:
+    - If advertiser is internal/test OR there is exactly 1 screen in the system, place on that screen
+    - Otherwise put into WAITING with a clear reason
+
+2) Create Placement records:
+- For each target screen create a placement row linking:
+  adAssetId + screenId + contractId (+ startDate)
+- Mark placement ACTIVE
+- Ensure idempotency: approving twice must not create duplicates
+
+3) Publish immediately:
+- After creating placements, run:
+  ensureScreenPlaylist(screenId) -> include baseline + ads from placements
+  assignAndPushScreenContent(screenId, playlistId)
+  verify screen content points to playlist and playlist itemCount > 0
+
+4) UI changes:
+- Replace "Geen plaatsing" with:
+  - "Wordt geplaatst…" right after approval (while publish runs)
+  - Then "Gekoppeld" once placement exists and playlist contains it
+- In Plaatsingen tab: the placement should appear automatically after approval.
+- In "Wat draait nu?": items count must become > 0 (baseline at least) and ads count must reflect the new placement.
+
+ACCEPTANCE
+- I approve an uploaded video and within the same flow it becomes LIVE on the target screen(s) without manual steps.
+- The ad no longer shows "Geen plaatsing".
