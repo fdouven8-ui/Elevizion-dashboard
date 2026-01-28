@@ -103,6 +103,7 @@ export const advertisers = pgTable("advertisers", {
   strictResolution: boolean("strict_resolution").default(false), // If true, resolution/aspect ratio mismatches are errors instead of warnings
   // === PLACEMENT TARGETING FIELDS ===
   targetRegionCodes: text("target_region_codes").array(), // Target regions (e.g., ['NB', 'ZH']) or null/empty for ANY
+  targetCities: text("target_cities"), // Comma-separated target cities (e.g., "Amsterdam, Rotterdam") or null for ANY
   category: text("category"), // Advertiser category for location matching (horeca, retail, sport, etc.)
   businessCategory: text("business_category"), // Business type (barber, gym, horeca, etc.) - also used as default competitorGroup
   competitorGroup: text("competitor_group"), // Explicit competitor group (default = businessCategory, admin can override)
@@ -794,6 +795,10 @@ export const contracts = pgTable("contracts", {
   signedUserAgent: text("signed_user_agent"),
   signatureData: text("signature_data"), // Base64 signature image
   notes: text("notes"),
+  // === CONTRACT-LEVEL TARGETING OVERRIDES ===
+  // If set, these override advertiser-level targeting for THIS contract only
+  targetRegionCodesOverride: text("target_region_codes_override").array(), // Override regions (e.g., ['NB']) or null to use advertiser default
+  targetCitiesOverride: text("target_cities_override"), // Override cities CSV (e.g., "Maastricht, Heerlen") or null to use advertiser default
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

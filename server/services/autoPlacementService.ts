@@ -31,7 +31,8 @@ export interface AutoPlacementResult {
   errors: string[];
   message: string;
   testFallbackUsed?: boolean;
-  targetingMethod: "CONTRACT_MATCH" | "TEST_MODE_ALL" | "TEST_FALLBACK" | "NO_TARGETS";
+  targetingMethod: "CITY_MATCH" | "REGION_MATCH" | "TEST_MODE_ALL" | "TEST_FALLBACK" | "NO_MATCH";
+  targetingSource: "CONTRACT_OVERRIDE" | "ADVERTISER_DEFAULT" | "NONE";
 }
 
 interface ScreenWithLocation {
@@ -80,16 +81,19 @@ export async function createAutoPlacementsForAsset(
   let screensPublished = 0;
   const targetScreenIds: string[] = [];
   let testFallbackUsed = false;
-  let targetingMethod: AutoPlacementResult["targetingMethod"] = "NO_TARGETS";
+  let targetingMethod: AutoPlacementResult["targetingMethod"] = "NO_MATCH";
+  let targetingSource: AutoPlacementResult["targetingSource"] = "NONE";
 
   try {
     console.log(`[AutoPlacement] Starting for asset ${assetId}, advertiser ${advertiserId}`);
 
-    // 1. Find the advertiser's active contract
+    // 1. Find the advertiser's active contract WITH targeting overrides
     const activeContracts = await db.select({
       id: contracts.id,
       status: contracts.status,
       advertiserId: contracts.advertiserId,
+      targetRegionCodesOverride: contracts.targetRegionCodesOverride,
+      targetCitiesOverride: contracts.targetCitiesOverride,
     })
       .from(contracts)
       .where(and(
@@ -109,7 +113,8 @@ export async function createAutoPlacementsForAsset(
         targetScreens: [],
         errors: ["Geen actief contract gevonden voor deze adverteerder"],
         message: "Geen contract - placements niet aangemaakt",
-        targetingMethod: "NO_TARGETS"
+        targetingMethod: "NO_MATCH",
+        targetingSource: "NONE"
       };
     }
 
@@ -119,6 +124,7 @@ export async function createAutoPlacementsForAsset(
     // 2. Get advertiser targeting preferences
     const advertiserData = await db.select({
       targetRegionCodes: advertisers.targetRegionCodes,
+      targetCities: advertisers.targetCities,
       companyName: advertisers.companyName,
       notes: advertisers.notes,
     })
@@ -128,9 +134,31 @@ export async function createAutoPlacementsForAsset(
 
     const advertiser = advertiserData[0];
     const isTestAdvertiser = await isAdvertiserTest(advertiserId);
-    const targetRegions = advertiser?.targetRegionCodes || [];
     
-    console.log(`[AutoPlacement] Advertiser ${advertiser?.companyName}: regions=${JSON.stringify(targetRegions)}, isTest=${isTestAdvertiser}`);
+    // 3. Determine effective targeting (contract override OR advertiser default)
+    const hasContractOverride = (contract.targetRegionCodesOverride && contract.targetRegionCodesOverride.length > 0) ||
+                                 (contract.targetCitiesOverride && contract.targetCitiesOverride.trim().length > 0);
+    
+    targetingSource = hasContractOverride ? "CONTRACT_OVERRIDE" : "ADVERTISER_DEFAULT";
+    
+    // Parse targeting - contract override takes precedence
+    const targetRegions = hasContractOverride && contract.targetRegionCodesOverride?.length 
+      ? contract.targetRegionCodesOverride 
+      : (advertiser?.targetRegionCodes || []);
+    
+    // Parse cities from CSV (trim, lowercase, normalize)
+    const parseCityCsv = (csv: string | null | undefined): string[] => {
+      if (!csv || csv.trim() === "") return [];
+      return csv.split(",").map(c => c.trim().toLowerCase()).filter(c => c.length > 0);
+    };
+    
+    const targetCities = hasContractOverride && contract.targetCitiesOverride
+      ? parseCityCsv(contract.targetCitiesOverride)
+      : parseCityCsv(advertiser?.targetCities);
+    
+    console.log(`[AutoPlacement] Targeting source: ${targetingSource}`);
+    console.log(`[AutoPlacement] Target regions: ${JSON.stringify(targetRegions)}, cities: ${JSON.stringify(targetCities)}`);
+    console.log(`[AutoPlacement] Advertiser ${advertiser?.companyName}: isTest=${isTestAdvertiser}`);
 
     // 3. Get all screens with location info for targeting
     const allScreensWithLocations = await db.select({
@@ -152,7 +180,8 @@ export async function createAutoPlacementsForAsset(
         targetScreens: [],
         errors: ["Geen schermen met Yodeck gekoppeld"],
         message: "Geen schermen - placements niet aangemaakt",
-        targetingMethod: "NO_TARGETS"
+        targetingMethod: "NO_MATCH",
+        targetingSource: "NONE"
       };
     }
 
@@ -201,39 +230,53 @@ export async function createAutoPlacementsForAsset(
         targetScreens: [],
         errors: ["Geen online schermen gevonden (Yodeck status check)"],
         message: "Geen online schermen - placements niet aangemaakt",
-        targetingMethod: "NO_TARGETS"
+        targetingMethod: "NO_MATCH",
+        targetingSource
       };
     }
 
-    // 6. Apply targeting rules - STRICT: region AND city matching
+    // 6. Apply targeting rules - PRIORITY ORDER: City > Region > Test fallback
     let targetScreens: ScreenWithLocation[] = [];
+    const hasAnyTargeting = targetCities.length > 0 || targetRegions.length > 0;
 
-    // Primary: Match by region AND city if advertiser has targeting configured
-    if (targetRegions.length > 0) {
-      // First filter by region
+    // Step 1: Try CITY matching first (most specific)
+    if (targetCities.length > 0) {
+      const cityMatches = onlineScreens.filter(s => {
+        if (!s.locationCity) return false;
+        const normalizedCity = s.locationCity.trim().toLowerCase();
+        return targetCities.includes(normalizedCity);
+      });
+      
+      if (cityMatches.length > 0) {
+        targetScreens = cityMatches;
+        targetingMethod = "CITY_MATCH";
+        console.log(`[AutoPlacement] CITY_MATCH: ${targetScreens.length} screens in cities ${JSON.stringify(targetCities)}`);
+      }
+    }
+
+    // Step 2: If no city matches (or no city targeting), try REGION matching
+    if (targetScreens.length === 0 && targetRegions.length > 0) {
       const regionMatches = onlineScreens.filter(s => 
         s.locationRegion && targetRegions.includes(s.locationRegion)
       );
       
-      // TODO: If targetCities is added to advertisers, also filter by city
-      // For now, region match is sufficient for contract targeting
-      targetScreens = regionMatches;
-      
-      if (targetScreens.length > 0) {
-        targetingMethod = "CONTRACT_MATCH";
-        console.log(`[AutoPlacement] CONTRACT_MATCH: ${targetScreens.length} screens in regions ${JSON.stringify(targetRegions)}`);
+      if (regionMatches.length > 0) {
+        targetScreens = regionMatches;
+        targetingMethod = "REGION_MATCH";
+        console.log(`[AutoPlacement] REGION_MATCH: ${targetScreens.length} screens in regions ${JSON.stringify(targetRegions)}`);
       }
     }
 
-    // Fallback 1: TEST_MODE or internal advertiser -> all online screens
-    // IMPORTANT: Only allow this if no contract targeting was specified
-    if (targetScreens.length === 0 && targetRegions.length === 0 && (TEST_MODE || isTestAdvertiser)) {
+    // Step 3: Fallback to TEST_MODE_ALL only if NO targeting was configured
+    // SAFETY: Never fallback to "all" when targeting exists but has no matches
+    if (targetScreens.length === 0 && !hasAnyTargeting && (TEST_MODE || isTestAdvertiser)) {
       targetScreens = onlineScreens;
       targetingMethod = "TEST_MODE_ALL";
-      console.log(`[AutoPlacement] TEST_MODE_ALL: Using all ${targetScreens.length} online screens (TEST_MODE=${TEST_MODE}, isInternal=${isTestAdvertiser}, no regions configured)`);
+      targetingSource = "NONE"; // No targeting configured
+      console.log(`[AutoPlacement] TEST_MODE_ALL: Using all ${targetScreens.length} online screens (no targeting configured)`);
     }
 
-    // Fallback 2: Use TEST_SCREEN_ID only (always available as last resort)
+    // Step 4: Final fallback to TEST_SCREEN_ID only
     if (targetScreens.length === 0) {
       const testScreenId = await getTestScreenId();
       if (testScreenId) {
@@ -242,26 +285,27 @@ export async function createAutoPlacementsForAsset(
           targetScreens = [testScreen];
           testFallbackUsed = true;
           targetingMethod = "TEST_FALLBACK";
-          console.log(`[AutoPlacement] TEST_FALLBACK: Using test screen ${testScreenId} (regions=${JSON.stringify(targetRegions)} had no matches)`);
+          console.log(`[AutoPlacement] TEST_FALLBACK: Using test screen ${testScreenId} (targeting=${JSON.stringify({cities: targetCities, regions: targetRegions})} had no matches)`);
         }
       }
     }
 
-    // No targets found
+    // No targets found at all
     if (targetScreens.length === 0) {
-      console.log(`[AutoPlacement] No matching screens for targeting`);
+      console.log(`[AutoPlacement] NO_MATCH: No screens matched targeting`);
       return {
         success: false,
         placementsCreated: 0,
         screensPublished: 0,
         targetScreens: [],
-        errors: ["Geen schermen gevonden die matchen met de targeting van dit contract"],
+        errors: [`Geen schermen gevonden voor targeting: cities=${JSON.stringify(targetCities)}, regions=${JSON.stringify(targetRegions)}`],
         message: "Geen matching schermen - placements niet aangemaakt",
-        targetingMethod: "NO_TARGETS"
+        targetingMethod: "NO_MATCH",
+        targetingSource
       };
     }
 
-    console.log(`[AutoPlacement] Targeting ${targetScreens.length} screens via ${targetingMethod}`);
+    console.log(`[AutoPlacement] Targeting ${targetScreens.length} screens via ${targetingMethod} (source: ${targetingSource})`);
 
     // 7. Create placements for each target screen (with idempotency check)
     const today = new Date().toISOString().split('T')[0];
@@ -337,9 +381,10 @@ export async function createAutoPlacementsForAsset(
       screensPublished,
       targetScreens: targetScreenIds,
       errors,
-      message,
+      message: `${message} (bron: ${targetingSource})`,
       testFallbackUsed,
       targetingMethod,
+      targetingSource,
     };
   } catch (error: any) {
     console.error("[AutoPlacement] Fatal error:", error);
@@ -350,7 +395,8 @@ export async function createAutoPlacementsForAsset(
       targetScreens: targetScreenIds,
       errors: [error.message],
       message: "Fout bij auto-placement: " + error.message,
-      targetingMethod: "NO_TARGETS"
+      targetingMethod: "NO_MATCH",
+      targetingSource: "NONE"
     };
   }
 }
