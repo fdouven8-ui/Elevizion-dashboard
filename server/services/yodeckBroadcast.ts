@@ -299,17 +299,26 @@ export async function ensureScreenPlaylist(screenId: string): Promise<EnsurePlay
   const items = await yodeckGetPlaylistItems(playlistId);
   const itemCount = items.items?.length || 0;
 
+  let finalItemCount = itemCount;
+  
   if (itemCount === 0) {
     console.warn(`[YodeckBroadcast] Playlist ${playlistId} is empty, re-seeding from template`);
     const templateItems = await yodeckGetPlaylistItems(templateId);
     if (templateItems.ok && templateItems.items && templateItems.items.length > 0) {
+      let addedCount = 0;
       for (const mediaId of templateItems.items) {
-        await yodeckAddMediaToPlaylist(playlistId, mediaId);
+        const addResult = await yodeckAddMediaToPlaylist(playlistId, mediaId);
+        if (addResult.ok) addedCount++;
       }
+      console.log(`[YodeckBroadcast] Re-seeded ${addedCount}/${templateItems.items.length} items to playlist ${playlistId}`);
+      
+      // Re-fetch to get actual count
+      const refetch = await yodeckGetPlaylistItems(playlistId);
+      finalItemCount = refetch.items?.length || addedCount;
     }
   }
 
-  return { ok: true, playlistId, created, itemCount };
+  return { ok: true, playlistId, created, itemCount: finalItemCount };
 }
 
 export interface PushResult {
