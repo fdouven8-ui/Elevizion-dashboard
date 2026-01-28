@@ -401,7 +401,7 @@ async function findPlaylistByName(name: string): Promise<{ id: number; name: str
 async function createPlaylist(name: string): Promise<{ ok: boolean; playlistId?: number; error?: string }> {
   const result = await yodeckRequest<any>(`/playlists/`, "POST", {
     name,
-    type: "classic",
+    type: "mixed", // mixed supports both media and app items (news/weather widgets)
     items: [],
     description: "Auto-managed by Elevizion Dashboard",
   });
