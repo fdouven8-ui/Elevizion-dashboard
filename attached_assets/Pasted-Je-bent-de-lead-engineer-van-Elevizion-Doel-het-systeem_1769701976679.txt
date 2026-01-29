@@ -1,0 +1,230 @@
+Je bent de lead engineer van Elevizion. Doel: het systeem moet 100% betrouwbaar “playlist-only digital signage” draaien met Yodeck: geen layouts, nooit zwart beeld, ads alleen op juiste schermen, en na elke wijziging automatisch push + verify + self-heal.
+
+0) Non-negotiables / Scope
+
+Het platform draait EXCLUSIEF in PLAYLIST MODE (SCREEN_PLAYLIST_ONLY).
+
+Alle bestaande “ForceLayout / ApplyLayout / ForceReset layout” codepaden mogen nooit meer activeren in productie of test. Als er nog endpoints/workers zijn die layouts kunnen toepassen: hard disable.
+
+Publishing mag NOOIT naar een scherm gaan dat niet aan een locationId gekoppeld is (unlinked). Unlinked screens zijn read-only en krijgen alleen baseline, nooit advertiser ads.
+
+Elke playlist die aan een screen hangt moet altijd minstens 1 gegarandeerd renderbaar item hebben (fallback) -> geen zwart beeld.
+
+Elke publish actie eindigt met: update playlist → push → verify (poll) → screenshot/now-playing check → self-heal indien nodig.
+
+1) Fix: “Ads komen op beide schermen”
+Probleem
+
+In logs:
+
+Screen 591896 playlistId 30532596
+
+Screen 591895 playlistId 30532597
+Beide playlists bevatten dezelfde ad mediaIds (29378800, 29408113). Dat mag alleen als beide schermen geselecteerd zijn door targeting. Basil (maasbracht) is unlinked en hoort NIET mee te doen.
+
+Oplossing (hard rules)
+
+Implementeer in de Targeting Resolver + Publisher een harde gate:
+
+ELIGIBLE screens =
+
+screen.locationId bestaat én verwijst naar een actieve location record
+
+location.status = active
+
+location.readyForAds = true
+
+location.pausedByAdmin = false
+
+screen.isActive = true
+
+screen.linkStatus = linked (of equivalent)
+
+location heeft geldige targeting velden (city of regionCode)
+
+NOOIT locationId die begint met YODECK- of “unlinked placeholder”.
+
+Als een screen unlinked is (zoals Basil 591895):
+
+Toon in UI: “Niet gekoppeld → ontvangt geen advertenties”
+
+Sluit hem 100% uit van publish (ook in TEST_MODE), tenzij expliciet forceIncludeUnlinked=true (alleen admin debug).
+
+Acceptance test
+
+Adverteerder target Sittard + package SINGLE=1 -> exact 1 screen geselecteerd: 591896.
+
+591895 moet 0 ads houden (alleen baseline/fallback).
+
+2) Fix: “Zwart beeld” (meest kritisch)
+
+Zwart beeld betekent: player krijgt content maar kan niks renderen of blijft hangen op corrupt/invalid item.
+
+2.1: “Renderbare content” garantie (fallback)
+
+Maak een permanent fallback asset (bijv. een simpele PNG “Elevizion – even geduld” of een MP4 5s) die 100% zeker afspeelt (klein bestand, standaard codec).
+Sla dit op in Yodeck en bewaar FALLBACK_MEDIA_ID in settings.
+
+Rule: elke screen playlist moet altijd minimaal:
+
+baseline items (nieuws/weer/etc) óf
+
+fallback item
+
+Als baseline niet configured is (baselinePlaylistId=null in jouw logs): dan moet het systeem automatisch fallback injecteren zodat het scherm nooit leeg is.
+
+2.2: “Bad media quarantine” (kapotte/0 bytes/processing)
+
+Jullie hadden eerder: empty video found / unfinished video found. Dat mag nooit in een playlist terechtkomen.
+Je hebt al een upload pipeline + media readiness gate, maar je ziet nog steeds dubieuze situatie: 2 media IDs met exact dezelfde naam. Dit is vaak een teken van:
+
+duplicate upload attempts
+
+één item is corrupt/0 bytes maar heeft toch een duration (of yodeck metadata is inconsistent)
+
+Maak een YodeckMediaVerifier die vóór publish én periodiek draait:
+
+Haal media status op (fileSize, status, duration, processing state)
+
+Markeer media als:
+
+OK
+
+NOT_READY (processing/uploading)
+
+BROKEN (fileSize=0, failed, duration missing, encoding stuck > timeout)
+
+BROKEN => automatisch verwijderen uit playlists + markeer in DB (permanent_fail) + notify
+
+Cruciaal: als playlist items BROKEN bevatten, kan de player zwart gaan of vastlopen.
+
+2.3: “Push + Verify + Self-heal”
+
+Na elke playlist wijziging:
+
+PATCH playlist items
+
+POST /screens/{id}/push/ (retry 3x)
+
+Verify loop (max 60s):
+
+check screen content source blijft playlist met juiste source_id
+
+check playlist itemCount > 0
+
+check er is minstens 1 item met MediaVerifier=OK
+
+Als verify faalt:
+
+self-heal: inject fallback media als enige item, push opnieuw
+
+log SELF_HEAL_APPLIED
+
+return duidelijke error naar UI met oorzaak (bijv. “No renderable items”).
+
+Acceptance test
+
+Als je een corrupt video uploadt: publish blokkeert + niets wordt gepusht.
+
+Als je per ongeluk een playlist leeg maakt: systeem injecteert fallback + push -> geen zwart scherm.
+
+3) Stop “layout mode” definitief
+
+Er zijn logs van ForceLayout die layout aanmaakt en toepast. Dat is nu een regressie.
+
+Acties
+
+Introduceer één config flag: CONTENT_PIPELINE_MODE=SCREEN_PLAYLIST_ONLY
+
+In code: alle layout functies:
+
+ForceLayout, ApplyLayout, EnsureLayout, ForceReset -> throw met “Layouts disabled in playlist-only mode”.
+
+Verwijder/disable UI entry “Layouts” of verstop achter superadmin.
+
+Acceptance test
+
+Geen enkele route kan layout toepassen.
+
+Screen blijft altijd source_type=playlist.
+
+4) Maak publishing deterministisch (geen “scan en hoop”)
+
+Je wilt dat het hele proces “zoals wij willen” werkt: upload → canonical media → publish naar juiste screens.
+
+Flow
+
+Upload pipeline levert advertiser.yodeckMediaIdCanonical (1 item)
+
+Publisher gebruikt altijd canonical media, nooit “random scan” behalve als admin debug.
+
+Targeting resolver selecteert screens (met harde eligibility gate)
+
+Publisher update elke geselecteerde screen playlist:
+
+ensure baseline (of fallback)
+
+ensure ad media aanwezig
+
+remove broken duplicates
+
+Push + verify + self-heal
+
+5) UI correct maken (nu staat “Niet gekoppeld” terwijl ad in playlist zit)
+
+In jouw screenshot staan ads als “Niet gekoppeld / Geen plaatsing” terwijl ze wél in playlist zitten. Dat betekent: UI status komt uit placements/contracts, maar in TEST_MODE publiceer je zonder contracts.
+
+Fix UI status model
+
+Splits UI “Content aanwezig op screen” vs “Contract/plaatsing status”.
+
+Toon in TEST_MODE:
+
+“Content staat op scherm (TEST publish)” + details (playlistId, mediaId)
+
+Maak 1 bron van waarheid:
+
+screen_current_content (what’s on playlist)
+
+placements (commercial truth)
+In TEST_MODE mag “commercial truth” leeg zijn, maar content kan toch live staan.
+
+6) Diagnostics die je nodig hebt (om nooit meer te gokken)
+
+Voeg endpoints toe (of verbeter) met 1 klik debug:
+
+GET /api/admin/diagnostics/screen/:screenId/renderability
+
+playlistId, itemCount, okItemsCount, brokenItems, fallbackPresent, lastPushResult
+
+POST /api/admin/screens/:screenId/self-heal
+
+force fallback-only + push
+
+GET /api/admin/diagnostics/publish/:advertiserId
+
+gekozen screens + scores + “why excluded” (unlinked, not ready, city mismatch)
+
+7) Concrete “Definition of Done”
+
+Het is pas klaar als:
+
+Adverteerder met SINGLE target Sittard -> alleen screen 591896 krijgt de ad.
+
+Unlinked screen 591895 -> nooit advertiser ads.
+
+TV toont nooit zwart beeld: bij fouten -> fallback zichtbaar binnen 60s.
+
+Geen layout codepad kan draaien.
+
+Elke publish eindigt met push+verify en geeft duidelijke status terug in UI.
+
+8) Levering
+
+Implementeer dit met minimale refactor maar harde guards. Update tests + voeg 3 integratietests toe:
+
+publish_single_city_targets_one_screen
+
+publish_excludes_unlinked_screens
+
+self_heal_injects_fallback_on_non_renderable_playlist

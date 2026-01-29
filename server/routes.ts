@@ -19005,6 +19005,156 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // DIAGNOSTICS ENDPOINTS
+  // ============================================================================
+
+  /**
+   * GET /api/admin/diagnostics/screen/:screenId/renderability
+   * Check if screen playlist is renderable
+   */
+  app.get("/api/admin/diagnostics/screen/:screenId/renderability", requireAdminAccess, async (req, res) => {
+    try {
+      const { getScreenRenderability } = await import("./services/productionBroadcast");
+      const result = await getScreenRenderability(req.params.screenId);
+      
+      if (!result) {
+        return res.status(404).json({ ok: false, error: "Screen or playlist not found" });
+      }
+      
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      console.error("[Diagnostics] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/:screenId/self-heal
+   * Force self-heal on a screen (inject fallback + push)
+   */
+  app.post("/api/admin/screens/:screenId/self-heal", requireAdminAccess, async (req, res) => {
+    try {
+      const { selfHealPlaylist } = await import("./services/productionBroadcast");
+      const screens = await storage.getScreens();
+      const screen = screens.find(s => s.id === req.params.screenId);
+      
+      if (!screen?.playlistId || !screen?.yodeckPlayerId) {
+        return res.status(404).json({ ok: false, error: "Screen or playlist not found" });
+      }
+      
+      const result = await selfHealPlaylist(
+        parseInt(screen.playlistId, 10),
+        parseInt(screen.yodeckPlayerId, 10)
+      );
+      
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      console.error("[SelfHeal] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/diagnostics/publish/:advertiserId
+   * Get publish diagnostics for an advertiser (screens + targeting + eligibility)
+   */
+  app.get("/api/admin/diagnostics/publish/:advertiserId", requireAdminAccess, async (req, res) => {
+    try {
+      const { resolveTargetingWithDiagnostics } = await import("./services/productionBroadcast");
+      const diagnostics = await resolveTargetingWithDiagnostics(req.params.advertiserId);
+      res.json({ ok: true, diagnostics });
+    } catch (error: any) {
+      console.error("[PublishDiagnostics] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/broadcast/fallback
+   * Get fallback media configuration
+   */
+  app.get("/api/admin/broadcast/fallback", requireAdminAccess, async (req, res) => {
+    try {
+      const { getFallbackMediaId, verifyMedia } = await import("./services/productionBroadcast");
+      const mediaId = await getFallbackMediaId();
+      
+      if (!mediaId) {
+        return res.json({ ok: true, configured: false, mediaId: null });
+      }
+      
+      const verifyResult = await verifyMedia(mediaId);
+      res.json({ 
+        ok: true, 
+        configured: true, 
+        mediaId,
+        status: verifyResult.status,
+        yodeckStatus: verifyResult.yodeckStatus
+      });
+    } catch (error: any) {
+      console.error("[FallbackGet] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/broadcast/fallback
+   * Configure fallback media ID
+   */
+  app.post("/api/admin/broadcast/fallback", requireAdminAccess, async (req, res) => {
+    try {
+      const { setFallbackMediaId } = await import("./services/productionBroadcast");
+      const { mediaId } = req.body;
+      
+      if (typeof mediaId !== "number") {
+        return res.status(400).json({ ok: false, error: "mediaId must be a number" });
+      }
+      
+      const result = await setFallbackMediaId(mediaId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[FallbackSet] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/broadcast/publish-with-heal
+   * Publish ad to screens with verify + self-heal
+   */
+  app.post("/api/admin/broadcast/publish-with-heal", requireAdminAccess, async (req, res) => {
+    try {
+      const { publishWithVerifyAndHeal } = await import("./services/productionBroadcast");
+      const { advertiserId, mediaId } = req.body;
+      
+      if (!advertiserId || typeof mediaId !== "number") {
+        return res.status(400).json({ ok: false, error: "advertiserId and mediaId required" });
+      }
+      
+      const result = await publishWithVerifyAndHeal(advertiserId, mediaId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PublishWithHeal] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/broadcast/verify-media/:mediaId
+   * Verify a media item's status
+   */
+  app.get("/api/admin/broadcast/verify-media/:mediaId", requireAdminAccess, async (req, res) => {
+    try {
+      const { verifyMedia } = await import("./services/productionBroadcast");
+      const mediaId = parseInt(req.params.mediaId, 10);
+      const result = await verifyMedia(mediaId);
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      console.error("[VerifyMedia] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
   // LEGACY LAYOUT ROUTES - BLOCKED (410 Gone)
   // ============================================================================
 

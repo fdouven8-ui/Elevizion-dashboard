@@ -4,10 +4,13 @@
  * HARD REQUIREMENTS:
  * 1. NEVER use layout mode (source_type="layout" is FORBIDDEN)
  * 2. Every screen has exactly 1 canonical playlist
- * 3. Baseline items (min 4) must always be present
+ * 3. Baseline items (min 4) must always be present + fallback guarantee
  * 4. Ads go to CORRECT screens only, removed from WRONG screens
  * 5. Media must be READY (fileSize > 0, status = Live) before publishing
- * 6. Auto-push after every playlist change with verify step
+ * 6. Auto-push after every playlist change with verify + self-heal
+ * 
+ * CONTENT_PIPELINE_MODE = SCREEN_PLAYLIST_ONLY
+ * All layout functions are HARD DISABLED.
  */
 
 import { storage } from "../storage";
@@ -15,7 +18,39 @@ import { getYodeckToken } from "./yodeckClient";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 
+export const CONTENT_PIPELINE_MODE = "SCREEN_PLAYLIST_ONLY";
 export const BASELINE_MIN_ITEMS = 4;
+export const VERIFY_TIMEOUT_MS = 60000;
+export const PUSH_RETRY_COUNT = 3;
+
+export type MediaStatus = "OK" | "NOT_READY" | "BROKEN";
+
+export interface MediaVerifyResult {
+  mediaId: number;
+  status: MediaStatus;
+  fileSize: number;
+  duration: number | null;
+  yodeckStatus: string;
+  reason: string;
+}
+
+export interface RenderabilityResult {
+  playlistId: number;
+  itemCount: number;
+  okItemsCount: number;
+  brokenItems: MediaVerifyResult[];
+  fallbackPresent: boolean;
+  isRenderable: boolean;
+  lastPushResult?: string;
+}
+
+export interface SelfHealResult {
+  applied: boolean;
+  reason: string;
+  fallbackInjected: boolean;
+  pushed: boolean;
+  verified: boolean;
+}
 
 export interface ContentWriteGateResult {
   enabled: boolean;
@@ -165,15 +200,21 @@ export async function getBaselineMediaIds(): Promise<{ ok: boolean; mediaIds: nu
   return { ok: true, mediaIds };
 }
 
-export async function getPlaylistItems(playlistId: number): Promise<{ ok: boolean; items: number[]; error?: string }> {
+export async function getPlaylistItems(playlistId: number): Promise<{ ok: boolean; items: number[]; rawItems?: any[]; error?: string }> {
   const result = await yodeckFetch("GET", `/playlists/${playlistId}/`);
   if (!result.ok) {
     return { ok: false, items: [], error: result.error };
   }
   
   const playlist = result.data;
-  const items = playlist.items || [];
-  return { ok: true, items };
+  const rawItems = playlist.items || [];
+  const items = rawItems.map((item: any) => {
+    if (typeof item === "number") return item;
+    if (typeof item === "object" && item.id) return item.id;
+    return null;
+  }).filter((id: number | null): id is number => id !== null);
+  
+  return { ok: true, items, rawItems };
 }
 
 export async function updatePlaylistItems(playlistId: number, items: number[]): Promise<{ ok: boolean; error?: string }> {
@@ -288,15 +329,37 @@ export async function resolveTargetingWithDiagnostics(advertiserId: string): Pro
     const city = (screen.city || location?.city || "").toLowerCase();
     const regionCode = (location?.regionCode || "").toLowerCase();
     
-    if (!location || location.status !== "active" || !location.readyForAds) {
+    const isUnlinked = !screen.locationId || 
+                       screen.locationId.startsWith("YODECK-") || 
+                       screen.locationId === "unlinked";
+    const isPaused = location?.pausedByAdmin === true;
+    const isScreenInactive = screen.isActive === false;
+    
+    let eligibilityReason = "";
+    if (isUnlinked) {
+      eligibilityReason = "UNLINKED: screen has no valid location";
+    } else if (!location) {
+      eligibilityReason = "NO_LOCATION: location record not found";
+    } else if (location.status !== "active") {
+      eligibilityReason = `INACTIVE: location.status=${location.status}`;
+    } else if (!location.readyForAds) {
+      eligibilityReason = "NOT_READY_FOR_ADS: location.readyForAds=false";
+    } else if (isPaused) {
+      eligibilityReason = "PAUSED_BY_ADMIN: location.pausedByAdmin=true";
+    } else if (isScreenInactive) {
+      eligibilityReason = "SCREEN_INACTIVE: screen.isActive=false";
+    }
+    
+    if (eligibilityReason) {
       candidates.push({
         screenId: screen.id,
         screenName: screen.name || "Unknown",
         city,
         score: 0,
-        reason: !location ? "NO_LOCATION" : location.status !== "active" ? "INACTIVE" : "NOT_READY_FOR_ADS",
+        reason: eligibilityReason,
         selected: false,
       });
+      console.log(`[ELIGIBILITY_GATE] EXCLUDED screen=${screen.name} reason=${eligibilityReason}`);
       continue;
     }
 
@@ -403,28 +466,16 @@ export async function checkMediaReadiness(mediaId: number): Promise<{
   status: string;
   error?: string;
 }> {
-  const result = await yodeckFetch("GET", `/media/${mediaId}/`);
-  if (!result.ok) {
-    return { ready: false, fileSize: 0, duration: null, status: "unknown", error: result.error };
-  }
-
-  const media = result.data;
-  const fileSize = media.file_size || 0;
-  const duration = media.duration || null;
-  const status = media.status || "unknown";
-
-  const blockedStatuses = ["initialized", "uploading", "encoding", "processing", "failed"];
-  const isBlockedByStatus = blockedStatuses.includes(status.toLowerCase());
-  const isApp = status.toLowerCase() === "finished" && fileSize === 0 && !duration;
-  const isBlocked = isBlockedByStatus || (!isApp && fileSize === 0);
-
-  console.log(`[MEDIA_GATE] media=${mediaId} READY=${!isBlocked} isApp=${isApp} fileSize=${fileSize} duration=${duration} status=${status}`);
-
+  const verifyResult = await verifyMedia(mediaId);
+  
+  console.log(`[MEDIA_GATE] media=${mediaId} status=${verifyResult.status} yodeckStatus=${verifyResult.yodeckStatus} fileSize=${verifyResult.fileSize}`);
+  
   return {
-    ready: !isBlocked,
-    fileSize,
-    duration,
-    status,
+    ready: verifyResult.status === "OK",
+    fileSize: verifyResult.fileSize,
+    duration: verifyResult.duration,
+    status: verifyResult.yodeckStatus,
+    error: verifyResult.status !== "OK" ? verifyResult.reason : undefined,
   };
 }
 
@@ -601,4 +652,296 @@ export async function publishAdToScreens(
   }
 
   return { ok: true, results, diagnostics };
+}
+
+// ============================================================================
+// MEDIA VERIFIER - Validates media before publishing
+// ============================================================================
+
+export async function verifyMedia(mediaId: number): Promise<MediaVerifyResult> {
+  const result = await yodeckFetch("GET", `/media/${mediaId}/`);
+  
+  if (!result.ok) {
+    return {
+      mediaId,
+      status: "BROKEN",
+      fileSize: 0,
+      duration: null,
+      yodeckStatus: "unknown",
+      reason: `API error: ${result.error}`,
+    };
+  }
+  
+  const media = result.data;
+  const fileSize = media.file_size || 0;
+  const duration = media.duration || null;
+  const yodeckStatus = (media.status || "unknown").toLowerCase();
+  
+  const okStatuses = ["finished", "live", "ready", "published"];
+  const notReadyStatuses = ["initialized", "uploading", "encoding", "processing", "pending"];
+  const brokenStatuses = ["failed", "error", "deleted", "rejected"];
+  
+  if (brokenStatuses.includes(yodeckStatus)) {
+    return {
+      mediaId,
+      status: "BROKEN",
+      fileSize,
+      duration,
+      yodeckStatus,
+      reason: `Status indicates failure: ${yodeckStatus}`,
+    };
+  }
+  
+  if (notReadyStatuses.includes(yodeckStatus)) {
+    return {
+      mediaId,
+      status: "NOT_READY",
+      fileSize,
+      duration,
+      yodeckStatus,
+      reason: `Still processing: ${yodeckStatus}`,
+    };
+  }
+  
+  const isApp = okStatuses.includes(yodeckStatus) && fileSize === 0 && !duration;
+  const isVideo = okStatuses.includes(yodeckStatus) && fileSize > 0;
+  
+  if (!isApp && !isVideo) {
+    if (fileSize === 0) {
+      return {
+        mediaId,
+        status: "BROKEN",
+        fileSize,
+        duration,
+        yodeckStatus,
+        reason: `fileSize=0 for non-app media (status=${yodeckStatus})`,
+      };
+    }
+    if (!okStatuses.includes(yodeckStatus)) {
+      return {
+        mediaId,
+        status: "NOT_READY",
+        fileSize,
+        duration,
+        yodeckStatus,
+        reason: `Unknown status: ${yodeckStatus}`,
+      };
+    }
+  }
+  
+  return {
+    mediaId,
+    status: "OK",
+    fileSize,
+    duration,
+    yodeckStatus,
+    reason: isApp ? "App media is ready" : `Video ready (fileSize=${fileSize})`,
+  };
+}
+
+export async function verifyPlaylistRenderability(playlistId: number): Promise<RenderabilityResult> {
+  const itemsResult = await getPlaylistItems(playlistId);
+  
+  if (!itemsResult.ok) {
+    return {
+      playlistId,
+      itemCount: 0,
+      okItemsCount: 0,
+      brokenItems: [],
+      fallbackPresent: false,
+      isRenderable: false,
+      lastPushResult: itemsResult.error,
+    };
+  }
+  
+  const items = itemsResult.items;
+  const verifyResults: MediaVerifyResult[] = [];
+  
+  for (const mediaId of items) {
+    const verifyResult = await verifyMedia(mediaId);
+    verifyResults.push(verifyResult);
+  }
+  
+  const okItems = verifyResults.filter(r => r.status === "OK");
+  const brokenItems = verifyResults.filter(r => r.status === "BROKEN");
+  
+  const fallbackId = await getFallbackMediaId();
+  const fallbackPresent = fallbackId ? items.includes(fallbackId) : false;
+  
+  const isRenderable = okItems.length > 0;
+  
+  return {
+    playlistId,
+    itemCount: items.length,
+    okItemsCount: okItems.length,
+    brokenItems,
+    fallbackPresent,
+    isRenderable,
+  };
+}
+
+// ============================================================================
+// FALLBACK SYSTEM - Ensures no black screen
+// ============================================================================
+
+export async function getFallbackMediaId(): Promise<number | null> {
+  const config = await storage.getIntegrationConfig("broadcast_fallback");
+  if (config?.settings && typeof config.settings === "object" && "mediaId" in config.settings) {
+    return (config.settings as { mediaId: number }).mediaId;
+  }
+  return null;
+}
+
+export async function setFallbackMediaId(mediaId: number): Promise<{ ok: boolean; error?: string }> {
+  const verifyResult = await verifyMedia(mediaId);
+  if (verifyResult.status !== "OK") {
+    return { ok: false, error: `Fallback media not ready: ${verifyResult.reason}` };
+  }
+  
+  await storage.upsertIntegrationConfig("broadcast_fallback", { settings: { mediaId } });
+  console.log(`[FALLBACK] Set fallback media to ${mediaId}`);
+  return { ok: true };
+}
+
+// ============================================================================
+// SELF-HEAL - Automatic recovery from non-renderable state
+// ============================================================================
+
+export async function selfHealPlaylist(
+  playlistId: number, 
+  yodeckScreenId: number
+): Promise<SelfHealResult> {
+  console.log(`[SELF_HEAL] Starting for playlist=${playlistId} screen=${yodeckScreenId}`);
+  
+  const renderability = await verifyPlaylistRenderability(playlistId);
+  
+  if (renderability.isRenderable && renderability.okItemsCount >= BASELINE_MIN_ITEMS) {
+    return {
+      applied: false,
+      reason: "Playlist is already renderable",
+      fallbackInjected: false,
+      pushed: false,
+      verified: true,
+    };
+  }
+  
+  const baselineResult = await getBaselineMediaIds();
+  if (baselineResult.ok && baselineResult.mediaIds.length >= BASELINE_MIN_ITEMS) {
+    const updateResult = await updatePlaylistItems(playlistId, baselineResult.mediaIds);
+    if (updateResult.ok) {
+      const pushResult = await pushScreenWithRetry(yodeckScreenId);
+      console.log(`[SELF_HEAL_APPLIED] playlist=${playlistId} action=BASELINE_RESTORE pushed=${pushResult.ok}`);
+      return {
+        applied: true,
+        reason: "Restored baseline items",
+        fallbackInjected: false,
+        pushed: pushResult.ok,
+        verified: false,
+      };
+    }
+  }
+  
+  const fallbackId = await getFallbackMediaId();
+  if (fallbackId) {
+    const currentItems = await getPlaylistItems(playlistId);
+    const newItems = currentItems.ok ? [...currentItems.items.filter(id => id !== fallbackId), fallbackId] : [fallbackId];
+    
+    const updateResult = await updatePlaylistItems(playlistId, newItems);
+    if (updateResult.ok) {
+      const pushResult = await pushScreenWithRetry(yodeckScreenId);
+      console.log(`[SELF_HEAL_APPLIED] playlist=${playlistId} action=FALLBACK_INJECT mediaId=${fallbackId} pushed=${pushResult.ok}`);
+      return {
+        applied: true,
+        reason: "Injected fallback media",
+        fallbackInjected: true,
+        pushed: pushResult.ok,
+        verified: false,
+      };
+    }
+  }
+  
+  console.error(`[SELF_HEAL_FAILED] playlist=${playlistId} - No fallback available`);
+  return {
+    applied: false,
+    reason: "Self-heal failed: no fallback media configured",
+    fallbackInjected: false,
+    pushed: false,
+    verified: false,
+  };
+}
+
+async function pushScreenWithRetry(yodeckScreenId: number): Promise<{ ok: boolean; attempts: number; error?: string }> {
+  for (let attempt = 1; attempt <= PUSH_RETRY_COUNT; attempt++) {
+    const result = await pushScreen(yodeckScreenId);
+    if (result.ok) {
+      return { ok: true, attempts: attempt };
+    }
+    console.log(`[PUSH_RETRY] screen=${yodeckScreenId} attempt=${attempt}/${PUSH_RETRY_COUNT} failed`);
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  return { ok: false, attempts: PUSH_RETRY_COUNT, error: "Max retries exceeded" };
+}
+
+// ============================================================================
+// PUBLISH WITH VERIFY + SELF-HEAL
+// ============================================================================
+
+export async function publishWithVerifyAndHeal(
+  advertiserId: string,
+  mediaId: number
+): Promise<{ ok: boolean; results: PublishResult[]; diagnostics: TargetingDiagnostics; selfHealApplied: boolean }> {
+  const publishResult = await publishAdToScreens(advertiserId, mediaId, false);
+  
+  if (!publishResult.ok) {
+    return { ...publishResult, selfHealApplied: false };
+  }
+  
+  let selfHealApplied = false;
+  
+  for (const result of publishResult.results) {
+    if (result.ok && (result.action === "added" || result.action === "removed")) {
+      const renderability = await verifyPlaylistRenderability(result.playlistId);
+      
+      if (!renderability.isRenderable) {
+        console.log(`[VERIFY_FAIL] screen=${result.screenId} playlist=${result.playlistId} - triggering self-heal`);
+        const healResult = await selfHealPlaylist(result.playlistId, result.yodeckScreenId);
+        if (healResult.applied) {
+          selfHealApplied = true;
+          result.logs.push(`[SELF_HEAL] ${healResult.reason}`);
+        }
+      }
+    }
+  }
+  
+  return { ...publishResult, selfHealApplied };
+}
+
+// ============================================================================
+// LAYOUT MODE HARD DISABLE
+// ============================================================================
+
+export function assertPlaylistOnlyMode(): void {
+  if (CONTENT_PIPELINE_MODE !== "SCREEN_PLAYLIST_ONLY") {
+    throw new Error("FATAL: CONTENT_PIPELINE_MODE must be SCREEN_PLAYLIST_ONLY");
+  }
+}
+
+export function throwLayoutDisabled(): never {
+  throw new Error("FATAL: Layout mode is HARD DISABLED. CONTENT_PIPELINE_MODE=SCREEN_PLAYLIST_ONLY. All layout functions are forbidden.");
+}
+
+// ============================================================================
+// SCREEN DIAGNOSTICS
+// ============================================================================
+
+export async function getScreenRenderability(screenId: string): Promise<RenderabilityResult | null> {
+  const screens = await storage.getScreens();
+  const screen = screens.find(s => s.id === screenId);
+  
+  if (!screen?.playlistId) {
+    return null;
+  }
+  
+  const playlistId = parseInt(screen.playlistId, 10);
+  return verifyPlaylistRenderability(playlistId);
 }
