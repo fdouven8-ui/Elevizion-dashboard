@@ -1894,6 +1894,7 @@ export interface PublishApprovedAdsResult {
 
 /**
  * Publish approved ads to correct screen playlists
+ * Uses targeting resolver + media readiness gate
  * Works without contracts in TEST_MODE - uses targeting rules only
  */
 export async function publishApprovedAdsToScreens(options: {
@@ -1906,6 +1907,8 @@ export async function publishApprovedAdsToScreens(options: {
   linkKey?: string | null;
   targetRegionCodes?: string[] | null;
   targetCities?: string[] | null;
+  packageType?: string | null;
+  screensIncluded?: number | null;
   assetStatus?: string | null;
   yodeckMediaId?: number | null;
 }>, dbScreens: Array<{
@@ -1915,10 +1918,21 @@ export async function publishApprovedAdsToScreens(options: {
   playlistId?: string | null;
   city?: string | null;
   region?: string | null;
+  locationId?: string | null;
+  yodeckSyncStatus?: string | null;
+}>, locations: Array<{
+  id: string;
+  name?: string | null;
+  city?: string | null;
+  status?: string | null;
+  readyForAds?: boolean | null;
 }>): Promise<PublishApprovedAdsResult> {
   const { dryRun = false, advertiserId, screenId } = options;
   
-  console.log(`[AdPublish] Starting publish run (dryRun=${dryRun}, advertiserId=${advertiserId || "all"}, screenId=${screenId || "all"})`);
+  // Import targeting service
+  const { resolveTargetScreensForAdvertiser, checkMediaReadiness, pickBestMedia } = await import("./adTargetingService");
+  
+  console.log(`[Publish] Starting publish run (dryRun=${dryRun}, advertiserId=${advertiserId || "all"}, screenId=${screenId || "all"})`);
   
   const result: PublishApprovedAdsResult = {
     ok: true,
@@ -1937,7 +1951,7 @@ export async function publishApprovedAdsToScreens(options: {
   }
   
   if (targetAdvertisers.length === 0) {
-    console.log("[AdPublish] No advertisers with linkKey found");
+    console.log("[Publish] No advertisers with linkKey found");
     return result;
   }
   
@@ -1951,99 +1965,156 @@ export async function publishApprovedAdsToScreens(options: {
   
   result.scanned = scanResult.matches.length;
   
-  // Filter screens if specific one requested
-  let targetScreens = dbScreens.filter(s => s.yodeckPlayerId && s.playlistId);
-  if (screenId) {
-    targetScreens = targetScreens.filter(s => s.id === screenId);
+  console.log(`[Publish] Processing ${scanResult.matches.length} media matches for ${targetAdvertisers.length} advertisers`);
+  
+  // Group matches by advertiser for deduplication
+  const matchesByAdvertiser = new Map<string, typeof scanResult.matches>();
+  for (const match of scanResult.matches) {
+    const existing = matchesByAdvertiser.get(match.advertiserId) || [];
+    existing.push(match);
+    matchesByAdvertiser.set(match.advertiserId, existing);
   }
   
-  console.log(`[AdPublish] Processing ${scanResult.matches.length} matches for ${targetScreens.length} screens`);
-  
-  for (const match of scanResult.matches) {
-    // Find matching screens based on targeting
-    for (const screen of targetScreens) {
-      // Check targeting match (region/city)
-      const screenCity = screen.city?.toLowerCase() || "";
-      const screenRegion = screen.region?.toLowerCase() || "";
-      
-      const targetRegions = match.targetRegionCodes.map(r => r.toLowerCase());
-      
-      // Match if screen city/region matches any target
-      const targetMatch = targetRegions.length === 0 || 
-        targetRegions.some(t => 
-          screenCity.includes(t) || 
-          screenRegion.includes(t) ||
-          t.includes(screenCity) ||
-          t.includes(screenRegion)
-        );
-      
-      if (!targetMatch) {
+  // Process each advertiser
+  for (const advertiser of targetAdvertisers) {
+    const matches = matchesByAdvertiser.get(advertiser.id) || [];
+    if (matches.length === 0) continue;
+    
+    // Use targeting resolver to find correct screens
+    const targeting = resolveTargetScreensForAdvertiser(
+      advertiser,
+      screenId ? dbScreens.filter(s => s.id === screenId) : dbScreens,
+      locations
+    );
+    
+    if (targeting.resolvedScreens.length === 0) {
+      for (const match of matches) {
         result.details.push({
-          advertiserId: match.advertiserId,
-          advertiserName: match.advertiserName,
+          advertiserId: advertiser.id,
+          advertiserName: advertiser.companyName || "Unknown",
           mediaId: match.yodeckMediaId,
-          screenId: screen.id,
-          playlistId: screen.playlistId!,
+          screenId: "none",
+          playlistId: "none",
           action: "skipped",
-          reason: `Targeting mismatch: screen=${screenCity}/${screenRegion}, target=${targetRegions.join(",")}`,
+          reason: `NO_TARGET_SCREENS: ${targeting.skippedScreens.map(s => s.reason).join("; ")}`,
         });
         result.skipped++;
-        continue;
       }
+      continue;
+    }
+    
+    // Deduplicate media - pick best from multiple uploads
+    const mediaIds = matches.map(m => m.yodeckMediaId);
+    let bestMediaId: number | null = null;
+    
+    if (mediaIds.length > 1) {
+      console.log(`[MediaGate] Multiple media found for ${advertiser.companyName}: ${mediaIds.join(", ")}`);
+      const pickResult = await pickBestMedia(mediaIds);
+      bestMediaId = pickResult.bestMediaId;
+      
+      // Log skipped media
+      for (const r of pickResult.results) {
+        if (r.mediaId !== bestMediaId) {
+          console.log(`[MediaGate] Skipping media ${r.mediaId}: ${r.reason}`);
+        }
+      }
+    } else {
+      bestMediaId = mediaIds[0];
+    }
+    
+    if (!bestMediaId) {
+      result.details.push({
+        advertiserId: advertiser.id,
+        advertiserName: advertiser.companyName || "Unknown",
+        mediaId: 0,
+        screenId: "none",
+        playlistId: "none",
+        action: "skipped",
+        reason: "NO_USABLE_MEDIA: All media items are processing/unfinished",
+      });
+      result.skipped++;
+      continue;
+    }
+    
+    // Check media readiness before publishing
+    const readiness = await checkMediaReadiness(bestMediaId);
+    console.log(`[MediaGate] Media ${bestMediaId}: usable=${readiness.usable}, reason=${readiness.reason}`);
+    
+    if (!readiness.usable) {
+      for (const targetScreen of targeting.resolvedScreens) {
+        result.details.push({
+          advertiserId: advertiser.id,
+          advertiserName: advertiser.companyName || "Unknown",
+          mediaId: bestMediaId,
+          screenId: targetScreen.screenId,
+          playlistId: targetScreen.playlistId,
+          action: "skipped",
+          reason: `MEDIA_NOT_READY: ${readiness.reason}`,
+        });
+        result.skipped++;
+      }
+      continue;
+    }
+    
+    // Publish to each resolved target screen
+    for (const targetScreen of targeting.resolvedScreens) {
+      console.log(`[Publish] Targeting: ${advertiser.companyName} -> ${targetScreen.screenName} (${targetScreen.matchReason})`);
       
       if (dryRun) {
         result.details.push({
-          advertiserId: match.advertiserId,
-          advertiserName: match.advertiserName,
-          mediaId: match.yodeckMediaId,
-          screenId: screen.id,
-          playlistId: screen.playlistId!,
+          advertiserId: advertiser.id,
+          advertiserName: advertiser.companyName || "Unknown",
+          mediaId: bestMediaId,
+          screenId: targetScreen.screenId,
+          playlistId: targetScreen.playlistId,
           action: "published",
-          reason: "dry_run",
+          reason: `dry_run (${targetScreen.matchReason})`,
         });
         result.published++;
         continue;
       }
       
       // Actually insert into playlist
-      const insertResult = await addAdToScreenPlaylist(screen.playlistId!, match.yodeckMediaId);
+      const insertResult = await addAdToScreenPlaylist(targetScreen.playlistId, bestMediaId);
       
       if (!insertResult.ok) {
         result.details.push({
-          advertiserId: match.advertiserId,
-          advertiserName: match.advertiserName,
-          mediaId: match.yodeckMediaId,
-          screenId: screen.id,
-          playlistId: screen.playlistId!,
+          advertiserId: advertiser.id,
+          advertiserName: advertiser.companyName || "Unknown",
+          mediaId: bestMediaId,
+          screenId: targetScreen.screenId,
+          playlistId: targetScreen.playlistId,
           action: "error",
           reason: insertResult.error,
         });
         result.errors++;
       } else if (insertResult.inserted) {
         result.details.push({
-          advertiserId: match.advertiserId,
-          advertiserName: match.advertiserName,
-          mediaId: match.yodeckMediaId,
-          screenId: screen.id,
-          playlistId: screen.playlistId!,
+          advertiserId: advertiser.id,
+          advertiserName: advertiser.companyName || "Unknown",
+          mediaId: bestMediaId,
+          screenId: targetScreen.screenId,
+          playlistId: targetScreen.playlistId,
           action: "published",
+          reason: targetScreen.matchReason,
         });
         result.published++;
-        console.log(`[AdPublish] Published: advertiser=${match.advertiserName} media=${match.yodeckMediaId} -> screen=${screen.name} playlist=${screen.playlistId}`);
+        console.log(`[Publish] SUCCESS: ${advertiser.companyName} media=${bestMediaId} -> ${targetScreen.screenName}`);
       } else {
         result.details.push({
-          advertiserId: match.advertiserId,
-          advertiserName: match.advertiserName,
-          mediaId: match.yodeckMediaId,
-          screenId: screen.id,
-          playlistId: screen.playlistId!,
+          advertiserId: advertiser.id,
+          advertiserName: advertiser.companyName || "Unknown",
+          mediaId: bestMediaId,
+          screenId: targetScreen.screenId,
+          playlistId: targetScreen.playlistId,
           action: "already_present",
+          reason: targetScreen.matchReason,
         });
         result.alreadyPresent++;
       }
     }
   }
   
-  console.log(`[AdPublish] Complete: scanned=${result.scanned} published=${result.published} already=${result.alreadyPresent} skipped=${result.skipped} errors=${result.errors}`);
+  console.log(`[Publish] Complete: scanned=${result.scanned} published=${result.published} already=${result.alreadyPresent} skipped=${result.skipped} errors=${result.errors}`);
   return result;
 }

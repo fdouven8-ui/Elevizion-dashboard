@@ -1,0 +1,129 @@
+JE BENT EEN SENIOR FULL-STACK DEVELOPER. We werken aan het Elevizion dashboard (Node/Express + DB) met Yodeck API v2 integratie. Er zijn 2 kritieke bugs die NU opgelost moeten worden, met harde garanties en duidelijke diagnostics.
+
+CONTEXT / OBSERVATIES (belangrijk):
+- In logs zie ik dat beide screens hetzelfde locationId hebben:
+  - screenId "241377ce-..." (YDK-591896) locationId = 3321f9c7-...
+  - screenId "d7e9a5b2-..." (YDK-591895) locationId = 3321f9c7-...
+  => Dit verklaart waarom publishing op “locatie” beide schermen raakt.
+- Advertiser “Bouwservice Douven” heeft package SINGLE (screensIncluded=1) en targetRegionCodes ["sittard"].
+- Endpoint POST /api/admin/publish-approved-ads publish’t ads naar beide playlists (30532596 en 30532597), maar mag slechts naar het juiste scherm (op basis van target).
+- In Yodeck UI bij “Save and push to screens” komt error:
+  “empty video found …” en “unfinished video found …” voor media “ADV-BOUWSERVICEDOUVEN-756846_Header Frontpage(2).mp4”.
+  => Dit betekent: media is incompleet/niet ge-encodeerd/0 bytes/processing. We mogen dit NOOIT in een live playlist laten belanden.
+
+DOEL (definition of done):
+1) Ads worden automatisch en correct geplaatst op EXACT de juiste schermen volgens targeting + contract/package regels (in TEST_MODE zonder contracts ook OK).
+2) NOOIT een ad publishen als Yodeck media status niet “ready/encoded/usable” is (geen empty/unfinished).
+3) Het systeem moet zichzelf kunnen herstellen + duidelijke admin diagnostics hebben zodat we direct zien: “waarom staat dit op dit scherm?” en “waarom wordt dit niet gepusht/afgespeeld?”
+4) Idempotent: opnieuw runnen mag geen duplicaten geven.
+
+TAKEN (implementeer stap-voor-stap):
+
+A) FIX: Screen ↔ Location mapping (root cause)
+- Introduceer een harde invariant:
+  - Default: één screen hoort bij één unieke locationId.
+  - Alleen als location.isMultiScreenLocation=true (of screen.isMultiScreenLocation=true) mag een location meerdere screens hebben.
+- Maak een DB constraint/validation in code (bij create/update/link):
+  - Als er al een screen bestaat met locationId=X en multiscreen=false => blokkeer of forceer “needsReview”.
+- Maak een admin tool/UI of endpoint om mapping te repareren:
+  - POST /api/admin/screens/:screenId/relink-location { locationId }
+  - Dit endpoint:
+    1) valideert dat target location bestaat
+    2) checkt invariant hierboven
+    3) update screen.locationId
+    4) logt audit (who/when/old/new)
+- Concreet voor huidige data:
+  - Maak/gebruik een aparte Location voor “Basil’s Barber Shop Maasbracht” (met eigen locationId) en koppel screen d7e9a5b2-... daaraan.
+  - Daarna moet publish op locatie-basis nog maar 1 scherm targeten.
+
+B) FIX: Targeting selectie (nooit “unlinked” of verkeerde locatie)
+- Bouw een centrale functie: resolveTargetScreensForAdvertiser(advertiser, options)
+  - Input: advertiser (targetRegionCodes, targetCities, screensIncluded), packageType, TEST_MODE flag
+  - Output: lijst screenIds die in aanmerking komen
+  - Regels:
+    1) Neem ALLEEN screens met een geldige locationId (niet null)
+    2) Neem ALLEEN locaties met readyForAds=true en status=active en niet pausedByAdmin
+    3) Neem ALLEEN screens met yodeckSyncStatus=linked en met een canonical playlistId (zoals nu: auto-playlist per screen)
+    4) Als advertiser.packageType=SINGLE => kies EXACT 1 screen:
+       - voorkeursvolgorde:
+         a) screens waarvan location.city of regionCode matcht met advertiser target
+         b) indien meerdere matches: kies op hoogste match-score (exact city > region > fallback), stabiel (zelfde keuze bij rerun)
+         c) indien geen match: in TEST_MODE -> kies NIETS en return “NO_TARGET_MATCH” (duidelijk in response)
+    5) Als advertiser targetRegionCodes=["sittard"] => match op:
+       - location.city normalized (“Sittard” -> “sittard”)
+       - of location.regionCode
+- Update /api/admin/publish-approved-ads zodat hij EXCLUSIEF deze resolver gebruikt.
+- Zorg dat screen met “moneybirdContact=null” of “linkStatus=unlinked” (zoals Basil in /api/screens/with-business) NIET automatisch gekozen wordt voor een SINGLE-pakket.
+
+C) FIX: Yodeck media readiness gate (empty/unfinished video)
+- Voeg een harde “media usability check” toe vóór publiceren:
+  - fetch Yodeck media details/status via v2:
+    - GET /api/v2/media/{id} (of bestaande wrapper)
+    - GET /api/v2/media/{id}/status indien nodig
+  - criteria “usable”:
+    - status == “ready/encoded/active” (exacte fieldnamen uit jullie wrapper)
+    - file size > 0
+    - duration > 0 (of een geldige duration uit Yodeck)
+    - NOT in states: “encoding”, “processing”, “uploading”, “failed”
+- Als media niet usable:
+  - publish hem NIET
+  - return in response per media: { mediaId, name, reason: "UNFINISHED_MEDIA", statusFields... }
+  - markeer intern (db) een flag “assetBlockedReason” zodat UI dit toont.
+- Daarnaast: dedupe dubbele uploads met dezelfde naam:
+  - Jullie zien 29378800 en 29408113 met exact dezelfde bestandsnaam.
+  - Kies altijd de “beste” (usable) en archiveer/ignore de rest.
+  - Bouw een deterministic chooser: pickBestMedia(candidates) die usable preferreert + hoogste createdAt of hoogste filesize.
+
+D) FIX: Push naar screens volledig automatisch (geen handmatige Yodeck “save & push”)
+- Na een succesvolle playlist wijziging:
+  - call een push/assign endpoint in Yodeck (wat jullie integratie ook gebruikt) zodat de device daadwerkelijk update:
+    - bijv. update screen content source (playlistId) of trigger “push” als dat bestaat.
+  - Zet in DB: lastPushAt, lastPushResult, lastPushError.
+- Als Yodeck geen expliciete push heeft maar automatisch sync’t:
+  - maak minimaal een “verify loop”:
+    - na publish: poll /api/screens/:id/now-playing of yodeck content fetch tot playlist items matchen (met timeout + backoff)
+    - als mismatch => markeer “pendingSync=true” en plan retry worker
+
+E) Diagnostics (zodat je meteen ziet wat misgaat)
+Maak 2 admin endpoints:
+
+1) GET /api/admin/diagnostics/publishing/:advertiserId
+- geeft terug:
+  - advertiser targets + package
+  - resolvedTargetScreens (met match score en waarom gekozen)
+  - per target screen: location info + readyForAds + playlistId + current items
+  - decision trace: waarom andere screens NIET gekozen zijn (bijv “wrong location”, “unlinked”, “package limit SINGLE”)
+
+2) GET /api/admin/diagnostics/yodeck-media/:mediaId
+- geeft terug:
+  - yodeck status fields
+  - filesize/duration
+  - usable: true/false + reden
+  - als unusable: advies “wait/reupload”
+
+ACCEPTANCE TESTS (moet je uitvoeren en bewijzen met logs/response):
+1) Relink Basil screen naar eigen locatie (nieuwe locationId). Daarna:
+   - POST /api/admin/publish-approved-ads (zonder filters) mag voor advertiser Bouwservice Douven slechts 1 screen publishen (Sittard).
+   - Basil screen mag NIET die ad krijgen.
+2) Als media “unfinished/empty” is:
+   - publish endpoint moet hem skippen en duidelijk melden waarom.
+   - playlist mag NIET veranderen voor die media.
+3) Als media klaar/usable is:
+   - publish endpoint voegt hem toe aan de juiste playlist (idempotent).
+   - lastPushAt/Result wordt gezet en now-playing toont adsCount > 0 op juiste scherm.
+4) Idempotency:
+   - 2x publish draaien => “alreadyPresent” counts kloppen, geen duplicaten.
+
+LEVER OP:
+- Concrete code changes (services + endpoints + validations)
+- Duidelijke logging (tagged): [Targeting], [MediaGate], [Publish], [Push], [Diagnostics]
+- Geen “vage” fix. Ik wil harde regels die dit in de toekomst voorkomen.
+
+BEGIN MET (prioriteit):
+1) Mapping invariant + relink endpoint
+2) Targeting resolver met SINGLE package limit + unlinked skip
+3) Media readiness gate (empty/unfinished) + dedupe
+4) Auto push + verify loop
+5) Diagnostics endpoints
+
+Ga nu implementeren.

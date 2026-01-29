@@ -18210,6 +18210,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       
       const advertisers = await storage.getAdvertisers();
       const screens = await storage.getScreens();
+      const locations = await storage.getLocations();
       
       const { publishApprovedAdsToScreens } = await import("./services/yodeckBroadcast");
       
@@ -18221,6 +18222,8 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           linkKey: a.linkKey,
           targetRegionCodes: a.targetRegionCodes,
           targetCities: a.targetCities,
+          packageType: a.packageType,
+          screensIncluded: a.screensIncluded,
           assetStatus: a.assetStatus,
           yodeckMediaId: (a as any).yodeckMediaId,
         })),
@@ -18231,12 +18234,145 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           playlistId: s.playlistId,
           city: s.city,
           region: s.region,
+          locationId: s.locationId,
+          yodeckSyncStatus: s.yodeckSyncStatus,
+        })),
+        locations.map(l => ({
+          id: l.id,
+          name: l.name,
+          city: l.city,
+          status: l.status,
+          readyForAds: l.readyForAds,
         }))
       );
       
       res.json(result);
     } catch (error: any) {
       console.error("[PublishApproved] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/diagnostics/publishing/:advertiserId
+   * Diagnostics endpoint showing targeting resolution and decision trace
+   */
+  app.get("/api/admin/diagnostics/publishing/:advertiserId", requireAdminAccess, async (req, res) => {
+    try {
+      const { advertiserId } = req.params;
+      
+      const advertiser = await storage.getAdvertiser(advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ ok: false, error: "Advertiser not found" });
+      }
+      
+      const screens = await storage.getScreens();
+      const locations = await storage.getLocations();
+      
+      const { resolveTargetScreensForAdvertiser } = await import("./services/adTargetingService");
+      const { scanYodeckMediaForAdvertisers, yodeckGetPlaylistItems } = await import("./services/yodeckBroadcast");
+      
+      // Resolve targets
+      const targeting = resolveTargetScreensForAdvertiser(
+        {
+          id: advertiser.id,
+          companyName: advertiser.companyName,
+          linkKey: advertiser.linkKey,
+          targetRegionCodes: advertiser.targetRegionCodes,
+          targetCities: advertiser.targetCities,
+          packageType: advertiser.packageType,
+          screensIncluded: advertiser.screensIncluded,
+        },
+        screens.map(s => ({
+          id: s.id,
+          name: s.name,
+          yodeckPlayerId: s.yodeckPlayerId,
+          playlistId: s.playlistId,
+          city: s.city,
+          region: s.region,
+          locationId: s.locationId,
+          yodeckSyncStatus: s.yodeckSyncStatus,
+        })),
+        locations.map(l => ({
+          id: l.id,
+          name: l.name,
+          city: l.city,
+          status: l.status,
+          readyForAds: l.readyForAds,
+        }))
+      );
+      
+      // Scan for media matches
+      const mediaMatches = await scanYodeckMediaForAdvertisers([{
+        id: advertiser.id,
+        companyName: advertiser.companyName,
+        linkKey: advertiser.linkKey,
+        targetRegionCodes: advertiser.targetRegionCodes,
+      }]);
+      
+      // Get playlist items for each resolved screen
+      const screenDetails = await Promise.all(
+        targeting.resolvedScreens.map(async (s) => {
+          const items = await yodeckGetPlaylistItems(s.playlistId);
+          return {
+            ...s,
+            playlistItems: items.items || [],
+            itemCount: items.items?.length || 0,
+          };
+        })
+      );
+      
+      res.json({
+        ok: true,
+        advertiser: {
+          id: advertiser.id,
+          name: advertiser.companyName,
+          linkKey: advertiser.linkKey,
+          packageType: targeting.packageType,
+          screensIncluded: targeting.screensIncluded,
+          targetRegions: targeting.targetRegions,
+        },
+        mediaMatches: mediaMatches.ok ? mediaMatches.matches : [],
+        resolvedScreens: screenDetails,
+        skippedScreens: targeting.skippedScreens,
+        decisionTrace: {
+          totalScreensChecked: screens.length,
+          matchingScreens: targeting.resolvedScreens.length,
+          skippedCount: targeting.skippedScreens.length,
+          packageLimit: targeting.screensIncluded,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Diagnostics] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/diagnostics/yodeck-media/:mediaId
+   * Diagnostics endpoint showing media readiness status
+   */
+  app.get("/api/admin/diagnostics/yodeck-media/:mediaId", requireAdminAccess, async (req, res) => {
+    try {
+      const mediaId = parseInt(req.params.mediaId, 10);
+      if (isNaN(mediaId)) {
+        return res.status(400).json({ ok: false, error: "Invalid mediaId" });
+      }
+      
+      const { checkMediaReadiness } = await import("./services/adTargetingService");
+      const readiness = await checkMediaReadiness(mediaId);
+      
+      res.json({
+        ok: true,
+        ...readiness,
+        advice: readiness.usable 
+          ? "Media is ready for publishing" 
+          : readiness.reason.includes("PROCESSING") 
+            ? "Wait for processing to complete, then retry" 
+            : "Re-upload the media file",
+      });
+    } catch (error: any) {
+      console.error("[Diagnostics] Error:", error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });
