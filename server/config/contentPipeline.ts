@@ -12,6 +12,11 @@
  * - Location autopilot/combined checks are DISABLED
  * - Only Screen.yodeckPlaylistId is used as source of truth
  * - No BASELINE_NOT_CONFIGURED or Combined Playlist Mode errors
+ * 
+ * BASELINE ARCHITECTURE:
+ * - One central baseline playlist "EVZ | BASELINE" is the source of truth
+ * - Per-screen playlists "EVZ | SCREEN | {playerId}" contain baseline + ads
+ * - Changing baseline auto-propagates to all screen playlists
  */
 
 export type ContentPipelineMode = "SCREEN_PLAYLIST_ONLY" | "LEGACY";
@@ -27,6 +32,20 @@ export const ENABLE_LOCATION_AUTOPILOT =
 
 export const YODECK_TEMPLATE_PLAYLIST_ID = 
   process.env.YODECK_TEMPLATE_PLAYLIST_ID || "30400683";
+
+// =============================================================================
+// BASELINE CONFIGURATION - Central source of truth for all screens
+// =============================================================================
+
+export const BASELINE_PLAYLIST_NAME = "EVZ | BASELINE";
+
+export function getScreenPlaylistName(yodeckPlayerId: string | number): string {
+  return `EVZ | SCREEN | ${yodeckPlayerId}`;
+}
+
+export const BASELINE_MEDIA_IDS: number[] = [27478716, 27476141, 27477130, 27476083];
+
+export const MIN_BASELINE_COUNT = 3;
 
 export function isScreenPlaylistOnlyMode(): boolean {
   return CONTENT_PIPELINE_MODE === "SCREEN_PLAYLIST_ONLY";

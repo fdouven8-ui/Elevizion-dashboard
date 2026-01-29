@@ -11,8 +11,14 @@
 
 import { db } from "../db";
 import { screens } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, isNotNull } from "drizzle-orm";
 import { getYodeckToken } from "./yodeckClient";
+import { 
+  BASELINE_PLAYLIST_NAME, 
+  BASELINE_MEDIA_IDS, 
+  MIN_BASELINE_COUNT,
+  getScreenPlaylistName
+} from "../config/contentPipeline";
 
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 
@@ -35,13 +41,30 @@ async function yodeckRequest<T>(
       },
     });
 
+    const contentType = response.headers.get("content-type") || "";
+    const text = await response.text();
+    
+    // Detect HTML responses (auth failure, session expired, etc.)
+    if (!contentType.includes("application/json") || text.trim().startsWith("<")) {
+      const preview = text.substring(0, 200);
+      console.error(`[YodeckAPI] Non-JSON response: status=${response.status}, contentType=${contentType}, preview=${preview}`);
+      return { 
+        ok: false, 
+        error: `Yodeck returned HTML instead of JSON (status ${response.status}). This may indicate auth failure or session expiry.` 
+      };
+    }
+
     if (!response.ok) {
-      const text = await response.text();
       return { ok: false, error: `Yodeck API error ${response.status}: ${text}` };
     }
 
-    const data = await response.json();
-    return { ok: true, data };
+    try {
+      const data = JSON.parse(text);
+      return { ok: true, data };
+    } catch (parseError) {
+      console.error(`[YodeckAPI] JSON parse error: ${text.substring(0, 200)}`);
+      return { ok: false, error: "Yodeck returned invalid JSON" };
+    }
   } catch (error: any) {
     return { ok: false, error: error.message };
   }
@@ -435,8 +458,6 @@ export async function onApprovedVideoAssignedToScreen(
 // =============================================================================
 // CANONICAL SCREEN PLAYBACK - SINGLE UNIFORM STRATEGY
 // =============================================================================
-
-const MIN_BASELINE_COUNT = 4;
 
 export interface CanonicalPlaybackResult {
   ok: boolean;
@@ -849,7 +870,31 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   
   // Derive playlist name: use actual playing name, fallback to DB name
   const playlistName = actual.sourceName || screen.playlistName || `Playlist ${expected}`;
-  const isOnline = screen.status === "online" || actualResult.isOnline === true;
+  const isOnline = screen.status === "online";
+  
+  // Calculate baseline vs ads count from playlist items
+  let baselineCount = 0;
+  let adsCount = 0;
+  const playlistId = actual.sourceId || expected;
+  
+  if (playlistId) {
+    const items = await yodeckGetPlaylistItems(playlistId);
+    if (items.ok && items.items) {
+      const baselineSet = new Set(BASELINE_MEDIA_IDS);
+      for (const id of items.items) {
+        if (baselineSet.has(id)) {
+          baselineCount++;
+        } else {
+          adsCount++;
+        }
+      }
+    } else {
+      // Fallback: use stored count to avoid showing 0 items when API fails
+      const fallbackCount = screen.yodeckContentCount ?? 0;
+      baselineCount = Math.min(fallbackCount, BASELINE_MEDIA_IDS.length);
+      adsCount = Math.max(0, fallbackCount - baselineCount);
+    }
+  }
 
   return {
     ok: true,
@@ -863,12 +908,12 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     verificationOk,
     selfHealed,
     // UI-facing fields
-    playlistId: actual.sourceId || expected,
+    playlistId,
     playlistName,
     expectedPlaylistName: screen.playlistName,
-    itemCount: screen.yodeckContentCount ?? actual.itemCount ?? null,
-    baselineCount: null,
-    adsCount: 0,
+    itemCount: baselineCount + adsCount,
+    baselineCount,
+    adsCount,
     lastPushAt: screen.lastPushAt?.toISOString() || null,
     lastPushResult: screen.lastPushResult,
     deviceStatus: makeDeviceStatus(isOnline ? "ONLINE" : "OFFLINE", screen),
@@ -878,8 +923,6 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
 // =============================================================================
 // BACKFILL / MIGRATION
 // =============================================================================
-
-import { isNotNull } from "drizzle-orm";
 
 /**
  * Backfill all screens with Yodeck devices - ensure they have playlists
@@ -940,5 +983,528 @@ export async function backfillScreenPlaylists(): Promise<{
     success,
     failed,
     logs,
+  };
+}
+
+// =============================================================================
+// BASELINE ARCHITECTURE - Central source of truth for all screens
+// =============================================================================
+
+export interface BaselinePlaylistInfo {
+  ok: boolean;
+  playlistId: string | null;
+  name: string;
+  mediaIds: number[];
+  error?: string;
+}
+
+// Cache baseline info to avoid repeated API calls
+let baselineCache: { info: BaselinePlaylistInfo; timestamp: number } | null = null;
+const BASELINE_CACHE_TTL = 60 * 1000; // 1 minute
+
+// Mutex to prevent concurrent baseline operations
+let baselineOperationInProgress = false;
+
+/**
+ * Find or create the central baseline playlist "EVZ | BASELINE"
+ * Uses search API for exact name match + pagination fallback
+ */
+export async function ensureBaselinePlaylist(): Promise<BaselinePlaylistInfo> {
+  // Check cache first
+  if (baselineCache && Date.now() - baselineCache.timestamp < BASELINE_CACHE_TTL) {
+    return baselineCache.info;
+  }
+  
+  // Simple mutex to prevent concurrent operations
+  if (baselineOperationInProgress) {
+    console.log("[BaselineSync] Waiting for concurrent operation...");
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    if (baselineCache) return baselineCache.info;
+  }
+  
+  baselineOperationInProgress = true;
+  
+  try {
+    console.log(`[BaselineSync] Ensuring baseline playlist exists: "${BASELINE_PLAYLIST_NAME}"`);
+    
+    // Use search API for exact name match (more efficient than pagination)
+    const searchResult = await yodeckRequest<{ results: any[] }>(`/playlists/?search=${encodeURIComponent("EVZ | BASELINE")}&page_size=50`);
+    
+    let existing: any = null;
+    
+    if (searchResult.ok && searchResult.data?.results) {
+      existing = searchResult.data.results.find(p => p.name === BASELINE_PLAYLIST_NAME);
+    }
+    
+    // Fallback: paginate through all playlists if search didn't find it
+    if (!existing) {
+      let nextUrl: string | null = "/playlists/?page_size=100";
+      while (nextUrl && !existing) {
+        const pageResult = await yodeckRequest<{ results: Array<{ id: number; name: string }>; next: string | null }>(nextUrl);
+        if (!pageResult.ok) break;
+        existing = pageResult.data?.results?.find((p: { name: string }) => p.name === BASELINE_PLAYLIST_NAME);
+        nextUrl = pageResult.data?.next ? pageResult.data.next.replace("https://app.yodeck.com/api/v2", "") : null;
+      }
+    }
+  
+    if (existing) {
+      // Get current items
+      const items = await yodeckGetPlaylistItems(String(existing.id));
+      const mediaIds = items.items || [];
+      
+      // Check if baseline needs seeding
+      if (mediaIds.length < MIN_BASELINE_COUNT) {
+        console.log(`[BaselineSync] Baseline has only ${mediaIds.length} items, seeding with defaults`);
+        for (const id of BASELINE_MEDIA_IDS) {
+          if (!mediaIds.includes(id)) {
+            await yodeckAddMediaToPlaylist(String(existing.id), id);
+          }
+        }
+        const refetch = await yodeckGetPlaylistItems(String(existing.id));
+        const result: BaselinePlaylistInfo = { ok: true, playlistId: String(existing.id), name: BASELINE_PLAYLIST_NAME, mediaIds: refetch.items || [] };
+        baselineCache = { info: result, timestamp: Date.now() };
+        return result;
+      }
+      
+      console.log(`[BaselineSync] Found baseline playlist ${existing.id} with ${mediaIds.length} items`);
+      const result: BaselinePlaylistInfo = { ok: true, playlistId: String(existing.id), name: BASELINE_PLAYLIST_NAME, mediaIds };
+      baselineCache = { info: result, timestamp: Date.now() };
+      return result;
+    }
+    
+    // Create new baseline playlist
+    console.log(`[BaselineSync] Creating baseline playlist "${BASELINE_PLAYLIST_NAME}"`);
+    const createResult = await yodeckRequest<any>("/playlists/", {
+      method: "POST",
+      body: JSON.stringify({
+        name: BASELINE_PLAYLIST_NAME,
+        type: "regular",
+        items: [],
+      }),
+    });
+    
+    if (!createResult.ok || !createResult.data?.id) {
+      return { ok: false, playlistId: null, name: BASELINE_PLAYLIST_NAME, mediaIds: [], error: `Failed to create baseline: ${createResult.error}` };
+    }
+    
+    const newPlaylistId = String(createResult.data.id);
+    
+    // Seed with baseline items
+    for (const id of BASELINE_MEDIA_IDS) {
+      await yodeckAddMediaToPlaylist(newPlaylistId, id);
+    }
+    
+    const items = await yodeckGetPlaylistItems(newPlaylistId);
+    console.log(`[BaselineSync] Created baseline playlist ${newPlaylistId} with ${items.items?.length || 0} items`);
+    
+    const result: BaselinePlaylistInfo = { ok: true, playlistId: newPlaylistId, name: BASELINE_PLAYLIST_NAME, mediaIds: items.items || [] };
+    baselineCache = { info: result, timestamp: Date.now() };
+    return result;
+  } finally {
+    baselineOperationInProgress = false;
+  }
+}
+
+/**
+ * Set playlist items exactly to the desired list (idempotent)
+ */
+export async function setPlaylistItemsExactly(
+  playlistId: string,
+  desiredMediaIds: number[]
+): Promise<{ ok: boolean; changed: boolean; error?: string }> {
+  const current = await yodeckGetPlaylistItems(playlistId);
+  if (!current.ok) {
+    return { ok: false, changed: false, error: current.error };
+  }
+  
+  const currentIds = current.items || [];
+  
+  // Check if already equal
+  if (currentIds.length === desiredMediaIds.length && 
+      currentIds.every((id, i) => id === desiredMediaIds[i])) {
+    return { ok: true, changed: false };
+  }
+  
+  // Build new items list
+  const patchPayload = {
+    items: desiredMediaIds.map((id, index) => ({ id, type: "media", priority: index + 1 })),
+  };
+  
+  const result = await yodeckRequest<any>(`/playlists/${playlistId}/`, {
+    method: "PATCH",
+    body: JSON.stringify(patchPayload),
+  });
+  
+  if (!result.ok) {
+    return { ok: false, changed: false, error: result.error };
+  }
+  
+  return { ok: true, changed: true };
+}
+
+export interface ScreenCanonicalResult {
+  ok: boolean;
+  screenId: string;
+  yodeckPlayerId: string;
+  playlistId: string | null;
+  playlistName: string | null;
+  baselineCount: number;
+  adsCount: number;
+  actions: string[];
+  error?: string;
+}
+
+/**
+ * Ensure a screen has the canonical playlist setup: baseline + ads
+ */
+export async function ensureCanonicalScreenWithBaseline(screenId: string): Promise<ScreenCanonicalResult> {
+  const actions: string[] = [];
+  
+  // Get screen from DB
+  const [screen] = await db.select().from(screens).where(eq(screens.id, screenId));
+  if (!screen || !screen.yodeckPlayerId) {
+    return { 
+      ok: false, screenId, yodeckPlayerId: "", playlistId: null, playlistName: null,
+      baselineCount: 0, adsCount: 0, actions, error: "Screen not found or no Yodeck player" 
+    };
+  }
+  
+  const yodeckPlayerId = screen.yodeckPlayerId;
+  const canonicalName = getScreenPlaylistName(yodeckPlayerId);
+  actions.push(`Ensuring canonical playlist: "${canonicalName}"`);
+  
+  // Step 1: Ensure baseline playlist exists
+  const baseline = await ensureBaselinePlaylist();
+  if (!baseline.ok) {
+    return {
+      ok: false, screenId, yodeckPlayerId, playlistId: null, playlistName: null,
+      baselineCount: 0, adsCount: 0, actions, error: `Baseline error: ${baseline.error}`
+    };
+  }
+  actions.push(`Baseline playlist: ${baseline.playlistId} with ${baseline.mediaIds.length} items`);
+  
+  // Step 2: Find or create screen playlist
+  const searchResult = await yodeckRequest<{ results: any[] }>(`/playlists/?search=${encodeURIComponent(canonicalName)}`);
+  let screenPlaylistId: string | null = null;
+  
+  if (searchResult.ok && searchResult.data?.results) {
+    const existing = searchResult.data.results.find(p => p.name === canonicalName);
+    if (existing) {
+      screenPlaylistId = String(existing.id);
+      actions.push(`Found existing screen playlist: ${screenPlaylistId}`);
+    }
+  }
+  
+  if (!screenPlaylistId) {
+    // Create new screen playlist
+    const createResult = await yodeckRequest<any>("/playlists/", {
+      method: "POST",
+      body: JSON.stringify({
+        name: canonicalName,
+        type: "regular",
+        items: [],
+      }),
+    });
+    
+    if (!createResult.ok || !createResult.data?.id) {
+      return {
+        ok: false, screenId, yodeckPlayerId, playlistId: null, playlistName: null,
+        baselineCount: 0, adsCount: 0, actions, error: `Failed to create screen playlist: ${createResult.error}`
+      };
+    }
+    
+    screenPlaylistId = String(createResult.data.id);
+    actions.push(`Created screen playlist: ${screenPlaylistId}`);
+  }
+  
+  // Step 3: Get ads for this screen (approved ads from placements)
+  // For now, we use the baseline items only - ads will be added via separate flow
+  const adsMediaIds: number[] = [];
+  
+  // Step 4: Build desired playlist: baseline first, then ads
+  const desiredMediaIds = [...baseline.mediaIds, ...adsMediaIds];
+  
+  // Step 5: Apply items
+  const setResult = await setPlaylistItemsExactly(screenPlaylistId, desiredMediaIds);
+  if (!setResult.ok) {
+    return {
+      ok: false, screenId, yodeckPlayerId, playlistId: screenPlaylistId, playlistName: canonicalName,
+      baselineCount: baseline.mediaIds.length, adsCount: 0, actions, error: setResult.error
+    };
+  }
+  actions.push(setResult.changed ? "Updated playlist items" : "Playlist items already correct");
+  
+  // Step 6: Assign screen content to this playlist
+  const assignResult = await yodeckSetScreenPlaylist(yodeckPlayerId, screenPlaylistId);
+  if (!assignResult.ok) {
+    actions.push(`Warning: Failed to assign playlist to screen: ${assignResult.error}`);
+  } else {
+    actions.push("Assigned screen to playlist");
+  }
+  
+  // Step 7: Update DB
+  await db.update(screens).set({
+    playlistId: screenPlaylistId,
+    playlistName: canonicalName,
+    yodeckSyncStatus: "synced",
+    updatedAt: new Date(),
+  }).where(eq(screens.id, screenId));
+  actions.push("Updated database");
+  
+  return {
+    ok: true, screenId, yodeckPlayerId, playlistId: screenPlaylistId, playlistName: canonicalName,
+    baselineCount: baseline.mediaIds.length, adsCount: adsMediaIds.length, actions
+  };
+}
+
+export interface RepairAllResult {
+  total: number;
+  success: number;
+  failed: number;
+  screens: ScreenCanonicalResult[];
+}
+
+/**
+ * Repair all screens: ensure canonical playlist architecture
+ */
+export async function repairAllScreens(): Promise<RepairAllResult> {
+  console.log(`[CanonicalRepair] Starting repair-all-screens...`);
+  
+  const linkedScreens = await db.select({
+    id: screens.id,
+    screenId: screens.screenId,
+    yodeckPlayerId: screens.yodeckPlayerId,
+  }).from(screens).where(isNotNull(screens.yodeckPlayerId));
+  
+  console.log(`[CanonicalRepair] Found ${linkedScreens.length} screens with Yodeck devices`);
+  
+  const results: ScreenCanonicalResult[] = [];
+  let success = 0;
+  let failed = 0;
+  
+  for (const screen of linkedScreens) {
+    try {
+      const result = await ensureCanonicalScreenWithBaseline(screen.id);
+      results.push(result);
+      
+      if (result.ok) {
+        console.log(`[CanonicalRepair] ✓ ${screen.screenId}: ${result.playlistName} (baseline=${result.baselineCount}, ads=${result.adsCount})`);
+        success++;
+      } else {
+        console.log(`[CanonicalRepair] ✗ ${screen.screenId}: ${result.error}`);
+        failed++;
+      }
+      
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (error: any) {
+      console.error(`[CanonicalRepair] ✗ ${screen.screenId}: ${error.message}`);
+      results.push({
+        ok: false, screenId: screen.id, yodeckPlayerId: screen.yodeckPlayerId || "",
+        playlistId: null, playlistName: null, baselineCount: 0, adsCount: 0,
+        actions: [], error: error.message
+      });
+      failed++;
+    }
+  }
+  
+  console.log(`[CanonicalRepair] Complete: ${success}/${linkedScreens.length} success`);
+  
+  return { total: linkedScreens.length, success, failed, screens: results };
+}
+
+/**
+ * Publish baseline: propagate baseline items to all screen playlists
+ */
+export async function publishBaseline(): Promise<{
+  ok: boolean;
+  baselinePlaylistId: string | null;
+  baselineItems: number[];
+  screensUpdated: number;
+  errors: string[];
+}> {
+  console.log(`[BaselineSync] Publishing baseline to all screens...`);
+  
+  const errors: string[] = [];
+  
+  // Step 1: Get/create baseline playlist
+  const baseline = await ensureBaselinePlaylist();
+  if (!baseline.ok) {
+    return { ok: false, baselinePlaylistId: null, baselineItems: [], screensUpdated: 0, errors: [baseline.error || "Baseline error"] };
+  }
+  
+  // Step 2: Get all screens with Yodeck devices
+  const linkedScreens = await db.select({
+    id: screens.id,
+    screenId: screens.screenId,
+    playlistId: screens.playlistId,
+  }).from(screens).where(isNotNull(screens.yodeckPlayerId));
+  
+  let updated = 0;
+  
+  for (const screen of linkedScreens) {
+    if (!screen.playlistId) {
+      errors.push(`${screen.screenId}: no playlist assigned`);
+      continue;
+    }
+    
+    try {
+      // Get current items in screen playlist
+      const current = await yodeckGetPlaylistItems(screen.playlistId);
+      const currentIds = current.items || [];
+      
+      // Extract ads (items not in baseline)
+      const adsIds = currentIds.filter(id => !baseline.mediaIds.includes(id));
+      
+      // Build new playlist: baseline + ads
+      const desiredIds = [...baseline.mediaIds, ...adsIds];
+      
+      const setResult = await setPlaylistItemsExactly(screen.playlistId, desiredIds);
+      if (setResult.ok) {
+        if (setResult.changed) {
+          console.log(`[BaselineSync] Updated ${screen.screenId}`);
+        }
+        updated++;
+      } else {
+        errors.push(`${screen.screenId}: ${setResult.error}`);
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 300));
+    } catch (error: any) {
+      errors.push(`${screen.screenId}: ${error.message}`);
+    }
+  }
+  
+  console.log(`[BaselineSync] Published baseline to ${updated}/${linkedScreens.length} screens`);
+  
+  return {
+    ok: errors.length === 0,
+    baselinePlaylistId: baseline.playlistId,
+    baselineItems: baseline.mediaIds,
+    screensUpdated: updated,
+    errors,
+  };
+}
+
+/**
+ * List all Yodeck playlists for cleanup inventory
+ */
+export async function listAllPlaylists(): Promise<{ ok: boolean; playlists: any[]; error?: string }> {
+  const result = await yodeckRequest<{ results: any[] }>("/playlists/?page_size=100");
+  if (!result.ok) {
+    return { ok: false, playlists: [], error: result.error };
+  }
+  return { ok: true, playlists: result.data?.results || [] };
+}
+
+/**
+ * List all Yodeck layouts for cleanup inventory
+ */
+export async function listAllLayouts(): Promise<{ ok: boolean; layouts: any[]; error?: string }> {
+  const result = await yodeckRequest<{ results: any[] }>("/layouts/?page_size=100");
+  if (!result.ok) {
+    return { ok: false, layouts: [], error: result.error };
+  }
+  return { ok: true, layouts: result.data?.results || [] };
+}
+
+export interface LegacyCleanupResult {
+  ok: boolean;
+  dryRun: boolean;
+  protectedPlaylists: string[];
+  legacyPlaylists: { id: string; name: string; action: string }[];
+  legacyLayouts: { id: string; name: string; action: string }[];
+  errors: string[];
+}
+
+/**
+ * Quarantine legacy playlists and layouts
+ */
+export async function quarantineLegacy(dryRun: boolean = true): Promise<LegacyCleanupResult> {
+  console.log(`[LegacyCleanup] Starting cleanup (dryRun=${dryRun})...`);
+  
+  const errors: string[] = [];
+  const protectedPlaylists: string[] = [];
+  const legacyPlaylists: { id: string; name: string; action: string }[] = [];
+  const legacyLayouts: { id: string; name: string; action: string }[] = [];
+  
+  // Get active screens to identify protected playlists
+  const activeScreens = await db.select({
+    playlistId: screens.playlistId,
+    yodeckPlayerId: screens.yodeckPlayerId,
+  }).from(screens).where(isNotNull(screens.yodeckPlayerId));
+  
+  const protectedIds = new Set<string>();
+  for (const s of activeScreens) {
+    if (s.playlistId) protectedIds.add(s.playlistId);
+    if (s.yodeckPlayerId) {
+      protectedPlaylists.push(`EVZ | SCREEN | ${s.yodeckPlayerId}`);
+    }
+  }
+  protectedPlaylists.push(BASELINE_PLAYLIST_NAME);
+  
+  // Get all playlists
+  const playlists = await listAllPlaylists();
+  if (playlists.ok) {
+    for (const p of playlists.playlists) {
+      const name = p.name || "";
+      const id = String(p.id);
+      
+      // Check if protected
+      if (protectedIds.has(id) || name === BASELINE_PLAYLIST_NAME || name.startsWith("EVZ | SCREEN |")) {
+        continue;
+      }
+      
+      // Check if legacy (Elevizion/EVZ/Loop patterns)
+      if (name.includes("Elevizion") || name.includes("Loop") || name.includes("auto-playlist")) {
+        const newName = `LEGACY | ${name} | ${new Date().toISOString().split("T")[0]}`;
+        legacyPlaylists.push({ id, name, action: dryRun ? `Would rename to: ${newName}` : `Renamed to: ${newName}` });
+        
+        if (!dryRun) {
+          const renameResult = await yodeckRequest<any>(`/playlists/${id}/`, {
+            method: "PATCH",
+            body: JSON.stringify({ name: newName }),
+          });
+          if (!renameResult.ok) {
+            errors.push(`Failed to rename playlist ${id}: ${renameResult.error}`);
+          }
+        }
+      }
+    }
+  }
+  
+  // Get all layouts
+  const layouts = await listAllLayouts();
+  if (layouts.ok) {
+    for (const l of layouts.layouts) {
+      const name = l.name || "";
+      const id = String(l.id);
+      
+      if (name.includes("Elevizion") || name.includes("EVZ")) {
+        const newName = `LEGACY | ${name} | ${new Date().toISOString().split("T")[0]}`;
+        legacyLayouts.push({ id, name, action: dryRun ? `Would rename to: ${newName}` : `Renamed to: ${newName}` });
+        
+        if (!dryRun) {
+          const renameResult = await yodeckRequest<any>(`/layouts/${id}/`, {
+            method: "PATCH",
+            body: JSON.stringify({ name: newName }),
+          });
+          if (!renameResult.ok) {
+            errors.push(`Failed to rename layout ${id}: ${renameResult.error}`);
+          }
+        }
+      }
+    }
+  }
+  
+  console.log(`[LegacyCleanup] Found ${legacyPlaylists.length} legacy playlists, ${legacyLayouts.length} legacy layouts`);
+  
+  return {
+    ok: errors.length === 0,
+    dryRun,
+    protectedPlaylists,
+    legacyPlaylists,
+    legacyLayouts,
+    errors,
   };
 }

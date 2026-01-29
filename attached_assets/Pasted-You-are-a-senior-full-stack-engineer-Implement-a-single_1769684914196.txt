@@ -1,0 +1,158 @@
+You are a senior full-stack engineer. Implement a single, uniform, production-grade Yodeck content architecture for Elevizion and clean up legacy clutter safely.
+
+CONTEXT (current state from logs):
+- Two Yodeck players: 591896 (Test) and 591895 (Basil’s Barber Shop Maasbracht).
+- Both are online and both currently play a Yodeck auto-playlist:
+  - 591896 plays playlistId 30524269 "Elevizion | Screen | 591896(auto-playlist-...)" with 4 baseline items.
+  - 591895 plays playlistId 30532044 "Elevizion | Screen | 591895(auto-playlist-...)" with same 4 baseline items.
+- In our DB, screen d7e9... (591895) had playlistId null but now-playing self-heal saved 30532044. So the uniform path must own DB truth, not rely on manual Yodeck state.
+- User requirement: remove all other playlists/layouts/etc and keep ONLY the uniform working method. Also make baseline centrally managed: change baseline once => updates all screens immediately. Also place the already-approved uploaded video that is “floating” in data onto the correct screen, and show clear separation between baseline content and uploaded ads.
+
+ABSOLUTE GOALS:
+1) ONE and only ONE playback source per screen: a single “screen playlist”. No layouts for now. Mode = PLAYLIST.
+2) Central baseline playlist (“EVZ | BASELINE”) is the single source of truth. Any change to baseline auto-propagates to all screens.
+3) Each screen uses a per-screen playback playlist (“EVZ | SCREEN | <playerId>”) that contains:
+   - All baseline items (kept in sync), plus
+   - Any approved ads assigned to that screen
+4) Idempotent: running repair multiple times does not duplicate items.
+5) Cleanup: identify and safely retire legacy playlists/layouts (rename + detach) and optionally delete only if we are 100% sure they are unused.
+6) Fix “floating approved video”: find approved media in our DB that isn’t linked to a placement/screen and correctly attach it into the correct screen playlist as an AD item.
+7) UI/DB clarity: show separation baseline vs ads in our “currentContent” / content summary:
+   - baseline items category = non_ad or baseline
+   - uploaded ads category = ad
+8) Robustness: all Yodeck API calls must validate JSON response; if HTML or non-JSON returned, raise a diagnostic error and do NOT treat as empty lists.
+
+NON-NEGOTIABLE CONSTRAINTS:
+- Do not break currently working screens.
+- Do not rely on Yodeck “auto-playlist cropping” naming. We must set our own canonical playlists and assign them explicitly.
+- Only remove/delete Yodeck objects after verifying they are not used by any screen AND not referenced in DB. Prefer “quarantine” via rename first.
+- Must handle future screens automatically: onboarding or sync should create/assign baseline+screen playlist.
+
+IMPLEMENTATION PLAN (must implement fully):
+
+A) DATA MODEL & CONFIG
+Add configuration constants:
+- BASELINE_PLAYLIST_NAME = "EVZ | BASELINE"
+- SCREEN_PLAYLIST_NAME(playerId) = `EVZ | SCREEN | ${playerId}`
+- MIN_BASELINE_COUNT = 3 (but we expect 4 currently)
+- BASELINE_MEDIA_IDS: If we already know baseline Yodeck media IDs (from logs: 27478716, 27476141, 27477130, 27476083), store them in config as default baseline seed.
+- (Optional) BASELINE_MEDIA_NAMES for human-friendly display, but IDs are source of truth.
+
+In DB:
+- Ensure Screen has playlistId + playlistName set for the screen playlist (not baseline).
+- Add optional Screen.baselineHash or baselineLastAppliedAt fields OR use a join table ScreenBaselineSyncLog.
+- Ensure content items stored locally have a field “category”: baseline vs ad (baseline includes news/weather etc).
+If you cannot change schema easily, adapt by using existing category non_ad as baseline and ad as ad.
+
+B) YODECK SERVICE PRIMITIVES (create/find/assign/sync)
+Implement these functions in a YodeckService module with strong diagnostics:
+1) yodeckFetchJson(url, options) that:
+   - checks response status, content-type, and first chars
+   - if content-type not JSON OR body begins with "<", throw error with {status, contentType, preview200}.
+2) findOrCreatePlaylistByName(name): returns {id, name}
+3) getPlaylistItems(playlistId): returns item list (media ids in order)
+4) setPlaylistItemsExactly(playlistId, desiredMediaIds):
+   - compute current media ids (ignore non-media items if any)
+   - if same set+order => no-op
+   - else update playlist so items exactly match desired order
+   - must be idempotent and avoid duplicates
+5) assignScreenContentToPlaylist(playerId, playlistId):
+   - sets screen content mode to playlist and source_id=playlistId using v2 API fields
+6) listAllPlaylists() and listAllLayouts() for cleanup inventory
+7) detectScreenAssignedSource(playerId): {sourceType, sourceId, sourceName}
+
+C) BASELINE: SINGLE SOURCE OF TRUTH + AUTO SYNC
+1) Ensure baseline playlist exists: ensureBaselinePlaylist():
+   - findOrCreate BASELINE_PLAYLIST_NAME
+   - if empty or below MIN_BASELINE_COUNT, seed with BASELINE_MEDIA_IDS
+2) Compute baseline signature:
+   - baselineSig = sha256(join(mediaIds, ","))
+3) For each screen: syncBaselineToScreenPlaylist(screen):
+   - ensure screen playlist exists (SCREEN_PLAYLIST_NAME(playerId))
+   - screenPlaylistDesired = baselineMediaIds + adMediaIdsForScreen
+   - write setPlaylistItemsExactly(screenPlaylistId, screenPlaylistDesired)
+4) When baseline changes, propagate immediately:
+   - Add endpoint POST /api/admin/baseline/publish (or reuse existing admin tools)
+   - Also implement watcher/worker BaselineSyncWorker that runs every 1-2 minutes OR triggers on baseline update events.
+   - The worker:
+     - reads current baselineSig
+     - for all active screens, ensures their screen playlist contains baseline in correct order
+     - if baselineSig changed since last applied, update all screens
+   - Make it safe for memory: run sequentially with small delays, log progress.
+
+D) SCREEN CANONICALIZATION / REPAIR
+Implement ensureCanonicalScreen(screen):
+Steps:
+1) Ensure baseline playlist exists and get baselineMediaIds
+2) Ensure screen playlist exists with name SCREEN_PLAYLIST_NAME(playerId)
+3) Assign screen content to this screen playlist (force)
+4) Determine ads for this screen from our DB:
+   - Identify “approved” ad assets assigned to this screen’s location/placements
+   - Also find “floating” approved media: approved==true AND not linked to any placement/screen OR missing yodeckPlaylist linkage
+   - Provide deterministic rule to decide target screen for floating ad:
+     - If advertiser/placement indicates city/locationId -> map to that screen
+     - If only 1 screen exists, attach to it
+     - Otherwise leave in “needs_manual_assignment” but show in UI
+5) Build desired playlist items: baselineMediaIds first, then adsMediaIds
+6) Apply setPlaylistItemsExactly
+7) Persist to DB: screen.playlistId/screen.playlistName = screenPlaylist
+8) Re-verify via now-playing: actualSourceId == screenPlaylistId; if mismatch, retry assign once.
+
+Provide admin endpoint:
+POST /api/admin/yodeck/repair-all-screens
+- loops all screens with yodeckPlayerId
+- calls ensureCanonicalScreen
+- returns summary with counts and per-screen actions
+
+E) CLEANUP LEGACY OBJECTS (safe)
+User wants all other playlists/layouts removed. Do this in phases:
+
+Phase 1 (immediate, SAFE): QUARANTINE instead of delete
+- Inventory:
+  - list all Yodeck playlists and layouts
+  - mark “protected”:
+    - BASELINE playlist
+    - any playlist named "EVZ | SCREEN | <id>" for active screens
+  - For everything else that matches "Elevizion" / "EVZ" / "Loop" / old patterns:
+    - if not assigned to any screen (check screen assigned source list)
+    - then rename to "LEGACY | <oldname> | <date>" and (optionally) move to an "Archive" folder/tag if supported
+- Layouts: if any layouts exist and are not assigned to screens, rename similarly.
+- Do NOT hard-delete yet.
+
+Phase 2 (optional delete, only if proven unused):
+Add endpoint POST /api/admin/yodeck/purge-legacy?dryRun=1
+- dryRun returns what would be deleted
+- non-dryRun deletes only if:
+  - not protected
+  - not assigned to any screen
+  - not referenced by our DB
+  - created before a cutoff (e.g., older than 24h) to avoid racing
+Given risk, default to dryRun and require explicit admin action to execute.
+
+F) UI / CONTENT DISTINCTION
+Update screen content summary logic so UI clearly shows:
+- Baseline items (from baseline playlist media ids) labeled "Baseline"
+- Ad items (from placements/approved uploads) labeled "Ad"
+In API responses:
+- now-playing should include baselineCount and adsCount (not null)
+- include arrays baselineItems[] and adItems[] with mediaId + name + duration
+- currentContent rows should set category = "baseline" for baseline items (or keep non_ad but label baseline in UI if mediaId is part of baseline set)
+
+G) FIX THE ROOT CAUSE CLASS OF BUGS
+- Any Yodeck call that returns HTML must produce:
+  - yodeckSyncError with clear reason
+  - not “0 screens”
+- Protect server memory:
+  - sequential processing
+  - avoid storing large bodies
+  - log minimal
+
+DELIVERABLES (must be present at end):
+1) Working canonicalization: both screens end up using "EVZ | SCREEN | 591896" and "EVZ | SCREEN | 591895"
+2) Baseline playlist "EVZ | BASELINE" exists and is the source of truth. Changing it and calling /api/admin/baseline/publish updates both screen playlists.
+3) /api/admin/yodeck/repair-all-screens returns summary and is idempotent.
+4) Legacy playlists/layouts are quarantined (renamed) and no longer used.
+5) Floating approved ad is either placed onto correct screen playlist OR listed clearly in an “Unassigned Approved Ads” admin view with a one-click “Assign to screen” action.
+6) now-playing returns baselineCount and adsCount correctly and UI shows separation.
+
+IMPLEMENT NOW. Update code, routes, worker, and minimal UI adjustments. Add logging with clear prefixes [BaselineSync], [CanonicalRepair], [LegacyCleanup], [YodeckAPI].

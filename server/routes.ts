@@ -17908,19 +17908,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * POST /api/admin/yodeck/repair-all-screens
-   * Repair all screens to use canonical playlist strategy
-   * Each screen gets exactly ONE playlist: "Elevizion | Screen | {yodeckPlayerId}"
+   * Repair all screens to use canonical playlist strategy with baseline
+   * Each screen gets "EVZ | SCREEN | {yodeckPlayerId}" with baseline + ads
    */
   app.post("/api/admin/yodeck/repair-all-screens", requireAdminAccess, async (req, res) => {
     try {
-      console.log("[RepairAllScreens] Starting canonical screen repair...");
-      const { repairAllScreensCanonical } = await import("./services/yodeckBroadcast");
-      const result = await repairAllScreensCanonical();
+      console.log("[RepairAllScreens] Starting canonical screen repair with baseline...");
+      const { repairAllScreens } = await import("./services/yodeckBroadcast");
+      const result = await repairAllScreens();
       
-      console.log(`[RepairAllScreens] Complete: ${result.total} total, ${result.repairedCount} repaired, ${result.alreadyOkCount} already ok, ${result.failedCount} failed`);
+      console.log(`[RepairAllScreens] Complete: ${result.total} total, ${result.success} success, ${result.failed} failed`);
       
       res.json({
-        ok: result.failedCount === 0,
+        ok: result.failed === 0,
         ...result,
       });
     } catch (error: any) {
@@ -18004,6 +18004,103 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       error: "LEGACY_CANONICAL_SYSTEM_DISABLED",
       message: "Use /api/admin/autopilot/repair-all instead",
     });
+  });
+
+  // =============================================================================
+  // BASELINE ARCHITECTURE ENDPOINTS
+  // =============================================================================
+
+  /**
+   * POST /api/admin/baseline/publish
+   * Publish baseline to all screens - propagates baseline items to all screen playlists
+   */
+  app.post("/api/admin/baseline/publish", requireAdminAccess, async (req, res) => {
+    try {
+      console.log("[BaselinePublish] Starting baseline publish...");
+      const { publishBaseline } = await import("./services/yodeckBroadcast");
+      const result = await publishBaseline();
+      
+      console.log(`[BaselinePublish] Complete: ${result.screensUpdated} screens updated`);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[BaselinePublish] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/baseline/status
+   * Get baseline playlist status
+   */
+  app.get("/api/admin/baseline/status", requireAdminAccess, async (req, res) => {
+    try {
+      const { ensureBaselinePlaylist } = await import("./services/yodeckBroadcast");
+      const result = await ensureBaselinePlaylist();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[BaselineStatus] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/yodeck/quarantine-legacy
+   * Quarantine legacy playlists and layouts
+   */
+  app.post("/api/admin/yodeck/quarantine-legacy", requireAdminAccess, async (req, res) => {
+    try {
+      const dryRun = req.query.dryRun !== "false";
+      console.log(`[LegacyCleanup] Starting quarantine (dryRun=${dryRun})...`);
+      
+      const { quarantineLegacy } = await import("./services/yodeckBroadcast");
+      const result = await quarantineLegacy(dryRun);
+      
+      console.log(`[LegacyCleanup] Found ${result.legacyPlaylists.length} legacy playlists, ${result.legacyLayouts.length} legacy layouts`);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[LegacyCleanup] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/yodeck/inventory
+   * Get all Yodeck playlists and layouts for inventory
+   */
+  app.get("/api/admin/yodeck/inventory", requireAdminAccess, async (req, res) => {
+    try {
+      const { listAllPlaylists, listAllLayouts } = await import("./services/yodeckBroadcast");
+      const [playlists, layouts] = await Promise.all([
+        listAllPlaylists(),
+        listAllLayouts(),
+      ]);
+      
+      res.json({
+        ok: playlists.ok && layouts.ok,
+        playlists: playlists.playlists,
+        layouts: layouts.layouts,
+        error: playlists.error || layouts.error,
+      });
+    } catch (error: any) {
+      console.error("[Inventory] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/:screenId/canonical-with-baseline
+   * Repair screen using baseline + ads architecture
+   */
+  app.post("/api/admin/screens/:screenId/canonical-with-baseline", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { ensureCanonicalScreenWithBaseline } = await import("./services/yodeckBroadcast");
+      const result = await ensureCanonicalScreenWithBaseline(screenId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[CanonicalWithBaseline] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
   });
 
   return httpServer;
