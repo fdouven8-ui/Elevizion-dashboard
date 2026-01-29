@@ -1,0 +1,83 @@
+JE BENT SENIOR ENGINEER. WE FIXEN DIT DEFINITIEF ZONDER NIEUWE CONCEPTEN.
+MODE STAAT AL GOED: CONTENT_PIPELINE_MODE=SCREEN_PLAYLIST_ONLY, AUTOPILOT DISABLED.
+TOCH IS UI FOUT: “Niet gekoppeld / Geen playlist / 0 items” terwijl Yodeck wel playlist draait.
+
+LOGS BEWIJZEN:
+- Yodeck draait playlist op screen 591896: actualSourceType=playlist, actualSourceId=30524269, en yodeckContentSummary itemCount=4
+- Maar app DB heeft: screen.playlistId=null en now-playing: expectedPlaylistId=null → mismatch=true → verificationOk=false
+=> ROOT CAUSE: playlistId wordt NIET persistent opgeslagen in de Screen-record OF UI leest verkeerde velden.
+Daarnaast toont UI “Niet gekoppeld” omdat yodeckSyncStatus nog “not_linked” is.
+
+DOEL (HARD):
+- 1 playlist per screen, altijd.
+- App moet die playlistId opslaan op de Screen-record en UI moet daarop vertrouwen.
+- Verify mag NOOIT falen als expectedPlaylistId ontbreekt maar Yodeck wel playlist draait; dan moeten we automatisch self-healen en expectedPlaylistId zetten.
+
+IMPLEMENTATIE (MUST DO ALL):
+
+1) DEFINE CANONICAL DB FIELDS (op Screen tabel)
+Gebruik deze velden (maak ze als ze niet bestaan):
+- screen.yodeckPlaylistId (string/int)
+- screen.yodeckPlaylistName (string)
+- screen.lastVerifiedAt, screen.lastVerifyOk (optioneel)
+STOP met losse playlistId/playlistName velden als die elders bestaan; of map ze 1-op-1 naar yodeckPlaylistId/Name.
+De UI moet 100% deze velden gebruiken.
+
+2) ENSURE SCREEN PLAYLIST MOET PERSISTENT SCHRIJVEN
+In ensureScreenPlaylist(screen):
+- bepaal playlistId (nieuw aanmaken of bestaand vinden)
+- CLONE template items (YODECK_TEMPLATE_PLAYLIST_ID)
+- SAVE naar DB:
+  screen.yodeckPlaylistId = playlistId
+  screen.yodeckPlaylistName = playlistName
+  screen.yodeckSyncStatus = "linked" (of "synced") ALS yodeckPlayerId bestaat
+Belangrijk: dit moet idempotent zijn.
+
+3) VERIFY/SELF-HEAL IN now-playing ENDPOINT
+In GET /api/screens/:id/now-playing:
+- haal actualSourceType/sourceId uit Yodeck
+- expectedPlaylistId = screen.yodeckPlaylistId
+- ALS expectedPlaylistId leeg is EN actualSourceType == "playlist" EN actualSourceId bestaat:
+  -> schrijf direct naar DB:
+     screen.yodeckPlaylistId = actualSourceId
+     screen.yodeckPlaylistName = actual playlist name (haal op via Yodeck playlists endpoint)
+     screen.yodeckSyncStatus = "linked"
+  -> zet expectedPlaylistId = actualSourceId
+- verificationOk = (actualSourceType=="playlist" && String(actualSourceId)==String(expectedPlaylistId))
+- mismatch = !verificationOk
+Return ALTIJD ok:true als device online is en we een playlist zien; rood alleen als sourceType != playlist of sourceId ontbreekt.
+
+4) UI “NIET GEKOPPELD / GEEN PLAYLIST” FIX
+- Verwijder UI-logica die kijkt naar yodeckSyncStatus="not_linked" of oude location velden.
+- “Gekoppeld” = screen.yodeckPlayerId bestaat.
+- “Actieve playlist” = screen.yodeckPlaylistId bestaat (of actualSourceId uit now-playing).
+- “Content count” = items tellen uit Yodeck playlist items (of yodeckContentSummary) — NIET uit oude baseline/combined velden.
+
+5) STOP MET 304/ETAG OP now-playing (BELANGRIJK)
+In logs zie ik now-playing met status 304 maar wel JSON body; dat is fout en veroorzaakt stale UI.
+Zet caching uit voor:
+- /api/screens/:id/now-playing
+- /api/screens
+- /api/screens/:id
+Forceer altijd 200 + verse data.
+
+6) BACKFILL MIGRATIE (1x) — REPAREREN VAN DOOLHOF DATA
+Maak script/job: backfillScreenPlaylists():
+- loop alle screens met yodeckPlayerId
+- call ensureScreenPlaylist(screen) (die nu persistent schrijft)
+- daarna assignPlaylistToPlayer(screen) zodat player naar die playlist wijst
+- zet yodeckSyncStatus="linked"
+Log alleen summary.
+
+7) ACCEPTATIECRITERIA (KEIHARD)
+Voor screen 591896:
+- /api/screens/:id moet yodeckPlaylistId tonen = 30524269 en yodeckPlaylistName gevuld
+- /api/screens/:id/now-playing moet geven: mismatch=false, verificationOk=true
+- UI moet tonen: gekoppeld + actieve playlist + 4 items (basis)
+Geen “Niet gekoppeld” meer.
+
+LEVER OP:
+- Welke files zijn aangepast
+- Waar screen.yodeckPlaylistId/Name wordt opgeslagen
+- Waar UI het leest
+- Welke caching is uitgezet

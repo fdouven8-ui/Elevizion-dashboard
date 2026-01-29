@@ -285,10 +285,11 @@ export async function ensureScreenPlaylist(screenId: string): Promise<EnsurePlay
     playlistId = cloneResult.playlistId;
     created = true;
 
-    // Save to DB
+    // Save to DB including sync status
     await db.update(screens).set({
       playlistId,
       playlistName,
+      yodeckSyncStatus: screen.yodeckPlayerId ? "linked" : "not_linked",
       updatedAt: new Date(),
     }).where(eq(screens.id, screenId));
 
@@ -438,6 +439,7 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   actualSourceId: string | null;
   mismatch: boolean;
   verificationOk: boolean;
+  selfHealed?: boolean;
   error?: string;
 }> {
   const [screen] = await db.select().from(screens).where(eq(screens.id, screenId));
@@ -487,8 +489,35 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     };
   }
 
-  const expected = screen.playlistId;
+  let expected = screen.playlistId;
   const actual = actualResult.source;
+  let selfHealed = false;
+  
+  // SELF-HEAL: If expected is empty but Yodeck is playing a playlist, save it to DB
+  if (!expected && actual.sourceType === "playlist" && actual.sourceId) {
+    console.log(`[NowPlaying] Self-heal: screen ${screenId} has no playlistId in DB but Yodeck plays ${actual.sourceId}`);
+    
+    await db.update(screens).set({
+      playlistId: actual.sourceId,
+      playlistName: actual.sourceName || `Playlist ${actual.sourceId}`,
+      yodeckSyncStatus: "linked",
+      lastVerifyAt: new Date(),
+      lastVerifyResult: "ok",
+      updatedAt: new Date(),
+    }).where(eq(screens.id, screenId));
+    
+    expected = actual.sourceId;
+    selfHealed = true;
+    console.log(`[NowPlaying] Self-healed: playlistId=${expected} saved to screen ${screenId}`);
+  }
+  
+  // Update sync status if device is linked but status says not_linked
+  if (screen.yodeckSyncStatus === "not_linked" && screen.yodeckPlayerId) {
+    await db.update(screens).set({
+      yodeckSyncStatus: "linked",
+      updatedAt: new Date(),
+    }).where(eq(screens.id, screenId));
+  }
   
   const mismatch = 
     actual.sourceType !== "playlist" || 
@@ -506,5 +535,74 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     actualSourceId: actual.sourceId,
     mismatch,
     verificationOk,
+    selfHealed,
+  };
+}
+
+// =============================================================================
+// BACKFILL / MIGRATION
+// =============================================================================
+
+import { isNotNull } from "drizzle-orm";
+
+/**
+ * Backfill all screens with Yodeck devices - ensure they have playlists
+ * This is a one-time migration to fix legacy data
+ */
+export async function backfillScreenPlaylists(): Promise<{
+  total: number;
+  success: number;
+  failed: number;
+  logs: string[];
+}> {
+  const logs: string[] = [];
+  logs.push(`[Backfill] Starting screen playlist backfill...`);
+  
+  const linkedScreens = await db.select({
+    id: screens.id,
+    screenId: screens.screenId,
+    name: screens.name,
+    yodeckPlayerId: screens.yodeckPlayerId,
+    playlistId: screens.playlistId,
+  }).from(screens).where(isNotNull(screens.yodeckPlayerId));
+  
+  logs.push(`[Backfill] Found ${linkedScreens.length} screens with Yodeck devices`);
+  
+  let success = 0;
+  let failed = 0;
+  
+  for (const screen of linkedScreens) {
+    try {
+      // Ensure playlist exists
+      const ensureResult = await ensureScreenPlaylist(screen.id);
+      if (!ensureResult.ok) {
+        logs.push(`[Backfill] ✗ ${screen.screenId}: ${ensureResult.error}`);
+        failed++;
+        continue;
+      }
+      
+      // Push to Yodeck
+      const pushResult = await pushScreen(screen.id);
+      if (!pushResult.ok) {
+        logs.push(`[Backfill] ✗ ${screen.screenId}: push failed - ${pushResult.error}`);
+        failed++;
+        continue;
+      }
+      
+      logs.push(`[Backfill] ✓ ${screen.screenId}: playlist=${ensureResult.playlistId}, items=${ensureResult.itemCount}`);
+      success++;
+    } catch (error: any) {
+      logs.push(`[Backfill] ✗ ${screen.screenId}: ${error.message}`);
+      failed++;
+    }
+  }
+  
+  logs.push(`[Backfill] Complete: ${success} success, ${failed} failed, ${linkedScreens.length} total`);
+  
+  return {
+    total: linkedScreens.length,
+    success,
+    failed,
+    logs,
   };
 }

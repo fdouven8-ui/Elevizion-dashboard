@@ -17879,10 +17879,33 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/broadcast/backfill
+   * One-time migration: ensure all screens with Yodeck devices have playlists
+   */
+  app.post("/api/admin/broadcast/backfill", requireAdminAccess, async (req, res) => {
+    try {
+      const { backfillScreenPlaylists } = await import("./services/yodeckBroadcast");
+      const result = await backfillScreenPlaylists();
+      result.logs.forEach(log => console.log(log));
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Backfill] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/admin/screens/:screenId/now-playing
    * Get current playback status for a screen
    */
   app.get("/api/admin/screens/:screenId/now-playing", requireAdminAccess, async (req, res) => {
+    // Disable caching - always return fresh data
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    });
+    
     try {
       const { screenId } = req.params;
       const { getScreenNowPlaying } = await import("./services/yodeckBroadcast");
