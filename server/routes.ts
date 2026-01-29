@@ -5313,6 +5313,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
   // ============================================================================
 
   app.get("/api/screens", async (_req, res) => {
+    // Prevent caching to ensure fresh data
+    res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    
     const screens = await storage.getScreens();
     
     // Enrich mediaItems with category if missing (for backward compatibility with old data)
@@ -5421,6 +5426,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   app.get("/api/screens/:id", async (req, res) => {
+    // Prevent caching to ensure fresh data
+    res.set("Cache-Control", "no-cache, no-store, must-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    
     const screen = await storage.getScreen(req.params.id);
     if (!screen) return res.status(404).json({ message: "Screen not found" });
     

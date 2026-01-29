@@ -49,6 +49,7 @@ export function SyncStatusBadge({
   const getBadgeContent = () => {
     switch (syncStatus) {
       case "synced":
+      case "linked":
         return {
           icon: <CheckCircle2 className="w-3 h-3 mr-1" />,
           label: `${providerLabel} ✓`,

@@ -441,8 +441,39 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   verificationOk: boolean;
   selfHealed?: boolean;
   error?: string;
+  // UI-facing fields (match what frontend expects)
+  playlistId: string | null;
+  playlistName: string | null;
+  expectedPlaylistName: string | null;
+  itemCount: number | null;
+  baselineCount: number | null;
+  adsCount: number;
+  lastPushAt: string | null;
+  lastPushResult: string | null;
+  deviceStatus: {
+    status: "ONLINE" | "OFFLINE" | "UNLINKED";
+    isOnline: boolean;
+    lastSeenAt: string | null;
+    lastScreenshotAt: string | null;
+    yodeckDeviceId: string | null;
+    yodeckDeviceName: string | null;
+    source: string;
+    fetchedAt: string;
+  };
 }> {
   const [screen] = await db.select().from(screens).where(eq(screens.id, screenId));
+  
+  const makeDeviceStatus = (status: "ONLINE" | "OFFLINE" | "UNLINKED", screen: any) => ({
+    status,
+    isOnline: status === "ONLINE",
+    lastSeenAt: screen?.lastSeenAt?.toISOString() || null,
+    lastScreenshotAt: screen?.yodeckScreenshotLastOkAt?.toISOString() || null,
+    yodeckDeviceId: screen?.yodeckPlayerId || null,
+    yodeckDeviceName: screen?.yodeckPlayerName || null,
+    source: "yodeck",
+    fetchedAt: new Date().toISOString(),
+  });
+  
   if (!screen) {
     return {
       ok: false,
@@ -455,6 +486,15 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
       mismatch: false,
       verificationOk: false,
       error: "Screen not found",
+      playlistId: null,
+      playlistName: null,
+      expectedPlaylistName: null,
+      itemCount: null,
+      baselineCount: null,
+      adsCount: 0,
+      lastPushAt: null,
+      lastPushResult: null,
+      deviceStatus: makeDeviceStatus("UNLINKED", null),
     };
   }
 
@@ -470,6 +510,15 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
       mismatch: true,
       verificationOk: false,
       error: "Screen has no Yodeck player ID",
+      playlistId: screen.playlistId,
+      playlistName: screen.playlistName,
+      expectedPlaylistName: screen.playlistName,
+      itemCount: screen.yodeckContentCount,
+      baselineCount: null,
+      adsCount: 0,
+      lastPushAt: screen.lastPushAt?.toISOString() || null,
+      lastPushResult: screen.lastPushResult,
+      deviceStatus: makeDeviceStatus("UNLINKED", screen),
     };
   }
 
@@ -486,6 +535,15 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
       mismatch: true,
       verificationOk: false,
       error: actualResult.error,
+      playlistId: screen.playlistId,
+      playlistName: screen.playlistName,
+      expectedPlaylistName: screen.playlistName,
+      itemCount: screen.yodeckContentCount,
+      baselineCount: null,
+      adsCount: 0,
+      lastPushAt: screen.lastPushAt?.toISOString() || null,
+      lastPushResult: screen.lastPushResult,
+      deviceStatus: makeDeviceStatus("OFFLINE", screen),
     };
   }
 
@@ -524,18 +582,32 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     actual.sourceId !== expected;
 
   const verificationOk = !mismatch && expected !== null;
+  
+  // Derive playlist name: use actual playing name, fallback to DB name
+  const playlistName = actual.sourceName || screen.playlistName || `Playlist ${expected}`;
+  const isOnline = screen.status === "online" || actualResult.isOnline === true;
 
   return {
     ok: true,
     screenId,
     yodeckPlayerId: screen.yodeckPlayerId,
-    isOnline: screen.status === "online",
+    isOnline,
     expectedPlaylistId: expected,
     actualSourceType: actual.sourceType,
     actualSourceId: actual.sourceId,
     mismatch,
     verificationOk,
     selfHealed,
+    // UI-facing fields
+    playlistId: actual.sourceId || expected,
+    playlistName,
+    expectedPlaylistName: screen.playlistName,
+    itemCount: screen.yodeckContentCount ?? actual.itemCount ?? null,
+    baselineCount: null,
+    adsCount: 0,
+    lastPushAt: screen.lastPushAt?.toISOString() || null,
+    lastPushResult: screen.lastPushResult,
+    deviceStatus: makeDeviceStatus(isOnline ? "ONLINE" : "OFFLINE", screen),
   };
 }
 

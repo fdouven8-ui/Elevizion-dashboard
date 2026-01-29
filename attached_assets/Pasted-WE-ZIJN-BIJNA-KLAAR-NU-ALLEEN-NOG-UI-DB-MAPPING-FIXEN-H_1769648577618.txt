@@ -1,0 +1,64 @@
+WE ZIJN BIJNA KLAAR. NU ALLEEN NOG UI/DB MAPPING FIXEN.
+
+HUIDIGE STATUS (BEWEZEN IN LOGS):
+- /now-playing self-healed en returned:
+  expectedPlaylistId=30524269, actualSourceId=30524269, mismatch=false, verificationOk=true, selfHealed=true
+- Maar UI toont nog:
+  “Niet gekoppeld”, “Geen playlist”, “0 items”
+- /api/screens response toont nog:
+  playlistId:null, playlistName:null, yodeckSyncStatus:"not_linked"
+=> ROOT CAUSE: UI en/of /api/screens leest andere velden dan die nu correct zijn, OF de self-heal schrijft naar een veld dat /api/screens niet selecteert/serialiseert.
+
+DOEL:
+- Zodra now-playing OK is, moet het scherm in UI ook tonen:
+  gekoppeld + actieve playlist + itemCount.
+- Geen “Niet gekoppeld” meer als yodeckPlayerId bestaat.
+- Geen “Geen playlist” als we actualSourceId hebben of screen playlistId in DB.
+
+TAKEN (MOET ALLES):
+
+1) ÉÉN BRON VAN WAARHEID VOOR PLAYLIST-ID OP SCREEN RECORD
+Kies exact één veld op Screen model:
+- screen.playlistId (string)  <-- als deze al bestaat, gebruik deze
+OF
+- screen.yodeckPlaylistId (string)
+Maar NIET allebei door elkaar.
+Update self-heal (/now-playing) zodat hij naar ditzelfde veld schrijft.
+
+2) FIX /api/screens en /api/screens/:id SELECT/SERIALIZE
+Zorg dat het gekozen playlist veld altijd terugkomt in JSON.
+In logs staat playlistId null → dus endpoint selecteert het niet, of mapping is fout.
+- Check ORM select/serializer (Prisma/select, SQL SELECT list, mapper).
+- Voeg playlistName ook toe (optioneel), maar playlistId is MUST.
+
+3) UI MOET STOPPEN MET “yodeckSyncStatus not_linked” ALS KOPPEL-INDICATOR
+Nieuwe UI-regel:
+- “Gekoppeld” = (screen.yodeckPlayerId bestaat)
+- “Niet gekoppeld” alleen als yodeckPlayerId leeg is
+Dus yodeckSyncStatus mag NOOIT de badge sturen.
+(Die status is nu clearly stale en veroorzaakt de verkeerde tekst.)
+
+4) UI: “Actieve playlist” en “Content count” MOETEN VAN DE JUISTE BRON KOMEN
+Voor scherm detail:
+- Als /now-playing ok=true en actualSourceId bestaat → toon die als actieve playlist.
+- Content count = screen.yodeckContentCount of yodeckContentSummary.uniqueMediaCount (of itemCount in content-status).
+NIET uit oude baseline/combined velden, en NIET uit playlistId null.
+
+5) CACHE / 304 PROBLEEM OP API
+Zet caching/ETag uit op:
+- GET /api/screens
+- GET /api/screens/:id
+- GET /api/screens/:id/now-playing
+Want UI kan anders oude JSON met null playlistId blijven renderen.
+
+6) BACKFILL: maak een repair job die alle screens met yodeckPlayerId langsloopt:
+- call now-playing (of een interne helper) om self-heal toe te passen
+- daarna moet /api/screens meteen playlistId != null teruggeven voor die screens
+
+ACCEPTATIECRITERIA:
+- Na 1 refresh:
+  UI mag NIET meer “Niet gekoppeld” tonen als yodeckPlayerId bestaat
+  UI moet playlistId of actualSourceId tonen (geen “Geen playlist”)
+  UI moet itemCount > 0 tonen (bijv. 4)
+- /api/screens en /api/screens/:id moeten playlistId gevuld teruggeven.
+Lever op: welke files aangepast en welke velden definitief de bron van waarheid zijn.
