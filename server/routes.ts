@@ -18875,6 +18875,136 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // PRODUCTION BROADCAST - Safe, correct publishing with targeting
+  // ============================================================================
+
+  /**
+   * GET /api/admin/broadcast/safety-gate
+   * Check if content write operations are enabled
+   */
+  app.get("/api/admin/broadcast/safety-gate", requireAdminAccess, async (req, res) => {
+    try {
+      const { checkContentWriteGate } = await import("./services/productionBroadcast");
+      const result = await checkContentWriteGate();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[SafetyGate] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/broadcast/targeting/:advertiserId
+   * Get full targeting diagnostics for an advertiser
+   */
+  app.get("/api/admin/broadcast/targeting/:advertiserId", requireAdminAccess, async (req, res) => {
+    try {
+      const { advertiserId } = req.params;
+      const { resolveTargetingWithDiagnostics } = await import("./services/productionBroadcast");
+      const result = await resolveTargetingWithDiagnostics(advertiserId);
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      console.error("[Targeting] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/broadcast/publish
+   * Publish ad to correct screens (and remove from wrong screens)
+   */
+  app.post("/api/admin/broadcast/publish", requireAdminAccess, async (req, res) => {
+    try {
+      const { advertiserId, mediaId, dryRun } = req.body;
+      
+      if (!advertiserId || !mediaId) {
+        return res.status(400).json({ ok: false, error: "advertiserId and mediaId required" });
+      }
+      
+      const { checkContentWriteGate, publishAdToScreens } = await import("./services/productionBroadcast");
+      
+      const gate = await checkContentWriteGate();
+      if (!gate.enabled && !dryRun) {
+        return res.status(409).json({
+          ok: false,
+          error: "PUBLISHING_DISABLED",
+          message: `Publishing disabled: ${gate.reasons.join("; ")}`,
+          gate,
+        });
+      }
+      
+      const result = await publishAdToScreens(advertiserId, mediaId, dryRun);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Publish] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/broadcast/media-check/:mediaId
+   * Check if media is ready for publishing
+   */
+  app.get("/api/admin/broadcast/media-check/:mediaId", requireAdminAccess, async (req, res) => {
+    try {
+      const mediaId = parseInt(req.params.mediaId, 10);
+      const { checkMediaReadiness } = await import("./services/productionBroadcast");
+      const result = await checkMediaReadiness(mediaId);
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      console.error("[MediaCheck] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/broadcast/baseline
+   * Get configured baseline media IDs
+   */
+  app.get("/api/admin/broadcast/baseline", requireAdminAccess, async (req, res) => {
+    try {
+      const { getBaselineMediaIds, BASELINE_MIN_ITEMS } = await import("./services/productionBroadcast");
+      const result = await getBaselineMediaIds();
+      res.json({ ...result, requiredMinimum: BASELINE_MIN_ITEMS });
+    } catch (error: any) {
+      console.error("[Baseline] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/broadcast/baseline
+   * Configure baseline media IDs
+   */
+  app.post("/api/admin/broadcast/baseline", requireAdminAccess, async (req, res) => {
+    try {
+      const { mediaIds } = req.body;
+      const { BASELINE_MIN_ITEMS } = await import("./services/productionBroadcast");
+      
+      if (!Array.isArray(mediaIds)) {
+        return res.status(400).json({ ok: false, error: "mediaIds must be an array" });
+      }
+      
+      if (mediaIds.length < BASELINE_MIN_ITEMS) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: `Need at least ${BASELINE_MIN_ITEMS} baseline items, got ${mediaIds.length}` 
+        });
+      }
+      
+      await storage.upsertIntegrationConfig("yodeck_baseline", {
+        settings: { baselineMediaIds: mediaIds },
+        enabled: true,
+      });
+      
+      res.json({ ok: true, mediaIds, count: mediaIds.length });
+    } catch (error: any) {
+      console.error("[Baseline] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
   // LEGACY LAYOUT ROUTES - BLOCKED (410 Gone)
   // ============================================================================
 

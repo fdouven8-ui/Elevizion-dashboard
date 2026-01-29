@@ -1,0 +1,230 @@
+JE BENT SENIOR FULL-STACK DEVELOPER EN JE GAAT DIT SYSTEEM PRODUCTIE-KLAAR MAKEN.
+Context: Elevizion dashboard + Yodeck. We willen 100% playlist-only publishing.
+Layout mode is VERBODEN en moet nergens meer kunnen worden gebruikt.
+
+PROBLEMEN DIE NU SPELEN:
+- Ads komen op beide schermen i.p.v. alleen het juiste scherm volgens locatie/city/region.
+- Yodeck “Save and push to screens” errors / not playable (vaak door fileSize=0 / media status niet Live).
+- App switcht soms terug naar layout mode en TV wordt zwart.
+- Baseline config is soms null; dat mag NOOIT leiden tot resets/push die het scherm leeg maakt.
+
+DOEL (DE ENIGE JUISTE ARCHITECTUUR):
+A) Elke screen draait exact 1 “screen playlist” (Yodeck screen_content.source_type=playlist).
+B) Die screen playlist bevat altijd:
+   1) Baseline items (nieuws/weer/EVZ) = minimaal 4 items
+   2) Ads items voor die screen (0..MAX) volgens targeting + package limit
+C) Als een ad of baseline wijzigt, publiceert het dashboard automatisch:
+   - playlist items updaten
+   - push naar het scherm via Yodeck API
+   - verify dat de screen ook echt die playlist draait (source_id match)
+D) Nooit lege playlists pushen. Nooit layout assignen. Nooit “reset playlist empty” hacks.
+
+------------------------------------------------------------
+1) VERWIJDER LAYOUT MODE COMPLEET (HARD DELETE / HARD DISABLE)
+------------------------------------------------------------
+- Zoek alle code paden: ForceLayout, ApplyLayout, ForceReset, EmptyReset, layoutMode=LAYOUT.
+- Verwijder endpoints of zet achter feature flag die standaard OFF is en in productie niet aan kan.
+- Voeg een runtime assert toe: als ergens source_type="layout" wordt gebruikt -> throw + log [FATAL] LAYOUT_MODE_FORBIDDEN.
+- Database: als er velden yodeckLayoutId bestaan: laat bestaan maar niet gebruiken; nergens schrijven.
+
+ACCEPTANCE:
+- In logs mag NOOIT meer voorkomen:
+  - source_type=layout
+  - PATCH /screens/:id met source_type layout
+  - Created layout / ForceLayout
+- Als screen in Yodeck toch op layout staat (handmatig): app mag NIET automatisch “fixen” met layout.
+  In plaats daarvan: app zet hem terug naar playlist-only door juiste playlist toe te wijzen + push.
+
+------------------------------------------------------------
+2) CANONICAL SCREEN PLAYLIST STRATEGIE (DE ENIGE SOURCE OF TRUTH)
+------------------------------------------------------------
+Voor iedere Yodeck screen (playerId) moet er 1 canonical playlist bestaan:
+Naam: "EVZ | SCREEN | <playerId>"
+Opslaan in DB op screen record: playlistId, playlistName.
+
+Reconcile bij startup:
+- READ + UPDATE DB mapping, maar: GEEN push, GEEN resets.
+- Als playlist ontbreekt: create playlist (met baseline items seed) MAAR push pas bij expliciete publish actie
+  OF bij “autopilot worker” wanneer baselineConfig ok is (zie safety gates).
+
+------------------------------------------------------------
+3) BASELINE CONFIG MOET ECHT EN ROBUUST ZIJN
+------------------------------------------------------------
+- Maak baselineConfig expliciet en compleet:
+  - baselineMediaIds[] (bijv 4 items) of baselinePlaylistTemplateId
+- “baselinePlaylistId=null configured=false” mag NIET voorkomen als baseline al bestaat.
+  Bouw een “BaselineResolver” die:
+  - zoekt in Yodeck naar baseline items (op naam/pattern/known IDs)
+  - als gevonden: sla baselineMediaIds vast in DB settings
+  - als NIET gevonden: toon UI error “Baseline ontbreekt” en blokkeer publishing
+
+Belangrijk:
+- Baseline items moeten in ELKE screen playlist staan (min. 4).
+- Nooit baseline items classificeren als ad.
+- 1Limburg/NOS/Weer = baseline/non_ad.
+
+------------------------------------------------------------
+4) MEDIA UPLOAD PIPELINE: GEEN fileSize=0, GEEN publishing voordat READY
+------------------------------------------------------------
+We gebruiken jouw uploadJobs systeem maar maken het “hard correct”:
+
+Rules:
+- Reject bij upload: file < 200KB => meteen fail (INVALID_TOO_SMALL)
+- Two-step upload:
+  1) create media in Yodeck => mediaId
+  2) presigned PUT upload binary
+  3) poll status tot:
+     - file_size > 0
+     - status in ["Live","Ready"] (gebruik echte Yodeck statuswaarden)
+     - duration > 0
+  4) pas dan: mark job READY
+- Als poll timeout of status failed:
+  - mark PERMANENT_FAIL met reason + advies
+- Canonical media per advertiser:
+  - advertiser.yodeckMediaIdCanonical = de laatste READY mediaId
+  - publish gebruikt ALTIJD canonical, nooit de fileSize=0 media
+
+Extra:
+- Als er meerdere media in Yodeck zijn met dezelfde linkKey:
+  - kies (file_size desc, created_at desc, status READY)
+  - archiveer of negeer de rest voor publishing
+
+------------------------------------------------------------
+5) TARGETING RESOLVER MOET 100% JUIST + PACKAGE LIMITS
+------------------------------------------------------------
+Implementatie-eis:
+- Input: advertiser.targetRegionCodes[], advertiser.targetCities[], packageType, screensIncluded
+- Kandidaten screens:
+  - Alleen screens met isActive=true
+  - En gekoppeld aan een locatie die readyForAds=true
+  - En locatie heeft city of regionCode (anders score=0 en uitsluiten)
+  - En screen heeft playlistId bekend (anders uitsluiten)
+
+Scoring:
+- CITY exact match: 100
+- CITY partial/normalized (bijv “Sittard-Geleen” vs “Sittard”): 50 (alleen als expliciet toegestaan)
+- REGION match: 25
+- Fallback: 1 (ALLEEN als advertiser expliciet “anywhere” of geen targets heeft)
+- Anders: 0 => uitsluiten
+
+Selection:
+- Sorteer score desc, tie-break: locatie visitorsPerWeek desc, dan screenId.
+- Selecteer top N op basis van package:
+  - SINGLE => N=1
+  - TRIPLE => N=3
+  - TEN => N=10
+- Cruciaal: als er maar 1 screen matcht, publish alleen naar die 1.
+
+DIAGNOSTICS:
+- /api/admin/diagnostics/publishing/:advertiserId moet exact tonen:
+  - targets
+  - kandidatenset met score + waarom
+  - gekozen screens (top N)
+  - uitgesloten screens + reden
+
+------------------------------------------------------------
+6) PUBLISH ENGINE: CORRECTE ADS PER SCREEN + IDPOTENT + AUTOPUSH
+------------------------------------------------------------
+We publiceren per advertiser naar geselecteerde screens.
+
+Voor elke geselecteerde screen:
+- Load screenPlaylistId (canonical)
+- Ensure baseline items aanwezig (min 4). Als niet:
+  - seed baseline items in playlist (playlist items update)
+- Ensure ad items aanwezig:
+  - add advertiser canonical mediaId als playlist item
+  - geen duplicates (idempotent)
+- Ensure ad NIET naar niet-geselecteerde screens gaat:
+  - verwijder advertiser mediaId uit playlists van screens die NIET in selectie zitten (en wel in systeem bekend)
+  - Dit is belangrijk om “ad op beide schermen” te fixen.
+
+Autopush:
+- Na playlist update: call Yodeck push endpoint voor die screen (POST /screens/:id/push of correcte API).
+- Daarna verify:
+  - fetch screen content status: source_type moet playlist zijn
+  - source_id moet gelijk zijn aan screenPlaylistId
+  - playlist moet itemCount >= baselineCount + adsCount
+- Als verify faalt: retry push max 3 met backoff (2s, 5s, 10s). Log [PUBLISH_VERIFY_FAIL]
+
+Belangrijk:
+- Nooit pushen als playlist itemCount == 0.
+- Nooit pushen als baseline ontbreekt.
+- Nooit pushen als media gate niet READY.
+
+------------------------------------------------------------
+7) SAFETY GATES: NOOIT ZWART SCHERM / NOOIT LEGE PUSH
+------------------------------------------------------------
+Introduceer contentWriteEnabled gate:
+
+contentWriteEnabled = true alleen als:
+- yodeck token aanwezig
+- baselineConfig configured=true + baselineMediaIds length >= 4
+- DB heeft minstens 1 screen met playlistId
+- TEST_MODE mag true zijn maar gate blijft hetzelfde
+
+Als gate false:
+- alle muterende endpoints return 409 met duidelijke boodschap:
+  "Publishing disabled: baseline not configured (or other reason)."
+- Autopilot workers disabled
+- Reconcile blijft read-only
+
+En vooral:
+- Verbied “empty reset playlist” creation/push volledig.
+
+------------------------------------------------------------
+8) UI/OPERATOR: WAT JE IN HET DASHBOARD MOET ZIEN
+------------------------------------------------------------
+- Screens overzicht:
+  - playlistId + itemCount + baselineCount + adsCount
+  - status: OK / NEEDS_BASELINE / MEDIA_NOT_READY / TARGETING_NONE
+- Advertiser detail:
+  - canonical media status (READY/FAILED) + fileSize + duration
+  - “Publish now” knop die publish engine draait
+  - “Diagnostics” link naar publishing trace
+
+------------------------------------------------------------
+9) TESTPLAN (MOET JE AUTOMATISCH MEELEVEREN)
+------------------------------------------------------------
+Schrijf integratie tests (of minimaal scriptbare checks):
+
+Case 1: SINGLE + target city "Sittard"
+- Er zijn 2 screens:
+  - Screen A locatie city=Sittard readyForAds=true
+  - Screen B city=Maasbracht readyForAds=true
+- EXPECT:
+  - ad mediaId staat alleen in playlist van A
+  - ad mediaId wordt verwijderd/blijft afwezig in B
+  - push+verify ok
+
+Case 2: media fileSize=0
+- EXPECT:
+  - publish blocked met reason MEDIA_NOT_READY
+  - GEEN playlist update
+  - GEEN push calls
+
+Case 3: baseline ontbreekt
+- EXPECT:
+  - contentWriteEnabled false
+  - geen pushes, geen resets
+  - UI banner zichtbaar
+
+Case 4: scherm staat handmatig op layout in Yodeck
+- EXPECT:
+  - publish zet source_type terug naar playlist (NOOIT layout)
+  - na push: verify source_type playlist + source_id correct
+
+------------------------------------------------------------
+10) OUTPUT DIE IK WIL ZIEN IN REPLIT
+------------------------------------------------------------
+- Een korte changelog met welke files zijn aangepast
+- Belangrijkste logs voorbeelden:
+  - [SAFETY] contentWriteEnabled=true/false reason=...
+  - [TARGETING] selectedScreens=[...] scores=[...]
+  - [MEDIA_GATE] canonicalMedia=... READY fileSize=... duration=...
+  - [PUBLISH] screen=... playlist=... addItems=... removeItems=...
+  - [PUSH] ok + [VERIFY] ok
+
+LET OP:
+- Maak geen nieuwe “quick fixes” die het systeem onvoorspelbaar maken.
+- Geen silent fallbacks die ads op alle screens zetten.
+- Alles moet deterministisch en idempotent zijn.
