@@ -17930,6 +17930,112 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/auto-placements
+   * Automatically create placements for advertisers with ready assets
+   * Matches screens based on targetRegionCodes/targetCities
+   */
+  app.post("/api/admin/auto-placements", requireAdminAccess, async (req, res) => {
+    try {
+      console.log("[AutoPlacements] Starting auto-placement for ready ads...");
+      
+      const advertisers = await storage.getAdvertisers();
+      const screens = await storage.getScreens();
+      const contracts = await storage.getContracts();
+      const existingPlacements = await storage.listPlacements();
+      
+      const results: Array<{
+        advertiserId: string;
+        advertiserName: string;
+        action: string;
+        screenId?: string;
+        screenName?: string;
+        error?: string;
+      }> = [];
+      
+      for (const advertiser of advertisers) {
+        if (!advertiser.packageType) continue;
+        
+        const contract = contracts.find(c => c.advertiserId === advertiser.id);
+        if (!contract) {
+          results.push({
+            advertiserId: advertiser.id,
+            advertiserName: advertiser.companyName || "Unknown",
+            action: "skipped",
+            error: "No contract found",
+          });
+          continue;
+        }
+        
+        const hasPlacement = existingPlacements.some(p => p.contractId === contract.id);
+        if (hasPlacement) {
+          results.push({
+            advertiserId: advertiser.id,
+            advertiserName: advertiser.companyName || "Unknown",
+            action: "skipped",
+            error: "Already has placement",
+          });
+          continue;
+        }
+        
+        const targetCities = advertiser.targetRegionCodes || [];
+        let matchedScreen = null;
+        
+        for (const screen of screens) {
+          if (!screen.yodeckPlayerId) continue;
+          const location = await storage.getLocation(screen.locationId || "");
+          if (!location) continue;
+          
+          const cityMatch = targetCities.length === 0 || 
+            targetCities.some(t => location.city?.toLowerCase().includes(t.toLowerCase()));
+          
+          if (cityMatch) {
+            matchedScreen = screen;
+            break;
+          }
+        }
+        
+        if (!matchedScreen) {
+          results.push({
+            advertiserId: advertiser.id,
+            advertiserName: advertiser.companyName || "Unknown",
+            action: "skipped",
+            error: "No matching screen for targeting",
+          });
+          continue;
+        }
+        
+        const placement = await storage.createPlacement({
+          contractId: contract.id,
+          screenId: matchedScreen.id,
+          source: "auto_targeting",
+          isActive: true,
+        });
+        
+        results.push({
+          advertiserId: advertiser.id,
+          advertiserName: advertiser.companyName || "Unknown",
+          action: "created",
+          screenId: matchedScreen.id,
+          screenName: matchedScreen.name || undefined,
+        });
+        
+        console.log(`[AutoPlacements] Created placement for ${advertiser.companyName} on screen ${matchedScreen.name}`);
+      }
+      
+      res.json({
+        ok: true,
+        total: results.length,
+        created: results.filter(r => r.action === "created").length,
+        skipped: results.filter(r => r.action === "skipped").length,
+        results,
+      });
+    } catch (error: any) {
+      console.error("[AutoPlacements] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/admin/screens/:screenId/now-playing
    * Get current playback status for a screen
    */

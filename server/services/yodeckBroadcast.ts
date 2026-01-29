@@ -1038,11 +1038,12 @@ export async function ensureBaselinePlaylist(): Promise<BaselinePlaylistInfo> {
     
     // Fallback: paginate through all playlists if search didn't find it
     if (!existing) {
+      type PlaylistPage = { results: Array<{ id: number; name: string }>; next: string | null };
       let nextUrl: string | null = "/playlists/?page_size=100";
       while (nextUrl && !existing) {
-        const pageResult = await yodeckRequest<{ results: Array<{ id: number; name: string }>; next: string | null }>(nextUrl);
+        const pageResult: Awaited<ReturnType<typeof yodeckRequest<PlaylistPage>>> = await yodeckRequest<PlaylistPage>(nextUrl);
         if (!pageResult.ok) break;
-        existing = pageResult.data?.results?.find((p: { name: string }) => p.name === BASELINE_PLAYLIST_NAME);
+        existing = pageResult.data?.results?.find((p) => p.name === BASELINE_PLAYLIST_NAME);
         nextUrl = pageResult.data?.next ? pageResult.data.next.replace("https://app.yodeck.com/api/v2", "") : null;
       }
     }

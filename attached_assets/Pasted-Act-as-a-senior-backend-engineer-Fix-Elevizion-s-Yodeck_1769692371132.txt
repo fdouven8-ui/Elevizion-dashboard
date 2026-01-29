@@ -1,0 +1,64 @@
+Act as a senior backend engineer. Fix Elevizion’s Yodeck integration to be fully uniform and correct based on the provided logs/screenshots.
+
+CURRENT OBSERVATIONS (from logs):
+- Two real screens in our DB: yodeckPlayerId 591896 and 591895.
+- Yodeck now plays playlists:
+  - 591896 actualSourceId = 30532596 name "EVZ | SCREEN | 591896(auto-playlist-30532596-crop)"
+  - 591895 actualSourceId = 30532597 name "EVZ | SCREEN | 591895(auto-playlist-30532597-crop)"
+- Our DB still expects old playlistIds:
+  - screen 591896 stored playlistId=30524269 playlistName "Elevizion | Screen | 591896(auto-playlist-30524269-crop)"
+  - screen 591895 stored playlistId=30532044 playlistName "Elevizion | Screen | 591895(auto-playlist-30532044-crop)"
+=> now-playing verification fails because expectedPlaylistId != actualSourceId.
+- There are 0 placements: GET /api/placements returns [].
+- Advertiser Bouwservice Douven has assetStatus "ready_for_yodeck", package SINGLE, screensIncluded=1, targetRegionCodes ["sittard"].
+- Yodeck contains massive playlist clutter: many "EVZ | SCREEN | yd_player_00x" and duplicate "EVZ | BASELINE".
+
+GOALS:
+1) Single uniform approach:
+   - ONLY 3 playlists total should exist in Yodeck for now:
+     - "EVZ | BASELINE" (single global baseline source of truth)
+     - "EVZ | SCREEN | 591896"
+     - "EVZ | SCREEN | 591895"
+   - Each screen must be assigned to its corresponding EVZ screen playlist as its ONLY playback source (mode=PLAYLIST, no layouts).
+2) Baseline central sync:
+   - Baseline content is defined by EVZ | BASELINE playlist items.
+   - Any change in baseline must propagate automatically to each EVZ | SCREEN | <id> playlist (baseline first), without duplicates.
+3) Ads placement:
+   - The approved uploaded asset for advertiser "Bouwservice Douven" (assetStatus ready_for_yodeck) must be placed on the correct screen based on package SINGLE and targeting.
+   - Since placements are currently empty, automatically create a placement for such advertisers when they become ready_for_yodeck:
+     - Create placement record linking advertiser -> exactly 1 screen (591896) based on targeting:
+       - If targetRegionCodes contains "sittard", pick screens whose location city/region matches "sittard" (we have location Bouwservice Douven in Sittard with yodeckDeviceId 591896).
+     - Ensure the ad mediaId is appended after baseline in that screen playlist.
+   - UI must clearly show baseline vs ads and show placement linkage (no more "Niet gekoppeld" for our own ad).
+4) Verification must be correct:
+   - Verification must compare against the EVZ canonical playlistId stored in DB (and must be updated/migrated).
+   - Names are not reliable due to Yodeck auto suffix "(auto-playlist-...-crop)". Canonical truth = playlistId.
+5) Cleanup playlist clutter safely:
+   - Do NOT delete blindly. Implement a quarantine+purge workflow:
+     - Quarantine: rename unused/non-canonical playlists to "LEGACY | <oldname> | <timestamp>" and ensure they are not assigned to any screen.
+     - Purge: optional deletion only if not assigned to any screen AND not referenced in DB AND not one of the 3 canonical playlists.
+   - Remove duplicates of EVZ | BASELINE: keep the one that is used as canonical baseline (prefer the one with correct content items), quarantine the other.
+   - NEVER create playlists for "yd_player_00x" again.
+
+IMPLEMENTATION DETAILS:
+
+A) Canonical naming and lookup (must be exact):
+- BASELINE_PLAYLIST_NAME = "EVZ | BASELINE"
+- SCREEN_PLAYLIST_NAME(playerId) = `EVZ | SCREEN | ${playerId}`  (playerId is numeric yodeckPlayerId from DB)
+- NEVER use yodeckPlayerName or internal "yd_player_00x" to generate names.
+
+B) Migrate DB to canonical EVZ playlists:
+Create a one-time migration function run on startup (or admin endpoint) that:
+- For each Screen with yodeckPlayerId:
+  1) Fetch actual current Yodeck assigned source (source_type/source_id).
+  2) If Yodeck is playing a playlist whose name starts with "EVZ | SCREEN | <playerId>" OR matches the desired canonical name (ignoring auto suffix), then:
+     - Set screen.playlistId = actualSourceId
+     - Set screen.playlistName = actualSourceName
+     - Mark screen.yodeckSyncStatus = "linked"
+  3) Else: ensure/find/create the canonical screen playlist by exact name "EVZ | SCREEN | <playerId>" and assign it.
+
+After migration, verification should succeed for both screens.
+
+C) Baseline sync engine:
+- Implement ensureBaselinePlaylist():
+  - Find playlists with exact name "EVZ | BA
