@@ -1,18 +1,19 @@
 /**
- * Canonical Broadcast Service
+ * LEGACY SERVICE - DISABLED
  * 
- * This is the ONLY broadcast system for Elevizion. All other methods are disabled.
+ * This service used LOCATION-based playlists.
+ * Replaced by yodeckBroadcast.ts which uses SCREEN-based playlists.
  * 
- * ARCHITECTURE:
- * - Each location has ONE canonical playlist (location.yodeckPlaylistId)
- * - Each screen plays that canonical playlist (source_type=playlist, source_id=playlistId)
- * - No layouts, no schedules, no tags, no fallbacks
- * 
- * TEMPLATE CLONING:
- * - New locations clone from YODECK_BASE_TEMPLATE_PLAYLIST_ID
- * - Cloned playlists get baseline items (news, weather, etc)
- * - Ads are appended to the canonical playlist
+ * All functions throw LEGACY_DISABLED error.
  */
+
+// KILL SWITCH - All legacy code disabled
+const LEGACY_DISABLED = true;
+const LEGACY_ERROR = "LEGACY_CANONICAL_BROADCAST_DISABLED: Use yodeckBroadcast.ts instead";
+
+function throwLegacyError(): never {
+  throw new Error(LEGACY_ERROR);
+}
 
 import { db } from "../db";
 import { locations, screens, systemSettings } from "@shared/schema";

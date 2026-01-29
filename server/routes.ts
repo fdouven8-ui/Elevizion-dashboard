@@ -16666,46 +16666,15 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
-   * POST /api/admin/autopilot/sync-all-baselines
-   * Sync all live locations' baselines from template
+   * DEPRECATED: POST /api/admin/autopilot/sync-all-baselines
+   * LEGACY_DISABLED - Use /api/admin/broadcast/cleanup-all instead
    */
   app.post("/api/admin/autopilot/sync-all-baselines", requireAdminAccess, async (req, res) => {
-    try {
-      const { ensureBaselineFromTemplate } = await import("./services/combinedPlaylistService");
-      
-      // Get all live locations
-      const liveLocations = await db.select({ id: locations.id, name: locations.name })
-        .from(locations)
-        .where(
-          sql`(${locations.status} = 'active' OR ${locations.readyForAds} = true)`
-        );
-      
-      const results: Array<{ locationId: string; locationName: string; ok: boolean; itemsSynced: boolean; baselineItemCount: number; error?: string }> = [];
-      
-      for (const loc of liveLocations) {
-        const result = await ensureBaselineFromTemplate(loc.id);
-        result.logs.forEach(log => console.log(log));
-        results.push({
-          locationId: loc.id,
-          locationName: loc.name,
-          ok: result.ok,
-          itemsSynced: result.itemsSynced,
-          baselineItemCount: result.baselineItemCount,
-          error: result.error,
-        });
-      }
-      
-      const syncedCount = results.filter(r => r.itemsSynced).length;
-      const okCount = results.filter(r => r.ok).length;
-      
-      res.json({
-        ok: true,
-        message: `Synced ${syncedCount} baselines, ${okCount}/${liveLocations.length} locations OK`,
-        results,
-      });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
+    res.status(410).json({
+      ok: false,
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Use /api/admin/broadcast/cleanup-all instead"
+    });
   });
 
   // =========================================================================

@@ -1,17 +1,19 @@
 /**
- * Combined Playlist Service
+ * LEGACY SERVICE - DISABLED
  * 
- * Implements the "single playlist per location" architecture:
- * - Each location gets ONE combined playlist: "Elevizion | Loop | {LocationName}"
- * - This playlist contains: base items (news/weather) + ads + fallback if no ads
- * - Ads are interleaved with base items for balanced content display
- * - Screen content is set to this playlist (not a layout)
+ * This service used LOCATION-based "Elevizion | Loop |" playlists.
+ * Replaced by yodeckBroadcast.ts which uses SCREEN-based playlists.
  * 
- * Key workflows:
- * 1. ensureCombinedPlaylistForLocation() - Main autopilot entry point
- * 2. syncCombinedPlaylistItems() - Merge base + ads into playlist
- * 3. assignPlaylistToScreen() - Set screen content to playlist
+ * All functions throw LEGACY_DISABLED error.
  */
+
+// KILL SWITCH - All legacy code disabled
+const LEGACY_DISABLED = true;
+const LEGACY_ERROR = "LEGACY_COMBINED_PLAYLIST_DISABLED: Use yodeckBroadcast.ts instead";
+
+function throwLegacyError(): never {
+  throw new Error(LEGACY_ERROR);
+}
 
 import { db } from "../db";
 import { locations, advertisers, contracts, placements, screens, adAssets } from "@shared/schema";
