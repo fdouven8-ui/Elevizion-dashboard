@@ -17863,6 +17863,22 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/broadcast/sanitize-legacy
+   * One-time cleanup: reset needsRepair=false on all locations
+   */
+  app.post("/api/admin/broadcast/sanitize-legacy", requireAdminAccess, async (req, res) => {
+    try {
+      const { sanitizeLegacyContentState } = await import("./services/sanitizeLegacyContent");
+      const result = await sanitizeLegacyContentState();
+      result.logs.forEach(log => console.log(log));
+      res.json(result);
+    } catch (error: any) {
+      console.error("[SanitizeLegacy] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/admin/screens/:screenId/now-playing
    * Get current playback status for a screen
    */
