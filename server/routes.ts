@@ -16737,11 +16737,13 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   /**
    * GET /api/screens/:screenId/now-playing
    * Get what's currently playing on a screen
+   * SIMPLIFIED: Uses Screen.playlistId as single source of truth
    */
   app.get("/api/screens/:screenId/now-playing", requirePermission("view_screens"), async (req, res) => {
     try {
       const { screenId } = req.params;
-      const { getScreenNowPlaying } = await import("./services/screenPlaylistService");
+      // Use yodeckBroadcast - single source of truth (Screen.playlistId)
+      const { getScreenNowPlaying } = await import("./services/yodeckBroadcast");
       const result = await getScreenNowPlaying(screenId);
       res.json(result);
     } catch (error: any) {
@@ -17831,6 +17833,62 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         envVarName: "YODECK_TEMPLATE_PLAYLIST_ID",
       });
     } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/broadcast/cleanup-all
+   * CLEANUP RUNNER: Ensure all screens have a playlist assigned
+   */
+  app.post("/api/admin/broadcast/cleanup-all", requireAdminAccess, async (req, res) => {
+    try {
+      const { ensureScreenPlaylist } = await import("./services/yodeckBroadcast");
+      
+      // Get all screens with yodeckPlayerId
+      const allScreens = await db.select({
+        id: screens.id,
+        screenId: screens.screenId,
+        name: screens.name,
+        yodeckPlayerId: screens.yodeckPlayerId,
+        playlistId: screens.playlistId,
+      }).from(screens).where(sql`${screens.yodeckPlayerId} IS NOT NULL`);
+      
+      console.log(`[CleanupAll] Processing ${allScreens.length} screens...`);
+      
+      const results: { screenId: string; yodeckPlayerId: string; playlistId: string | null; status: string }[] = [];
+      
+      for (const screen of allScreens) {
+        try {
+          const result = await ensureScreenPlaylist(screen.id);
+          results.push({
+            screenId: screen.screenId,
+            yodeckPlayerId: screen.yodeckPlayerId || "unknown",
+            playlistId: result.playlistId,
+            status: result.ok ? "ok" : `error: ${result.error}`,
+          });
+          console.log(`[CleanupAll] ${screen.screenId}: playerId=${screen.yodeckPlayerId} -> playlistId=${result.playlistId}`);
+        } catch (e: any) {
+          results.push({
+            screenId: screen.screenId,
+            yodeckPlayerId: screen.yodeckPlayerId || "unknown",
+            playlistId: null,
+            status: `exception: ${e.message}`,
+          });
+        }
+      }
+      
+      const successCount = results.filter(r => r.status === "ok").length;
+      console.log(`[CleanupAll] Complete: ${successCount}/${allScreens.length} screens processed successfully`);
+      
+      res.json({
+        ok: successCount === allScreens.length,
+        total: allScreens.length,
+        success: successCount,
+        results,
+      });
+    } catch (error: any) {
+      console.error("[CleanupAll] Error:", error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });

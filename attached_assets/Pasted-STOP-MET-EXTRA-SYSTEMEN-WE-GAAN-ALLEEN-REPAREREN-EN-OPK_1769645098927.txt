@@ -1,0 +1,106 @@
+STOP MET EXTRA SYSTEMEN. WE GAAN ALLEEN REPAREREN EN OPKUISEN.
+
+DOEL (ENIGE LOGICA):
+- Ieder SCHERM heeft precies 1 Yodeck playlist.
+- Die playlist start als kopie van 1 template playlist (met de 4 basis-items).
+- Als een video is goedgekeurd en toegewezen aan een scherm: voeg media toe aan DIE playlist.
+- Push die playlist naar dat scherm zodat het direct afspeelt.
+- Geen layouts, geen schedule, geen baseline apart, geen tag-based, geen canonical, geen auto-playlist naming logic.
+
+PROBLEEM NU (uit logs):
+- Yodeck draait playlist 30524269 maar API zegt mismatch omdat ergens nog expected/canonical playlist 30461663 wordt gebruikt.
+- Dus er bestaat oude code die expected/broadcast/verify uit LOCATION of canonical haalt.
+- Dat moet 100% weg of uitgeschakeld, anders blijven fouten terugkomen.
+
+UITVOERING (stap voor stap, niets overslaan):
+
+1) DEFINITIEVE DATASOURCE
+- Introduceer GEEN nieuwe concepten.
+- Gebruik alleen deze velden als waarheid:
+  Screen.yodeckPlayerId (bestaat al)
+  Screen.yodeckPlaylistId (NIEUW of bestaand, maar dit is de ENIGE playlist-id die we nog gebruiken)
+- Verwijder/ignore overal:
+  Location.yodeckPlaylistId
+  Location.yodeckLayoutId
+  Location.yodeckBaselinePlaylistId
+  playlistMode, playlistTag, TAG_BASED, canonical, layoutMode, combinedPlaylistId
+  Elke verify/broadcast die deze velden nog gebruikt.
+
+2) TEMPLATE
+- Zet 1 env var: YODECK_TEMPLATE_PLAYLIST_ID = <id van jouw voorbeeld playlist met 4 items>
+- Deze template is de basis voor alle screen playlists.
+
+3) ONE-TIME CLEANUP / MIGRATIE (AUTOMATISCH BIJ BOOT OF ADMIN ENDPOINT)
+Maak een functie: ensureScreenPlaylist(screen)
+- Als Screen.yodeckPlaylistId leeg:
+   - maak playlist in Yodeck: "Elevizion | Screen | <yodeckPlayerId>"
+   - clone content van template playlist naar deze nieuwe playlist
+   - sla playlistId op in Screen.yodeckPlaylistId
+- Als Screen.yodeckPlaylistId gevuld:
+   - check of playlist bestaat in Yodeck; zo niet -> maak opnieuw + clone + update Screen.yodeckPlaylistId
+BELANGRIJK: NIKS anders updaten.
+
+Maak een eenmalige cleanup runner:
+- Loop alle screens uit DB
+- Run ensureScreenPlaylist(screen)
+- Log per screen: playerId -> screenPlaylistId
+
+4) YODECK SCREEN CONFIG (PUSH)
+Maak 1 functie: pushScreenPlaylist(screen)
+- Zorg dat ensureScreenPlaylist(screen) is gedaan
+- Zet in Yodeck voor die screen/player:
+   source_type = "playlist"
+   source_id = Screen.yodeckPlaylistId
+- Klaar.
+
+5) UPLOAD FLOW (GOEDGEKEURD -> SCHERM)
+Bij approve/publish van een video:
+- bepaal target screens (jullie bestaande mapping/plaatsing)
+- voor elk screen:
+   ensureScreenPlaylist(screen)
+   voeg mediaId toe aan playlist Screen.yodeckPlaylistId (playlist items)
+   pushScreenPlaylist(screen)
+- Idempotent: als media al in playlist zit, niet dubbel toevoegen.
+
+6) API FIX: NOW PLAYING (GEEN MISMATCH MEER)
+Pas GET /api/screens/:id/now-playing aan:
+- expectedPlaylistId = Screen.yodeckPlaylistId
+- actualPlaylistId = lees uit Yodeck screen config (source_id)
+- mismatch = (expectedPlaylistId != actualPlaylistId)
+- mismatchReason NOOIT meer "canonical" of "location".
+- Als Screen.yodeckPlaylistId leeg: return needsRepair=true.
+
+7) UI SIMPEL
+- In Schermen pagina toon alleen:
+  Online status
+  ScreenPlaylistId (deze)
+  Item count in die playlist
+  Laatste push resultaat
+- Verberg systeemchecks/logs.
+
+8) HARD KILL SWITCH (SUPER BELANGRIJK)
+Zoek in hele codebase op strings:
+"canonical"
+"TAG_BASED"
+"playlistTag"
+"layoutMode"
+"yodeckLayoutId"
+"yodeckBaselinePlaylistId"
+"combinedPlaylist"
+"Elevizion | Loop |"
+EN:
+- verwijder deze code OF zet het achter een flag LEGACY_MODE=false zodat het nooit runt.
+- Geen workers mogen nog playlists/layouts wijzigen behalve de functies hierboven.
+
+AFSLUITENDE TEST (MOET SLAGEN):
+- Run cleanup runner -> alle screens hebben Screen.yodeckPlaylistId gevuld
+- Voor screen 591896:
+  expectedPlaylistId = Screen.yodeckPlaylistId
+  Yodeck screen config source_id == expectedPlaylistId
+  now-playing mismatch = false
+- Upload + approve 1 video -> verschijnt in dezelfde playlist + scherm speelt hem af
+
+GEEF ALS OUTPUT:
+- Welke files aangepast
+- Logs van cleanup runner
+- Voor 1 screen: now-playing response met mismatch=false
