@@ -1,0 +1,80 @@
+2026-01-29 11:13:53.71
+59f502f0
+User
+[Sync] Starting scheduled Yodeck content sync...
+2026-01-29 11:14:08.01
+59f502f0
+User
+[Sync] Completed: 0 screens (0 with content, 0 empty, 0 errors)
+2026-01-29 11:14:08.01
+59f502f0
+User
+[YodeckContent] Failed to fetch screen list: Unexpected token '<', "
+2026-01-29 11:14:20.62
+59f502f0
+User
+[MEMORY] RSS: 123.8MB | Heap: 33.9/41.2MB | External: 3.9MB
+2026-01-29 11:15:20.63
+59f502f0
+User
+[MEMORY] RSS: 124.2MB | Heap: 34.4/41.2MB | External: 3.9MB
+2026-01-29 11:16:20.64
+59f502f0
+User
+[MEMORY] RSS: 123.8MB | Heap: 34.1/41.2MB | External: 3.9MB
+2026-01-29 11:17:20.65
+59f502f0
+User
+[MEMORY] RSS: 124.2MB | Heap: 34.6/41.2MB | External: 3.9MB
+2026-01-29 11:18:20.65
+59f502f0
+User
+[MEMORY] RSS: 123.9MB | Heap: 34.4/41.2MB | External: 3.9MB
+2026-01-29 11:19:20.65
+59f502f0
+User
+[MEMORY] RSS: 124.4MB | Heap: 34.8/41.2MB | External: 3.9MB
+2026-01-29 11:20:20.66
+59f502f0
+User
+[MEMORY] RSS: 123.8MB | Heap: 34.5/41.2MB | External: 3.9MB
+2026-01-29 11:21:20.67
+59f502f0
+User
+[MEMORY] RSS: 124.2MB | Heap: 35.0/41.2MB | External: 3.9MB
+2026-01-29 11:22:20.67
+59f502f0
+User
+[MEMORY] RSS: 123.9MB | Heap: 34.7/41.2MB | External: 3.9MB
+2026-01-29 11:23:20.68
+59f502f0
+User
+[MEMORY] RSS: 123.7MB | Heap: 34.5/41.2MB | External: 3.9MB
+2026-01-29 11:24:20.69
+59f502f0
+User
+[MEMORY] RSS: 123.9MB | Heap: 35.0/41.2MB | External: 3.9MB
+2026-01-29 11:24:37.58
+59f502f0
+User
+10:24:37 AM [express] GET /api/public/status 200 in 485ms :: {"testMode":true,"buildId":"mkz94ks9-nr8jeh","builtAt":"2026-01-29T09:28:23.097Z"}
+2026-01-29 11:24:37.90
+59f502f0
+User
+10:24:37 AM [express] GET /api/auth/me 200 in 808ms :: {"id":"58bbe4c8-a1a3-434e-b63a-7f4f7ce6d3b3","username":"admin","displayName":"Administrator","email":null,"firstName":null,"lastName":null,"profileImageUrl":null,"role":"eigenaar","rolePreset":"eigenaar","permissions":["view_home","view_screens","edit_screens","view_advertisers","edit_advertisers","view_placements","edit_placements","view_finance","view_onboarding","onboard_advertisers","onboard_screens","manage_templates","manage_integrations","manage_users","edit_system_settings"],"locationId":null,"isActive":true,"forcePasswordChange":false,"lastLoginAt":"2026-01-24T11:35:52.721Z","createdAt":"2025-12-19T21:10:33.316Z","updatedAt":"2026-01-29T09:28:21.511Z"}
+2026-01-29 11:24:37.90
+59f502f0
+User
+10:24:37 AM [express] GET /api/public/ui-config 304 in 810ms :: {"uiMode":"operator"}
+2026-01-29 11:24:37.95
+59f502f0
+User
+10:24:37 AM [express] GET /api/screens/241377ce-a25e-4744-9ea7-cd9359515d07 200 in 854ms :: {"id":"241377ce-a25e-4744-9ea7-cd9359515d07","screenId":"YDK-591896","locationId":"3321f9c7-4a76-4abd-9cc1-9472d6473d80","groupId":null,"locationGroupId":null,"isMultiScreenLocation":false,"name":"Test","yodeckPlayerId":"591896","yodeckPlayerName":"Test","yodeckUuid":"872d34ea-52cc-413f-a539-10cc0dad0a24","yodeckWorkspaceName":null,"yodeckScreenshotUrl":"https://dsbackend.s3.amazonaws.com/screenshots/872d34ea52cc413fa53910cc0dad0a24.png","yodeckContentStatus":"has_content","yodeckContentCount":4,"yodeckContentSummary":{"items":[{"id":30524269,"name":"Elevizion | Screen | 591896(auto-playlist-30524269-crop)","type":"playlist"}],"mediaIds":[27478716,27476141,27477130,27476083],"sourceId":30524269,"topItems":["media: 1Limburg","media: NOS sport algemeen","media: Weer goed","media: NOS algemeen nieuws"],"mediaItems":[{"id":27478716,"name":"1Limburg","type":"media","category":"ad","duration":20},{"id":27476141,"name":"NOS sport algemeen","type":"media","category":"non_ad","duration":20},{"id":27477130,"name":"Weer goed","type":"media","category":"non_ad","duration":15},{"id":27476083,"name":"NOS algemeen nieuws","type":"media","category":"non_ad","duration":15}],"sourceName":"Elevizion | Screen | 591896(auto-playlist-30524269-crop)","sourceType":"playlist","lastFetchedAt":"2026-01-29T09:59:22.411Z","uniqueMediaCount":4},"yodeckContentLastFetchedAt":"2026-01-29T09:59:22.411Z","yodeckContentError":null,"yodeckScreenshotLastOkAt":null,"yodeckScreenshotByteSize":null,"yodeckScreenshotHash":null,"resolution":null,"orientation":"landscape","status":"online","lastSeenAt":"2025-12-28T17:07:26.000Z","isActive":true,"matchConfidence":null,"matchReason":null,"moneybirdContactId":"474516820946060382","moneybirdContactSnapshot":{"city":"Sittard","email":"info@bouwservicedouven.nl","phone":"+31636166374","country":"NL","zipcode":"6131JD","address1":"Engelenkampstraat 11","address2":null,"lastname":null,"syncedAt":"2025-12-30T17:10:03.816Z","firstname":null,"taxNumber":"NL004857473B37","companyName":"Bouwservice Douven","chamberOfCommerce":"90982541"},"moneybirdSyncStatus":"linked","moneybirdSyncError":null,"moneybirdLastSyncAt":null,"yodeckSyncStatus":"linked","yodeckSyncError":null,"yodeckLastSyncAt":null,"onboardingStatus":"draft","playlistId":"30524269","playlistName":"Elevizion | Screen | 591896(auto-playlist-30524269-crop)","lastPushAt":null,"lastPushResult":null,"lastPushError":null,"lastVerifyAt":"2026-01-29T00:59:21.224Z","lastVerifyResult":"ok","lastVerifyError":null,"effectiveName":"Bouwservice Douven","city":null,"notes":null,"createdAt":"2025-12-21T16:15:52.637Z","updatedAt":"2026-01-29T09:59:22.411Z","currentContent":[{"id":"39f1cdcb-29c1-4bc4-9eea-5d48aec6f3ec","screenId":"241377ce-a25e-4744-9ea7-cd9359515d07","yodeckMediaId":27476083,"name":"NOS algemeen nieuws","mediaType":"media","category":"non_ad","duration":15,"isActive":true,"linkedAdvertiserId":null,"linkedPlacementId":null,"detectedAt":"2025-12-24T21:25:56.961Z","lastSeenAt":"2026-01-29T09:59:21.811Z"},{"id":"3e2c00c9-b100-44eb-a071-1c62ad65afbb","screenId":"241377ce-a25e-4744-9ea7-cd9359515d07","yodeckMediaId":27477130,"name":"Weer goed","mediaType":"media","category":"non_ad","duration":15,"isActive":true,"linkedAdvertiserId":null,"linkedPlacementId":null,"detectedAt":"2025-12-24T21:25:55.593Z","lastSeenAt":"2026-01-29T09:59:18.711Z"},{"id":"f6d866c3-e9d6-4174-927c-a4e6d5cbee7b","screenId":"241377ce-a25e-4744-9ea7-cd9359515d07","yodeckMediaId":27476141,"name":"NOS sport algemeen","mediaType":"media","category":"non_ad","duration":20,"isActive":true,"linkedAdvertiserId":null,"linkedPlacementId":null,"detectedAt":"2025-12-24T21:25:51.592Z","lastSeenAt":"2026-01-29T09:59:16.811Z"},{"id":"133f352c-89fc-4e70-b3fa-c6dabb62ff28","screenId":"241377ce-a25e-4744-9ea7-cd9359515d07","yodeckMediaId":27478716,"name":"1Limburg","mediaType":"media","category":"ad","duration":20,"isActive":true,"linkedAdvertiserId":null,"linkedPlacementId":null,"detectedAt":"2026-01-28T15:10:07.913Z","lastSeenAt":"2026-01-29T09:59:12.312Z"}]}
+2026-01-29 11:24:38.31
+59f502f0
+User
+10:24:38 AM [express] GET /api/screens/241377ce-a25e-4744-9ea7-cd9359515d07/now-playing 200 in 1222ms :: {"ok":true,"screenId":"241377ce-a25e-4744-9ea7-cd9359515d07","yodeckPlayerId":"591896","isOnline":true,"expectedPlaylistId":"30524269","actualSourceType":"playlist","actualSourceId":"30524269","mismatch":false,"verificationOk":true,"selfHealed":false,"playlistId":"30524269","playlistName":"Elevizion | Screen | 591896(auto-playlist-30524269-crop)","expectedPlaylistName":"Elevizion | Screen | 591896(auto-playlist-30524269-crop)","itemCount":4,"baselineCount":null,"adsCount":0,"lastPushAt":null,"lastPushResult":null,"deviceStatus":{"status":"ONLINE","isOnline":true,"lastSeenAt":"2025-12-28T17:07:26.000Z","lastScreenshotAt":null,"yodeckDeviceId":"591896","yodeckDeviceName":"Test","source":"yodeck","fetchedAt":"2026-01-29T10:24:38.272Z"}}
+2026-01-29 11:24:38.44
+59f502f0
+User
+10:24:38 AM [express] GET /api/admin/locations/3321f9c7-4a76-4abd-9cc1-9472d6473d80/content-status 304 in 1344ms :: {"locationId":"3321f9c7-4a76-4abd-9cc1-9472d6473d80","locationName":"Bouwservice Douven","isLive":true,"hasYodeckDevice":true,"mode":"PLAYLIST","layout":{"ok":true,"layoutId":null,"layoutName":null},"ads":{"playlistId":"30524269","itemCount":4,"hasFallbackAd":true,"pendingSync":false},"lastSyncAt":"2026-01-28T10:13:27.912Z","lastError":null,"needsRepair":false}

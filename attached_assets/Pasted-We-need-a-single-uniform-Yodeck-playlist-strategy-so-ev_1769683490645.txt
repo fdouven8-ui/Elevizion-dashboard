@@ -1,0 +1,45 @@
+We need a single uniform Yodeck playlist strategy so every screen always plays baseline content and never ends up empty.
+
+CURRENT PROBLEM:
+- Screen "Test" plays playlist "Elevizion | Screen | 591896" and has baseline items, works.
+- Screen "Basil's Barber Shop Maasbracht" plays playlist "Elevizion | Loop | YDK-591895" and shows "No content to play".
+We must eliminate multiple playlist naming/flows. Every screen (old + new) must get the same canonical playlist, auto-created, auto-seeded, auto-assigned.
+
+GOAL:
+For every Yodeck screen, the device must always have exactly ONE assigned playback playlist:
+Canonical playlist name: "Elevizion | Screen | {yodeckPlayerId}"
+Example: "Elevizion | Screen | 591895"
+This playlist must always contain baseline media items (news/weather/self promo/etc) so it can never be empty.
+Ads are appended later, but baseline stays.
+
+IMPLEMENT:
+1) Create a single function ensureCanonicalScreenPlayback(screen):
+   - Input: local Screen record with yodeckPlayerId and yodeckUuid
+   - Compute canonicalName = `Elevizion | Screen | ${yodeckPlayerId}`
+   - Find playlist by exact name. If multiple exist, pick the newest and mark others as legacy (rename with prefix "LEGACY ").
+   - If missing, create playlist in Yodeck, store playlistId + playlistName on Screen record.
+   - Ensure playlist has baseline items (seed if < MIN_BASELINE_COUNT).
+     Baseline items are the existing Yodeck media IDs used on the working screen (NOS, Weer, 1Limburg etc). Put these IDs in config and verify they exist.
+   - Assign this playlist to the screen as Screen Content (source_type=playlist, source_id=playlistId).
+   - Verify by calling now-playing endpoint: actualSourceId must equal playlistId.
+   - Return a structured result with {ok, selfHealed, actions[], errors[]}.
+
+2) Add "repair all screens" job:
+   - Admin endpoint: POST /api/admin/yodeck/repair-all-screens
+   - Loops all screens with yodeckPlayerId present:
+     run ensureCanonicalScreenPlayback(screen)
+   - Summary output: total, repairedCount, alreadyOkCount, failedCount with per-screen errors.
+
+3) Fix scheduled sync bug:
+   - When fetching Yodeck screen list, if response is not JSON (content-type text/html or body starts with "<"):
+     log status + content-type + first 200 chars
+     set yodeckSyncError = "Yodeck API returned HTML (auth/endpoint/blocked)"
+     do NOT treat it as empty screens list.
+   - Ensure we use the correct Yodeck API base URL and token header.
+   - Make /api/admin/integrations/yodeck/test return a clear diagnostic.
+
+4) Acceptance criteria:
+   - Both screens (591896 and 591895) end up with assigned playlist "Elevizion | Screen | {id}".
+   - Neither screen ever shows "No content to play".
+   - There are no "Loop | YDK-..." playlists assigned to screens anymore.
+   - Running repair-all-screens multiple times is idempotent (no duplicates, no re-adding baseline endlessly).

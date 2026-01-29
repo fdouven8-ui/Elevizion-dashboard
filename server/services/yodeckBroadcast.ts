@@ -151,6 +151,7 @@ export async function yodeckAddMediaToPlaylist(
   // First get current items
   const current = await yodeckGetPlaylistItems(playlistId);
   if (!current.ok) {
+    console.warn(`[YodeckBroadcast] Failed to get current items: ${current.error}`);
     return { ok: false, error: current.error };
   }
 
@@ -162,17 +163,22 @@ export async function yodeckAddMediaToPlaylist(
     return { ok: true };
   }
 
-  // Add the new item
+  // Add the new item - Yodeck API requires "id" and "type": "media" fields
   const newItems = [...currentItems, mediaId];
+  
+  const patchPayload = {
+    items: newItems.map((id, index) => ({ id, type: "media", priority: index + 1 })),
+  };
+  
+  console.log(`[YodeckBroadcast] PATCH payload: ${JSON.stringify(patchPayload)}`);
   
   const result = await yodeckRequest<any>(`/playlists/${playlistId}/`, {
     method: "PATCH",
-    body: JSON.stringify({
-      items: newItems.map((id, index) => ({ media_id: id, priority: index + 1 })),
-    }),
+    body: JSON.stringify(patchPayload),
   });
 
   if (!result.ok) {
+    console.warn(`[YodeckBroadcast] PATCH failed: ${result.error}`);
     return { ok: false, error: result.error };
   }
 
@@ -218,10 +224,10 @@ export async function yodeckClonePlaylistFromTemplate(
   const newPlaylistId = String(createResult.data.id);
   console.log(`[YodeckBroadcast] Created empty playlist ${newPlaylistId}`);
 
-  // Step 2: Add items via PATCH
+  // Step 2: Add items via PATCH (format: id, type, priority)
   if (templateItems.items.length > 0) {
     const patchPayload = {
-      items: templateItems.items.map((id, index) => ({ media_id: id, priority: index + 1 })),
+      items: templateItems.items.map((id, index) => ({ id, type: "media", priority: index + 1 })),
     };
     
     console.log(`[YodeckBroadcast] Adding ${templateItems.items.length} items to playlist ${newPlaylistId}`);
@@ -424,6 +430,264 @@ export async function onApprovedVideoAssignedToScreen(
 
   console.log(`[VideoAssign] SUCCESS: media ${yodeckMediaId} added to playlist ${playlistId}, screen pushed`);
   return { ok: true, playlistId, pushed: true };
+}
+
+// =============================================================================
+// CANONICAL SCREEN PLAYBACK - SINGLE UNIFORM STRATEGY
+// =============================================================================
+
+const MIN_BASELINE_COUNT = 4;
+
+export interface CanonicalPlaybackResult {
+  ok: boolean;
+  selfHealed: boolean;
+  actions: string[];
+  errors: string[];
+  playlistId: string | null;
+  playlistName: string | null;
+  itemCount: number;
+  verified: boolean;
+}
+
+/**
+ * Search for playlists by name in Yodeck
+ */
+async function yodeckSearchPlaylistsByName(searchName: string): Promise<{ ok: boolean; playlists?: any[]; error?: string }> {
+  const result = await yodeckRequest<any>(`/playlists/?search=${encodeURIComponent(searchName)}`);
+  
+  if (!result.ok || !result.data) {
+    return { ok: false, error: result.error };
+  }
+
+  const playlists = result.data.results || [];
+  return { ok: true, playlists };
+}
+
+/**
+ * Rename a playlist in Yodeck
+ */
+async function yodeckRenamePlaylist(playlistId: string, newName: string): Promise<{ ok: boolean; error?: string }> {
+  const result = await yodeckRequest<any>(`/playlists/${playlistId}/`, {
+    method: "PATCH",
+    body: JSON.stringify({ name: newName }),
+  });
+  return { ok: result.ok, error: result.error };
+}
+
+/**
+ * CANONICAL SCREEN PLAYBACK
+ * 
+ * Ensures every screen has exactly ONE canonical playlist assigned:
+ * "Elevizion | Screen | {yodeckPlayerId}"
+ * 
+ * This playlist always contains baseline items so screens never show "No content to play".
+ */
+export async function ensureCanonicalScreenPlayback(screenId: string): Promise<CanonicalPlaybackResult> {
+  const actions: string[] = [];
+  const errors: string[] = [];
+  let selfHealed = false;
+
+  const templateId = process.env.YODECK_TEMPLATE_PLAYLIST_ID || "30400683";
+
+  // 1. Get screen from DB
+  const [screen] = await db.select().from(screens).where(eq(screens.id, screenId));
+  if (!screen) {
+    return {
+      ok: false, selfHealed: false, actions: [], errors: ["Screen not found"],
+      playlistId: null, playlistName: null, itemCount: 0, verified: false,
+    };
+  }
+
+  if (!screen.yodeckPlayerId) {
+    return {
+      ok: false, selfHealed: false, actions: [], errors: ["Screen has no Yodeck player ID"],
+      playlistId: null, playlistName: null, itemCount: 0, verified: false,
+    };
+  }
+
+  // 2. Compute canonical playlist name
+  const canonicalName = `Elevizion | Screen | ${screen.yodeckPlayerId}`;
+  actions.push(`Looking for playlist: "${canonicalName}"`);
+
+  // 3. Search for existing playlists with this name
+  const searchResult = await yodeckSearchPlaylistsByName(canonicalName);
+  if (!searchResult.ok) {
+    errors.push(`Failed to search playlists: ${searchResult.error}`);
+    return {
+      ok: false, selfHealed: false, actions, errors,
+      playlistId: screen.playlistId, playlistName: screen.playlistName, itemCount: 0, verified: false,
+    };
+  }
+
+  const matchingPlaylists = (searchResult.playlists || []).filter(
+    (p: any) => p.name === canonicalName
+  );
+
+  let targetPlaylistId: string | null = null;
+
+  // 4. Handle multiple playlists with same name (pick newest, mark others as legacy)
+  if (matchingPlaylists.length > 1) {
+    actions.push(`Found ${matchingPlaylists.length} playlists with canonical name - deduplicating`);
+    const sorted = [...matchingPlaylists].sort((a: any, b: any) => b.id - a.id);
+    targetPlaylistId = String(sorted[0].id);
+    
+    // Rename older ones to LEGACY
+    for (let i = 1; i < sorted.length; i++) {
+      const oldPlaylist = sorted[i];
+      const legacyName = `LEGACY ${canonicalName} (${oldPlaylist.id})`;
+      const renameResult = await yodeckRenamePlaylist(String(oldPlaylist.id), legacyName);
+      if (renameResult.ok) {
+        actions.push(`Renamed old playlist ${oldPlaylist.id} to "${legacyName}"`);
+        selfHealed = true;
+      } else {
+        errors.push(`Failed to rename playlist ${oldPlaylist.id}: ${renameResult.error}`);
+      }
+    }
+  } else if (matchingPlaylists.length === 1) {
+    targetPlaylistId = String(matchingPlaylists[0].id);
+    actions.push(`Found existing canonical playlist: ${targetPlaylistId}`);
+  }
+
+  // 5. If no matching playlist, create one from template
+  if (!targetPlaylistId) {
+    actions.push(`No canonical playlist found, creating from template ${templateId}`);
+    const cloneResult = await yodeckClonePlaylistFromTemplate(templateId, canonicalName);
+    
+    if (!cloneResult.ok || !cloneResult.playlistId) {
+      errors.push(`Failed to create playlist: ${cloneResult.error}`);
+      return {
+        ok: false, selfHealed: false, actions, errors,
+        playlistId: null, playlistName: null, itemCount: 0, verified: false,
+      };
+    }
+
+    targetPlaylistId = cloneResult.playlistId;
+    selfHealed = true;
+    actions.push(`Created new canonical playlist: ${targetPlaylistId}`);
+  }
+
+  // 6. Ensure playlist has baseline items (minimum count)
+  const currentItems = await yodeckGetPlaylistItems(targetPlaylistId);
+  let itemCount = currentItems.items?.length || 0;
+
+  if (itemCount < MIN_BASELINE_COUNT) {
+    actions.push(`Playlist has only ${itemCount} items, seeding baseline from template`);
+    const templateItems = await yodeckGetPlaylistItems(templateId);
+    
+    if (templateItems.ok && templateItems.items && templateItems.items.length > 0) {
+      // Add missing baseline items
+      for (const mediaId of templateItems.items) {
+        if (!currentItems.items?.includes(mediaId)) {
+          const addResult = await yodeckAddMediaToPlaylist(targetPlaylistId, mediaId);
+          if (addResult.ok) {
+            actions.push(`Added baseline media ${mediaId}`);
+            selfHealed = true;
+          }
+        }
+      }
+      
+      // Re-fetch count
+      const refetch = await yodeckGetPlaylistItems(targetPlaylistId);
+      itemCount = refetch.items?.length || itemCount;
+    }
+  }
+
+  // 7. Assign playlist to screen
+  const setResult = await yodeckSetScreenPlaylist(screen.yodeckPlayerId, targetPlaylistId);
+  if (!setResult.ok) {
+    errors.push(`Failed to assign playlist to screen: ${setResult.error}`);
+  } else {
+    actions.push(`Assigned playlist ${targetPlaylistId} to screen ${screen.yodeckPlayerId}`);
+    if (!setResult.verified) {
+      actions.push(`Warning: Assignment verification pending`);
+    }
+  }
+
+  // 8. Update DB with canonical playlist info
+  await db.update(screens).set({
+    playlistId: targetPlaylistId,
+    playlistName: canonicalName,
+    yodeckSyncStatus: "linked",
+    yodeckContentCount: itemCount,
+    lastVerifyAt: new Date(),
+    lastVerifyResult: setResult.verified ? "ok" : "pending",
+    updatedAt: new Date(),
+  }).where(eq(screens.id, screenId));
+
+  actions.push(`Updated DB: playlistId=${targetPlaylistId}, itemCount=${itemCount}`);
+
+  // 9. Verify by checking now-playing
+  const verifyResult = await yodeckGetScreenSource(screen.yodeckPlayerId);
+  const verified = 
+    verifyResult.ok && 
+    verifyResult.source?.sourceType === "playlist" &&
+    verifyResult.source?.sourceId === targetPlaylistId;
+
+  if (verified) {
+    actions.push(`Verified: screen is now playing canonical playlist`);
+  } else {
+    actions.push(`Verification: screen source is ${verifyResult.source?.sourceType}/${verifyResult.source?.sourceId}`);
+  }
+
+  return {
+    ok: errors.length === 0,
+    selfHealed,
+    actions,
+    errors,
+    playlistId: targetPlaylistId,
+    playlistName: canonicalName,
+    itemCount,
+    verified,
+  };
+}
+
+/**
+ * Repair all screens with Yodeck players - ensure canonical playlist setup
+ */
+export async function repairAllScreensCanonical(): Promise<{
+  total: number;
+  repairedCount: number;
+  alreadyOkCount: number;
+  failedCount: number;
+  results: Array<{ screenId: string; yodeckPlayerId: string; result: CanonicalPlaybackResult }>;
+}> {
+  const linkedScreens = await db.select({
+    id: screens.id,
+    screenId: screens.screenId,
+    yodeckPlayerId: screens.yodeckPlayerId,
+  }).from(screens).where(isNotNull(screens.yodeckPlayerId));
+
+  const results: Array<{ screenId: string; yodeckPlayerId: string; result: CanonicalPlaybackResult }> = [];
+  let repairedCount = 0;
+  let alreadyOkCount = 0;
+  let failedCount = 0;
+
+  for (const screen of linkedScreens) {
+    if (!screen.yodeckPlayerId) continue;
+    
+    const result = await ensureCanonicalScreenPlayback(screen.id);
+    results.push({
+      screenId: screen.screenId,
+      yodeckPlayerId: screen.yodeckPlayerId,
+      result,
+    });
+
+    if (!result.ok) {
+      failedCount++;
+    } else if (result.selfHealed) {
+      repairedCount++;
+    } else {
+      alreadyOkCount++;
+    }
+  }
+
+  return {
+    total: linkedScreens.length,
+    repairedCount,
+    alreadyOkCount,
+    failedCount,
+    results,
+  };
 }
 
 /**

@@ -17778,18 +17778,20 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * POST /api/admin/screens/:screenId/canonical-repair
-   * PLAYLIST-ONLY ARCHITECTURE: Alias for force-broadcast
+   * CANONICAL PLAYLIST STRATEGY: Ensures screen has exactly ONE playlist
+   * Named "Elevizion | Screen | {yodeckPlayerId}" with baseline items
    */
   app.post("/api/admin/screens/:screenId/canonical-repair", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.params;
-      const { pushScreen } = await import("./services/yodeckBroadcast");
+      const { ensureCanonicalScreenPlayback } = await import("./services/yodeckBroadcast");
       
-      console.log(`[CanonicalRepair] Pushing screen ${screenId}`);
-      const result = await pushScreen(screenId);
+      console.log(`[CanonicalRepair] Repairing screen ${screenId}`);
+      const result = await ensureCanonicalScreenPlayback(screenId);
       
-      console.log(`[CanonicalRepair] Result: ok=${result.ok}, verified=${result.verified}`);
-      result.logs.forEach(log => console.log(`[CanonicalRepair] ${log}`));
+      console.log(`[CanonicalRepair] Result: ok=${result.ok}, selfHealed=${result.selfHealed}, verified=${result.verified}`);
+      result.actions.forEach(action => console.log(`[CanonicalRepair] ${action}`));
+      result.errors.forEach(err => console.error(`[CanonicalRepair] ERROR: ${err}`));
       
       res.json(result);
     } catch (error: any) {
@@ -17900,6 +17902,29 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.json(result);
     } catch (error: any) {
       console.error("[Backfill] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/yodeck/repair-all-screens
+   * Repair all screens to use canonical playlist strategy
+   * Each screen gets exactly ONE playlist: "Elevizion | Screen | {yodeckPlayerId}"
+   */
+  app.post("/api/admin/yodeck/repair-all-screens", requireAdminAccess, async (req, res) => {
+    try {
+      console.log("[RepairAllScreens] Starting canonical screen repair...");
+      const { repairAllScreensCanonical } = await import("./services/yodeckBroadcast");
+      const result = await repairAllScreensCanonical();
+      
+      console.log(`[RepairAllScreens] Complete: ${result.total} total, ${result.repairedCount} repaired, ${result.alreadyOkCount} already ok, ${result.failedCount} failed`);
+      
+      res.json({
+        ok: result.failedCount === 0,
+        ...result,
+      });
+    } catch (error: any) {
+      console.error("[RepairAllScreens] Error:", error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });
