@@ -18378,6 +18378,94 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * GET /api/admin/diagnostics/upload-jobs
+   * Diagnostics endpoint showing upload job status for an advertiser
+   */
+  app.get("/api/admin/diagnostics/upload-jobs", requireAdminAccess, async (req, res) => {
+    try {
+      const { advertiserId } = req.query;
+      
+      if (!advertiserId || typeof advertiserId !== "string") {
+        return res.status(400).json({ ok: false, error: "advertiserId query parameter required" });
+      }
+
+      const { getAdvertiserUploadStatus } = await import("./services/uploadWorkerService");
+      const status = await getAdvertiserUploadStatus(advertiserId);
+
+      res.json({
+        ok: true,
+        advertiserId,
+        latestStatus: status.latestStatus,
+        hasReadyMedia: status.hasReadyMedia,
+        canonicalMediaId: status.canonicalMediaId,
+        jobs: status.jobs.map(j => ({
+          id: j.id,
+          status: j.status,
+          attempt: j.attempt,
+          maxAttempts: j.maxAttempts,
+          yodeckMediaId: j.yodeckMediaId,
+          yodeckFileSize: j.yodeckFileSize,
+          yodeckStatus: j.yodeckStatus,
+          lastError: j.lastError,
+          lastErrorAt: j.lastErrorAt,
+          nextRetryAt: j.nextRetryAt,
+          createdAt: j.createdAt,
+          completedAt: j.completedAt,
+        })),
+      });
+    } catch (error: any) {
+      console.error("[Diagnostics] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/upload-worker/run
+   * Manually trigger the upload worker
+   */
+  app.post("/api/admin/upload-worker/run", requireAdminAccess, async (req, res) => {
+    try {
+      const { runUploadWorker } = await import("./services/uploadWorkerService");
+      const result = await runUploadWorker();
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      console.error("[UploadWorker] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/upload-jobs/enqueue
+   * Enqueue a new upload job for testing
+   */
+  app.post("/api/admin/upload-jobs/enqueue", requireAdminAccess, async (req, res) => {
+    try {
+      const { advertiserId, localAssetPath, localFileSize, yodeckMediaName, localDurationSeconds } = req.body;
+      
+      if (!advertiserId || !localAssetPath || !localFileSize || !yodeckMediaName) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: "Required: advertiserId, localAssetPath, localFileSize, yodeckMediaName" 
+        });
+      }
+
+      const { enqueueUploadJob } = await import("./services/uploadWorkerService");
+      const job = await enqueueUploadJob({
+        advertiserId,
+        localAssetPath,
+        localFileSize,
+        localDurationSeconds,
+        yodeckMediaName,
+      });
+
+      res.json({ ok: true, job });
+    } catch (error: any) {
+      console.error("[UploadWorker] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/admin/screens/:screenId/now-playing
    * Get current playback status for a screen
    */

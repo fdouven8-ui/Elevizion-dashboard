@@ -73,6 +73,7 @@ import type {
   CompanyProfile, InsertCompanyProfile,
   WaitlistRequest, InsertWaitlistRequest,
   ClaimPrefill, InsertClaimPrefill,
+  UploadJob, InsertUploadJob,
 } from "@shared/schema";
 
 // Lead query params for server-side filtering/pagination
@@ -494,6 +495,13 @@ export interface IStorage {
   createClaimPrefill(data: InsertClaimPrefill): Promise<ClaimPrefill>;
   getClaimPrefill(id: string): Promise<ClaimPrefill | undefined>;
   markClaimPrefillUsed(id: string): Promise<ClaimPrefill | undefined>;
+
+  // Upload Jobs
+  createUploadJob(data: InsertUploadJob): Promise<UploadJob>;
+  getUploadJob(id: string): Promise<UploadJob | undefined>;
+  getUploadJobByAdvertiser(advertiserId: string): Promise<UploadJob[]>;
+  getUploadJobsForProcessing(): Promise<UploadJob[]>;
+  updateUploadJob(id: string, data: Partial<UploadJob>): Promise<UploadJob | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -3372,6 +3380,49 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(schema.reportLogs)
       .where(sql`${schema.reportLogs.createdAt} >= ${since}`)
       .orderBy(desc(schema.reportLogs.createdAt));
+  }
+
+  // ============================================================================
+  // UPLOAD JOBS
+  // ============================================================================
+
+  async createUploadJob(data: InsertUploadJob): Promise<UploadJob> {
+    const [job] = await db.insert(schema.uploadJobs).values(data).returning();
+    return job;
+  }
+
+  async getUploadJob(id: string): Promise<UploadJob | undefined> {
+    const [job] = await db.select().from(schema.uploadJobs).where(eq(schema.uploadJobs.id, id));
+    return job;
+  }
+
+  async getUploadJobByAdvertiser(advertiserId: string): Promise<UploadJob[]> {
+    return db.select().from(schema.uploadJobs)
+      .where(eq(schema.uploadJobs.advertiserId, advertiserId))
+      .orderBy(desc(schema.uploadJobs.createdAt));
+  }
+
+  async getUploadJobsForProcessing(): Promise<UploadJob[]> {
+    const now = new Date();
+    return db.select().from(schema.uploadJobs)
+      .where(
+        or(
+          eq(schema.uploadJobs.status, "QUEUED"),
+          and(
+            eq(schema.uploadJobs.status, "RETRYABLE_FAIL"),
+            lt(schema.uploadJobs.nextRetryAt, now)
+          )
+        )
+      )
+      .orderBy(schema.uploadJobs.createdAt);
+  }
+
+  async updateUploadJob(id: string, data: Partial<UploadJob>): Promise<UploadJob | undefined> {
+    const [job] = await db.update(schema.uploadJobs)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(schema.uploadJobs.id, id))
+      .returning();
+    return job;
   }
 }
 

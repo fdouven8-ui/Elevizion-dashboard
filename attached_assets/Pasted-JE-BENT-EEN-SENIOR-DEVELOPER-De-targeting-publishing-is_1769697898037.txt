@@ -1,0 +1,91 @@
+JE BENT EEN SENIOR DEVELOPER. De targeting/publishing is nu correct en media-gating blokkeert lege/unusable uploads (fileSize=0, status=initialized). Root issue: Yodeck media records worden aangemaakt maar de binary upload / encoding completion faalt, waardoor Yodeck later “empty/unfinished video” geeft.
+
+DOEL:
+- Uploads naar Yodeck moeten altijd eindigen in usable media (fileSize>0, duration>0, status=ready).
+- Als upload faalt of blijft hangen op initialized/processing, moet het systeem AUTOMATISCH herstellen (retry, opnieuw uploaden, of markeren als hard fail).
+- Geen handmatige “Save & push” in Yodeck meer nodig.
+
+IMPLEMENTEER NU:
+
+A) HARDEN THE TWO-STEP UPLOAD (bron van fileSize=0)
+1) Na POST create media + get presigned URL:
+   - Voer PUT upload uit met:
+     - Content-Type: video/mp4
+     - Content-Length: exact bytes
+     - body = binary stream (geen base64)
+   - Log: uploadUrl host + statuscode + returned headers (ETag) zonder secrets.
+2) Verifieer direct daarna:
+   - HEAD/GET op de presigned URL is niet mogelijk (S3 policy), dus:
+   - Call Yodeck: GET /api/v2/media/{id} en/of /status
+   - Wacht/poll tot:
+     - fileSize > 0 (of “filesize” veld)
+     - status niet meer initialized/uploading
+   - Timeout: 2 min met backoff (2s, 4s, 8s… max 15s)
+3) Als na timeout nog fileSize=0 of status=initialized:
+   - Markeer upload attempt als FAILED_UPLOAD (db)
+   - Trigger auto-retry (zie B)
+
+B) AUTO-RETRY + SELF-HEAL PIPELINE
+Maak een UploadJob tabel (of hergebruik bestaande) met:
+- id, advertiserId, localAssetPath, yodeckMediaId, attempt, status, lastError, createdAt, updatedAt
+
+Flow:
+1) Wanneer local asset “ready_for_yodeck” is:
+   - enqueue UploadJob(status=QUEUED)
+2) Worker verwerkt QUEUED:
+   - create media -> presigned upload -> poll status -> success => status=READY
+   - fail => status=RETRYABLE_FAIL met reason
+3) Retry policy:
+   - maxAttempts=5
+   - retry delays: 1m, 5m, 15m, 1h, 6h
+4) Als maxAttempts bereikt:
+   - status=PERMANENT_FAIL
+   - UI toont: “Upload mislukt, upload opnieuw in portal”
+5) BELANGRIJK: publish-approved-ads mag ALLEEN media gebruiken met UploadJob.status=READY (of yodeck media usable=true)
+
+C) DEDUPE + CLEANUP IN YODECK
+Probleem: 2 media IDs met dezelfde naam. Dit ontstaat door retries zonder cleanup.
+Regels:
+1) Introduceer “canonical media” per advertiser:
+   - advertiser.yodeckMediaIdCanonical
+2) Bij nieuwe succesvolle upload:
+   - set canonical naar nieuwe mediaId
+   - archive/delete oude duplicates (alleen als veilig) OF markeer ignored in DB
+3) publish/playlist linking gebruikt altijd canonical.
+
+D) PRE-UPLOAD VALIDATION (voorkomt upload van slecht bestand)
+Voor upload:
+- check file exists
+- fs.stat size > 200KB (realistische ondergrens)
+- ffprobe duration > 0
+- codec h264/yuv420p etc (jullie hebben dit al)
+Als faalt => nooit naar Yodeck sturen, direct UI error.
+
+E) END-TO-END TESTS (moet je uitvoeren)
+1) Upload dezelfde video via portal:
+   - verwacht: UploadJob READY, yodeck fileSize>0, status=ready
+2) publish-approved-ads:
+   - verwacht: 1 target screen (Sittard) ontvangt ad, Basil krijgt niets
+3) Simuleer failure:
+   - forceer presigned PUT fail => job RETRYABLE_FAIL, later auto retry
+4) Dedupe test:
+   - 2 uploads achter elkaar => canonical updated, oude media archived/ignored, playlists bevatten maar 1 item
+
+F) EXTRA DIAGNOSTICS (zodat Frank direct ziet wat er is)
+1) GET /api/admin/diagnostics/upload-jobs?advertiserId=...
+- toont attempts, status, lastError, yodeckMediaId, fileSize/status snapshot
+2) UI badge bij ad:
+- “Upload: READY” / “Upload: RETRYING (attempt 2/5)” / “Upload: FAILED – upload opnieuw”
+
+IMPLEMENTATIE DETAILS (niet overslaan):
+- Zorg dat presigned PUT exact bytes streamt, geen buffering in memory.
+- Zet timeouts op fetch/axios (connect + read).
+- Log altijd: yodeckMediaId, attempt, result, poll transitions.
+- Idempotent: als job al READY, geen nieuwe media create.
+
+GA NU IMPLEMENTEREN EN LEVER:
+- UploadJob worker + schema
+- verbeterde two-step upload + poll
+- dedupe/canonical media selectie
+- diagnostics endpoints + minimale UI status
+- bewijs met log snippets + voorbeeld responses

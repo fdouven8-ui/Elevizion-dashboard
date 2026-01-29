@@ -121,6 +121,9 @@ export const advertisers = pgTable("advertisers", {
   inviteEmailSentAt: timestamp("invite_email_sent_at"), // When portal invite was sent
   confirmationEmailSentAt: timestamp("confirmation_email_sent_at"), // When submission confirmation was sent
   whatnowEmailSentAt: timestamp("whatnow_email_sent_at"), // When "what now" email was sent
+  // Canonical Yodeck media (deduplicated, single source of truth)
+  yodeckMediaIdCanonical: integer("yodeck_media_id_canonical"), // The ONE usable Yodeck media ID
+  yodeckMediaIdCanonicalUpdatedAt: timestamp("yodeck_media_id_canonical_updated_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -2731,4 +2734,58 @@ export const PREDEFINED_TAGS = [
   "elevizion:location",
 ] as const;
 export type PredefinedTag = typeof PREDEFINED_TAGS[number];
+
+/**
+ * Upload Jobs - Tracks Yodeck media upload lifecycle with retry logic
+ * Ensures uploads complete successfully with verification polling
+ */
+export const uploadJobs = pgTable("upload_jobs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),
+  adAssetId: varchar("ad_asset_id").references(() => adAssets.id, { onDelete: "set null" }),
+  // Local file reference
+  localAssetPath: text("local_asset_path").notNull(), // Path in object storage
+  localFileSize: integer("local_file_size").notNull(), // File size in bytes
+  localDurationSeconds: decimal("local_duration_seconds", { precision: 10, scale: 2 }), // FFprobe duration
+  // Yodeck media tracking
+  yodeckMediaId: integer("yodeck_media_id"), // Assigned after create call
+  yodeckMediaName: text("yodeck_media_name"), // Name in Yodeck
+  // Upload status
+  status: text("status").notNull().default("QUEUED"), // QUEUED | UPLOADING | POLLING | READY | RETRYABLE_FAIL | PERMANENT_FAIL
+  attempt: integer("attempt").notNull().default(0), // Current attempt number (1-5)
+  maxAttempts: integer("max_attempts").notNull().default(5),
+  // Error tracking
+  lastError: text("last_error"), // Last error message
+  lastErrorAt: timestamp("last_error_at"),
+  // Yodeck verification snapshot (from poll)
+  yodeckFileSize: integer("yodeck_file_size"), // File size reported by Yodeck
+  yodeckDuration: decimal("yodeck_duration", { precision: 10, scale: 2 }), // Duration reported by Yodeck
+  yodeckStatus: text("yodeck_status"), // Status reported by Yodeck (ready, processing, etc.)
+  // Retry scheduling
+  nextRetryAt: timestamp("next_retry_at"), // When to retry (null if not scheduled)
+  // Timestamps
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  completedAt: timestamp("completed_at"), // When job reached READY status
+});
+
+export const insertUploadJobSchema = createInsertSchema(uploadJobs).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  completedAt: true,
+});
+export type UploadJob = typeof uploadJobs.$inferSelect;
+export type InsertUploadJob = z.infer<typeof insertUploadJobSchema>;
+
+// Upload job status constants
+export const UPLOAD_JOB_STATUS = {
+  QUEUED: "QUEUED",
+  UPLOADING: "UPLOADING",
+  POLLING: "POLLING",
+  READY: "READY",
+  RETRYABLE_FAIL: "RETRYABLE_FAIL",
+  PERMANENT_FAIL: "PERMANENT_FAIL",
+} as const;
+export type UploadJobStatus = typeof UPLOAD_JOB_STATUS[keyof typeof UPLOAD_JOB_STATUS];
 
