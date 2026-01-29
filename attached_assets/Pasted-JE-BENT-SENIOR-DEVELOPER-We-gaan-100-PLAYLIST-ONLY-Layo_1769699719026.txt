@@ -1,0 +1,89 @@
+JE BENT SENIOR DEVELOPER. We gaan 100% PLAYLIST-ONLY. Layout mode moet volledig verdwijnen uit de hele codebase en uit alle flows. Er mag NOOIT meer een Yodeck screen_content.source_type = "layout" gezet worden. Alle screens moeten source_type="playlist" hebben en blijven houden.
+
+PROBLEEM (bewijs):
+Logs tonen nog ForceLayout/ApplyLayout:
+- Created layout "Elevizion Standard | Bouwservice Douven" (7736579)
+- PATCH /screens/591896 payload source_type:"layout"
+Dus ergens in code wordt layout opnieuw geactiveerd, terwijl de app in SCREEN_PLAYLIST_ONLY draait.
+
+DOEL:
+1) Eén canoniek model: elke screen draait EXACT 1 playlist (screen playlist / auto-playlist of canonical EVZ playlist).
+2) Baseline + ads worden samengevoegd in DIE playlist.
+3) Ads moeten targeting respecteren (SINGLE=1 => exact 1 scherm), en NOOIT op andere schermen verschijnen.
+4) Geen handmatig "Save and push": na playlist update moet automatisch push naar screen gebeuren.
+5) Media gate: nooit publishen als fileSize=0/processing/failed.
+
+TE DOEN (hard requirements):
+
+A) Layout volledig uitschakelen (compile-time + runtime)
+- Zoek en verwijder/disable alle codepaden: ForceLayout, ApplyLayout, ensureElevizionLayout, layoutMode="LAYOUT", yodeckLayoutId, yodeckBaselinePlaylistId die aan layouts hangt, endpoints /force-layout /force-reset als ze layout gebruiken.
+- Voeg een HARD GUARD toe:
+  - Bij elke sync/verify/publish: als Yodeck screen_content.source_type === "layout" -> automatisch terugzetten naar playlist-mode:
+    PATCH /screens/:id { screen_content: { source_type:"playlist", source_id:<expectedPlaylistId> } }
+    POST /screens/:id/push
+  - Log audit event: LAYOUT_DETECTED_AND_REMOVED
+
+B) Canonical playlist per screen (1 playlist, altijd)
+- Definieer canonicalPlaylistId per screen in DB (screens.playlistId).
+- reconcile bij opstarten:
+  - Lees Yodeck screens => bepaal source_id playlistId => schrijf naar screens.playlistId + playlistName.
+  - Als DB playlistId null is, maar Yodeck wel een playlist source_id heeft: adopt die source_id als canonical.
+- publish schrijft ALLEEN naar screens.playlistId (nooit naar location.yodeckPlaylistId als dat afwijkt).
+
+C) Baseline seeding + ads publishing naar dezelfde playlist
+- Baseline set = [NOS algemeen nieuws, NOS sport algemeen, Weer goed, ...] (jullie bestaande baselineMediaIds)
+- ensurePlaylistHasBaseline(screen.playlistId) idempotent
+- publishAds(screen.playlistId, mediaId) idempotent
+- Zorg dat baseline media NOOIT als "ad" wordt geclassificeerd (fix classificatie blijft).
+
+D) Targeting fix: ad komt nu op beide schermen omdat mapping en/of selectie fout is
+- Implement TargetingResolver strict:
+  - CITY exact match => score 100
+  - region match => 25
+  - fallback => 0 (niet selecteren bij SINGLE/TRIPLE/TEN tenzij expliciet allowed)
+- Apply package limits:
+  - SINGLE => selecteer exact 1 hoogste score. Bij tie: kies laagste screenId of deterministic sort.
+- HARD BLOCK: als selectedScreens.length > package.screensIncluded => error.
+- HARD BLOCK: als score < 100 bij SINGLE en er bestaat een 100 match => selecteer alleen 100 match.
+
+E) Screen ↔ Location mapping bug fix (kritisch)
+Uit logs eerder: beide screens hadden locationId=3321f9c7... (Bouwservice Douven). Daardoor kan targeting niet werken.
+- Voeg repair endpoint:
+  POST /api/admin/repair/screen-location
+  - Toon per screen: yodeckPlayerId, yodeckPlayerName, current locationId + locationName
+  - Regels:
+    * Als screenName bevat "Basil" en locationName is "Bouwservice Douven" => mapping is fout.
+    * Als linkStatus=unlinked => maak nieuwe Location "Basil's Barber Shop Maasbracht" (city=Maasbracht) en zet screen.locationId daarnaar.
+- Voeg invariant check:
+  - Als meerdere screens dezelfde locationId hebben EN isMultiScreenLocation=false => markeer needsRepair=true en publish blokkeren.
+
+F) Auto push na wijziging (geen handmatige "Save and Push")
+- Na elke playlist update (baseline of ads):
+  POST /screens/:yodeckId/push
+- Voeg retry (3x) + logging toe.
+- Sla lastPushAt/lastPushResult op.
+
+G) Media readiness gate (blijft)
+- Publiceer nooit als:
+  fileSize==0 OR status in [initialized, uploading, encoding, processing, failed] OR duration missing.
+- Selecteer canonical mediaId voor advertiser: advertiser.yodeckMediaIdCanonical.
+- Als gate faalt => duidelijke diagnostic + geen publish.
+
+H) Acceptance test (moet slagen)
+Scenario:
+- advertiser: targetRegionCodes=["sittard"], package SINGLE (1 screen)
+- screen 591896: city=Sittard (Bouwservice)
+- screen 591895: city=Maasbracht (Basil)
+Expected:
+- selectedScreens = [591896] only
+- playlist 30532596 krijgt ad mediaId
+- playlist 30532597 blijft onveranderd
+- push uitgevoerd alleen voor 591896
+Fail als ad op 591895 verschijnt.
+
+DELIVERABLES:
+1) layout code verwijderd + guard die layout terugdraait naar playlist
+2) strict targeting + package limit enforcement
+3) repair screen-location mapping endpoint + publish block bij mapping inconsistent
+4) publish naar canonical screen playlist + auto push
+5) diagnostics endpoints updaten zodat je exact ziet: selected screens, scores, playlistIds, push result, media gate status

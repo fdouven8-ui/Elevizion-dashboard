@@ -18648,5 +18648,252 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  // ============================================================================
+  // PLAYLIST-ONLY GUARD - Enforce playlist mode, block layouts
+  // ============================================================================
+
+  /**
+   * POST /api/admin/playlist-guard/run
+   * Check all screens for layout mode and revert to playlist if found
+   */
+  app.post("/api/admin/playlist-guard/run", requireAdminAccess, async (req, res) => {
+    try {
+      const { runPlaylistGuardForAllScreens } = await import("./services/playlistOnlyGuard");
+      const result = await runPlaylistGuardForAllScreens();
+      
+      console.log(`[PlaylistGuard] Checked ${result.screensChecked} screens, detected ${result.layoutsDetected} layouts, reverted ${result.layoutsReverted}`);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PlaylistGuard] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/playlist-guard/check/:screenId
+   * Check single screen for layout mode
+   */
+  app.post("/api/admin/playlist-guard/check/:screenId", requireAdminAccess, async (req, res) => {
+    try {
+      const screenId = parseInt(req.params.screenId, 10);
+      const { checkAndRevertLayoutMode } = await import("./services/playlistOnlyGuard");
+      const result = await checkAndRevertLayoutMode(screenId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PlaylistGuard] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/playlist-guard/ensure-playlist/:screenId
+   * Force screen to playlist mode with specific playlist
+   */
+  app.post("/api/admin/playlist-guard/ensure-playlist/:screenId", requireAdminAccess, async (req, res) => {
+    try {
+      const screenId = parseInt(req.params.screenId, 10);
+      const { playlistId } = req.body;
+      
+      if (!playlistId) {
+        return res.status(400).json({ ok: false, error: "playlistId required in body" });
+      }
+      
+      const { ensurePlaylistMode } = await import("./services/playlistOnlyGuard");
+      const result = await ensurePlaylistMode(screenId, playlistId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PlaylistGuard] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // SCREEN-LOCATION REPAIR - Fix mapping inconsistencies
+  // ============================================================================
+
+  /**
+   * GET /api/admin/repair/screen-location
+   * Diagnose screen-location mapping issues
+   */
+  app.get("/api/admin/repair/screen-location", requireAdminAccess, async (req, res) => {
+    try {
+      const screens = await storage.getScreens();
+      const locations = await storage.getLocations();
+      const locationMap = new Map(locations.map(l => [l.id, l]));
+      
+      const mappingIssues: Array<{
+        screenId: string;
+        screenName: string;
+        yodeckPlayerId: string | null;
+        currentLocationId: string | null;
+        currentLocationName: string | null;
+        currentLocationCity: string | null;
+        issue: string;
+        suggestedFix?: string;
+      }> = [];
+
+      const locationScreenCount = new Map<string, number>();
+      
+      for (const screen of screens) {
+        if (screen.locationId) {
+          const count = locationScreenCount.get(screen.locationId) || 0;
+          locationScreenCount.set(screen.locationId, count + 1);
+        }
+      }
+      
+      for (const screen of screens) {
+        const location = screen.locationId ? locationMap.get(screen.locationId) : null;
+        
+        let issue = "";
+        let suggestedFix: string | undefined;
+        
+        if (!screen.locationId) {
+          issue = "NO_LOCATION: Screen has no linked location";
+          suggestedFix = "Create or link to appropriate location";
+        } else if (!location) {
+          issue = "ORPHANED: Location ID not found in database";
+        } else {
+          const screenCount = locationScreenCount.get(screen.locationId) || 0;
+          if (screenCount > 1 && !location.isMultiScreenLocation) {
+            issue = `MULTI_SCREEN_CONFLICT: ${screenCount} screens share location that is not marked as multi-screen`;
+            suggestedFix = "Either mark location as multi-screen or create separate locations";
+          }
+          
+          const screenNameLower = screen.name?.toLowerCase() || "";
+          const locationNameLower = location.name?.toLowerCase() || "";
+          
+          if (screenNameLower.includes("basil") && !locationNameLower.includes("basil")) {
+            issue = `NAME_MISMATCH: Screen "${screen.name}" linked to location "${location.name}"`;
+            suggestedFix = "Create new location 'Basil's Barber Shop' with correct city";
+          }
+        }
+        
+        if (issue) {
+          mappingIssues.push({
+            screenId: screen.id,
+            screenName: screen.name || "Unknown",
+            yodeckPlayerId: screen.yodeckPlayerId,
+            currentLocationId: screen.locationId,
+            currentLocationName: location?.name || null,
+            currentLocationCity: location?.city || null,
+            issue,
+            suggestedFix,
+          });
+        }
+      }
+      
+      const needsRepair = mappingIssues.length > 0;
+      const publishBlocked = mappingIssues.some(i => 
+        i.issue.includes("MULTI_SCREEN_CONFLICT") || i.issue.includes("NAME_MISMATCH")
+      );
+      
+      res.json({
+        ok: true,
+        screensChecked: screens.length,
+        issuesFound: mappingIssues.length,
+        needsRepair,
+        publishBlocked,
+        issues: mappingIssues,
+      });
+    } catch (error: any) {
+      console.error("[RepairScreenLocation] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/repair/screen-location/:screenId
+   * Fix screen-location mapping for specific screen
+   */
+  app.post("/api/admin/repair/screen-location/:screenId", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { newLocationId, createLocation } = req.body;
+      
+      const screen = await storage.getScreen(screenId);
+      if (!screen) {
+        return res.status(404).json({ ok: false, error: "Screen not found" });
+      }
+      
+      if (createLocation) {
+        const { name, city, address } = createLocation;
+        if (!name || !city) {
+          return res.status(400).json({ ok: false, error: "createLocation requires name and city" });
+        }
+        
+        const newLocation = await storage.createLocation({
+          name,
+          city,
+          address,
+          status: "active",
+          readyForAds: true,
+          isMultiScreenLocation: false,
+        });
+        
+        await storage.updateScreen(screenId, {
+          locationId: newLocation.id,
+        });
+        
+        console.log(`[RepairScreenLocation] Created location ${newLocation.id} and linked to screen ${screenId}`);
+        
+        res.json({
+          ok: true,
+          action: "CREATED_AND_LINKED",
+          screenId,
+          newLocationId: newLocation.id,
+          newLocationName: name,
+        });
+      } else if (newLocationId) {
+        const location = await storage.getLocation(newLocationId);
+        if (!location) {
+          return res.status(404).json({ ok: false, error: "Location not found" });
+        }
+        
+        await storage.updateScreen(screenId, {
+          locationId: newLocationId,
+        });
+        
+        console.log(`[RepairScreenLocation] Linked screen ${screenId} to location ${newLocationId}`);
+        
+        res.json({
+          ok: true,
+          action: "LINKED",
+          screenId,
+          newLocationId,
+          newLocationName: location.name,
+        });
+      } else {
+        return res.status(400).json({ 
+          ok: false, 
+          error: "Either newLocationId or createLocation object required" 
+        });
+      }
+    } catch (error: any) {
+      console.error("[RepairScreenLocation] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
+  // LEGACY LAYOUT ROUTES - BLOCKED (410 Gone)
+  // ============================================================================
+
+  /**
+   * POST /api/admin/locations/:locationId/force-layout
+   * BLOCKED - Layout system deprecated
+   */
+  app.post("/api/admin/locations/:locationId/force-layout", requireAdminAccess, async (req, res) => {
+    console.warn(`[LEGACY_BLOCKED] Attempted to use deprecated force-layout endpoint`);
+    res.status(410).json({
+      ok: false,
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout mode is deprecated. Use playlist-only endpoints instead.",
+      alternatives: [
+        "POST /api/admin/playlist-guard/ensure-playlist/:screenId",
+        "POST /api/admin/screens/:screenId/canonical-with-baseline",
+      ],
+    });
+  });
+
   return httpServer;
 }
