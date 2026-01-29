@@ -82,6 +82,7 @@ const BASELINE_PLAYLIST_PREFIX = "Baseline | ";
  * Get the configured base playlist ID from autopilot config
  */
 export async function getBasePlaylistId(): Promise<string | null> {
+  if (LEGACY_DISABLED) throwLegacyError();
   // First check environment variable
   const envValue = process.env.AUTOPILOT_BASE_PLAYLIST_ID;
   if (envValue) {
@@ -98,6 +99,7 @@ export async function getBasePlaylistId(): Promise<string | null> {
  * If not set, automatically searches for "Elevizion - Basis" in Yodeck and caches it
  */
 export async function getBaseTemplatePlaylistId(): Promise<string | null> {
+  if (LEGACY_DISABLED) throwLegacyError();
   // Check database first
   const [setting] = await db.select().from(systemSettings).where(eq(systemSettings.key, CONFIG_KEY_BASE_TEMPLATE));
   if (setting?.value) {
@@ -127,6 +129,7 @@ export async function getBaseTemplatePlaylistId(): Promise<string | null> {
  * Set the base template playlist ID in config
  */
 export async function setBaseTemplatePlaylistId(playlistId: string): Promise<void> {
+  if (LEGACY_DISABLED) throwLegacyError();
   const existing = await db.select().from(systemSettings).where(eq(systemSettings.key, CONFIG_KEY_BASE_TEMPLATE));
   
   if (existing.length > 0) {
@@ -148,6 +151,7 @@ export async function setBaseTemplatePlaylistId(playlistId: string): Promise<voi
  * Set the base playlist ID in autopilot config
  */
 export async function setBasePlaylistId(playlistId: string): Promise<void> {
+  if (LEGACY_DISABLED) throwLegacyError();
   const existing = await db.select().from(systemSettings).where(eq(systemSettings.key, CONFIG_KEY_BASE_PLAYLIST));
   
   if (existing.length > 0) {
@@ -169,6 +173,7 @@ export async function setBasePlaylistId(playlistId: string): Promise<void> {
  * Generate canonical combined playlist name for a location
  */
 export function getCombinedPlaylistName(locationName: string): string {
+  if (LEGACY_DISABLED) throwLegacyError();
   return `${COMBINED_PLAYLIST_PREFIX}${locationName}`.trim();
 }
 
@@ -233,6 +238,7 @@ export async function ensureCombinedPlaylist(
   locationName: string,
   logs: string[]
 ): Promise<{ ok: boolean; playlistId: string | null; playlistName: string; isNew: boolean; error?: string }> {
+  if (LEGACY_DISABLED) throwLegacyError();
   const playlistName = getCombinedPlaylistName(locationName);
   logs.push(`[CombinedPlaylist] Ensuring playlist: "${playlistName}"`);
   
@@ -619,6 +625,7 @@ async function assignPlaylistToScreen(
  * Main autopilot entry point: ensure combined playlist for location
  */
 export async function ensureCombinedPlaylistForLocation(locationId: string): Promise<CombinedPlaylistResult> {
+  if (LEGACY_DISABLED) throwLegacyError();
   const logs: string[] = [];
   logs.push(`[Autopilot] ═══════════════════════════════════════`);
   logs.push(`[Autopilot] Combined Playlist Mode voor ${locationId}`);
@@ -905,6 +912,7 @@ export function getBaselinePlaylistName(locationName: string): string {
  * IDEMPOTENT: Can be called multiple times safely
  */
 export async function ensureBaselineFromTemplate(locationId: string): Promise<BaselineSyncResult> {
+  if (LEGACY_DISABLED) throwLegacyError();
   const logs: string[] = [];
   logs.push(`[BaselineSync] ═══════════════════════════════════════`);
   logs.push(`[BaselineSync] Baseline-from-Template voor locatie ${locationId}`);
@@ -1238,6 +1246,7 @@ export async function getAutopilotConfigStatus(): Promise<{
   baseTemplateItemCount: number;
   configuredViaDatabaseOrEnv: "database" | "env" | "auto-discovered" | "not_set";
 }> {
+  if (LEGACY_DISABLED) throwLegacyError();
   // Check base playlist (for combined mode)
   const basePlaylistId = await getBasePlaylistId();
   

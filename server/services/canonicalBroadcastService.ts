@@ -34,9 +34,10 @@ const KNOWN_GOOD_DIR = "/tmp/evz-canonical";
 const KNOWN_GOOD_FILENAME = "evz_canonical_test.mp4";
 
 /**
- * Get the base template playlist ID from config or environment
+ * LEGACY DISABLED - Get the base template playlist ID from config or environment
  */
 export async function getBaseTemplatePlaylistId(): Promise<string | null> {
+  if (LEGACY_DISABLED) throwLegacyError();
   // 1. Check environment variable
   const envValue = process.env.YODECK_BASE_TEMPLATE_PLAYLIST_ID;
   if (envValue) {
@@ -72,6 +73,7 @@ export async function getBaseTemplatePlaylistId(): Promise<string | null> {
  * Set the base template playlist ID in database
  */
 export async function setBaseTemplatePlaylistId(playlistId: string): Promise<void> {
+  if (LEGACY_DISABLED) throwLegacyError();
   const existing = await db.select().from(systemSettings).where(eq(systemSettings.key, CONFIG_KEY_BASE_TEMPLATE));
   
   if (existing.length > 0) {
@@ -150,6 +152,7 @@ export async function clonePlaylistFromTemplate(
   templatePlaylistId: string,
   newName: string
 ): Promise<{ ok: boolean; playlistId: string | null; itemCount: number }> {
+  if (LEGACY_DISABLED) throwLegacyError();
   console.log(`${LOG_PREFIX} [CloneTemplate] Cloning from ${templatePlaylistId} as "${newName}"...`);
   
   // 1. Get template items
@@ -218,6 +221,7 @@ export async function ensureLocationCanonicalPlaylist(locationId: string): Promi
   created: boolean;
   itemCount: number;
 }> {
+  if (LEGACY_DISABLED) throwLegacyError();
   console.log(`${LOG_PREFIX} Ensuring canonical playlist for location ${locationId}...`);
   
   // 1. Get location
@@ -312,6 +316,7 @@ export async function setYodeckScreenSourceToPlaylist(
   yodeckScreenId: string,
   playlistId: string
 ): Promise<{ ok: boolean; verified: boolean }> {
+  if (LEGACY_DISABLED) throwLegacyError();
   console.log(`${LOG_PREFIX} [SetScreenSource] Setting screen ${yodeckScreenId} to playlist ${playlistId}...`);
   
   // 1. PATCH screen with playlist source
@@ -358,6 +363,7 @@ export async function ensureScreenBroadcast(screenId: string): Promise<{
   verified: boolean;
   error?: string;
 }> {
+  if (LEGACY_DISABLED) throwLegacyError();
   console.log(`${LOG_PREFIX} Ensuring broadcast for screen ${screenId}...`);
   
   // 1. Get screen with location
@@ -500,6 +506,7 @@ export async function runBroadcastWorker(): Promise<{
   screensFailed: number;
   errors: string[];
 }> {
+  if (LEGACY_DISABLED) throwLegacyError();
   console.log(`${LOG_PREFIX} [Worker] Running broadcast enforcement...`);
   
   const result = {
@@ -600,6 +607,7 @@ export interface RepairBroadcastResult {
  * Runs full enforcement cycle with detailed logging
  */
 export async function repairBroadcast(screenId: string): Promise<RepairBroadcastResult> {
+  if (LEGACY_DISABLED) throwLegacyError();
   const logs: string[] = [];
   
   logs.push(`[RepairBroadcast] Starting repair for screen ${screenId}`);
@@ -752,6 +760,7 @@ export async function addMediaToCanonicalPlaylist(
   yodeckMediaId: string,
   duration: number = 15
 ): Promise<{ ok: boolean; playlistId: string | null; error?: string }> {
+  if (LEGACY_DISABLED) throwLegacyError();
   console.log(`${LOG_PREFIX} Adding media ${yodeckMediaId} to location ${locationId}...`);
   
   // 1. Ensure location has canonical playlist
@@ -810,6 +819,7 @@ export async function publishApprovedVideoToLocations(
   failedCount: number;
   results: { locationId: string; ok: boolean; playlistId: string | null; error?: string }[];
 }> {
+  if (LEGACY_DISABLED) throwLegacyError();
   console.log(`${LOG_PREFIX} Publishing media ${yodeckMediaId} to ${targetLocationIds.length} locations...`);
   
   const results: { locationId: string; ok: boolean; playlistId: string | null; error?: string }[] = [];
