@@ -18226,6 +18226,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           screensIncluded: a.screensIncluded,
           assetStatus: a.assetStatus,
           yodeckMediaId: (a as any).yodeckMediaId,
+          yodeckMediaIdCanonical: (a as any).yodeckMediaIdCanonical,
         })),
         screens.map(s => ({
           id: s.id,

@@ -1911,6 +1911,7 @@ export async function publishApprovedAdsToScreens(options: {
   screensIncluded?: number | null;
   assetStatus?: string | null;
   yodeckMediaId?: number | null;
+  yodeckMediaIdCanonical?: number | null;
 }>, dbScreens: Array<{
   id: string;
   name: string;
@@ -1978,7 +1979,6 @@ export async function publishApprovedAdsToScreens(options: {
   // Process each advertiser
   for (const advertiser of targetAdvertisers) {
     const matches = matchesByAdvertiser.get(advertiser.id) || [];
-    if (matches.length === 0) continue;
     
     // Use targeting resolver to find correct screens
     const targeting = resolveTargetScreensForAdvertiser(
@@ -1988,38 +1988,45 @@ export async function publishApprovedAdsToScreens(options: {
     );
     
     if (targeting.resolvedScreens.length === 0) {
-      for (const match of matches) {
-        result.details.push({
-          advertiserId: advertiser.id,
-          advertiserName: advertiser.companyName || "Unknown",
-          mediaId: match.yodeckMediaId,
-          screenId: "none",
-          playlistId: "none",
-          action: "skipped",
-          reason: `NO_TARGET_SCREENS: ${targeting.skippedScreens.map(s => s.reason).join("; ")}`,
-        });
-        result.skipped++;
+      if (matches.length > 0) {
+        for (const match of matches) {
+          result.details.push({
+            advertiserId: advertiser.id,
+            advertiserName: advertiser.companyName || "Unknown",
+            mediaId: match.yodeckMediaId,
+            screenId: "none",
+            playlistId: "none",
+            action: "skipped",
+            reason: `NO_TARGET_SCREENS: ${targeting.skippedScreens.map(s => s.reason).join("; ")}`,
+          });
+          result.skipped++;
+        }
       }
       continue;
     }
     
-    // Deduplicate media - pick best from multiple uploads
-    const mediaIds = matches.map(m => m.yodeckMediaId);
-    let bestMediaId: number | null = null;
+    // PRIORITY 1: Use canonical media if available (from UploadJob system)
+    let bestMediaId: number | null = advertiser.yodeckMediaIdCanonical || null;
+    let mediaSource = "canonical";
     
-    if (mediaIds.length > 1) {
-      console.log(`[MediaGate] Multiple media found for ${advertiser.companyName}: ${mediaIds.join(", ")}`);
-      const pickResult = await pickBestMedia(mediaIds);
-      bestMediaId = pickResult.bestMediaId;
+    // PRIORITY 2: Fall back to media scan matches
+    if (!bestMediaId && matches.length > 0) {
+      const mediaIds = matches.map(m => m.yodeckMediaId);
+      mediaSource = "scan";
       
-      // Log skipped media
-      for (const r of pickResult.results) {
-        if (r.mediaId !== bestMediaId) {
-          console.log(`[MediaGate] Skipping media ${r.mediaId}: ${r.reason}`);
+      if (mediaIds.length > 1) {
+        console.log(`[MediaGate] Multiple media found for ${advertiser.companyName}: ${mediaIds.join(", ")}`);
+        const pickResult = await pickBestMedia(mediaIds);
+        bestMediaId = pickResult.bestMediaId;
+        
+        for (const r of pickResult.results) {
+          if (r.mediaId !== bestMediaId) {
+            console.log(`[MediaGate] Skipping media ${r.mediaId}: ${r.reason}`);
+          }
         }
+      } else {
+        bestMediaId = mediaIds[0];
       }
-    } else {
-      bestMediaId = mediaIds[0];
     }
     
     if (!bestMediaId) {
@@ -2030,11 +2037,13 @@ export async function publishApprovedAdsToScreens(options: {
         screenId: "none",
         playlistId: "none",
         action: "skipped",
-        reason: "NO_USABLE_MEDIA: All media items are processing/unfinished",
+        reason: "NO_MEDIA: No canonical or scanned media available",
       });
       result.skipped++;
       continue;
     }
+    
+    console.log(`[Publish] Using ${mediaSource} media ${bestMediaId} for ${advertiser.companyName}`);
     
     // Check media readiness before publishing
     const readiness = await checkMediaReadiness(bestMediaId);

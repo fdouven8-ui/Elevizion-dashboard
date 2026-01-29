@@ -218,6 +218,20 @@ export async function processUploadJob(job: UploadJob): Promise<{
   });
 
   try {
+    // Step 0: Pre-upload validation
+    const { quickValidate } = await import("./preUploadValidation");
+    const validation = quickValidate(job.localFileSize, "video/mp4");
+    if (!validation.valid) {
+      console.error(`[UploadWorker] Pre-upload validation failed: ${validation.error}`);
+      // Mark as permanent fail - file is invalid, no point retrying
+      await storage.updateUploadJob(job.id, {
+        status: UPLOAD_JOB_STATUS.PERMANENT_FAIL,
+        lastError: `PRE_VALIDATION_FAILED: ${validation.error}`,
+        lastErrorAt: new Date(),
+      });
+      return { success: false, error: `Pre-validation failed: ${validation.error}` };
+    }
+
     // Step 1: Get file from storage
     const { Client } = await import("@replit/object-storage");
     const client = new Client();
@@ -229,6 +243,16 @@ export async function processUploadJob(job: UploadJob): Promise<{
     
     const fileBuffer = Buffer.from(fileResult.value);
     console.log(`[UploadWorker] Read ${fileBuffer.length} bytes from ${job.localAssetPath}`);
+
+    // Verify actual file size matches expected
+    if (fileBuffer.length !== job.localFileSize) {
+      console.warn(`[UploadWorker] File size mismatch: expected=${job.localFileSize}, actual=${fileBuffer.length}`);
+    }
+    
+    // Additional validation: check actual file size
+    if (fileBuffer.length < 200 * 1024) {
+      throw new Error(`File too small: ${fileBuffer.length} bytes (min 200KB)`);
+    }
 
     // Step 2: Create Yodeck media and get presigned URL
     const createResult = await createYodeckMedia(job.yodeckMediaName || `Upload-${job.id}`);
