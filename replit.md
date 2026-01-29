@@ -1,7 +1,7 @@
 # Elevizion Dashboard
 
 ## Overview
-Elevizion Dashboard is an OPS-first internal operations control room designed for managing digital signage networks. Its core purpose is to ensure high screen uptime, efficient ad delivery, rapid onboarding of new locations, and streamlined automation. The system uses a unique `SCREEN_ID` (e.g., EVZ-001) as the primary identifier for all operations. Key capabilities include real-time screen monitoring, comprehensive advertiser and ad creative management, intuitive quick onboarding wizards, and flexible automation rules. The project aims to provide immediate answers to critical operational questions through a simplified, Dutch-language interface, enhancing efficiency and operational control.
+Elevizion Dashboard is an OPS-first internal operations control room for managing digital signage networks. Its primary goal is to ensure high screen uptime, efficient ad delivery, rapid location onboarding, and streamlined automation using a unique `SCREEN_ID`. Key capabilities include real-time screen monitoring, comprehensive advertiser and ad creative management, intuitive onboarding wizards, and flexible automation rules. The project aims to provide immediate answers to critical operational questions through a simplified, Dutch-language interface, enhancing efficiency and operational control.
 
 ## User Preferences
 - Preferred communication style: Simple, everyday language.
@@ -10,131 +10,40 @@ Elevizion Dashboard is an OPS-first internal operations control room designed fo
 ## System Architecture
 
 ### Frontend
-The frontend is built with React 18 and TypeScript, using Vite for a fast development experience. Wouter handles routing, and TanStack React Query manages state. UI components are developed using shadcn/ui (based on Radix UI primitives) and styled with Tailwind CSS v4, leveraging CSS variables for theming. Forms are managed with React Hook Form, incorporating Zod for validation. The UI/UX follows a pages-based structure with a consistent sidebar and breadcrumb navigation. It features KPI tiles, dedicated modules for screens, ads, advertisers, settings, and finance, alongside quick-create onboarding flows accessible via public portals with token-based authentication.
+The frontend is built with React 18, TypeScript, and Vite. It uses Wouter for routing, TanStack React Query for state management, and shadcn/ui (Radix UI + Tailwind CSS v4) for UI components. Forms are handled with React Hook Form and Zod validation. The UI/UX features a pages-based structure with consistent navigation, KPI tiles, and modules for screens, ads, advertisers, settings, and finance. Quick-create onboarding flows are accessible via public portals with token-based authentication.
 
 ### Backend
-The backend is an Express.js application written in TypeScript, providing a RESTful API (`/api/*`). It utilizes a centralized `storage.ts` for database abstraction and PostgreSQL with Drizzle ORM for data persistence. Zod schemas, generated from Drizzle, are used for data validation. The architecture emphasizes a thin controller layer, with business logic primarily residing within the storage service.
-
-### Data Model
-Core entities include: a unified `entities` table for Advertisers and Screens, Sites, Advertisers, PackagePlans, Contracts, Placements, ScheduleSnapshots, Invoices/Payments, and Payouts/CarryOvers.
+The backend is an Express.js application written in TypeScript, providing a RESTful API. It uses a centralized `storage.ts` for database abstraction and PostgreSQL with Drizzle ORM for data persistence. Zod schemas are used for data validation, with business logic primarily residing within the storage service.
 
 ### Authentication & Authorization
-Authentication uses a username/password system with bcrypt hashing. Session data is stored in PostgreSQL via `connect-pg-simple`. User access is controlled by five predefined roles with hierarchical access levels enforced by `requireRole()` middleware.
+Authentication uses username/password with bcrypt hashing and session data stored in PostgreSQL. User access is controlled by five predefined roles enforced by `requireRole()` middleware.
 
 ### System Design Choices
-The system integrates various advanced functionalities:
-- **Statistics & Content Management**: Backend services with caching for Yodeck statistics and a centralized `YodeckClient` with robust retry, pagination, rate limiting, and TTL-based caching.
-- **Screenshot Analysis**: Perceptual Hashing (pHash) is used for detecting empty screens and matching content.
-- **Operational Prioritization**: The control room prioritizes alerts such as `offline_screen`, `onboarding_hint`, `unmanaged_content`, and `paused_placement`.
-- **Caching**: Server-side in-memory TTL caching (10 seconds) is applied to control room statistics.
-- **Yodeck Media Management**: Manages the lifecycle of media items within Yodeck.
-- **Integration Outbox Pattern**: Ensures transactional consistency for external APIs using an `integration_outbox` table, idempotency keys, and a background worker.
+- **Centralized `SCREEN_ID`**: Primary identifier for all operations.
+- **Yodeck Integration**: Backend services with caching for Yodeck statistics, a robust `YodeckClient` with retry and rate limiting, and Yodeck media management.
+- **Screenshot Analysis**: Uses Perceptual Hashing (pHash) for detecting empty screens and content matching.
+- **Operational Prioritization**: Alerts for `offline_screen`, `onboarding_hint`, `unmanaged_content`, and `paused_placement`.
+- **Integration Outbox Pattern**: Ensures transactional consistency for external APIs.
 - **Contract Signing**: Internal OTP-based digital contract signing with audit trails and HTML-to-PDF generation.
-- **Lead & Location Management**: Tracks lead workflows, manages a 2-phase, 9-state location onboarding process with dual tokens, and maintains a centralized company profile system.
-- **Revenue Allocation**: A revenue allocation engine calculates weighted screen-days for location payouts, including minimum thresholds and carry-over mechanisms.
-- **Communication & Logging**: Database-driven template management for dynamic communications and comprehensive logging of all outgoing emails via Postmark.
-- **System Health**: A dedicated admin page (`/system-health`) provides comprehensive health checks, including configuration validation and test actions.
-- **Unified Availability Service**: Manages a count-based capacity system (`MAX_ADS_PER_SCREEN=20`) to ensure accurate screen availability and prevent overselling, using `active` and `readyForAds` locations.
-- **City-Based Targeting**: Enables dynamic region selection based on actual location cities.
-- **Waitlist System**: Allows advertisers to join a waitlist when capacity is unavailable, featuring a background watcher, 48-hour claim tokens, and cross-device claim flows.
-- **Ad Publishing Workflow**: Includes video upload portals with token-based authentication, validation, object storage integration, auto-renaming, and transcoding. An admin review workflow (`/video-review`) mandates approval, triggers automatic placement plan creation, and sends notifications.
-- **Combined Playlist Architecture** (NEW - replaces layout-based system): Each location gets ONE combined playlist named "Elevizion | Loop | {LocationName}" containing:
-  - Base items from configured base playlist (news/weather apps)
-  - Advertisements interleaved with base items
-  - Automatic fallback video if no ads available
-  - Screen content set directly to this playlist (no layouts needed)
-- **Combined Playlist Service** (`combinedPlaylistService.ts`):
-  - `ensureCombinedPlaylistForLocation()` - Main autopilot entry point
-  - `getBasePlaylistItems()` - Fetches items from configured base playlist
-  - `getAdsForLocation()` - Gets approved ads via placement→contract→advertiser chain
-  - `buildCombinedItems()` - Interleaves base items with ads (pattern: base, base, ad, ...)
-  - Deduplication strategy: searches by name, uses lowest ID as canonical
-  - Stores `combinedPlaylistId` in locations table for reuse
-- **Autopilot Worker** (Combined Playlist Mode):
-  - Runs every 5 minutes checking all live locations
-  - Syncs combined playlist items via PATCH /playlists/{id}/
-  - Assigns playlist to screen via PATCH /screens/{id}/ with screen_content
-- **Admin Endpoints**:
-  - `GET /api/admin/autopilot/combined-config` - Get base playlist ID
-  - `POST /api/admin/autopilot/combined-config` - Set base playlist ID
-  - `POST /api/admin/autopilot/repair/:locationId` - Force sync location
-  - `GET /api/admin/locations/:id/content-status` - Get content status
-- **Yodeck Screen Mapper**: `yodeckScreenMapper.ts` acts as a central interpreter for Yodeck screen status, handling various API field formats with robust fallbacks.
-- **Canonical Screen Status Model**: `CanonicalScreenStatus` in `shared/schema.ts` defines a standardized live screen state from the Yodeck API, accessible via `/api/admin/canonical-screens`.
-- **Unified Screen Hook**: `useCanonicalScreens` in the frontend provides a single source of truth for live Yodeck screen data, supporting various operations and compliance checks.
-- **Screen Content Operations**: Distinct paths for screen content assignment: `Layout Mode` (2-zone layouts) and `Playlist Mode` (single playlist), adhering to a "FAIL FAST" principle.
-- **Canonical Playlist Management**: `yodeckCanonicalService.ts` provides the single control path for screen content operations, featuring a new architecture for layout-based baseline content, `ensureCanonicalSetupForLocation()`, and robust ad linking pipelines.
-- **ELEVIZION_LAYOUT_SPEC**: Defines deterministic layout dimensions and provides helper functions for building and verifying Yodeck layout payloads.
-- **Feature Flags**: Control legacy cleanup and logging for non-canonical data.
-- **Force Repair + Proof System** (`screenPlaylistService.ts`): Production-grade E2E playback enforcement with visual verification:
-  - `ensureScreenPlaysPlaylist()` - Enforces PLAYLIST mode via Yodeck screen_content (source of truth)
-  - `syncScreenCombinedPlaylist()` - Fills active playlist with baseline items + optional ads
-  - `refreshScreenPlayback()` - Forces player sync (API restart or content reassignment fallback)
-  - `fetchScreenshotProof()` - Screenshot verification with NO CONTENT detection via size heuristics (<3KB threshold)
-  - `forceRepairAndProof()` - Complete E2E cycle with 6-poll backoff (5s, 5s, 10s, 10s, 15s, 15s)
-  - Returns complete diagnostics: proofStatus, pollAttempts, refreshMethodUsed, detectedNoContent flag
-  - Endpoint: `POST /api/screens/:id/force-repair-proof`
-- **Canonical Broadcast Service** (`canonicalBroadcastService.ts`): SINGLE SOURCE OF TRUTH for all broadcast operations:
-  - **Architecture**: Each location has ONE canonical playlist (`location.yodeckPlaylistId`). No layouts, no schedules, no tags.
-  - **Template Cloning**: New locations clone from `YODECK_BASE_TEMPLATE_PLAYLIST_ID` (env/DB config)
-  - Key functions:
-    - `ensureLocationCanonicalPlaylist(locationId)` - Create/verify canonical playlist
-    - `setYodeckScreenSourceToPlaylist(screenId, playlistId)` - Assign screen to playlist
-    - `ensureScreenBroadcast(screenId)` - Full workflow: ensure playlist + assign screen
-    - `addMediaToCanonicalPlaylist(locationId, mediaId)` - Add approved ad to location playlist
-    - `repairBroadcast(screenId)` - Full repair with detailed logging
-    - `runBroadcastWorker()` - 5-minute worker for all active screens
-  - Endpoints:
-    - `POST /api/admin/screens/:id/canonical-repair` - Repair single screen
-    - `GET/POST /api/admin/canonical-broadcast/config` - Template config
-    - `POST /api/admin/canonical-broadcast/run-worker` - Manual worker trigger
-- **Broadcast Enforcer** (`screenPlaylistService.ts`): Now delegates to canonical service:
-  - `POST /api/admin/screens/:id/force-broadcast` → redirects to `repairBroadcast()` from canonicalBroadcastService
-  - Uses `yodeckPlaylistId` as SINGLE SOURCE OF TRUTH
-  - UI: "Forceer uitzending (fix)" button in ScreenDetail page
-- **Approval → Canonical Publish Integration** (`adAssetUploadService.ts`):
-  - `approveAsset()` calls `publishApprovedVideoToLocations()` from canonicalBroadcastService
-  - Approved videos are automatically added to location canonical playlists
-- **Legacy Route Deprecation** (410 Gone):
-  - All `/api/admin/layouts/*` routes return 410 LEGACY_LAYOUT_SYSTEM_DISABLED
-  - All `/api/admin/autopilot/*` baseline/combined/layout routes return 410
-  - Legacy systems replaced by canonical playlist architecture
-- **Playlist-Only Guard** (`playlistOnlyGuard.ts`): ENFORCES 100% playlist mode:
-  - **Hard Requirement**: No screen may EVER have `source_type="layout"`
-  - `checkAndRevertLayoutMode(screenId)` - Detect layout and auto-revert to playlist
-  - `runPlaylistGuardForAllScreens()` - Check all screens and revert any layouts
-  - `ensurePlaylistMode(screenId, playlistId)` - Force screen to playlist mode
-  - Auto-push after reversion via `POST /screens/:id/push/`
-  - Audit logging: `LAYOUT_DETECTED_AND_REMOVED` events
-  - Endpoints:
-    - `POST /api/admin/playlist-guard/run` - Check all screens
-    - `POST /api/admin/playlist-guard/check/:screenId` - Check single screen
-    - `POST /api/admin/playlist-guard/ensure-playlist/:screenId` - Force playlist mode
-- **Screen-Location Repair** (mapping diagnostics):
-  - `GET /api/admin/repair/screen-location` - Diagnose mapping issues
-  - `POST /api/admin/repair/screen-location/:screenId` - Fix mapping
-  - Detects: NO_LOCATION, ORPHANED, MULTI_SCREEN_CONFLICT, NAME_MISMATCH
-  - Blocks publishing when critical mapping issues detected
-- **Ad Targeting Service** (`adTargetingService.ts`):
-  - Strict scoring: CITY_MATCH=100, PARTIAL_CITY=50, REGION_MATCH=25
-  - Package limits enforced: SINGLE=1, TRIPLE=3, TEN=10
-  - Sort by score (highest first) then name (stable)
-  - `resolveTargetScreensForAdvertiser()` - Main targeting resolver
-  - `checkMediaReadiness()` - Verify media is ready for publishing
-- **Upload Worker Service** (`uploadWorkerService.ts`):
-  - Two-step upload: Create media → Presigned PUT → Poll verification
-  - Retry policy: 5 attempts with exponential backoff (1m, 5m, 15m, 1h, 6h)
-  - Pre-upload validation: min 200KB file size
-  - Canonical media: `yodeckMediaIdCanonical` updated on successful upload
-  - Status tracking: QUEUED → UPLOADING → POLLING → READY/PERMANENT_FAIL
+- **Lead & Location Management**: Tracks lead workflows and a 2-phase, 9-state location onboarding process.
+- **Revenue Allocation**: Engine for calculating weighted screen-days for location payouts.
+- **Communication & Logging**: Database-driven template management and comprehensive email logging via Postmark.
+- **System Health**: Dedicated admin page (`/system-health`) for comprehensive health checks.
+- **Unified Availability Service**: Manages capacity (`MAX_ADS_PER_SCREEN`) to prevent overselling.
+- **Ad Publishing Workflow**: Includes video upload portals, validation, object storage integration, transcoding, and an admin review workflow for approval.
+- **Combined Playlist Architecture**: Each location gets ONE combined playlist ("Elevizion | Loop | {LocationName}") containing base items and interleaved advertisements, with an automatic fallback video. This replaces previous layout-based systems.
+- **Canonical Broadcast Service**: Acts as the single source of truth for all broadcast operations, ensuring each location has one canonical playlist (`location.yodeckPlaylistId`) and managing screen assignments and media additions.
+- **Playlist-Only Guard**: Enforces 100% playlist mode; no screen is allowed to have `source_type="layout"`. Detects and auto-reverts layout modes to playlist.
+- **Production Broadcast Engine**: A safety-first publish pipeline with eligibility gates for screens, media verification, and a robust fallback system to prevent black screens. It includes a `selfHealPlaylist()` function and a `publishWithVerifyAndHeal` flow.
+- **Upload Worker Service**: Handles a two-step upload process with retries and validation, tracking media status.
 
 ## External Dependencies
 
 ### Database
-- **PostgreSQL**: The primary relational database.
-- **Drizzle ORM**: Used for type-safe interaction with PostgreSQL.
+- **PostgreSQL**: Primary relational database.
+- **Drizzle ORM**: For type-safe database interaction.
 
 ### External Service Integrations
-- **Yodeck API**: Integrates for managing digital signage players, screen synchronization, and content resolution.
-- **Moneybird**: Used for accounting, invoicing, contact synchronization, and SEPA Direct Debit functionalities.
-- **Postmark**: Utilized as the email service provider for transactional emails and deliverability monitoring.
+- **Yodeck API**: Manages digital signage players, screen synchronization, and content.
+- **Moneybird**: For accounting, invoicing, contact synchronization, and SEPA Direct Debit.
+- **Postmark**: Email service provider for transactional emails.
