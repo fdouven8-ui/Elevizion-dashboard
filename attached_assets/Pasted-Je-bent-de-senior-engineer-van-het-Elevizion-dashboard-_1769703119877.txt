@@ -1,0 +1,87 @@
+Je bent de senior engineer van het Elevizion dashboard. DOEL: het hele end-to-end proces moet betrouwbaar werken: screen ↔ locatie linking, playlist building, ads publiceren, playback verificatie en self-healing bij black screen/stale devices. Geen layout-mode meer gebruiken, alleen SCREEN_PLAYLIST_ONLY.
+
+CONTEXT (harde feiten uit logs):
+- CONTENT_PIPELINE_MODE = SCREEN_PLAYLIST_ONLY
+- Beide Yodeck screens hebben playlists:
+  - 591896 -> playlist 30532596
+  - 591895 -> playlist 30532597
+- In /api/screens staat BUG: beide screens hebben locationId = 3321f9c7... (Bouwservice Douven). Dit veroorzaakt dat beide schermen dezelfde ads/content krijgen.
+- Devices tonen zwart beeld. lastSeenAt is oud (2025) en lastScreenshotAt=null, dus we missen betrouwbare “player is echt aan het afspelen” signalen.
+- Playlist bevat duplicate ad media IDs (29378800 en 29408113) met dezelfde naam; mogelijk is één invalid/corrupt waardoor playback zwart wordt.
+
+WAT JE MOET BOUWEN (zonder regressies):
+
+A) VERWIJDER / BLOKKEER LAYOUT-MODE COMPLEET
+1) Zoek en verwijder alle codepaden die screen naar source_type=layout zetten (ForceLayout/ForceReset etc).
+2) Voeg een guard toe: als CONTENT_PIPELINE_MODE=SCREEN_PLAYLIST_ONLY dan is elke poging om layout toe te wijzen een ERROR + log “LAYOUT_BLOCKED_BY_PIPELINE_MODE”.
+3) Database: zet voor locations layoutMode standaard op PLAYLIST (of equivalent) en negeer yodeckLayoutId in playlist-only mode.
+
+B) FIX SCREEN ↔ LOCATIE LINKING (DIT IS PRIORITEIT #1)
+1) Maak een admin “Screen Linking” repair die garandeert:
+   - Een yodeckDeviceId/screenId kan maar aan 1 locationId gekoppeld zijn.
+   - Een location kan meerdere screens hebben, maar ieder screen hoort bij precies één location.
+2) Voeg database constraint/logic toe (app-level als DB lastig):
+   - Bij het linken: unlink automatisch van oude locatie (met audit log).
+3) Bouw endpoint:
+   POST /api/admin/screens/:screenDbId/link-to-location
+   body: { locationId }
+   -> voert unlink oude locatie uit, linkt naar nieuwe, sync’d yodeck mapping, en triggert playlist rebuild+push.
+4) Data repair script:
+   - Detecteer screens die dezelfde locationId delen maar verschillende yodeckDeviceId hebben en screenName niet matcht.
+   - Zet Basil’s screen (591895) op een eigen locatie record (Maasbracht) of laat admin kiezen; maar voorkom dat hij nog aan Bouwservice Douven hangt.
+   - Log een duidelijke waarschuwing “SCREEN_LOCATION_MISMATCH_FIXED”.
+
+C) ROBUUST PLAYLIST BUILDER (NOOIT ZWARTE PLAYLIST / NOOIT INVALID MEDIA)
+1) Bouw functie buildScreenPlaylist(locationId, screenId):
+   - Baseline items altijd eerst (nieuws/weer/1Limburg of jouw baseline set).
+   - Ads daarna op basis van targeting resolver.
+2) Media gate per item (BELANGRIJK):
+   - Voor elk yodeckMediaId dat je in playlist zet: fetch /api/v2/media/{id} status.
+   - Alleen toelaten als:
+     - status is Live/Ready (niet processing/failed/uploading)
+     - fileSize >= 200KB
+     - duration aanwezig en > 0
+   - Als invalid:
+     - verwijder uit playlist plan
+     - markeer advertiser assetStatus = NEEDS_REUPLOAD (met reden)
+     - als er een uploadJob systeem is: enqueue nieuwe uploadJob (optioneel) of geef actie “reupload required”.
+3) Dedup:
+   - Als dezelfde ad media naam of dezelfde linkKey meerdere keren voorkomt, kies 1 canonical (voorkeur: yodeckMediaIdCanonical als die bestaat; anders grootste fileSize/nieuwste).
+4) Push + verify:
+   - Na playlist update: call Yodeck push endpoint.
+   - Verify door screen content opnieuw op te halen en te checken dat source_type=playlist en source_id=expectedPlaylistId.
+
+D) BLACK SCREEN / STALE DEVICE WATCHDOG (SELF-HEAL)
+1) Bouw “Playback Health” model:
+   - deviceLastSeenAt (from Yodeck)
+   - lastScreenshotAt/lastScreenshotByteSize
+   - lastVerifiedAt
+   - nowPlayingOk (mismatch false + itemCount > 0)
+2) Detecteer “stale”:
+   - Als lastSeenAt ouder dan 15 min -> status STALE (ook al zegt Yodeck online).
+3) Detecteer “black screen risk”:
+   - Als screenshotUrl bestaat maar download faalt/0 bytes -> markeer SCREEN_RENDER_FAIL.
+   - Als itemCount > 0 maar screenshot blijft null/0 bytes na push -> markeer POSSIBLE_BLACK_SCREEN.
+4) Self-heal acties (in volgorde):
+   - Re-push playlist
+   - Rebuild playlist zonder ads (alleen baseline) en push (kijken of beeld terugkomt)
+   - Als baseline werkt: ads één-voor-één toevoegen (binary search) om corrupte ad te vinden; log welke mediaId de black screen triggert en block die media.
+5) Maak endpoint:
+   POST /api/admin/screens/:screenDbId/repair
+   -> voert bovenstaande self-heal flow uit en retourneert een gedetailleerd rapport (steps, actions, final state).
+
+E) UI FIXES (zodat jij direct ziet wat er mis is)
+1) In Screen detail:
+   - Toon: linked locationId + locationName, en maak “Fix linking” knop zichtbaar als screenName niet matcht locatie.
+   - Toon: lastSeenAt, lastScreenshotAt, screenshotByteSize, en status badges: ONLINE / STALE / RENDER_FAIL.
+2) In Content tab:
+   - Toon per item: mediaId + readiness (Live, fileSize, duration) en “blocked reason”.
+
+ACCEPTANCE CRITERIA (moet je testen):
+1) Basil’s screen (591895) kan niet meer dezelfde locationId hebben als Bouwservice Douven tenzij admin dat expliciet doet.
+2) Als een ad file corrupt/invalid is, wordt hij AUTOMATISCH geblokkeerd en kan hij geen black screen meer veroorzaken.
+3) Als device stale is (lastSeenAt oud), UI toont STALE en repair probeert te repushen maar meldt eerlijk dat device niet checkt-in.
+4) Na repair op Bouwservice Douven screen zie ik een niet-zwarte screenshot of minimaal een duidelijke render status + welke media blocked is.
+
+Belangrijk: houd alles backward compatible, maar layout-mode mag niet meer gebruikt worden in SCREEN_PLAYLIST_ONLY.
+Log alles met duidelijke tags zodat Frank het kan volgen.

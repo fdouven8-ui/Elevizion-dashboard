@@ -19155,6 +19155,98 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // SCREEN LINKING & REPAIR ROUTES
+  // ============================================================================
+
+  /**
+   * POST /api/admin/screens/:screenDbId/link-to-location
+   * Link a screen to a location (exclusive 1:1 mapping)
+   */
+  app.post("/api/admin/screens/:screenDbId/link-to-location", requireAdminAccess, async (req, res) => {
+    try {
+      const { linkScreenToLocation } = await import("./services/productionBroadcast");
+      const { locationId, forceExclusive } = req.body;
+      
+      if (!locationId) {
+        return res.status(400).json({ ok: false, error: "locationId required" });
+      }
+      
+      const result = await linkScreenToLocation(req.params.screenDbId, locationId, forceExclusive === true);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[LinkScreen] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/:screenDbId/repair
+   * Full repair flow: dedup, verify media, remove broken, push, verify
+   */
+  app.post("/api/admin/screens/:screenDbId/repair", requireAdminAccess, async (req, res) => {
+    try {
+      const { repairScreen } = await import("./services/productionBroadcast");
+      const result = await repairScreen(req.params.screenDbId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[RepairScreen] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/screens/:screenDbId/playback-health
+   * Get playback health status for a screen
+   */
+  app.get("/api/admin/screens/:screenDbId/playback-health", requireAdminAccess, async (req, res) => {
+    try {
+      const { getPlaybackHealth } = await import("./services/productionBroadcast");
+      const result = await getPlaybackHealth(req.params.screenDbId);
+      
+      if (!result) {
+        return res.status(404).json({ ok: false, error: "Screen not found" });
+      }
+      
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      console.error("[PlaybackHealth] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/playlists/:playlistId/duplicates
+   * Find duplicate media in a playlist
+   */
+  app.get("/api/admin/playlists/:playlistId/duplicates", requireAdminAccess, async (req, res) => {
+    try {
+      const { findPlaylistDuplicates } = await import("./services/productionBroadcast");
+      const playlistId = parseInt(req.params.playlistId, 10);
+      const result = await findPlaylistDuplicates(playlistId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[FindDuplicates] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/playlists/:playlistId/deduplicate
+   * Remove duplicate media from a playlist
+   */
+  app.post("/api/admin/playlists/:playlistId/deduplicate", requireAdminAccess, async (req, res) => {
+    try {
+      const { deduplicatePlaylist } = await import("./services/productionBroadcast");
+      const playlistId = parseInt(req.params.playlistId, 10);
+      const result = await deduplicatePlaylist(playlistId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Deduplicate] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
   // LEGACY LAYOUT ROUTES - BLOCKED (410 Gone)
   // ============================================================================
 

@@ -945,3 +945,370 @@ export async function getScreenRenderability(screenId: string): Promise<Renderab
   const playlistId = parseInt(screen.playlistId, 10);
   return verifyPlaylistRenderability(playlistId);
 }
+
+// ============================================================================
+// SCREEN LINKING - Exclusive 1:1 screen-location mapping
+// ============================================================================
+
+export interface ScreenLinkResult {
+  success: boolean;
+  screenId: string;
+  newLocationId: string;
+  previousLocationId: string | null;
+  unlinkedFromOther: boolean;
+  playlistRebuilt: boolean;
+  pushed: boolean;
+  logs: string[];
+}
+
+export async function linkScreenToLocation(screenDbId: string, newLocationId: string, forceExclusive: boolean = false): Promise<ScreenLinkResult> {
+  const logs: string[] = [];
+  const screen = await storage.getScreen(screenDbId);
+  
+  if (!screen) {
+    logs.push(`[ERROR] Screen ${screenDbId} not found`);
+    return { success: false, screenId: screenDbId, newLocationId, previousLocationId: null, unlinkedFromOther: false, playlistRebuilt: false, pushed: false, logs };
+  }
+  
+  const previousLocationId = screen.locationId;
+  logs.push(`[LINK] screen=${screenDbId} previousLocation=${previousLocationId || "none"} newLocation=${newLocationId}`);
+  
+  if (previousLocationId && previousLocationId !== newLocationId) {
+    logs.push(`[UNLINK] Removing screen from previous location ${previousLocationId}`);
+  }
+  
+  const location = await storage.getLocation(newLocationId);
+  const isMultiScreen = location?.isMultiScreenLocation === true;
+  
+  const otherScreens = await storage.getScreens();
+  const conflictingScreens = otherScreens.filter(s => 
+    s.id !== screenDbId && 
+    s.locationId === newLocationId
+  );
+  
+  if (conflictingScreens.length > 0 && !isMultiScreen) {
+    if (forceExclusive) {
+      for (const conflicting of conflictingScreens) {
+        await storage.updateScreen(conflicting.id, { locationId: null });
+        logs.push(`[UNLINK_CONFLICT] Screen ${conflicting.id} (${conflicting.name}) unlinked from location ${newLocationId} (exclusive mode)`);
+      }
+    } else {
+      logs.push(`[ERROR] Location ${newLocationId} already has ${conflictingScreens.length} screens. Use forceExclusive=true to unlink them.`);
+      return { success: false, screenId: screenDbId, newLocationId, previousLocationId, unlinkedFromOther: false, playlistRebuilt: false, pushed: false, logs };
+    }
+  }
+  
+  await storage.updateScreen(screenDbId, { locationId: newLocationId });
+  logs.push(`[LINK] Screen ${screenDbId} now linked to location ${newLocationId}`);
+  
+  if (isMultiScreen && conflictingScreens.length > 0) {
+    logs.push(`[INFO] Location ${newLocationId} is multi-screen - ${conflictingScreens.length} other screens allowed`);
+  }
+  
+  if (screen.playlistId) {
+    const playlistId = parseInt(screen.playlistId, 10);
+    const baseline = await getBaselineMediaIds();
+    
+    if (baseline.ok) {
+      const updateResult = await updatePlaylistItems(playlistId, baseline.mediaIds);
+      if (updateResult.ok) {
+        logs.push(`[REBUILD] Playlist ${playlistId} rebuilt with baseline items`);
+        
+        const yodeckScreenId = parseInt(screen.yodeckPlayerId || "0", 10);
+        if (yodeckScreenId > 0) {
+          const pushResult = await pushScreen(yodeckScreenId);
+          if (pushResult.ok) {
+            logs.push(`[PUSH] Screen pushed successfully`);
+            return { success: true, screenId: screenDbId, newLocationId, previousLocationId, unlinkedFromOther: !!previousLocationId, playlistRebuilt: true, pushed: true, logs };
+          }
+        }
+        return { success: true, screenId: screenDbId, newLocationId, previousLocationId, unlinkedFromOther: !!previousLocationId, playlistRebuilt: true, pushed: false, logs };
+      }
+    }
+  }
+  
+  return { success: true, screenId: screenDbId, newLocationId, previousLocationId, unlinkedFromOther: !!previousLocationId, playlistRebuilt: false, pushed: false, logs };
+}
+
+// ============================================================================
+// MEDIA DEDUPLICATION - Find and resolve duplicate media in playlists
+// ============================================================================
+
+export interface MediaDuplicateInfo {
+  name: string;
+  mediaIds: number[];
+  canonicalId: number;
+  duplicateIds: number[];
+  reason: string;
+}
+
+export async function findPlaylistDuplicates(playlistId: number): Promise<{ ok: boolean; duplicates: MediaDuplicateInfo[]; error?: string }> {
+  const itemsResult = await getPlaylistItems(playlistId);
+  if (!itemsResult.ok) {
+    return { ok: false, duplicates: [], error: itemsResult.error };
+  }
+  
+  const mediaDetails: Map<number, { name: string; fileSize: number; duration: number | null; status: string }> = new Map();
+  
+  for (const mediaId of itemsResult.items) {
+    const verifyResult = await verifyMedia(mediaId);
+    mediaDetails.set(mediaId, {
+      name: verifyResult.reason.includes("App") ? `App-${mediaId}` : `Media-${mediaId}`,
+      fileSize: verifyResult.fileSize,
+      duration: verifyResult.duration,
+      status: verifyResult.yodeckStatus,
+    });
+  }
+  
+  const result = await yodeckFetch("GET", `/playlists/${playlistId}/`);
+  if (result.ok && result.data?.items) {
+    for (const item of result.data.items) {
+      const id = typeof item === "number" ? item : item.id;
+      const name = typeof item === "object" ? item.name : null;
+      if (id && name && mediaDetails.has(id)) {
+        const existing = mediaDetails.get(id)!;
+        mediaDetails.set(id, { ...existing, name });
+      }
+    }
+  }
+  
+  const byName: Map<string, number[]> = new Map();
+  for (const [mediaId, info] of mediaDetails) {
+    const normalizedName = info.name.toLowerCase().trim();
+    if (!byName.has(normalizedName)) {
+      byName.set(normalizedName, []);
+    }
+    byName.get(normalizedName)!.push(mediaId);
+  }
+  
+  const duplicates: MediaDuplicateInfo[] = [];
+  for (const [name, mediaIds] of byName) {
+    if (mediaIds.length > 1) {
+      const sorted = mediaIds.sort((a, b) => {
+        const infoA = mediaDetails.get(a)!;
+        const infoB = mediaDetails.get(b)!;
+        if (infoB.fileSize !== infoA.fileSize) return infoB.fileSize - infoA.fileSize;
+        return b - a;
+      });
+      
+      const canonicalId = sorted[0];
+      const duplicateIds = sorted.slice(1);
+      
+      duplicates.push({
+        name,
+        mediaIds,
+        canonicalId,
+        duplicateIds,
+        reason: `Keep ${canonicalId} (largest fileSize or newest), remove ${duplicateIds.join(", ")}`,
+      });
+    }
+  }
+  
+  console.log(`[DEDUP] playlist=${playlistId} foundDuplicates=${duplicates.length}`);
+  return { ok: true, duplicates };
+}
+
+export async function deduplicatePlaylist(playlistId: number): Promise<{ ok: boolean; removed: number[]; error?: string }> {
+  const dupResult = await findPlaylistDuplicates(playlistId);
+  if (!dupResult.ok) {
+    return { ok: false, removed: [], error: dupResult.error };
+  }
+  
+  if (dupResult.duplicates.length === 0) {
+    return { ok: true, removed: [] };
+  }
+  
+  const itemsResult = await getPlaylistItems(playlistId);
+  if (!itemsResult.ok) {
+    return { ok: false, removed: [], error: itemsResult.error };
+  }
+  
+  const toRemove = new Set<number>();
+  for (const dup of dupResult.duplicates) {
+    for (const id of dup.duplicateIds) {
+      toRemove.add(id);
+    }
+  }
+  
+  const newItems = itemsResult.items.filter(id => !toRemove.has(id));
+  
+  if (newItems.length === 0) {
+    return { ok: false, removed: [], error: "Cannot remove all items - would cause black screen" };
+  }
+  
+  const updateResult = await updatePlaylistItems(playlistId, newItems);
+  if (!updateResult.ok) {
+    return { ok: false, removed: [], error: updateResult.error };
+  }
+  
+  console.log(`[DEDUP] playlist=${playlistId} removed=${Array.from(toRemove).join(",")}`);
+  return { ok: true, removed: Array.from(toRemove) };
+}
+
+// ============================================================================
+// PLAYBACK HEALTH & STALE DEVICE WATCHDOG
+// ============================================================================
+
+export interface PlaybackHealth {
+  screenId: string;
+  yodeckScreenId: number;
+  lastSeenAt: Date | null;
+  lastScreenshotAt: Date | null;
+  screenshotByteSize: number | null;
+  playlistId: number | null;
+  itemCount: number;
+  isStale: boolean;
+  staleSince: Date | null;
+  hasScreenshot: boolean;
+  screenshotFailed: boolean;
+  possibleBlackScreen: boolean;
+  status: "HEALTHY" | "STALE" | "SCREEN_RENDER_FAIL" | "POSSIBLE_BLACK_SCREEN" | "NO_CONTENT";
+}
+
+const STALE_THRESHOLD_MS = 15 * 60 * 1000;
+
+export async function getPlaybackHealth(screenDbId: string): Promise<PlaybackHealth | null> {
+  const screen = await storage.getScreen(screenDbId);
+  if (!screen) return null;
+  
+  const yodeckScreenId = parseInt(screen.yodeckPlayerId || "0", 10);
+  const playlistId = screen.playlistId ? parseInt(screen.playlistId, 10) : null;
+  const lastSeenAt = screen.lastSeenAt ? new Date(screen.lastSeenAt) : null;
+  const lastScreenshotAt = screen.yodeckScreenshotLastOkAt ? new Date(screen.yodeckScreenshotLastOkAt) : null;
+  const screenshotByteSize = screen.yodeckScreenshotByteSize || null;
+  
+  const now = Date.now();
+  const isStale = lastSeenAt ? (now - lastSeenAt.getTime()) > STALE_THRESHOLD_MS : true;
+  const staleSince = isStale && lastSeenAt ? lastSeenAt : null;
+  
+  const hasScreenshot = !!screen.yodeckScreenshotUrl;
+  const screenshotFailed = hasScreenshot && (!screenshotByteSize || screenshotByteSize < 100);
+  
+  let itemCount = 0;
+  if (playlistId) {
+    const itemsResult = await getPlaylistItems(playlistId);
+    if (itemsResult.ok) {
+      itemCount = itemsResult.items.length;
+    }
+  }
+  
+  const possibleBlackScreen = itemCount > 0 && screenshotFailed;
+  
+  let status: PlaybackHealth["status"] = "HEALTHY";
+  if (itemCount === 0) {
+    status = "NO_CONTENT";
+  } else if (possibleBlackScreen) {
+    status = "POSSIBLE_BLACK_SCREEN";
+  } else if (screenshotFailed) {
+    status = "SCREEN_RENDER_FAIL";
+  } else if (isStale) {
+    status = "STALE";
+  }
+  
+  return {
+    screenId: screenDbId,
+    yodeckScreenId,
+    lastSeenAt,
+    lastScreenshotAt,
+    screenshotByteSize,
+    playlistId,
+    itemCount,
+    isStale,
+    staleSince,
+    hasScreenshot,
+    screenshotFailed,
+    possibleBlackScreen,
+    status,
+  };
+}
+
+// ============================================================================
+// SELF-HEAL REPAIR FLOW
+// ============================================================================
+
+export interface RepairResult {
+  screenId: string;
+  steps: string[];
+  finalStatus: PlaybackHealth["status"];
+  baselineOnlyWorked: boolean;
+  blockedMediaIds: number[];
+  success: boolean;
+}
+
+export async function repairScreen(screenDbId: string): Promise<RepairResult> {
+  const steps: string[] = [];
+  const blockedMediaIds: number[] = [];
+  
+  const screen = await storage.getScreen(screenDbId);
+  if (!screen) {
+    steps.push("[ERROR] Screen not found");
+    return { screenId: screenDbId, steps, finalStatus: "NO_CONTENT", baselineOnlyWorked: false, blockedMediaIds, success: false };
+  }
+  
+  const yodeckScreenId = parseInt(screen.yodeckPlayerId || "0", 10);
+  const playlistId = screen.playlistId ? parseInt(screen.playlistId, 10) : null;
+  
+  if (!playlistId || yodeckScreenId === 0) {
+    steps.push("[ERROR] No playlist or Yodeck screen ID");
+    return { screenId: screenDbId, steps, finalStatus: "NO_CONTENT", baselineOnlyWorked: false, blockedMediaIds, success: false };
+  }
+  
+  steps.push("[STEP 1] Deduplicating playlist");
+  const dedupResult = await deduplicatePlaylist(playlistId);
+  if (dedupResult.ok && dedupResult.removed.length > 0) {
+    steps.push(`[DEDUP] Removed ${dedupResult.removed.length} duplicate media: ${dedupResult.removed.join(", ")}`);
+  }
+  
+  steps.push("[STEP 2] Verifying media readiness");
+  const itemsResult = await getPlaylistItems(playlistId);
+  if (itemsResult.ok) {
+    for (const mediaId of itemsResult.items) {
+      const verifyResult = await verifyMedia(mediaId);
+      if (verifyResult.status === "BROKEN") {
+        blockedMediaIds.push(mediaId);
+        steps.push(`[BLOCK] Media ${mediaId} is BROKEN: ${verifyResult.reason}`);
+      }
+    }
+  }
+  
+  if (blockedMediaIds.length > 0) {
+    steps.push("[STEP 3] Removing broken media from playlist");
+    const cleanItems = itemsResult.items.filter(id => !blockedMediaIds.includes(id));
+    if (cleanItems.length > 0) {
+      await updatePlaylistItems(playlistId, cleanItems);
+      steps.push(`[CLEAN] Removed ${blockedMediaIds.length} broken items, ${cleanItems.length} remaining`);
+    }
+  }
+  
+  steps.push("[STEP 4] Re-pushing screen");
+  const pushResult = await pushScreen(yodeckScreenId);
+  if (pushResult.ok) {
+    steps.push("[PUSH] Screen pushed successfully");
+  } else {
+    steps.push(`[PUSH] Failed: ${pushResult.error}`);
+  }
+  
+  steps.push("[STEP 5] Checking playback health");
+  const health = await getPlaybackHealth(screenDbId);
+  const finalStatus = health?.status || "NO_CONTENT";
+  steps.push(`[STATUS] Final status: ${finalStatus}`);
+  
+  if (finalStatus === "POSSIBLE_BLACK_SCREEN" || finalStatus === "SCREEN_RENDER_FAIL") {
+    steps.push("[STEP 6] Trying baseline-only mode");
+    const baseline = await getBaselineMediaIds();
+    if (baseline.ok) {
+      await updatePlaylistItems(playlistId, baseline.mediaIds);
+      await pushScreen(yodeckScreenId);
+      steps.push("[BASELINE] Playlist set to baseline-only");
+      
+      const healthAfter = await getPlaybackHealth(screenDbId);
+      if (healthAfter?.status === "HEALTHY" || healthAfter?.status === "STALE") {
+        steps.push("[BASELINE] Baseline-only worked - ads may be causing the problem");
+        return { screenId: screenDbId, steps, finalStatus: healthAfter.status, baselineOnlyWorked: true, blockedMediaIds, success: true };
+      }
+    }
+  }
+  
+  const success = finalStatus === "HEALTHY" || finalStatus === "STALE";
+  return { screenId: screenDbId, steps, finalStatus, baselineOnlyWorked: false, blockedMediaIds, success };
+}
