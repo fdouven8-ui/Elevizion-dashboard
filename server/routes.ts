@@ -16282,6 +16282,8 @@ KvK: 90982541 | BTW: NL004857473B37</p>
    * POST /api/admin/locations/:locationId/link-ad
    * Manually link a specific ad to a location's ADS playlist
    * Body: { adId: string }
+   * 
+   * HARD GATE: Returns 422 if media is not READY_FOR_YODECK
    */
   app.post("/api/admin/locations/:locationId/link-ad", requireAdminAccess, async (req, res) => {
     try {
@@ -16298,6 +16300,27 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       const result = await linkAdToLocation(adId, locationId);
       
       result.logs.forEach(log => console.log(log));
+      
+      // Return appropriate HTTP status based on error code
+      if (!result.ok && result.errorCode === "MEDIA_NOT_READY") {
+        return res.status(422).json({
+          ok: false,
+          code: "MEDIA_NOT_READY",
+          status: result.mediaStatus,
+          reason: result.error,
+          nextAction: result.nextAction,
+          adId: result.adId,
+          logs: result.logs,
+        });
+      }
+      
+      if (!result.ok && result.errorCode === "LOCATION_NOT_FOUND") {
+        return res.status(404).json(result);
+      }
+      
+      if (!result.ok && result.errorCode === "AD_NOT_FOUND") {
+        return res.status(404).json(result);
+      }
       
       res.json(result);
     } catch (error: any) {
@@ -18494,6 +18517,46 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.json(result);
     } catch (error: any) {
       console.error("[NowPlaying] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/screens/:screenId/playback-health
+   * Comprehensive diagnostic endpoint for screen playback status
+   * Returns everything needed to debug why a screen might be black
+   */
+  app.get("/api/admin/screens/:screenId/playback-health", requireAdminAccess, async (req, res) => {
+    res.set({
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+      "Pragma": "no-cache",
+    });
+    
+    try {
+      const { screenId } = req.params;
+      const { getPlaybackHealth } = await import("./services/playbackHealthService");
+      
+      const result = await getPlaybackHealth(screenId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PlaybackHealth] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/:screenId/repair
+   * Self-heal a screen: reassign playlist, reseed baseline, dedup, etc.
+   */
+  app.post("/api/admin/screens/:screenId/repair", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { repairScreen } = await import("./services/playbackHealthService");
+      
+      const result = await repairScreen(screenId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[RepairScreen] Error:", error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });

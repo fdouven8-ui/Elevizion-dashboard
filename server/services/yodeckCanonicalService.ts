@@ -1706,6 +1706,8 @@ export async function getRecentApprovedAds(limit: number = 20): Promise<{
 
 /**
  * Link ad to location and add to ADS playlist
+ * 
+ * HARD GATE: Only allows READY_FOR_YODECK assets to be published
  */
 export async function linkAdToLocation(adId: string, locationId: string): Promise<{
   ok: boolean;
@@ -1715,6 +1717,9 @@ export async function linkAdToLocation(adId: string, locationId: string): Promis
   pushed: boolean;
   logs: string[];
   error?: string;
+  errorCode?: "MEDIA_NOT_READY" | "LOCATION_NOT_FOUND" | "AD_NOT_FOUND" | "YODECK_ERROR";
+  mediaStatus?: string;
+  nextAction?: "validate" | "retry_normalization" | "wait" | "upload";
 }> {
   const logs: string[] = [];
   logs.push(`[LinkAd] Koppelen ad ${adId} aan locatie ${locationId}...`);
@@ -1722,16 +1727,70 @@ export async function linkAdToLocation(adId: string, locationId: string): Promis
   // Get location
   const [location] = await db.select().from(locations).where(eq(locations.id, locationId));
   if (!location) {
-    return { ok: false, adId, yodeckMediaId: null, adsPlaylistId: null, pushed: false, logs, error: "Locatie niet gevonden" };
+    return { ok: false, adId, yodeckMediaId: null, adsPlaylistId: null, pushed: false, logs, error: "Locatie niet gevonden", errorCode: "LOCATION_NOT_FOUND" };
   }
   
   // Get ad asset
   const [adAsset] = await db.select().from(adAssets).where(eq(adAssets.id, adId));
   if (!adAsset) {
-    return { ok: false, adId, yodeckMediaId: null, adsPlaylistId: null, pushed: false, logs, error: "Advertentie niet gevonden" };
+    return { ok: false, adId, yodeckMediaId: null, adsPlaylistId: null, pushed: false, logs, error: "Advertentie niet gevonden", errorCode: "AD_NOT_FOUND" };
   }
   
   logs.push(`[LinkAd] Ad gevonden: "${adAsset.originalFileName}"`);
+  
+  // ============================================================================
+  // HARD GATE: Check if media is READY_FOR_YODECK
+  // ============================================================================
+  const mediaStatus = adAsset.yodeckReadinessStatus || "PENDING";
+  logs.push(`[LinkAd] Media readiness status: ${mediaStatus}`);
+  
+  if (mediaStatus !== "READY_FOR_YODECK") {
+    let nextAction: "validate" | "retry_normalization" | "wait" | "upload" = "wait";
+    let reason = "";
+    
+    switch (mediaStatus) {
+      case "PENDING":
+        nextAction = "validate";
+        reason = "Media moet eerst worden gevalideerd";
+        break;
+      case "VALIDATING":
+        nextAction = "wait";
+        reason = "Media wordt momenteel gevalideerd";
+        break;
+      case "NEEDS_NORMALIZATION":
+        nextAction = "retry_normalization";
+        reason = "Media moet worden genormaliseerd voor Yodeck";
+        break;
+      case "NORMALIZING":
+        nextAction = "wait";
+        reason = "Media wordt momenteel genormaliseerd";
+        break;
+      case "REJECTED":
+        nextAction = "retry_normalization";
+        reason = adAsset.yodeckRejectReason || "Media is afgekeurd en kan niet worden gepubliceerd";
+        break;
+      default:
+        nextAction = "validate";
+        reason = `Onbekende status: ${mediaStatus}`;
+    }
+    
+    logs.push(`[LinkAd] ❌ HARD GATE: Media niet klaar voor publicatie - ${reason}`);
+    
+    return {
+      ok: false,
+      adId,
+      yodeckMediaId: null,
+      adsPlaylistId: null,
+      pushed: false,
+      logs,
+      error: reason,
+      errorCode: "MEDIA_NOT_READY",
+      mediaStatus,
+      nextAction,
+    };
+  }
+  
+  logs.push(`[LinkAd] ✓ HARD GATE: Media is READY_FOR_YODECK`);
   
   // Try to find in Yodeck by storedFilename OR originalFileName (case-insensitive)
   let yodeckMediaId = adAsset.yodeckMediaId;

@@ -1,0 +1,122 @@
+JE BENT EEN SENIOR FULL-STACK ENGINEER (Node/TS, Express, Drizzle, Yodeck API). DOEL: de “media validatie/normalisatie pipeline” HARD afdwingen zodat ALLEEN YODECK-PLAYABLE media ooit in playlists/screens terechtkomt, én we superduidelijke diagnostics terugkrijgen zodat we exact zien waarom een scherm zwart is of waarom een ad niet draait. Alles moet backward-compatible blijven: bestaande flows, endpoints, UI en scheduled sync mogen niet breken.
+
+CONTEXT (huidig):
+- Media pipeline bestaat al:
+  - GET /api/admin/advertisers/:id/media
+  - POST /api/admin/media/:id/validate
+  - POST /api/admin/media/:id/retry-normalization
+  - statuses: PENDING → VALIDATING → READY_FOR_YODECK óf NEEDS_NORMALIZATION → NORMALIZING → READY_FOR_YODECK
+  - checks: H.264, yuv420p, moov atom vooraan, max 1920x1080 (zoals nu geïmplementeerd)
+- Content pipeline draait momenteel in mode: SCREEN_PLAYLIST_ONLY (AutopilotWorker disabled)
+- We hebben schermen met auto-playlists (EVZ | SCREEN | <id>) en basiscontent werkt pas weer nadat in Yodeck “Save & Push” is geklikt.
+- We zien soms “NO CONTENT TO PLAY” in Yodeck terwijl onze API “has_content” claimt. We willen echte waarheid + self-heal flow.
+
+WAT JE NU MOET BOUWEN (1) — HARD GATE “READY_FOR_YODECK”
+1) Zoek ALLE codepaden waar media naar Yodeck gaat of in playlists terecht komt:
+   - “Plaats Ad” (UI button)
+   - publish / linking logic (linkAdToLocation / ensureLocationContent / publishQueue / manual linking endpoints)
+   - elke plek waar we playlist items toevoegen of screen content pushen
+2) Voeg een harde gate toe:
+   - Als asset.status != READY_FOR_YODECK => STOP. Geen upload naar Yodeck, geen playlist add, geen push.
+   - Geef duidelijke API error response (409 of 422) met machine-readable code:
+     - code: MEDIA_NOT_READY
+     - status: <PENDING|VALIDATING|NEEDS_NORMALIZATION|NORMALIZING|REJECTED>
+     - reason: <yodeckRejectReason of validation errors>
+     - nextAction: "validate" of "retry_normalization" of "wait"
+   - UI: “Plaats Ad” disabled zolang niet READY (met tooltip), maar breek geen bestaande UI; als snelste: backend error tonen in toast.
+
+WAT JE NU MOET BOUWEN (2) — CANONICAL FILE SELECTIE
+3) Implementeer één canonical resolutie functie (één bron van waarheid), bijv:
+   resolvePlayableAsset(mediaRecord) -> { storageKey/path, isNormalized, ffprobeSummary, validationSummary }
+   Regels:
+   - Als normalized aanwezig EN READY_FOR_YODECK => gebruik normalized
+   - Anders als original READY_FOR_YODECK => gebruik original
+   - Anders => null + reason
+4) Zorg dat ALLE Yodeck upload / playlist add flows uitsluitend deze resolver gebruiken.
+
+WAT JE NU MOET BOUWEN (3) — SAFE REPLACE + DEDUP
+5) Implementeer “safe replace” voor playlist updates:
+   replaceAdInPlaylist({ playlistId, newMediaId, oldMediaIds? })
+   Steps:
+   - Fetch playlist items (Yodeck API)
+   - Add newMediaId indien niet aanwezig
+   - Verify playlist non-empty
+   - Remove oldMediaIds (of dedup duplicates van dezelfde ad)
+   - Push/Apply screen content (alleen als nodig in deze mode)
+   - Verify via Yodeck + ons /now-playing
+6) Dedup rule:
+   - Als dezelfde mediaId meerdere keren voorkomt => behoud één, verwijder rest
+   - Als dezelfde name voorkomt met andere id => log als warning (mogelijk dubbele upload in Yodeck), maar niet agressief verwijderen tenzij expliciet oldMediaIds.
+7) Waar mogelijk: maak changes idempotent (zelfde call 2x geeft geen extra duplicates).
+
+WAT JE NU MOET BOUWEN (4) — PLAYBACK HEALTH + DIAGNOSTICS (CRUCIAAL)
+8) Voeg een nieuw admin diagnostic endpoint toe per screen:
+   GET /api/admin/screens/:id/playback-health
+   Response moet ALLES bevatten wat we nodig hebben om remote te debuggen, incl:
+   - buildId, builtAt, env flags, CONTENT_PIPELINE_MODE
+   - screen: id, yodeckPlayerId, yodeckUuid, lastSeenAt, status
+   - expected content: expectedSourceType (playlist/layout/schedule), expectedSourceId (playlistId), expectedName
+   - actual content (live from Yodeck): actualSourceType, actualSourceId, mismatch boolean
+   - playlist details: playlistId, itemCount, item list (id, name, duration), lastFetchedAt
+   - classification: baselineCount vs adsCount (op basis van ons category of naming convention)
+   - playable check: for ads: are they READY_FOR_YODECK in DB? if not, list blocking reasons
+   - flags: isPlaylistEmpty, hasInvalidAd, hasDuplicateAd, POSSIBLE_BLACK_SCREEN (true/false)
+   - recommendedActions: array met strings (e.g. ["ASSIGN_PLAYLIST", "RESEED_BASELINE", "REUPLOAD_AD", "RUN_NORMALIZATION", "PUSH_TO_SCREEN"])
+   Zorg voor duidelijke error codes per failure.
+9) Voeg “repair” endpoint toe:
+   POST /api/admin/screens/:id/repair
+   Dit moet:
+   - (a) her-assign expected playlist/layout correct (self-heal)
+   - (b) ensure baseline seeded (als empty)
+   - (c) remove duplicates in playlist (safe)
+   - (d) als ads niet READY: laat ads weg, maar scherm moet NOOIT leeg zijn
+   Response: exact wat er is gedaan (actions array + per action outcome + timings + yodeck request ids/status codes).
+10) Voeg logging toe (structured) bij elke stap met correlationId:
+   - correlationId per request
+   - log elke Yodeck API call (endpoint, method, status, durationMs, relevant ids)
+   - log “before/after” playlist item counts
+   - log gating decisions (waarom geblokkeerd)
+   - log “final verdict” PLAYABLE_OK / PLAYABLE_FAIL met reasons
+
+WAT JE NU MOET BOUWEN (5) — UPDATE /now-playing waarheid
+11) Update bestaand /api/screens/:id/now-playing (of maak een uitgebreid variant) zodat:
+   - Het altijd live data gebruikt (of cache + timestamp duidelijk)
+   - Het mismatch/hard truth van Yodeck toont
+   - Het item list (top N) + playlist itemCount toont
+   - Het duidelijk toont of er “NO CONTENT TO PLAY” risico is:
+     - itemCount == 0 => true
+     - of ad items bestaan maar non-playable => true
+   - Voeg fields toe: verificationSteps[], selfHealed boolean, selfHealActions[]
+
+WAT JE NU MOET BOUWEN (6) — GEEN BREAKING CHANGES
+12) Breek niets:
+   - bestaande sync worker mag blijven werken
+   - bestaande endpoints responses mogen uitbreiden, maar niet velden verwijderen
+   - UI mag minimal: alleen toast/tooltip; geen grote redesign nodig
+
+ACCEPTANCE CRITERIA (moet je zelf testen):
+A) Als een ad file incompatibel is:
+   - pipeline zet NEEDS_NORMALIZATION
+   - “Plaats Ad” blokkeert met MEDIA_NOT_READY + reason
+   - na normalisatie => READY_FOR_YODECK => “Plaats Ad” werkt
+B) Elke publish/plaatsing call is idempotent: geen duplicates
+C) Scherm kan nooit eindigen met lege playlist (baseline wordt altijd re-seeded)
+D) playback-health endpoint geeft voldoende info om oorzaak zwart scherm te pinpointen (empty playlist vs mismatch vs invalid media)
+E) repair endpoint fixt: mismatch, empty playlist, duplicates, en laat ads weg als ze niet READY (maar baseline blijft)
+
+OUTPUT VERWACHT:
+- Geef een korte “Implementation Plan” (max 10 bullets) met welke files/modules je aanpast (bij benadering) en nieuwe helpers.
+- Lever de daadwerkelijke code wijzigingen (TypeScript), inclusief:
+  - nieuwe endpoints
+  - nieuwe helper(s): resolvePlayableAsset, replaceAdInPlaylist, classifyPlaylistItems
+  - aanpassingen aan bestaande “Plaats Ad”/publish flow om gating af te dwingen
+  - logging + correlationId
+- Voeg voorbeelden toe van JSON responses van playback-health en repair (realistisch).
+- Voeg unit-ish tests of simpele smoke test scripts toe (kan via existing patterns).
+
+BELANGRIJK:
+- Gebruik onze bestaande DB en storage interfaces (getAdAsset, getAdAssetsByAdvertiser). Voeg alleen kolommen toe als echt nodig.
+- Houd rekening met Yodeck API quirks: tag endpoint 404, en soms playlist_mode errors; bouw fallbacks i.p.v. hard crash.
+- Als ffprobe/ffmpeg niet aanwezig is in runtime: zorg dat normalisatie/validatie degradeert met duidelijke foutcode + instructie (maar we hebben het nu in shell gezien; toch defensief coderen).
+
+BEGIN NU MET IMPLEMENTATIE.
