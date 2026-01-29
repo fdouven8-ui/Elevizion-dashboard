@@ -74,6 +74,7 @@ import type {
   WaitlistRequest, InsertWaitlistRequest,
   ClaimPrefill, InsertClaimPrefill,
   UploadJob, InsertUploadJob,
+  AdAsset, InsertAdAsset,
 } from "@shared/schema";
 
 // Lead query params for server-side filtering/pagination
@@ -173,6 +174,10 @@ export interface IStorage {
   getOnboardingTasks(checklistId: string): Promise<OnboardingTask[]>;
   createOnboardingTask(data: InsertOnboardingTask): Promise<OnboardingTask>;
   updateOnboardingTask(id: string, data: Partial<OnboardingTask>): Promise<OnboardingTask | undefined>;
+  
+  // Ad Assets
+  getAdAsset(id: string): Promise<AdAsset | undefined>;
+  getAdAssetsByAdvertiser(advertiserId: string): Promise<AdAsset[]>;
   
   // Reports
   getReports(): Promise<Report[]>;
@@ -853,6 +858,18 @@ export class DatabaseStorage implements IStorage {
   // ============================================================================
   // REPORTS
   // ============================================================================
+
+  // Ad Assets
+  async getAdAsset(id: string): Promise<AdAsset | undefined> {
+    const [asset] = await db.select().from(schema.adAssets).where(eq(schema.adAssets.id, id));
+    return asset;
+  }
+
+  async getAdAssetsByAdvertiser(advertiserId: string): Promise<AdAsset[]> {
+    return await db.select().from(schema.adAssets)
+      .where(eq(schema.adAssets.advertiserId, advertiserId))
+      .orderBy(desc(schema.adAssets.createdAt));
+  }
 
   async getReports(): Promise<Report[]> {
     return await db.select().from(schema.reports).orderBy(desc(schema.reports.createdAt));

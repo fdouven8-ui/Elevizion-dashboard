@@ -1,0 +1,148 @@
+You are a senior full-stack engineer working in the existing Elevizion Dashboard codebase (Node/Express + DB + Yodeck integration). 
+
+CONTEXT / PROBLEM
+- We confirmed the runtime does NOT have ffprobe/ffmpeg available (no apt-get/sudo). 
+- Current upload/video validation + possible remux/transcode logic relies on ffprobe/ffmpeg assumptions.
+- Result: videos can be accepted/stored but are not reliably previewable/playable in Yodeck -> black screens / “NO CONTENT TO PLAY”.
+- We must guarantee Yodeck-safe media while keeping all other product flows working (onboarding, contracts, placements, publish queue, playlist mapping, baseline content, capacity logic, Moneybird, UI).
+
+PRIMARY GOAL
+Implement a “Yodeck-safe media pipeline” that:
+1) never uploads/attaches media to Yodeck unless it is proven compatible
+2) auto-normalizes incompatible uploads
+3) preserves backwards compatibility with existing database records, endpoints, and UI expectations
+
+HARD CONSTRAINTS
+- Do NOT break existing endpoints and flows.
+- Do NOT remove existing DB fields that are in use by UI.
+- Do NOT require installing system packages (no apt, no sudo).
+- Keep current upload portal UX working (token-based upload).
+- Keep current Yodeck two-step upload flow intact; only gate it behind “READY_FOR_YODECK”.
+- Avoid heavy CPU transcoding inside the Replit runtime.
+
+IMPLEMENTATION STRATEGY (minimal-risk)
+We will add a Media Normalization layer + state machine, without rewriting the whole app.
+
+A) DATA MODEL (backwards compatible)
+- Add a new DB table (or extend existing “ad assets” table if present) for media processing:
+  MediaAsset:
+    id (uuid)
+    advertiserId (uuid, nullable if generic)
+    originalFilePath
+    normalizedFilePath (nullable)
+    originalFilename
+    normalizedFilename (nullable)
+    status ENUM:
+      UPLOADED
+      VALIDATING
+      NEEDS_NORMALIZATION
+      NORMALIZING
+      READY_FOR_YODECK
+      REJECTED
+    rejectReason (nullable)
+    metadataJson (nullable)  // container/codec/duration/width/height, if known
+    durationSeconds (nullable)
+    hasVideoStream (nullable)
+    createdAt/updatedAt
+- IMPORTANT: Keep existing advertiser fields like assetStatus and any “ready_for_yodeck” usage working:
+  - Map/translate new MediaAsset.status into existing advertiser.assetStatus values where needed.
+  - If current code expects advertiser.assetStatus = "ready_for_yodeck", keep setting it ONLY when MediaAsset becomes READY_FOR_YODECK.
+
+B) VALIDATION WITHOUT ffprobe CLI
+- Implement validation using a pure Node approach:
+  - Use a Node library capable of reading MP4 metadata/duration without shelling out (e.g. mp4box, mp4-parser, mediainfo.js wasm, or similar).
+  - Must extract at least: duration, presence of video track, and (if possible) codec and width/height.
+- If metadata parsing fails or is incomplete -> do NOT assume OK. Set status NEEDS_NORMALIZATION.
+
+C) NORMALIZATION (preferred approach: external service)
+- We cannot rely on local ffmpeg. Create an abstraction:
+  interface NormalizerProvider {
+    normalize(inputFilePath) -> { normalizedFilePath, normalizedMetadata }
+  }
+- Implement Provider #1 using an external API/service (choose the simplest reliable option you can implement quickly and run in production):
+  - CloudConvert OR Mux OR similar transcoding API (you choose).
+  - Store API key in Secrets; fail gracefully if missing (do not crash server).
+  - Output MUST be:
+    mp4 + H.264 + yuv420p + 1920x1080 (or maintain aspect with padding), faststart enabled
+    audio: AAC or none
+    max duration enforcement already exists; keep it (<=15s unless configured)
+- If an external service is not available, implement Provider #2 fallback:
+  - Use ffmpeg.wasm ONLY if it won’t exceed memory/time; otherwise do NOT attempt heavy transcoding.
+  - If cannot normalize -> REJECT with clear reason.
+
+D) STATE MACHINE + GATING
+- On upload complete:
+  1) Create/Update MediaAsset status UPLOADED -> VALIDATING
+  2) Validate:
+      - If proven Yodeck-safe -> READY_FOR_YODECK
+      - Else -> NEEDS_NORMALIZATION
+  3) If NEEDS_NORMALIZATION -> enqueue normalization job -> NORMALIZING -> READY_FOR_YODECK on success, REJECTED on failure.
+- CRITICAL: Update existing advertiser.assetStatus transitions to align:
+  - advertiser.assetStatus must NOT be “ready_for_yodeck” unless MediaAsset is READY_FOR_YODECK.
+  - if MediaAsset is NEEDS_NORMALIZATION/NORMALIZING, set advertiser.assetStatus to something like “processing” (create if necessary) but do not break UI: if UI doesn’t know “processing”, keep showing “pending” but add a badge.
+
+E) PRESERVE CURRENT FLOWS (must not break)
+- Publishing / playlist linking must still function but should be gated:
+  - Any code path that uploads media to Yodeck must first resolve “canonical media” = normalized if available else original.
+  - It may proceed ONLY if MediaAsset.status == READY_FOR_YODECK.
+  - Otherwise return a clear Dutch error for operators (e.g. “Video wordt nog verwerkt” or “Video is afgekeurd: <reason>”).
+- Keep Baseline content and screen playlists functioning exactly as before.
+- Do not change how screen playlists are discovered/verified.
+- Do not change placement planning logic.
+
+F) DEDUP + REPLACEMENT (important for real use)
+- If an advertiser uploads a replacement video:
+  - Do NOT create duplicate Yodeck items.
+  - Mark old MediaAsset as superseded (add supersededById or isActive flag).
+  - Ensure the newest READY_FOR_YODECK MediaAsset is used as the canonical.
+  - If the old video already exists in Yodeck playlists:
+    - Remove/replace playlist item references cleanly (don’t leave stale broken items).
+    - Implement a safe “replace in playlist” that:
+       1) adds new media
+       2) removes old media
+       3) verifies playlist non-empty
+       4) pushes screen if needed
+  - If Yodeck does not support direct “remove by tag”, then remove by playlist item IDs (store them if available).
+
+G) NEW DIAGNOSTICS ENDPOINTS (operator friendly)
+Add:
+- GET /api/admin/media/:mediaAssetId/diagnostics
+  returns:
+    status
+    rejectReason
+    metadataJson
+    files (original/normalized paths)
+    yodeckCompatibilityVerdict { ok, reasons[] }
+    linkedAdvertiserId
+- POST /api/admin/media/:mediaAssetId/retry-normalization
+  -> sets NEEDS_NORMALIZATION and re-enqueues job (idempotent)
+- OPTIONAL but helpful:
+  GET /api/admin/advertisers/:id/media
+  -> list MediaAssets for that advertiser and which one is canonical
+
+H) UI / STATUS (minimal changes)
+- In advertiser detail + video review + publish queue:
+  - Show “Verwerken…” when NORMALIZING/NEEDS_NORMALIZATION
+  - Show “Afgekeurd” with reason when REJECTED
+  - Only show “Klaar voor Yodeck” when READY_FOR_YODECK
+- In screen content page:
+  - “Ads (x)” must count only READY_FOR_YODECK + successfully linked to playlist.
+
+I) TEST PLAN (do it, don’t skip)
+Add automated tests (or at minimum an admin test endpoint) for:
+1) Upload a known-good H.264 mp4 -> becomes READY_FOR_YODECK without normalization
+2) Upload a problematic mp4 (moov at end / HEVC / odd pixel format) -> becomes NEEDS_NORMALIZATION -> READY_FOR_YODECK after normalization
+3) Attempt publish while NORMALIZING -> blocked with clear message, no Yodeck calls
+4) Replacement upload -> replaces in playlists without leaving duplicates or empty playlists
+5) Yodeck two-step upload still works and is unchanged besides using canonical normalized file
+
+J) SAFETY + CONSEQUENCES (think about these)
+- Do not let backlog grow silently: add a small worker queue with visibility (counts in system health).
+- Add timeouts and retry limits for external normalization API.
+- Never leak API keys into logs.
+- If normalization fails, do NOT push broken media; keep baseline content playing.
+
+DELIVERABLE
+- Implement the above in a clean PR-style change with minimal disruption.
+- Keep existing behavior for baseline content and screen playlist verification.
+- Provide a short “What changed” summary and where to configure the Normalizer API key in Secrets.

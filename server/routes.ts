@@ -19247,6 +19247,93 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // YODECK MEDIA PIPELINE ROUTES
+  // ============================================================================
+
+  /**
+   * GET /api/admin/media/:assetId/diagnostics
+   * Get detailed diagnostics for a media asset
+   */
+  app.get("/api/admin/media/:assetId/diagnostics", requireAdminAccess, async (req, res) => {
+    try {
+      const { getMediaDiagnostics } = await import("./services/yodeckMediaPipeline");
+      const diagnostics = await getMediaDiagnostics(req.params.assetId);
+      
+      if (!diagnostics) {
+        return res.status(404).json({ ok: false, error: "Asset niet gevonden" });
+      }
+      
+      res.json({ ok: true, diagnostics });
+    } catch (error: any) {
+      console.error("[MediaDiagnostics] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/media/:assetId/retry-normalization
+   * Retry normalization for a failed asset
+   */
+  app.post("/api/admin/media/:assetId/retry-normalization", requireAdminAccess, async (req, res) => {
+    try {
+      const { retryNormalization } = await import("./services/yodeckMediaPipeline");
+      const result = await retryNormalization(req.params.assetId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[RetryNormalization] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/media/:assetId/validate
+   * Trigger validation for a media asset
+   */
+  app.post("/api/admin/media/:assetId/validate", requireAdminAccess, async (req, res) => {
+    try {
+      const { validateMediaAsset } = await import("./services/yodeckMediaPipeline");
+      const result = await validateMediaAsset(req.params.assetId);
+      res.json({ ok: true, result });
+    } catch (error: any) {
+      console.error("[ValidateMedia] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/advertisers/:advertiserId/media
+   * Get media assets for an advertiser with canonical status
+   */
+  app.get("/api/admin/advertisers/:advertiserId/media", requireAdminAccess, async (req, res) => {
+    try {
+      const { getCanonicalAssetForAdvertiser } = await import("./services/yodeckMediaPipeline");
+      const assets = await storage.getAdAssetsByAdvertiser(req.params.advertiserId);
+      const canonical = await getCanonicalAssetForAdvertiser(req.params.advertiserId);
+      
+      res.json({
+        ok: true,
+        assets: assets.map(a => ({
+          id: a.id,
+          originalFileName: a.originalFileName,
+          storedFilename: a.storedFilename,
+          status: a.yodeckReadinessStatus || "PENDING",
+          isSuperseded: a.isSuperseded,
+          rejectReason: a.yodeckRejectReason,
+          createdAt: a.createdAt,
+        })),
+        canonical: {
+          assetId: canonical.asset?.id || null,
+          status: canonical.status,
+          reason: canonical.reason,
+        },
+      });
+    } catch (error: any) {
+      console.error("[AdvertiserMedia] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
   // LEGACY LAYOUT ROUTES - BLOCKED (410 Gone)
   // ============================================================================
 

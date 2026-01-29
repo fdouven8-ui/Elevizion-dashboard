@@ -198,6 +198,33 @@ export const adAssets = pgTable("ad_assets", {
   // Yodeck integration - tracks when video is uploaded to Yodeck
   yodeckMediaId: integer("yodeck_media_id"), // Yodeck media ID after upload (null until uploaded)
   yodeckUploadedAt: timestamp("yodeck_uploaded_at"), // When uploaded to Yodeck
+  // Yodeck-safe media pipeline status
+  // Status flow: PENDING → VALIDATING → READY_FOR_YODECK (if compatible) or NEEDS_NORMALIZATION → NORMALIZING → READY_FOR_YODECK
+  yodeckReadinessStatus: text("yodeck_readiness_status").notNull().default("PENDING"), // PENDING | VALIDATING | NEEDS_NORMALIZATION | NORMALIZING | READY_FOR_YODECK | REJECTED
+  yodeckRejectReason: text("yodeck_reject_reason"), // Human-readable rejection reason
+  yodeckMetadataJson: jsonb("yodeck_metadata_json").$type<{
+    container?: string;
+    videoCodec?: string;
+    audioCodec?: string;
+    pixelFormat?: string;
+    width?: number;
+    height?: number;
+    durationSeconds?: number;
+    bitrate?: number;
+    hasVideoStream?: boolean;
+    hasAudioStream?: boolean;
+    moovAtStart?: boolean;
+    isYodeckCompatible?: boolean;
+    compatibilityReasons?: string[];
+  }>(), // Raw metadata from validation
+  normalizationProvider: text("normalization_provider"), // cloudconvert | ffmpeg_wasm | none
+  normalizationStartedAt: timestamp("normalization_started_at"),
+  normalizationCompletedAt: timestamp("normalization_completed_at"),
+  normalizationError: text("normalization_error"),
+  normalizedStoragePath: text("normalized_storage_path"), // Path to normalized file
+  normalizedStorageUrl: text("normalized_storage_url"), // URL to normalized file
+  isSuperseded: boolean("is_superseded").notNull().default(false), // True if replaced by newer upload
+  supersededById: varchar("superseded_by_id"), // ID of the asset that replaced this one
   // Timestamps
   uploadedAt: timestamp("uploaded_at").notNull().defaultNow(),
   createdAt: timestamp("created_at").notNull().defaultNow(),
