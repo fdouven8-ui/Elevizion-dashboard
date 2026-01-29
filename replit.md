@@ -99,6 +99,34 @@ The system integrates various advanced functionalities:
   - All `/api/admin/layouts/*` routes return 410 LEGACY_LAYOUT_SYSTEM_DISABLED
   - All `/api/admin/autopilot/*` baseline/combined/layout routes return 410
   - Legacy systems replaced by canonical playlist architecture
+- **Playlist-Only Guard** (`playlistOnlyGuard.ts`): ENFORCES 100% playlist mode:
+  - **Hard Requirement**: No screen may EVER have `source_type="layout"`
+  - `checkAndRevertLayoutMode(screenId)` - Detect layout and auto-revert to playlist
+  - `runPlaylistGuardForAllScreens()` - Check all screens and revert any layouts
+  - `ensurePlaylistMode(screenId, playlistId)` - Force screen to playlist mode
+  - Auto-push after reversion via `POST /screens/:id/push/`
+  - Audit logging: `LAYOUT_DETECTED_AND_REMOVED` events
+  - Endpoints:
+    - `POST /api/admin/playlist-guard/run` - Check all screens
+    - `POST /api/admin/playlist-guard/check/:screenId` - Check single screen
+    - `POST /api/admin/playlist-guard/ensure-playlist/:screenId` - Force playlist mode
+- **Screen-Location Repair** (mapping diagnostics):
+  - `GET /api/admin/repair/screen-location` - Diagnose mapping issues
+  - `POST /api/admin/repair/screen-location/:screenId` - Fix mapping
+  - Detects: NO_LOCATION, ORPHANED, MULTI_SCREEN_CONFLICT, NAME_MISMATCH
+  - Blocks publishing when critical mapping issues detected
+- **Ad Targeting Service** (`adTargetingService.ts`):
+  - Strict scoring: CITY_MATCH=100, PARTIAL_CITY=50, REGION_MATCH=25
+  - Package limits enforced: SINGLE=1, TRIPLE=3, TEN=10
+  - Sort by score (highest first) then name (stable)
+  - `resolveTargetScreensForAdvertiser()` - Main targeting resolver
+  - `checkMediaReadiness()` - Verify media is ready for publishing
+- **Upload Worker Service** (`uploadWorkerService.ts`):
+  - Two-step upload: Create media → Presigned PUT → Poll verification
+  - Retry policy: 5 attempts with exponential backoff (1m, 5m, 15m, 1h, 6h)
+  - Pre-upload validation: min 200KB file size
+  - Canonical media: `yodeckMediaIdCanonical` updated on successful upload
+  - Status tracking: QUEUED → UPLOADING → POLLING → READY/PERMANENT_FAIL
 
 ## External Dependencies
 
