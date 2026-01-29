@@ -1,0 +1,100 @@
+JE BENT SENIOR DEVELOPER. FIX DIT PROBLEEM ZONDER GROTE REFACTOR.
+
+Context:
+We run Elevizion dashboard with Yodeck integration.
+Mode is CONTENT_PIPELINE_MODE=SCREEN_PLAYLIST_ONLY (autopilot disabled).
+Current issue: an approved uploaded ad exists in Yodeck as media but is NOT being published/assigned to the correct screen playlist.
+Also baseline item "1Limburg" is incorrectly treated as an AD in UI and content categorization.
+
+Evidence (from logs):
+- Screen 591896 runs playlistId 30532596 "EVZ | SCREEN | 591896(auto-playlist-30532596-crop)", baselineCount=4, adsCount=0.
+- The uploaded ad media exists: yodeckMediaId=29408113 name="ADV-BOUWSERVICEDOUVEN-756846_Header Frontpage(2).mp4", duration 15, screensCount=0 (not assigned anywhere).
+- Advertiser exists: id=9a99d555..., onboardingStatus=READY_FOR_ASSET, assetStatus=ready_for_yodeck, uploadEnabled=true, linkKey="ADV-BOUWSERVICEDOUVEN-756846", targetRegionCodes=["sittard"], package screensIncluded=1.
+- GET /api/contracts returns [] and GET /api/placements returns [].
+- So publish logic that depends on contracts/placements will never publish, especially in TEST_MODE.
+
+Goal (must):
+1) Automatically publish approved ads to correct screens in SCREEN_PLAYLIST_ONLY mode.
+   - For each advertiser with an approved asset (assetStatus=ready_for_yodeck OR approved flag in your schema),
+     determine target screens by targeting rules (region/city) and screensIncluded capacity.
+   - Then ENSURE the screen playlist (the ACTUAL playlist running on the device, from canonical parse: source_type=playlist source_id) contains:
+       - baseline items (already there)
+       - PLUS the ad media item(s) for that advertiser
+   - Result: /api/screens/:id/now-playing shows adsCount > 0 and the ad appears in currentContent with category=ad.
+
+2) Fix categorization: baseline items like "NOS algemeen nieuws", "Weer goed", "NOS sport algemeen", and "1Limburg" must NEVER be treated as an AD.
+   - In the UI and in /api/placements/ads-view, baseline media must be categorized as non_ad (or excluded from "ads" list).
+   - Only advertiser-uploaded media (matched via linkKey like "ADV-...") or linked placements should be treated as ads.
+
+Constraints:
+- Do NOT redesign the app.
+- Do NOT change database schema unless absolutely required.
+- Keep changes minimal and localized to publishing + categorization.
+- Preserve existing screen playlists (EVZ | SCREEN | <id>) and do not rename/copy everything.
+- Must work in TEST_MODE even when no contracts exist.
+
+Implementation details to do:
+A) Define "approved ad" source of truth:
+   - If you already have a DB table for uploaded ad assets (e.g. AdAsset/Creative/VideoUpload) with yodeckMediaId, use it.
+   - If not, derive approved ad media from Yodeck media list by matching advertiser.linkKey in media.name (e.g. contains "ADV-BOUWSERVICEDOUVEN-756846").
+   - Ensure you can map advertiser -> yodeckMediaId(s).
+
+B) Publish pipeline (new or fix existing):
+   - Create/repair function publishApprovedAdsToScreens({dryRun?:boolean}).
+   - It should run:
+       1. Load all active screens (yodeck linked).
+       2. For each screen, read canonical "actual playlist" (source_id) via existing code (canonical parse already logs source_type/source_id).
+       3. Compute which advertisers should appear on that screen based on targeting (region/city) and screensIncluded.
+       4. For each needed advertiser ad mediaId, ensure it is present in that screen playlist in Yodeck.
+           - Use Yodeck API playlist-items add endpoint you already use elsewhere (same style as baseline seeding).
+           - Must be idempotent: do not duplicate playlist items.
+       5. After pushing, re-fetch screen content summary and update DB cache so UI immediately shows adsCount.
+
+   - IMPORTANT: publishing must NOT require contracts/placements in TEST_MODE.
+     Add a guard:
+       if TEST_MODE is true OR no contracts table usage is configured, allow publish based on advertiser.assetStatus=ready_for_yodeck.
+     In production, you can keep contract gating later, but for now, do not block publishing when contracts are empty.
+
+C) Add 1 admin endpoint for debugging:
+   - POST /api/admin/publish-approved-ads
+     body: { dryRun?: boolean, advertiserId?: string, screenId?: string }
+     - When advertiserId is provided, publish ONLY that advertiser.
+     - When screenId is provided, publish ONLY to that screen.
+     - Return diagnostics: which advertiser, which mediaIds, which playlistId, addedCount, alreadyPresentCount, errors.
+
+D) Fix categorization / ads-view:
+   - Maintain a baseline whitelist of media IDs used as baseline OR detect baseline items by name prefix (NOS/Weer/1Limburg) ONLY for baseline playlist context.
+   - In /api/placements/ads-view:
+       - Exclude baseline mediaIds (or mark them non_ad and do not count them as "ads").
+       - Only show media as "ads candidates" if:
+           * matches an advertiser linkKey pattern "ADV-" OR
+           * is linked to a placement/advertiser in DB OR
+           * is inside an ADS playlist (if you have one).
+   - Ensure "1Limburg" becomes non_ad and disappears from unlinked ads list (or appears as non_ad).
+
+E) Update screen content parsing:
+   - When building yodeckContentSummary/currentContent, mark items that match advertiser linkKey as category=ad, otherwise category=non_ad.
+   - For baseline items, force category=non_ad even if name heuristic says otherwise.
+
+Acceptance tests (must pass):
+1) With current data:
+   - Advertiser 9a99d555... has yodeckMediaId=29408113 matching linkKey.
+   - Screen 591896 actual playlistId=30532596.
+   - After calling POST /api/admin/publish-approved-ads (dryRun=false, advertiserId=9a99..., screenId=241377ce... optional),
+     Yodeck playlist 30532596 contains mediaId 29408113.
+   - GET /api/screens/241377ce.../now-playing returns adsCount >= 1.
+   - UI "Schermen > Bouwservice Douven > Content" shows the advertiser ad as AD and linked/placed (not "Niet gekoppeld").
+2) "1Limburg" is no longer treated as an ad:
+   - In screen content list it is INFO/non_ad or baseline.
+   - In /api/placements/ads-view it is excluded or labeled non_ad and not counted as unlinked ad.
+
+Logging:
+- Add clear logs with prefix [AdPublish] showing:
+  screenId, yodeckPlayerId, playlistId, advertiserId, mediaId, action=added/already_present, result.
+- Return diagnostics in the admin endpoint response.
+
+Now implement with minimal code changes, reusing existing Yodeck client helpers and existing playlist mutation logic used for baseline seeding.
+After implementation, run the acceptance tests and paste the JSON responses for:
+- POST /api/admin/publish-approved-ads
+- GET /api/screens/:id/now-playing
+- GET /api/placements/ads-view

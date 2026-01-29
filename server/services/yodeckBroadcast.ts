@@ -1797,3 +1797,253 @@ export async function addAdToScreenPlaylist(
   
   return { ok: true, inserted: true, position };
 }
+
+// =============================================================================
+// SCAN & PUBLISH APPROVED ADS (TEST_MODE compatible - no contracts required)
+// =============================================================================
+
+export interface AdvertiserMediaMatch {
+  advertiserId: string;
+  advertiserName: string;
+  linkKey: string;
+  yodeckMediaId: number;
+  yodeckMediaName: string;
+  targetRegionCodes: string[];
+}
+
+/**
+ * Scan Yodeck media and match with advertiser linkKeys
+ * This discovers approved ads by matching media names with ADV-xxx patterns
+ */
+export async function scanYodeckMediaForAdvertisers(advertisers: Array<{
+  id: string;
+  companyName?: string | null;
+  linkKey?: string | null;
+  targetRegionCodes?: string[] | null;
+}>): Promise<{ ok: boolean; matches: AdvertiserMediaMatch[]; error?: string }> {
+  console.log(`[AdPublish] Scanning Yodeck media for ${advertisers.length} advertisers...`);
+  
+  const token = await getYodeckToken();
+  if (!token.isValid || !token.value) {
+    return { ok: false, matches: [], error: "Yodeck token not configured" };
+  }
+  
+  // Fetch all media from Yodeck
+  const mediaResult = await yodeckRequest<{ results: any[] }>("/media/?limit=500");
+  if (!mediaResult.ok || !mediaResult.data?.results) {
+    return { ok: false, matches: [], error: mediaResult.error || "Failed to fetch media" };
+  }
+  
+  const allMedia = mediaResult.data.results;
+  console.log(`[AdPublish] Found ${allMedia.length} media items in Yodeck`);
+  
+  const matches: AdvertiserMediaMatch[] = [];
+  
+  for (const advertiser of advertisers) {
+    if (!advertiser.linkKey) continue;
+    
+    // Extract advertiser prefix from linkKey (e.g., ADV-BOUWSERVICEDOUVEN from ADV-BOUWSERVICEDOUVEN-6E43D3)
+    const linkKeyParts = advertiser.linkKey.split("-");
+    const advertiserPrefix = linkKeyParts.length >= 2 
+      ? `${linkKeyParts[0]}-${linkKeyParts[1]}` 
+      : advertiser.linkKey;
+    
+    // Find media that contains the advertiser prefix in the name
+    // This allows matching ADV-BOUWSERVICEDOUVEN-756846 with linkKey ADV-BOUWSERVICEDOUVEN-6E43D3
+    const matchingMedia = allMedia.filter((m: any) => 
+      m.name && (
+        m.name.includes(advertiser.linkKey) || // Exact linkKey match
+        m.name.includes(advertiserPrefix)       // Prefix match (ADV-COMPANYNAME)
+      )
+    );
+    
+    for (const media of matchingMedia) {
+      matches.push({
+        advertiserId: advertiser.id,
+        advertiserName: advertiser.companyName || "Unknown",
+        linkKey: advertiser.linkKey,
+        yodeckMediaId: media.id,
+        yodeckMediaName: media.name,
+        targetRegionCodes: advertiser.targetRegionCodes || [],
+      });
+      console.log(`[AdPublish] Match: ${advertiser.companyName} (prefix=${advertiserPrefix}) -> mediaId=${media.id} "${media.name}"`);
+    }
+  }
+  
+  console.log(`[AdPublish] Found ${matches.length} advertiser-media matches`);
+  return { ok: true, matches };
+}
+
+export interface PublishApprovedAdsResult {
+  ok: boolean;
+  scanned: number;
+  published: number;
+  alreadyPresent: number;
+  skipped: number;
+  errors: number;
+  details: Array<{
+    advertiserId: string;
+    advertiserName: string;
+    mediaId: number;
+    screenId: string;
+    playlistId: string;
+    action: "published" | "already_present" | "skipped" | "error";
+    reason?: string;
+  }>;
+}
+
+/**
+ * Publish approved ads to correct screen playlists
+ * Works without contracts in TEST_MODE - uses targeting rules only
+ */
+export async function publishApprovedAdsToScreens(options: {
+  dryRun?: boolean;
+  advertiserId?: string;
+  screenId?: string;
+}, advertisers: Array<{
+  id: string;
+  companyName?: string | null;
+  linkKey?: string | null;
+  targetRegionCodes?: string[] | null;
+  targetCities?: string[] | null;
+  assetStatus?: string | null;
+  yodeckMediaId?: number | null;
+}>, dbScreens: Array<{
+  id: string;
+  name: string;
+  yodeckPlayerId?: string | null;
+  playlistId?: string | null;
+  city?: string | null;
+  region?: string | null;
+}>): Promise<PublishApprovedAdsResult> {
+  const { dryRun = false, advertiserId, screenId } = options;
+  
+  console.log(`[AdPublish] Starting publish run (dryRun=${dryRun}, advertiserId=${advertiserId || "all"}, screenId=${screenId || "all"})`);
+  
+  const result: PublishApprovedAdsResult = {
+    ok: true,
+    scanned: 0,
+    published: 0,
+    alreadyPresent: 0,
+    skipped: 0,
+    errors: 0,
+    details: [],
+  };
+  
+  // Filter advertisers if specific one requested
+  let targetAdvertisers = advertisers.filter(a => a.linkKey);
+  if (advertiserId) {
+    targetAdvertisers = targetAdvertisers.filter(a => a.id === advertiserId);
+  }
+  
+  if (targetAdvertisers.length === 0) {
+    console.log("[AdPublish] No advertisers with linkKey found");
+    return result;
+  }
+  
+  // Scan Yodeck media for matches
+  const scanResult = await scanYodeckMediaForAdvertisers(targetAdvertisers);
+  if (!scanResult.ok) {
+    result.ok = false;
+    (result as any).error = scanResult.error || "Media scan failed";
+    return result;
+  }
+  
+  result.scanned = scanResult.matches.length;
+  
+  // Filter screens if specific one requested
+  let targetScreens = dbScreens.filter(s => s.yodeckPlayerId && s.playlistId);
+  if (screenId) {
+    targetScreens = targetScreens.filter(s => s.id === screenId);
+  }
+  
+  console.log(`[AdPublish] Processing ${scanResult.matches.length} matches for ${targetScreens.length} screens`);
+  
+  for (const match of scanResult.matches) {
+    // Find matching screens based on targeting
+    for (const screen of targetScreens) {
+      // Check targeting match (region/city)
+      const screenCity = screen.city?.toLowerCase() || "";
+      const screenRegion = screen.region?.toLowerCase() || "";
+      
+      const targetRegions = match.targetRegionCodes.map(r => r.toLowerCase());
+      
+      // Match if screen city/region matches any target
+      const targetMatch = targetRegions.length === 0 || 
+        targetRegions.some(t => 
+          screenCity.includes(t) || 
+          screenRegion.includes(t) ||
+          t.includes(screenCity) ||
+          t.includes(screenRegion)
+        );
+      
+      if (!targetMatch) {
+        result.details.push({
+          advertiserId: match.advertiserId,
+          advertiserName: match.advertiserName,
+          mediaId: match.yodeckMediaId,
+          screenId: screen.id,
+          playlistId: screen.playlistId!,
+          action: "skipped",
+          reason: `Targeting mismatch: screen=${screenCity}/${screenRegion}, target=${targetRegions.join(",")}`,
+        });
+        result.skipped++;
+        continue;
+      }
+      
+      if (dryRun) {
+        result.details.push({
+          advertiserId: match.advertiserId,
+          advertiserName: match.advertiserName,
+          mediaId: match.yodeckMediaId,
+          screenId: screen.id,
+          playlistId: screen.playlistId!,
+          action: "published",
+          reason: "dry_run",
+        });
+        result.published++;
+        continue;
+      }
+      
+      // Actually insert into playlist
+      const insertResult = await addAdToScreenPlaylist(screen.playlistId!, match.yodeckMediaId);
+      
+      if (!insertResult.ok) {
+        result.details.push({
+          advertiserId: match.advertiserId,
+          advertiserName: match.advertiserName,
+          mediaId: match.yodeckMediaId,
+          screenId: screen.id,
+          playlistId: screen.playlistId!,
+          action: "error",
+          reason: insertResult.error,
+        });
+        result.errors++;
+      } else if (insertResult.inserted) {
+        result.details.push({
+          advertiserId: match.advertiserId,
+          advertiserName: match.advertiserName,
+          mediaId: match.yodeckMediaId,
+          screenId: screen.id,
+          playlistId: screen.playlistId!,
+          action: "published",
+        });
+        result.published++;
+        console.log(`[AdPublish] Published: advertiser=${match.advertiserName} media=${match.yodeckMediaId} -> screen=${screen.name} playlist=${screen.playlistId}`);
+      } else {
+        result.details.push({
+          advertiserId: match.advertiserId,
+          advertiserName: match.advertiserName,
+          mediaId: match.yodeckMediaId,
+          screenId: screen.id,
+          playlistId: screen.playlistId!,
+          action: "already_present",
+        });
+        result.alreadyPresent++;
+      }
+    }
+  }
+  
+  console.log(`[AdPublish] Complete: scanned=${result.scanned} published=${result.published} already=${result.alreadyPresent} skipped=${result.skipped} errors=${result.errors}`);
+  return result;
+}

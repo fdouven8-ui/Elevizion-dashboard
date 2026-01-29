@@ -18198,6 +18198,50 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/publish-approved-ads
+   * Publish approved ads to screens based on linkKey matching and targeting
+   * Works WITHOUT contracts - scans Yodeck media for ADV-xxx patterns
+   */
+  app.post("/api/admin/publish-approved-ads", requireAdminAccess, async (req, res) => {
+    try {
+      const { dryRun = false, advertiserId, screenId } = req.body || {};
+      
+      console.log(`[PublishApproved] Request: dryRun=${dryRun}, advertiserId=${advertiserId || "all"}, screenId=${screenId || "all"}`);
+      
+      const advertisers = await storage.getAdvertisers();
+      const screens = await storage.getScreens();
+      
+      const { publishApprovedAdsToScreens } = await import("./services/yodeckBroadcast");
+      
+      const result = await publishApprovedAdsToScreens(
+        { dryRun, advertiserId, screenId },
+        advertisers.map(a => ({
+          id: a.id,
+          companyName: a.companyName,
+          linkKey: a.linkKey,
+          targetRegionCodes: a.targetRegionCodes,
+          targetCities: a.targetCities,
+          assetStatus: a.assetStatus,
+          yodeckMediaId: (a as any).yodeckMediaId,
+        })),
+        screens.map(s => ({
+          id: s.id,
+          name: s.name,
+          yodeckPlayerId: s.yodeckPlayerId,
+          playlistId: s.playlistId,
+          city: s.city,
+          region: s.region,
+        }))
+      );
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PublishApproved] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/admin/screens/:screenId/now-playing
    * Get current playback status for a screen
    */

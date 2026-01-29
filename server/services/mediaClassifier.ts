@@ -3,6 +3,8 @@
  * Classifies Yodeck media items as 'ad' or 'non_ad' based on name patterns and media type
  */
 
+import { BASELINE_MEDIA_IDS } from "../config/contentPipeline";
+
 // Default patterns for non-ad content (case-insensitive)
 const NON_AD_NAME_PATTERNS = [
   'nos',
@@ -32,6 +34,10 @@ const NON_AD_NAME_PATTERNS = [
   'opening hours',
   'logo',
   'branding',
+  '1limburg',    // Regional news app
+  'limburg',     // Regional content
+  'baseline',    // Baseline content indicator
+  'evz | baseline', // EVZ baseline playlist
 ];
 
 // Media types that are ALWAYS non-ad content (utility widgets only)
@@ -72,19 +78,26 @@ export interface ClassificationResult {
 }
 
 /**
- * Classify a single media item based on its name and media type
+ * Classify a single media item based on its name, media type, and optional ID
  * @param name - The name of the media item
  * @param mediaType - Optional media type (video, image, widget, app, etc.)
+ * @param mediaId - Optional media ID to check against baseline
  * 
  * Classification priority:
- * 1. Check name patterns first (most reliable)
- * 2. Check if media type is ALWAYS non-ad (clock, rss, weather, etc.)
- * 3. For video/image/app/webview, assume ad unless name matches non-ad pattern
- * 4. Unknown types default to 'ad' (safer for tracking)
+ * 1. Check if media ID is in baseline (highest priority - known baseline content)
+ * 2. Check name patterns (very reliable)
+ * 3. Check if media type is ALWAYS non-ad (clock, rss, weather, etc.)
+ * 4. For video/image/app/webview, assume ad unless name matches non-ad pattern
+ * 5. Unknown types default to 'ad' (safer for tracking)
  */
-export function classifyMediaItem(name: string, mediaType?: string): MediaCategory {
+export function classifyMediaItem(name: string, mediaType?: string, mediaId?: number): MediaCategory {
   const lowerName = name.toLowerCase();
   const lowerType = (mediaType || '').toLowerCase();
+  
+  // HIGHEST PRIORITY: Check if this is a baseline media ID
+  if (mediaId && BASELINE_MEDIA_IDS.includes(mediaId)) {
+    return 'non_ad';
+  }
   
   // First check name patterns - this is the most reliable signal
   for (const pattern of NON_AD_NAME_PATTERNS) {
@@ -126,7 +139,7 @@ export function classifyMediaItems(
     type: item.type || 'media',
     mediaType: item.mediaType,
     duration: item.duration,
-    category: classifyMediaItem(item.name, item.type || item.mediaType),
+    category: classifyMediaItem(item.name, item.type || item.mediaType, item.id),
   }));
 
   const ads = classifiedItems.filter(item => item.category === 'ad');
