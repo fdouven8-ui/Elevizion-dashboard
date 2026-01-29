@@ -691,10 +691,12 @@ export default function ScreenDetail() {
                 <span>EVZ: {screen.screenId}</span>
               )}
             </p>
-            <p className="text-sm text-muted-foreground flex items-center gap-1 mt-1">
-              <Clock className="h-3 w-3" />
-              Laatst gezien: {formatLastSeen(screen.lastSeenAt)}
-            </p>
+            {screen.status !== "online" && (
+              <p className="text-sm text-muted-foreground flex items-center gap-1 mt-1">
+                <Clock className="h-3 w-3" />
+                Laatst gezien: {formatLastSeen(screen.lastSeenAt)}
+              </p>
+            )}
             <div className="mt-2">
               <SyncStatusBadge
                 status={screen.yodeckSyncStatus}

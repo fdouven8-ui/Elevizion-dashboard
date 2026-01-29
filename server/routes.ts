@@ -18036,6 +18036,168 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/reconcile-screens
+   * Reconcile DB playlistId with actual Yodeck source_id
+   */
+  app.post("/api/admin/reconcile-screens", requireAdminAccess, async (req, res) => {
+    try {
+      const { reconcileScreenPlaylistIds } = await import("./services/yodeckBroadcast");
+      const result = await reconcileScreenPlaylistIds();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Reconcile] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/baseline/sync-all
+   * Sync all screen playlists from baseline
+   */
+  app.post("/api/admin/baseline/sync-all", requireAdminAccess, async (req, res) => {
+    try {
+      const { syncAllScreensFromBaseline } = await import("./services/yodeckBroadcast");
+      const result = await syncAllScreensFromBaseline();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[BaselineSync] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/ads/publish-missing
+   * Find advertisers with ready assets and publish to correct screens
+   */
+  app.post("/api/admin/ads/publish-missing", requireAdminAccess, async (req, res) => {
+    try {
+      console.log("[PublishMissing] Scanning for advertisers with ready assets...");
+      
+      const advertisers = await storage.getAdvertisers();
+      const screens = await storage.getScreens();
+      const contracts = await storage.getContracts();
+      const placements = await storage.listPlacements();
+      
+      const results: Array<{
+        advertiserId: string;
+        advertiserName: string;
+        action: string;
+        screenId?: string;
+        mediaId?: number;
+        error?: string;
+      }> = [];
+      
+      for (const advertiser of advertisers) {
+        if (advertiser.assetStatus !== "ready_for_yodeck") continue;
+        
+        const contract = contracts.find(c => c.advertiserId === advertiser.id);
+        if (!contract) {
+          results.push({
+            advertiserId: advertiser.id,
+            advertiserName: advertiser.companyName || "Unknown",
+            action: "skipped",
+            error: "No contract found",
+          });
+          continue;
+        }
+        
+        let placement = placements.find(p => p.contractId === contract.id);
+        if (!placement) {
+          const targetCities = advertiser.targetRegionCodes || [];
+          let matchedScreen = null;
+          
+          for (const screen of screens) {
+            if (!screen.yodeckPlayerId || !screen.playlistId) continue;
+            const location = await storage.getLocation(screen.locationId || "");
+            if (!location) continue;
+            
+            const cityMatch = targetCities.length === 0 || 
+              targetCities.some(t => location.city?.toLowerCase().includes(t.toLowerCase()));
+            
+            if (cityMatch) {
+              matchedScreen = screen;
+              break;
+            }
+          }
+          
+          if (!matchedScreen) {
+            results.push({
+              advertiserId: advertiser.id,
+              advertiserName: advertiser.companyName || "Unknown",
+              action: "skipped",
+              error: "No matching screen for targeting",
+            });
+            continue;
+          }
+          
+          placement = await storage.createPlacement({
+            contractId: contract.id,
+            screenId: matchedScreen.id,
+            source: "auto_publish_missing",
+            isActive: true,
+          });
+        }
+        
+        const screen = screens.find(s => s.id === placement!.screenId);
+        if (!screen?.playlistId) {
+          results.push({
+            advertiserId: advertiser.id,
+            advertiserName: advertiser.companyName || "Unknown",
+            action: "skipped",
+            error: "Placement screen has no playlist",
+          });
+          continue;
+        }
+        
+        const yodeckMediaId = (advertiser as any).yodeckMediaId;
+        if (!yodeckMediaId) {
+          results.push({
+            advertiserId: advertiser.id,
+            advertiserName: advertiser.companyName || "Unknown",
+            action: "skipped",
+            error: "No yodeckMediaId found",
+          });
+          continue;
+        }
+        
+        const { addAdToScreenPlaylist } = await import("./services/yodeckBroadcast");
+        const publishResult = await addAdToScreenPlaylist(screen.playlistId, yodeckMediaId);
+        
+        if (publishResult.ok) {
+          results.push({
+            advertiserId: advertiser.id,
+            advertiserName: advertiser.companyName || "Unknown",
+            action: publishResult.inserted ? "published" : "already_present",
+            screenId: screen.id,
+            mediaId: yodeckMediaId,
+          });
+          console.log(`[PublishMissing] advertiser=${advertiser.companyName} mediaId=${yodeckMediaId} screen=${screen.id} inserted=${publishResult.inserted}`);
+        } else {
+          results.push({
+            advertiserId: advertiser.id,
+            advertiserName: advertiser.companyName || "Unknown",
+            action: "error",
+            error: publishResult.error,
+          });
+        }
+      }
+      
+      res.json({
+        ok: true,
+        total: results.length,
+        published: results.filter(r => r.action === "published").length,
+        alreadyPresent: results.filter(r => r.action === "already_present").length,
+        skipped: results.filter(r => r.action === "skipped").length,
+        errors: results.filter(r => r.action === "error").length,
+        results,
+      });
+    } catch (error: any) {
+      console.error("[PublishMissing] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/admin/screens/:screenId/now-playing
    * Get current playback status for a screen
    */
@@ -18049,9 +18211,17 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     
     try {
       const { screenId } = req.params;
-      const { getScreenNowPlaying } = await import("./services/yodeckBroadcast");
+      const { getScreenNowPlaying, reconcileScreenPlaylistIds } = await import("./services/yodeckBroadcast");
       
-      const result = await getScreenNowPlaying(screenId);
+      let result = await getScreenNowPlaying(screenId);
+      
+      // Auto-reconcile if mismatch detected
+      if (result.ok && result.mismatch) {
+        console.log(`[NowPlaying] Mismatch detected for ${screenId}, auto-reconciling...`);
+        await reconcileScreenPlaylistIds();
+        result = await getScreenNowPlaying(screenId);
+      }
+      
       res.json(result);
     } catch (error: any) {
       console.error("[NowPlaying] Error:", error);

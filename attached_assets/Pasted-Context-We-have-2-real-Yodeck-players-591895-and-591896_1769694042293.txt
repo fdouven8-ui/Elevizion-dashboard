@@ -1,0 +1,190 @@
+Context: We have 2 real Yodeck players: 591895 and 591896. The screens are online and show content. However, verification fails and the approved advertiser video for advertiserId 9a99d555-8676-49d3-9862-f65859bdcfb1 (Bouwservice Douven, linkKey ADV-BOUWSERVICEDOUVEN-756846, assetStatus ready_for_yodeck) is not appearing on the correct screen. Yodeck now plays “EVZ | SCREEN | 591895(auto-playlist-30532597-crop)” (id 30532597) and “EVZ | SCREEN | 591896(auto-playlist-30532596-crop)” (id 30532596), but DB still expects old playlistIds (30532044 / 30524269), so mismatch => verificationOk false. Also Yodeck has many legacy playlists (15 pages) that must be cleaned safely.
+
+Goal: Fix this surgically without rewriting the whole app. Keep the new SCREEN_PLAYLIST_ONLY pipeline, but make it correct and complete:
+
+Expected playlistId in DB must always match what Yodeck is actually playing (source_id), and verification should become true.
+
+There must be exactly: EVZ | BASELINE (single baseline playlist) + one canonical screen playlist per real player: EVZ | SCREEN | <playerId>. Everything else that is legacy/duplicate should be marked legacy or deleted safely.
+
+Baseline must be the single source of truth: whenever baseline changes, all screen playlists that use baseline must be automatically synced to include the baseline items (in order) + ads afterwards.
+
+The approved advertiser video for Bouwservice Douven must be found (even if it “floats” in Yodeck media or in DB) and inserted into the correct screen playlist for player 591896. In UI, it must show as an Ad AND be linked to a placement record (so it doesn’t show “Niet gekoppeld / Geen plaatsing”).
+
+Do NOT change unrelated modules. Minimal changes. Idempotent. Safe.
+
+Required implementation details (do exactly this)
+A) Canonical truth: reconcile DB playlistId with Yodeck “now playing”
+
+Implement a server-side function reconcileScreenPlaylistIds() that:
+
+Fetches Yodeck players/screens via the same API you already use in /api/admin/canonical-screens or YodeckContent.
+
+For each real player (591895, 591896), read source_type and source_id from Yodeck (canonical parse shows it).
+
+If source_type === "playlist" then that source_id is the canonical playlist currently playing.
+
+Update our DB screens.playlistId and screens.playlistName to that canonical playlist ID/name (even if previously different).
+
+Update any “expectedPlaylistId” logic in /now-playing endpoints to use the DB value AFTER reconciliation.
+
+Run reconcileScreenPlaylistIds() automatically:
+
+on server startup (once),
+
+and before returning GET /api/screens/:id/now-playing (only if mismatch is detected, then reconcile & retry once).
+
+Acceptance: /api/screens/*/now-playing must return verificationOk: true and mismatch: false for both screens.
+
+B) Baseline as source of truth + automatic sync
+
+We have one baseline playlist in Yodeck called exactly: EVZ | BASELINE (case sensitive).
+
+Implement getBaselinePlaylistItems() that reliably fetches ALL items from EVZ | BASELINE (handle pagination; you already added pagination search fallback).
+
+Implement syncScreenPlaylistFromBaseline(screenPlaylistId):
+
+Fetch current items of the screen playlist.
+
+Ensure baseline items exist in the screen playlist in the same order as baseline.
+
+Remove baseline duplicates (keep one copy).
+
+Do NOT remove ad items (ads are appended after baseline).
+
+Resulting playlist structure must be: [baseline items ...] + [ad items ...]
+
+Implement a lightweight worker BaselineSyncWorker that runs every 2 minutes:
+
+Computes a stable hash (e.g., JSON stringify list of baseline media IDs) and stores last hash in DB (a small table or key-value setting).
+
+If hash changed since last run => sync all screen playlists (for all real players).
+
+Worker must run even when CONTENT_PIPELINE_MODE=SCREEN_PLAYLIST_ONLY.
+
+Also add admin endpoint:
+
+POST /api/admin/baseline/sync-all to force immediate sync and return a report (per screen: baselineCount before/after, adsCount).
+
+Acceptance: editing EVZ | BASELINE in Yodeck and waiting max 2 minutes updates both screen playlists (baselineCount matches baseline length).
+
+C) Place the approved Bouwservice Douven video on the correct screen (591896)
+
+There are currently NO placements in /api/placements (empty), but the UI expects a placement link to mark the ad as “gekoppeld”.
+
+Implement ensurePlacementForAdvertiserOnScreen(advertiserId, screenId):
+
+Create a placement record in DB if none exists (minimal fields only).
+
+Status = active, package = SINGLE, screensIncluded=1, target = screen 591896.
+
+This is allowed in TEST_MODE even without contracts; do not touch contract system.
+
+Implement findApprovedYodeckMediaForAdvertiser(advertiser) robustly:
+
+First check DB tables you already use for uploaded assets (whatever stores yodeckMediaId / fileName / advertiserId).
+
+If not found, query Yodeck media search for ADV-BOUWSERVICEDOUVEN-756846 (linkKey) and pick the newest READY/encoded video asset (duration <= 15 or close) and capture its mediaId.
+
+Store that mediaId back in DB for the advertiser asset record so this becomes deterministic.
+
+Implement publishAdvertiserToScreenPlaylist(advertiserId, screenId):
+
+Calls baseline sync for that screen first.
+
+Inserts the advertiser media item into the screen playlist AFTER baseline items.
+
+Ensure no duplicates (idempotent).
+
+Updates our screen_content / currentContent mapping so this media item becomes category ad and has linkedAdvertiserId and linkedPlacementId.
+
+Add admin endpoint:
+
+POST /api/admin/ads/publish-missing which:
+
+scans advertisers with assetStatus=ready_for_yodeck,
+
+ensures placement,
+
+ensures mediaId,
+
+publishes to the correct screen playlist based on targeting (for now: regionCode “sittard” => player 591896).
+
+Acceptance:
+
+Screen 591896 playlist itemCount becomes baselineCount + 1 ad.
+
+/api/screens/241377ce.../content shows the Bouwservice Douven ad row as TYPE=AD and STATUS not “Niet gekoppeld” (must show linked placement).
+
+On the physical screen, the ad appears in the loop.
+
+D) Cleanup Yodeck playlists safely (stop the 15 pages chaos)
+
+Implement cleanupYodeckPlaylists() that:
+
+Fetches all playlists (paged).
+
+Determine “in use” playlists by:
+
+canonical source_id of each real player (591895/591896),
+
+plus EVZ | BASELINE.
+
+Protected names:
+
+EVZ | BASELINE
+
+EVZ | SCREEN | 591895
+
+EVZ | SCREEN | 591896
+
+also protect the actual currently-playing playlist IDs even if names differ.
+
+For all other playlists that match legacy patterns:
+
+names starting with Elevizion | Screen |
+
+OR EVZ | SCREEN | yd_player_
+
+OR auto-playlist duplicates older than 7 days
+
+either delete them or rename them with prefix LEGACY | (prefer rename if delete is risky).
+
+Add endpoint:
+
+POST /api/admin/yodeck/cleanup returns counts: renamed, deleted, protected, skipped.
+
+Acceptance: after running cleanup, the Yodeck UI should show only a few relevant playlists, not 15 pages.
+
+E) Small UI correctness (do not overdo)
+
+“Laatst gezien: 1 maand geleden” while status is Online is confusing. If isOnline=true, show “Online (nu)” and hide lastSeen text. If offline, show lastSeen.
+
+Do NOT change navigation or other sections.
+
+Diagnostics / what to log
+
+Add clear logs (single line per action):
+
+[Reconcile] screenId=... expected=... actual=... updatedTo=...
+
+[BaselineSync] baselineHashChanged=... baselineCount=...
+
+[PublishAd] advertiser=... mediaId=... screen=... inserted=true position=...
+
+[Cleanup] protected=... renamed=... deleted=...
+
+Final check script (must be included)
+
+After implementing, run these calls and paste outputs to console on startup:
+
+GET /api/admin/canonical-screens
+
+GET /api/screens/241377ce-a25e-4744-9ea7-cd9359515d07/now-playing
+
+GET /api/screens/d7e9a5b2-0ded-44b6-951b-01ac743e7d78/now-playing
+
+POST /api/admin/ads/publish-missing
+
+POST /api/admin/baseline/sync-all
+
+Do the minimal code changes needed, keep everything else intact

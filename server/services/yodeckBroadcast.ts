@@ -1509,3 +1509,291 @@ export async function quarantineLegacy(dryRun: boolean = true): Promise<LegacyCl
     errors,
   };
 }
+
+// =============================================================================
+// A) RECONCILE SCREEN PLAYLIST IDS
+// =============================================================================
+
+export interface ReconcileResult {
+  screenId: string;
+  yodeckPlayerId: string;
+  expected: string | null;
+  actual: string | null;
+  action: "unchanged" | "updated" | "error";
+  error?: string;
+}
+
+/**
+ * Reconcile DB playlistId with actual Yodeck source_id
+ * This ensures verification works correctly
+ */
+export async function reconcileScreenPlaylistIds(): Promise<{
+  ok: boolean;
+  results: ReconcileResult[];
+}> {
+  console.log("[Reconcile] Starting screen playlist ID reconciliation...");
+  
+  const allScreens = await db.select().from(screens).where(isNotNull(screens.yodeckPlayerId));
+  const results: ReconcileResult[] = [];
+  
+  // Fetch all Yodeck screens
+  const yodeckScreens = await yodeckRequest<{ results: any[] }>("/screens/?page_size=100");
+  if (!yodeckScreens.ok || !yodeckScreens.data?.results) {
+    console.error("[Reconcile] Failed to fetch Yodeck screens");
+    return { ok: false, results: [] };
+  }
+  
+  for (const screen of allScreens) {
+    const playerId = screen.yodeckPlayerId;
+    if (!playerId || playerId.startsWith("yd_player_")) continue;
+    
+    const yodeckScreen = yodeckScreens.data.results.find((s: any) => String(s.id) === playerId);
+    if (!yodeckScreen) {
+      results.push({
+        screenId: screen.id,
+        yodeckPlayerId: playerId,
+        expected: screen.playlistId,
+        actual: null,
+        action: "error",
+        error: "Player not found in Yodeck",
+      });
+      continue;
+    }
+    
+    // Parse screen_content to find actual source
+    const screenContent = yodeckScreen.screen_content;
+    let actualSourceId: string | null = null;
+    let actualSourceName: string | null = null;
+    
+    if (screenContent?.source_type === "playlist" && screenContent?.source_id) {
+      actualSourceId = String(screenContent.source_id);
+      actualSourceName = screenContent.source_name || null;
+    }
+    
+    if (!actualSourceId) {
+      results.push({
+        screenId: screen.id,
+        yodeckPlayerId: playerId,
+        expected: screen.playlistId,
+        actual: null,
+        action: "error",
+        error: "No playlist source found",
+      });
+      continue;
+    }
+    
+    // Check if DB matches
+    if (screen.playlistId === actualSourceId) {
+      results.push({
+        screenId: screen.id,
+        yodeckPlayerId: playerId,
+        expected: screen.playlistId,
+        actual: actualSourceId,
+        action: "unchanged",
+      });
+      continue;
+    }
+    
+    // Update DB to match actual
+    console.log(`[Reconcile] screenId=${screen.id} expected=${screen.playlistId} actual=${actualSourceId} updatedTo=${actualSourceId}`);
+    
+    await db.update(screens)
+      .set({ 
+        playlistId: actualSourceId,
+        playlistName: actualSourceName || screen.playlistName,
+      })
+      .where(eq(screens.id, screen.id));
+    
+    results.push({
+      screenId: screen.id,
+      yodeckPlayerId: playerId,
+      expected: screen.playlistId,
+      actual: actualSourceId,
+      action: "updated",
+    });
+  }
+  
+  console.log(`[Reconcile] Complete: ${results.filter(r => r.action === "updated").length} updated, ${results.filter(r => r.action === "unchanged").length} unchanged`);
+  
+  return { ok: true, results };
+}
+
+// =============================================================================
+// B) BASELINE SYNC
+// =============================================================================
+
+/**
+ * Get all items from the baseline playlist
+ */
+export async function getBaselinePlaylistItems(): Promise<{
+  ok: boolean;
+  playlistId: string | null;
+  items: number[];
+  error?: string;
+}> {
+  const baseline = await ensureBaselinePlaylist();
+  if (!baseline.ok || !baseline.playlistId) {
+    return { ok: false, playlistId: null, items: [], error: baseline.error };
+  }
+  
+  const items = await yodeckGetPlaylistItems(baseline.playlistId);
+  return {
+    ok: items.ok,
+    playlistId: baseline.playlistId,
+    items: items.items || [],
+    error: items.error,
+  };
+}
+
+/**
+ * Sync a screen playlist from baseline
+ * Structure: [baseline items] + [ad items]
+ */
+export async function syncScreenPlaylistFromBaseline(screenPlaylistId: string): Promise<{
+  ok: boolean;
+  baselineCount: number;
+  adsCount: number;
+  changed: boolean;
+  error?: string;
+}> {
+  // Get baseline items
+  const baseline = await getBaselinePlaylistItems();
+  if (!baseline.ok) {
+    return { ok: false, baselineCount: 0, adsCount: 0, changed: false, error: baseline.error };
+  }
+  
+  const baselineIds = new Set(baseline.items);
+  
+  // Get current screen playlist items
+  const current = await yodeckGetPlaylistItems(screenPlaylistId);
+  if (!current.ok) {
+    return { ok: false, baselineCount: 0, adsCount: 0, changed: false, error: current.error };
+  }
+  
+  const currentIds = current.items || [];
+  
+  // Separate current items into baseline and ads
+  const currentBaseline: number[] = [];
+  const currentAds: number[] = [];
+  
+  for (const id of currentIds) {
+    if (baselineIds.has(id)) {
+      if (!currentBaseline.includes(id)) {
+        currentBaseline.push(id);
+      }
+    } else {
+      if (!currentAds.includes(id)) {
+        currentAds.push(id);
+      }
+    }
+  }
+  
+  // Build desired order: baseline first (in original order), then ads
+  const desired = [...baseline.items, ...currentAds];
+  
+  // Check if already correct
+  if (JSON.stringify(currentIds) === JSON.stringify(desired)) {
+    return { 
+      ok: true, 
+      baselineCount: baseline.items.length, 
+      adsCount: currentAds.length, 
+      changed: false 
+    };
+  }
+  
+  // Update playlist items
+  const result = await setPlaylistItemsExactly(screenPlaylistId, desired);
+  
+  return {
+    ok: result.ok,
+    baselineCount: baseline.items.length,
+    adsCount: currentAds.length,
+    changed: result.changed,
+    error: result.error,
+  };
+}
+
+/**
+ * Sync all screen playlists from baseline
+ */
+export async function syncAllScreensFromBaseline(): Promise<{
+  ok: boolean;
+  results: Array<{
+    screenId: string;
+    playlistId: string;
+    baselineCount: number;
+    adsCount: number;
+    changed: boolean;
+    error?: string;
+  }>;
+}> {
+  console.log("[BaselineSync] Syncing all screen playlists from baseline...");
+  
+  const allScreens = await db.select().from(screens).where(isNotNull(screens.yodeckPlayerId));
+  const results: Array<{
+    screenId: string;
+    playlistId: string;
+    baselineCount: number;
+    adsCount: number;
+    changed: boolean;
+    error?: string;
+  }> = [];
+  
+  for (const screen of allScreens) {
+    if (!screen.playlistId || screen.yodeckPlayerId?.startsWith("yd_player_")) continue;
+    
+    const result = await syncScreenPlaylistFromBaseline(screen.playlistId);
+    results.push({
+      screenId: screen.id,
+      playlistId: screen.playlistId,
+      ...result,
+    });
+    
+    console.log(`[BaselineSync] screen=${screen.id} baselineCount=${result.baselineCount} adsCount=${result.adsCount} changed=${result.changed}`);
+  }
+  
+  return { ok: true, results };
+}
+
+// =============================================================================
+// C) PUBLISH ADS
+// =============================================================================
+
+/**
+ * Add an ad media item to a screen playlist (after baseline)
+ */
+export async function addAdToScreenPlaylist(
+  screenPlaylistId: string, 
+  mediaId: number
+): Promise<{ ok: boolean; inserted: boolean; position: number; error?: string }> {
+  // First sync baseline
+  const syncResult = await syncScreenPlaylistFromBaseline(screenPlaylistId);
+  if (!syncResult.ok) {
+    return { ok: false, inserted: false, position: -1, error: syncResult.error };
+  }
+  
+  // Get current items
+  const current = await yodeckGetPlaylistItems(screenPlaylistId);
+  if (!current.ok) {
+    return { ok: false, inserted: false, position: -1, error: current.error };
+  }
+  
+  const currentIds = current.items || [];
+  
+  // Check if already present
+  if (currentIds.includes(mediaId)) {
+    const position = currentIds.indexOf(mediaId);
+    return { ok: true, inserted: false, position };
+  }
+  
+  // Add at the end (after baseline + existing ads)
+  const result = await yodeckAddMediaToPlaylist(screenPlaylistId, mediaId);
+  if (!result.ok) {
+    return { ok: false, inserted: false, position: -1, error: result.error };
+  }
+  
+  const position = currentIds.length;
+  console.log(`[PublishAd] mediaId=${mediaId} screen=${screenPlaylistId} inserted=true position=${position}`);
+  
+  return { ok: true, inserted: true, position };
+}

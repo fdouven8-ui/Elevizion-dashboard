@@ -383,6 +383,15 @@ app.use((req, res, next) => {
           const result = await testYodeckConnection();
           if (result.ok) {
             console.log(`[BOOT][Yodeck] Connection OK: ${(result as any).count || 0} screens found`);
+            
+            // Run reconciliation on startup
+            try {
+              const { reconcileScreenPlaylistIds } = await import("./services/yodeckBroadcast");
+              const reconcileResult = await reconcileScreenPlaylistIds();
+              console.log(`[BOOT][Reconcile] Completed: ${reconcileResult.results.filter(r => r.action === "updated").length} updated`);
+            } catch (err: any) {
+              console.log(`[BOOT][Reconcile] Error: ${err.message}`);
+            }
           } else {
             console.log(`[BOOT][Yodeck] Connection FAILED: status=${result.statusCode} body=${(result as any).bodyPreview?.substring(0, 200)}`);
           }
