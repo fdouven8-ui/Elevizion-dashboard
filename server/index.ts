@@ -9,6 +9,7 @@ import { startCapacityWatcher, stopCapacityWatcher } from "./services/capacityWa
 import { startMonthlyReportWorker, stopMonthlyReportWorker } from "./services/monthlyReportWorker";
 import { startAutopilotWorker, stopAutopilotWorker } from "./workers/autopilotWorker";
 import { checkVideoProcessingDependencies } from "./services/videoMetadataService";
+import { shouldStartAutopilotWorker, logContentPipelineConfig } from "./config/contentPipeline";
 import { db } from "./db";
 import { storage } from "./storage";
 
@@ -448,11 +449,15 @@ app.use((req, res, next) => {
         }
       }, 25000);
       
-      // Start autopilot worker (5 minute interval)
-      // Ensures all live locations have canonical content (NEWS/WEATHER/ADS)
+      // Start autopilot worker (5 minute interval) - CONDITIONAL based on kill-switches
       setTimeout(() => {
         if (!isShuttingDown) {
-          startAutopilotWorker();
+          logContentPipelineConfig();
+          if (shouldStartAutopilotWorker()) {
+            startAutopilotWorker();
+          } else {
+            console.log("[AutopilotWorker] DISABLED by CONTENT_PIPELINE_MODE=SCREEN_PLAYLIST_ONLY");
+          }
         }
       }, 30000);
     },

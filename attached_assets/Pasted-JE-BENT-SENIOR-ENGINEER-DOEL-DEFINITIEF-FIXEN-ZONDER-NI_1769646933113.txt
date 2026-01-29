@@ -1,0 +1,130 @@
+JE BENT SENIOR ENGINEER. DOEL: DEFINITIEF FIXEN ZONDER NIEUWE CONCEPTEN. GEEN AUTOPILOT BASELINE, GEEN COMBINED PLAYLIST, GEEN LAYOUTS, GEEN TAGS. ALLEEN: 1 PLAYLIST PER SCHERM.
+
+LOGS BEWIJZEN HUIDIG PROBLEEM:
+- AutopilotWorker draait NOG STEEDS en eist AUTOPILOT_BASELINE_PLAYLIST_ID -> BASELINE_NOT_CONFIGURED
+- Daarna draait location “Combined Playlist Mode” check en markeert “needs repair”
+=> Dit saboteert de simpele screen-playlist aanpak en blijft foutstatussen zetten.
+
+HARD REQUIREMENT:
+- Er mag nog maar 1 content pipeline bestaan: ScreenPlaylistPipeline.
+- Alle andere pipelines moeten 100% uit staan, niet “failen”, niet “checken”, niet “needs repair” schrijven.
+
+IMPLEMENTATIE (IN ÉÉN CHANGESET):
+
+1) KILL-SWITCHES (MOET)
+Maak 3 env flags met defaults:
+- CONTENT_PIPELINE_MODE="SCREEN_PLAYLIST_ONLY"   (default!)
+- ENABLE_AUTOPILOT_WORKER=false                  (default!)
+- ENABLE_LOCATION_AUTOPILOT=false                (default!)
+
+Gedrag:
+- Als CONTENT_PIPELINE_MODE == "SCREEN_PLAYLIST_ONLY":
+  - AutopilotWorker MAG NIET STARTEN.
+  - Location autopilot / combined playlist checks mogen NIET starten.
+  - Alle endpoints die location content-status berekenen op baseline/combined/layout moeten OF:
+    (a) verwijzen naar ScreenPlaylistPipeline, OF
+    (b) returnen met “disabled_by_mode” zonder side effects.
+
+CRUCIAAL: “disabled” betekent: GEEN error logs, GEEN needsRepair updates, GEEN status wijzigingen.
+
+2) VERWIJDER/NEGEER BASELINE EN COMBINED IN CODEPAD
+Zoek en verwijder/disable alle code die deze errors kan triggeren:
+- BASELINE_NOT_CONFIGURED
+- Combined Playlist Mode
+- LEGACY_COMBINED_PLAYLIST_DISABLED
+- AUTOPILOT_BASELINE_PLAYLIST_ID
+- ensureLocationContent / ensureBaseline / ensureCombinedPlaylist / layout broadcasts
+
+Als je het niet kunt verwijderen: wrap het volledig:
+if (CONTENT_PIPELINE_MODE !== "SCREEN_PLAYLIST_ONLY") { ...legacy... } else { return NOOP }
+
+3) SINGLE SOURCE OF TRUTH (ALLEEN SCREEN)
+Screen velden (bron van waarheid):
+- screen.yodeckPlayerId
+- screen.yodeckPlaylistId
+- screen.yodeckPlaylistName
+Niets op Location mag nog gebruikt worden voor content:
+- ignore location.yodeckLayoutId, yodeckBaselinePlaylistId, combinedPlaylistId, playlistMode, playlistTag, layoutMode
+
+4) TEMPLATE BASIS (ZONDER AUTOPILOT SETTINGS)
+Gebruik maar 1 template env:
+- YODECK_TEMPLATE_PLAYLIST_ID (de 4-items voorbeeld playlist)
+
+GEEN “Instellingen > Autopilot baseline playlist id”.
+Alles komt uit YODECK_TEMPLATE_PLAYLIST_ID.
+
+5) ScreenPlaylistPipeline (ENIGE FLOW)
+A) ensureScreenPlaylist(screen)
+- if no yodeckPlayerId => return {ok:false, reason:"SCREEN_NOT_LINKED"} (geen errors die UI vervuilen)
+- if screen.yodeckPlaylistId ontbreekt of playlist bestaat niet:
+  - create playlist: "Elevizion | Screen | <playerId>"
+  - clone items from YODECK_TEMPLATE_PLAYLIST_ID (zelfde volgorde)
+  - save to Screen (playlistId, playlistName)
+- return playlistId
+
+B) assignPlaylistToPlayer(screen)
+- set player content source naar playlist (source_type="playlist", source_id=screen.yodeckPlaylistId)
+- idempotent
+
+C) addMediaToScreenPlaylist(screen, yodeckMediaId)
+- ensureScreenPlaylist
+- check duplicate -> idempotent
+- append media
+- assignPlaylistToPlayer (safe)
+- update screen.lastPushAt
+
+6) EVENTS
+Bij approve + assignment naar screen:
+- upload -> yodeckMediaId
+- addMediaToScreenPlaylist(screen, mediaId)
+KLAAR.
+
+7) API/UI: STOP MET LOCATION CONTENT-STATUS ALS BRON
+Probleem uit screenshot “Yodeck niet gekoppeld / Geen playlist / 0 items” komt door verkeerde checks.
+Fix endpoints:
+
+A) GET /api/screens/:id/now-playing
+- uses ScreenPlaylistPipeline
+- ensureScreenPlaylist + assignPlaylistToPlayer
+- fetch playlist items => itemCount
+- verificationOk = (player source_id == screen.yodeckPlaylistId)
+- NOOIT “baselineConfigured/canonical/mismatchReason” op basis van location/layout.
+
+B) GET /api/admin/locations/:id/content-status
+- Als CONTENT_PIPELINE_MODE == "SCREEN_PLAYLIST_ONLY":
+  - return een simpele aggregatie van screens onder die location:
+    - hasYodeckDevice = any screen has yodeckPlayerId
+    - playlistId = per screen (lijst)
+    - itemCount = per screen
+  - mode = "SCREEN_PLAYLIST_ONLY"
+  - needsRepair ALTIJD false zolang screen pipeline ok is
+  - Geen baseline/combined velden meer.
+
+8) CLEANUP / DATA SANITIZER (MOET EENMALIG)
+Omdat er “doolhof van data” is:
+- Maak script: sanitizeLegacyContentState()
+  - zet op Locations: needsRepair=false, needsRepairReason=null
+  - verwijder of null legacy velden die UI beïnvloeden (of zorg dat UI ze niet leest)
+  - verwijder oude “mismatchReason” / “baselineConfigured” status caches als die bestaan
+
+9) STARTUP GEDRAG
+Op server boot:
+- Als ENABLE_AUTOPILOT_WORKER=false: start worker NIET (dus geen BASELINE_NOT_CONFIGURED ooit meer)
+- Run 1x backfillScreenPlaylists():
+  - voor elke Screen met yodeckPlayerId:
+    ensureScreenPlaylist + assignPlaylistToPlayer
+  - log alleen summary
+
+10) ACCEPTATIE (KEIHARD)
+- In logs mag NOOIT meer voorkomen:
+  - BASELINE_NOT_CONFIGURED
+  - Combined Playlist Mode
+  - LEGACY_COMBINED_PLAYLIST_DISABLED
+- Elke Screen met yodeckPlayerId heeft playlistId en itemCount >= 4
+- Approved video -> itemCount stijgt + video in playlist.
+
+OUTPUT VAN JOU:
+- Welke files zijn aangepast
+- Welke workers/routes zijn uitgeschakeld
+- Welke env defaults gezet zijn
+- 2-min test stappen (endpoints)
