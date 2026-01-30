@@ -1,0 +1,201 @@
+You are a senior backend engineer with deep experience in digital signage systems (Yodeck).
+
+Your task is to FIX and SIMPLIFY the entire Elevizion publish & playback pipeline so that it is deterministic, debuggable, and impossible to end in a “published but not visible” state.
+
+====================================================================
+HARD NON-NEGOTIABLE RULE (MOST IMPORTANT)
+====================================================================
+
+ELEVIZION MUST NEVER USE YODECK LAYOUT MODE FOR ADS.
+
+- Layouts are deprecated for Elevizion.
+- ALL Elevizion-managed screens MUST run in PLAYLIST mode.
+- Ads are ONLY allowed to be visible when they are physically present inside a playlist.
+- If any screen is found in layout mode, the system MUST auto-migrate it to playlist mode.
+
+No exceptions. No fallbacks. No silent success.
+
+====================================================================
+DESIRED GOLDEN FLOW
+====================================================================
+
+Upload video
+→ validate + normalize (MP4 / H.264 / moov atom at start)
+→ approve in Video Review
+→ publish
+→ screen is forced into PLAYLIST mode
+→ baseline playlist is ensured
+→ ad media is inserted into playlist
+→ screen is verified
+→ adsCount > 0
+→ video is visible on the physical screen
+
+If the ad is not visible → publish MUST fail.
+
+====================================================================
+MANDATORY SYSTEM CHANGES
+====================================================================
+
+--------------------------------------------------------------------
+1) GLOBAL KILL SWITCH FOR LAYOUTS
+--------------------------------------------------------------------
+
+- Remove / bypass ALL logic related to:
+  - layout verification
+  - layout assignment
+  - layout-based ad surfacing
+- Layouts may ONLY be read for detection/audit, never used for playback.
+
+If screen_content.source_type === "layout":
+  - Log: "[PlaylistEnforcer] Screen in layout mode, migrating to playlist"
+  - Continue with forced playlist migration (see below).
+
+--------------------------------------------------------------------
+2) PLAYLIST ENFORCER (RUNS ON EVERY PUBLISH)
+--------------------------------------------------------------------
+
+Before ANY publishing logic:
+
+For each target screen:
+- Fetch Yodeck screen status.
+- If source_type !== "playlist":
+    a) Resolve or create the canonical Elevizion playlist.
+    b) Assign screen_content.source_type = "playlist".
+    c) Assign screen_content.source_id = <playlistId>.
+    d) Persist old layoutId for audit only (do NOT delete).
+- Log before/after source_type.
+
+This step MUST happen before media tagging or insertion.
+
+--------------------------------------------------------------------
+3) CANONICAL ELEVIZION PLAYLIST (ONE PER LOCATION)
+--------------------------------------------------------------------
+
+Every location must have EXACTLY one playlist:
+
+Name format:
+"EVZ | SCREEN | <location name>"
+
+Rules:
+- This playlist is the ONLY playback surface.
+- It MUST always contain baseline content:
+  - news
+  - weather
+  - info
+  - Elevizion self-ad
+- Baseline content is immutable and may never be removed by ad logic.
+
+--------------------------------------------------------------------
+4) TAGS ARE METADATA ONLY
+--------------------------------------------------------------------
+
+- Media tags (elevizion:ad, etc.) may exist.
+- Tags must NEVER be used as the mechanism that makes ads visible.
+- An ad is considered published ONLY if:
+  - yodeckMediaId exists inside the playlist items array.
+
+--------------------------------------------------------------------
+5) DETERMINISTIC PLAYLIST UPDATE (CORE FIX)
+--------------------------------------------------------------------
+
+Implement a strict playlist mutation algorithm:
+
+- Fetch playlist items.
+- Split items into:
+  - baselineItems
+  - adItems
+- Deduplicate by yodeckMediaId.
+
+If ad mediaId already exists:
+  - Do nothing.
+  - Log "alreadyPresent".
+
+If missing:
+  - Insert ad AFTER baseline block (or append if ordering unknown).
+
+Return diagnostics:
+{
+  playlistId,
+  baselineCount,
+  adsBefore,
+  adsAfter,
+  inserted,
+  alreadyPresent,
+  totalItems
+}
+
+--------------------------------------------------------------------
+6) PUSH + HARD VERIFICATION (NO SOFT SUCCESS)
+--------------------------------------------------------------------
+
+After playlist mutation:
+
+- Push/update screen if required by Yodeck.
+- Verify using now-playing endpoint:
+
+Conditions for SUCCESS:
+- source_type === "playlist"
+- playlistId === expectedPlaylistId
+- adsCount >= 1
+- yodeckMediaId is present in playlist
+
+If ANY check fails:
+- Publish outcome = FAILED
+- Return explicit failure reason
+- Never return success optimistically.
+
+--------------------------------------------------------------------
+7) TRACEABLE JSON RESPONSE (REQUIRED)
+--------------------------------------------------------------------
+
+Every publish must return a full trace object:
+
+{
+  correlationId,
+  advertiserId,
+  screenId,
+  sourceTypeBefore,
+  sourceTypeAfter,
+  enforcedPlaylistId,
+  playlistMutation,
+  verificationSnapshot,
+  outcome
+}
+
+Logs MUST clearly show:
+"[PlaylistEnforcer] layout → playlist enforced"
+"[PlaylistUpdate] ad inserted"
+"[Verify] adsCount=1 OK"
+
+--------------------------------------------------------------------
+8) UI / OPERATOR FEEDBACK
+--------------------------------------------------------------------
+
+- If a screen was auto-migrated from layout to playlist:
+  - Show warning badge:
+    "Layout uitgeschakeld — scherm draait nu op playlist (baseline + ads)"
+- Operators should NEVER need DevTools or manual fetch calls to confirm publish state.
+
+====================================================================
+ACCEPTANCE CRITERIA
+====================================================================
+
+After approving a valid Canva-exported MP4:
+- Within 60 seconds:
+  - Screen is in PLAYLIST mode
+  - Baseline content is present
+  - Ad exists in playlist
+  - now-playing.adsCount >= 1
+  - Video is visible on the TV
+
+If not → publish MUST be FAILED.
+
+====================================================================
+DELIVERABLES
+====================================================================
+
+- Updated publish pipeline code
+- Forced playlist enforcer
+- Deterministic playlist mutation
+- Hard verification logic
+- Clear JSON publish trace

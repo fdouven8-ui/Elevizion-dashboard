@@ -19518,17 +19518,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   app.post("/api/admin/advertisers/:id/publish-now", requireAdminAccess, async (req, res) => {
     try {
       const { id: advertiserId } = req.params;
-      const { targetYodeckPlayerIds } = req.body || {};
+      const { targetYodeckPlayerIds, useDeterministic } = req.body || {};
       
-      console.log(`[PublishNow] Starting publish for advertiser ${advertiserId}`);
+      console.log(`[PublishNow] Starting publish for advertiser ${advertiserId} deterministic=${useDeterministic !== false}`);
       
-      const { publishNow } = await import("./services/publishNowService");
+      // Use new deterministic publish service (default)
+      const { deterministicPublish } = await import("./services/deterministicPublishService");
       
-      const result = await publishNow(advertiserId, {
-        targetYodeckPlayerIds,
+      const result = await deterministicPublish(advertiserId, targetYodeckPlayerIds);
+      
+      // Log trace summary
+      result.traces.forEach(trace => {
+        trace.logs.forEach(log => console.log(log));
       });
-      
-      result.logs.forEach(log => console.log(log));
       
       if (result.outcome === "FAILED") {
         return res.status(422).json(result);
