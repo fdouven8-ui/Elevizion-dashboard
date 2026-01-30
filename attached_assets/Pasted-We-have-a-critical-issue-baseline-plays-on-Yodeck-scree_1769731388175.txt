@@ -1,0 +1,98 @@
+We have a critical issue: baseline plays on Yodeck screens, but ads are never added to the effective playlist.
+
+Current logs prove:
+- Screen 591896 is in playlist mode, effective playlistId=30532596 (auto playlist).
+- now-playing: itemCount=4 baselineCount=4 adsCount=0.
+- There are NO logs showing any publish attempt (no linkAdToLocation/replaceAdInPlaylist, no Yodeck playlist update, no push call).
+=> The system is syncing state but not executing an E2E publish action, OR it is silently blocked.
+
+GOAL:
+Implement a deterministic E2E publish flow that:
+1) resolves the correct playable asset,
+2) ensures it is READY_FOR_YODECK and has a valid yodeckMediaId (fileSize>0, status Live),
+3) inserts it into the EFFECTIVE playlist (screen_content playlistId) NOT legacy location fields,
+4) pushes the screen,
+5) verifies that adsCount > 0.
+This must return a complete trace so we can see exactly where it fails.
+
+IMPLEMENT:
+
+A) Add endpoint: POST /api/admin/advertisers/:id/publish-now
+Body:
+{
+  "targetYodeckPlayerIds": ["591896"]  // optional, if omitted publish to resolved screens
+}
+Response must be FULL trace JSON with correlationId, and it must NEVER fail silently.
+
+B) Resolve effective playlist per screen (single source of truth)
+Create resolveEffectivePlaylistForScreen(yodeckPlayerId):
+- fetch screen canonical snapshot from Yodeck (/screens/:id or cached canonical parsing)
+- require screen_content.source_type == "playlist"
+- playlistId = screen_content.source_id
+Return:
+{ playlistId, playlistName, sourceUsed: "screen_content", yodeckPlayerId }
+If not playlist -> return 409 with code SCREEN_NOT_IN_PLAYLIST_MODE and instructions.
+
+C) Resolve playable asset + hard gate
+Implement resolvePlayableAsset(advertiserId):
+- use canonical best asset (largest+newest) from ad_assets table
+- require asset.status == READY_FOR_YODECK
+- require asset.yodeckMediaId exists (or create/upload it now)
+If not ready -> return 422:
+{
+  "code":"MEDIA_NOT_READY",
+  "assetStatus":"PENDING|VALIDATING|NEEDS_NORMALIZATION|NORMALIZING",
+  "nextAction":"wait|normalize|retry"
+}
+
+D) Ensure Yodeck media is actually usable (do not trust IDs)
+Implement ensureYodeckMediaReady(yodeckMediaId):
+- call Yodeck media status endpoint
+- require fileSize > 0 and status in ["Live","Ready","Available"]
+If not -> return 422 with details:
+{ code:"YODECK_MEDIA_NOT_READY", status, fileSize, recommendation }
+
+E) Insert ad into effective playlist (must work with real Yodeck API)
+Implement addOrReplaceAdInPlaylist({playlistId, yodeckMediaId}):
+- fetch playlist items from Yodeck
+- dedup: remove duplicates of the same mediaId
+- insert mediaId (append or at a controlled position)
+- save playlist changes (use correct Yodeck endpoint/method)
+Return diagnostics:
+{
+  beforeCount,
+  afterCount,
+  removedDuplicates,
+  inserted:true,
+  playlistId
+}
+
+F) Push screen after playlist update
+Implement pushScreen(yodeckPlayerId):
+- call Yodeck push endpoint (POST /screens/{id}/push/)
+- wait 2-3 seconds
+- verify now-playing (existing endpoint /api/screens/:id/now-playing) shows adsCount>0
+If adsCount==0:
+- retry push once
+- if still 0 -> return 500 with code PUBLISH_VERIFY_FAILED and include full verify snapshot.
+
+G) IMPORTANT: Add logging with correlationId
+Every step must log:
+[PublishNow][{correlationId}] STEP=... details...
+No more silent outcomes.
+Also return the same trace in API response.
+
+H) Trigger publish automatically when media becomes READY_FOR_YODECK
+Wherever the pipeline transitions to READY_FOR_YODECK:
+- enqueue publish job OR call publish-now internally (idempotent)
+- ensure this survives restarts (job table recommended)
+If server receives SIGTERM mid-job, job must resume.
+
+I) DO NOT break baseline
+Baseline seeding stays as-is, but ensure playlist is never empty.
+Do not switch layout mode anywhere in SCREEN_PLAYLIST_ONLY.
+
+DELIVERABLES:
+- Endpoint POST /api/admin/advertisers/:id/publish-now
+- Full JSON trace response + logs with correlationId
+- Guarantee: if asset is READY_FOR_YODECK and Yodeck media is ready, then ad appears in playlistId=screen_content.source_id and plays.

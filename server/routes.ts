@@ -19309,6 +19309,47 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  /**
+   * POST /api/admin/advertisers/:id/publish-now
+   * Deterministic E2E publish flow for ads to Yodeck screens
+   * 
+   * Request body:
+   * {
+   *   "targetYodeckPlayerIds": ["591896"]  // optional, if omitted publish to resolved screens
+   * }
+   * 
+   * Response: Full trace JSON with correlationId, never fails silently
+   */
+  app.post("/api/admin/advertisers/:id/publish-now", requireAdminAccess, async (req, res) => {
+    try {
+      const { id: advertiserId } = req.params;
+      const { targetYodeckPlayerIds } = req.body || {};
+      
+      console.log(`[PublishNow] Starting publish for advertiser ${advertiserId}`);
+      
+      const { publishNow } = await import("./services/publishNowService");
+      
+      const result = await publishNow(advertiserId, {
+        targetYodeckPlayerIds,
+      });
+      
+      result.logs.forEach(log => console.log(log));
+      
+      if (result.outcome === "FAILED") {
+        return res.status(422).json(result);
+      }
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PublishNow] Error:", error);
+      res.status(500).json({ 
+        ok: false, 
+        error: error.message,
+        correlationId: `err-${Date.now()}`,
+      });
+    }
+  });
+
   // ============================================================================
   // YODECK MEDIA PIPELINE ROUTES
   // ============================================================================

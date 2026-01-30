@@ -57,6 +57,27 @@ export interface ValidationResult {
   rejectReason?: string;
 }
 
+/**
+ * Trigger auto-publish when media becomes READY_FOR_YODECK
+ * This is called asynchronously after validation/normalization completes
+ */
+async function triggerAutoPublish(advertiserId: string, assetId: string): Promise<void> {
+  console.log(`[AutoPublish] Triggering for advertiser ${advertiserId}, asset ${assetId}`);
+  
+  try {
+    const { publishNow } = await import("./publishNowService");
+    const result = await publishNow(advertiserId, {});
+    
+    console.log(`[AutoPublish] Result: outcome=${result.outcome}, success=${result.summary.successCount}/${result.summary.targetsResolved}`);
+    
+    if (result.outcome === "FAILED") {
+      console.warn(`[AutoPublish] Failed for advertiser ${advertiserId}: ${result.steps.find(s => s.error)?.error}`);
+    }
+  } catch (error: any) {
+    console.error(`[AutoPublish] Error for advertiser ${advertiserId}: ${error.message}`);
+  }
+}
+
 export interface NormalizationResult {
   success: boolean;
   normalizedPath?: string;
@@ -334,6 +355,12 @@ export async function validateMediaAsset(assetId: string): Promise<ValidationRes
   
   console.log(`[MediaPipeline] Asset ${assetId} validated: status=${newStatus} compatible=${result.isYodeckCompatible}`);
   
+  if (newStatus === "READY_FOR_YODECK") {
+    triggerAutoPublish(asset.advertiserId, assetId).catch(err => {
+      console.warn(`[MediaPipeline] Auto-publish trigger failed: ${err.message}`);
+    });
+  }
+  
   return result;
 }
 
@@ -483,6 +510,10 @@ export async function normalizeMediaAsset(assetId: string): Promise<Normalizatio
         normalizedStoragePath: result.normalizedPath,
       })
       .where(eq(adAssets.id, assetId));
+    
+    triggerAutoPublish(asset.advertiserId, assetId).catch(err => {
+      console.warn(`[MediaPipeline] Auto-publish trigger failed: ${err.message}`);
+    });
   } else {
     await db.update(adAssets)
       .set({
