@@ -16797,10 +16797,59 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   app.get("/api/screens/:screenId/now-playing", requirePermission("view_screens"), async (req, res) => {
     try {
       const { screenId } = req.params;
-      // Use yodeckBroadcast - single source of truth (Screen.playlistId)
+      const screen = await storage.getScreen(screenId);
+      
+      if (!screen) {
+        return res.status(404).json({ ok: false, error: "Screen not found" });
+      }
+
+      const { selfHealIfLayout, verifyScreenPlayback } = await import("./services/yodeckPlaybackEngine");
       const { getScreenNowPlaying } = await import("./services/yodeckBroadcast");
+      
+      let selfHealed = false;
+      let selfHealResult: any = null;
+
+      if (screen.yodeckPlayerId) {
+        // First ensure playlists exist if missing
+        if (!screen.combinedPlaylistId) {
+          const { ensureScreenPlaylists, seedBaselineIfEmpty, rebuildCombinedPlaylist, assignCombinedPlaylistToScreen } = await import("./services/yodeckPlaybackEngine");
+          console.log(`[NowPlaying] Screen ${screenId} missing combinedPlaylistId, creating playlists...`);
+          const ensureResult = await ensureScreenPlaylists(screen);
+          if (ensureResult.ok) {
+            const refreshed = await storage.getScreen(screenId);
+            if (refreshed) {
+              await seedBaselineIfEmpty(refreshed);
+              await rebuildCombinedPlaylist(refreshed);
+              // Assign and push to screen
+              await assignCombinedPlaylistToScreen(refreshed);
+            }
+          }
+        }
+        
+        // Now self-heal if in layout mode
+        const refreshedScreen = await storage.getScreen(screenId);
+        if (refreshedScreen) {
+          selfHealResult = await selfHealIfLayout(refreshedScreen);
+          selfHealed = selfHealResult.healed;
+          
+          if (selfHealResult.wasOnLayout) {
+            console.log(`[NowPlaying] LAYOUT_FORBIDDEN detected on screen ${screenId}, self-healed=${selfHealed}`);
+          }
+        }
+      }
+
       const result = await getScreenNowPlaying(screenId);
-      res.json(result);
+      
+      res.json({
+        ...result,
+        selfHealed,
+        selfHealResult: selfHealResult ? {
+          wasOnLayout: selfHealResult.wasOnLayout,
+          healed: selfHealResult.healed,
+          correlationId: selfHealResult.correlationId,
+          error: selfHealResult.error,
+        } : undefined,
+      });
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message });
     }
@@ -19650,21 +19699,16 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   app.post("/api/admin/advertisers/:id/publish-now", requireAdminAccess, async (req, res) => {
     try {
       const { id: advertiserId } = req.params;
-      const { targetYodeckPlayerIds, useDeterministic } = req.body || {};
+      const { usePlaybackEngine } = req.body || {};
       
-      console.log(`[PublishNow] Starting publish for advertiser ${advertiserId} deterministic=${useDeterministic !== false}`);
+      console.log(`[PublishNow] Starting publish for advertiser ${advertiserId}`);
       
-      // Use new deterministic publish service (default)
-      const { deterministicPublish } = await import("./services/deterministicPublishService");
+      // Use new canonical playback engine
+      const { publishApprovedAdvertiser } = await import("./services/publishService");
       
-      const result = await deterministicPublish(advertiserId, targetYodeckPlayerIds);
+      const result = await publishApprovedAdvertiser(advertiserId);
       
-      // Log trace summary
-      result.traces.forEach(trace => {
-        trace.logs.forEach(log => console.log(log));
-      });
-      
-      if (result.outcome === "FAILED") {
+      if (!result.ok) {
         return res.status(422).json(result);
       }
       
