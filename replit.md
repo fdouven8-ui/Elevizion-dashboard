@@ -31,9 +31,16 @@ Authentication uses username/password with bcrypt hashing and session data store
 - **System Health**: Dedicated admin page (`/system-health`) for comprehensive health checks.
 - **Unified Availability Service**: Manages capacity (`MAX_ADS_PER_SCREEN`) to prevent overselling.
 - **Ad Publishing Workflow**: Includes video upload portals, validation, object storage integration, transcoding, and an admin review workflow for approval.
-- **Combined Playlist Architecture**: Each location gets ONE combined playlist ("Elevizion | Loop | {LocationName}") containing base items and interleaved advertisements, with an automatic fallback video. This replaces previous layout-based systems.
+- **Combined Playlist Architecture**: Each location gets ONE combined playlist ("EVZ | SCREEN | {LocationName}") containing base items and interleaved advertisements, with an automatic fallback video. This replaces previous layout-based systems.
 - **Canonical Broadcast Service**: Acts as the single source of truth for all broadcast operations, ensuring each location has one canonical playlist (`location.yodeckPlaylistId`) and managing screen assignments and media additions.
 - **Playlist-Only Guard**: Enforces 100% playlist mode; no screen is allowed to have `source_type="layout"`. Detects and auto-reverts layout modes to playlist.
+- **Deterministic Publish Service** (NEW): Golden flow implementation with:
+  - **Playlist Enforcer**: Forces screens from layout to playlist mode before any publish
+  - **Canonical Playlist Resolution**: Creates/resolves "EVZ | SCREEN | {LocationName}" playlists per location
+  - **Deterministic Playlist Mutation**: Deduplicates items, preserves existing content, appends new ads
+  - **Hard Verification**: Only succeeds if specific ad mediaId is physically in playlist AND screen is in playlist mode
+  - **Full Trace Logging**: correlationId, sourceTypeBefore/After, playlistMutation, verificationSnapshot
+  - **No Soft Success**: If ad is not visible → publish FAILS with explicit error
 - **Production Broadcast Engine**: A safety-first publish pipeline with eligibility gates for screens, media verification, and a robust fallback system to prevent black screens. It includes a `selfHealPlaylist()` function and a `publishWithVerifyAndHeal` flow.
 - **Upload Worker Service**: Handles a two-step upload process with retries and validation, tracking media status.
 
