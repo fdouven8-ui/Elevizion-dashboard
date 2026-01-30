@@ -224,6 +224,11 @@ export async function enforcePlaylistMode(
 // STEP 3: DETERMINISTIC PLAYLIST MUTATION
 // ============================================================================
 
+function extractMediaId(item: any): number | null {
+  const id = item.media || item.item?.id || item.id;
+  return typeof id === "number" ? id : null;
+}
+
 export async function updatePlaylistWithAd(
   playlistId: number,
   adMediaId: number,
@@ -241,18 +246,19 @@ export async function updatePlaylistWithAd(
   
   logs.push(`[PlaylistUpdate] Playlist "${playlistName}" has ${currentItems.length} items`);
   
-  // Categorize items: baseline vs ads
-  const baselineItems: any[] = [];
-  const adItems: any[] = [];
-  const adsBefore: number[] = [];
+  // Track existing media IDs for deduplication
+  const seenMediaIds = new Set<number>();
   const alreadyPresent: string[] = [];
   const inserted: string[] = [];
+  let adAlreadyExists = false;
   
-  const seenMediaIds = new Set<number>();
+  // Build deduplicated list preserving all existing items
+  const dedupedItems: { id: number; type: string; priority: number; duration: number }[] = [];
+  let priority = 1;
   
   for (const item of currentItems) {
-    const mediaId = item.media || item.item?.id || item.id;
-    if (typeof mediaId !== "number") continue;
+    const mediaId = extractMediaId(item);
+    if (mediaId === null) continue;
     
     // Skip duplicates
     if (seenMediaIds.has(mediaId)) {
@@ -265,39 +271,36 @@ export async function updatePlaylistWithAd(
     if (mediaId === adMediaId) {
       logs.push(`[PlaylistUpdate] Ad mediaId=${adMediaId} alreadyPresent`);
       alreadyPresent.push(String(adMediaId));
-      adItems.push(item);
-      adsBefore.push(mediaId);
-      continue;
+      adAlreadyExists = true;
     }
     
-    // Categorize: baseline items go first
-    // For now, treat all existing non-target items as baseline
-    baselineItems.push(item);
+    // Build normalized item using Yodeck v2 format
+    dedupedItems.push({
+      id: mediaId,
+      type: "media",
+      priority: priority++,
+      duration: item.duration || 15,
+    });
   }
   
-  // If ad not already present, insert it
-  let needsInsert = !seenMediaIds.has(adMediaId);
-  
-  if (needsInsert) {
+  // If ad not already present, append it
+  if (!adAlreadyExists) {
     logs.push(`[PlaylistUpdate] Ad mediaId=${adMediaId} NOT in playlist, inserting`);
     inserted.push(String(adMediaId));
-    adItems.push({
+    dedupedItems.push({
       id: adMediaId,
       type: "media",
-      priority: 1,
+      priority: priority++,
       duration: 15,
     });
   }
   
-  // Build final playlist: baseline + ads (interleaved or appended)
-  const newItems = [...baselineItems, ...adItems];
+  logs.push(`[PlaylistUpdate] Final: total=${dedupedItems.length} items, inserted=${inserted.length}, alreadyPresent=${alreadyPresent.length}`);
   
-  logs.push(`[PlaylistUpdate] Final: baseline=${baselineItems.length}, ads=${adItems.length}, total=${newItems.length}`);
-  
-  // PATCH playlist with new items
-  if (needsInsert) {
+  // PATCH playlist with new items if we inserted something
+  if (inserted.length > 0) {
     const updateResult = await yodeckRequest<any>(`/playlists/${playlistId}/`, "PATCH", {
-      items: newItems,
+      items: dedupedItems,
     });
     
     if (!updateResult.ok) {
@@ -310,12 +313,12 @@ export async function updatePlaylistWithAd(
   return {
     playlistId,
     playlistName,
-    baselineCount: baselineItems.length,
-    adsBefore: adsBefore.length,
-    adsAfter: adItems.length,
+    baselineCount: dedupedItems.length - (adAlreadyExists ? 1 : inserted.length),
+    adsBefore: adAlreadyExists ? 1 : 0,
+    adsAfter: 1, // We always have exactly 1 ad (the one we're publishing)
     inserted,
     alreadyPresent,
-    totalItems: newItems.length,
+    totalItems: dedupedItems.length,
   };
 }
 
@@ -403,29 +406,27 @@ export async function verifyAdInPlaylist(
   
   const items = playlistResult.data.items || [];
   const playlistItems: number[] = [];
-  let adsCount = 0;
   let containsExpectedMedia = false;
   
   for (const item of items) {
-    const mediaId = item.media || item.item?.id || item.id;
-    if (typeof mediaId === "number") {
+    const mediaId = extractMediaId(item);
+    if (mediaId !== null) {
       playlistItems.push(mediaId);
-      adsCount++;
       if (mediaId === expectedMediaId) {
         containsExpectedMedia = true;
       }
     }
   }
   
-  // VERIFICATION CHECK 3: Ad must be in playlist
+  // VERIFICATION CHECK 3: Our specific ad must be in playlist (this is what matters)
   if (!containsExpectedMedia) {
-    logs.push(`[Verify] FAILED: mediaId=${expectedMediaId} NOT in playlist items`);
+    logs.push(`[Verify] FAILED: mediaId=${expectedMediaId} NOT in playlist items [${playlistItems.join(", ")}]`);
     return {
       ok: false,
       snapshot: {
         sourceType,
         playlistId: expectedPlaylistId,
-        adsCount,
+        adsCount: containsExpectedMedia ? 1 : 0, // Only count the expected ad
         containsExpectedMedia: false,
         expectedMediaId,
         playlistItems,
@@ -434,32 +435,32 @@ export async function verifyAdInPlaylist(
     };
   }
   
-  // VERIFICATION CHECK 4: adsCount >= 1
-  if (adsCount < 1) {
-    logs.push(`[Verify] FAILED: adsCount=0`);
+  // VERIFICATION CHECK 4: Playlist must have at least 1 item (guaranteed if check 3 passed)
+  if (playlistItems.length < 1) {
+    logs.push(`[Verify] FAILED: playlist is empty`);
     return {
       ok: false,
       snapshot: {
         sourceType,
         playlistId: expectedPlaylistId,
-        adsCount,
+        adsCount: 0,
         containsExpectedMedia,
         expectedMediaId,
         playlistItems,
       },
-      error: `adsCount=0`,
+      error: `Playlist is empty`,
     };
   }
   
-  logs.push(`[Verify] adsCount=${adsCount} OK, containsMedia=${containsExpectedMedia}`);
+  logs.push(`[Verify] SUCCESS: mediaId=${expectedMediaId} found in playlist, totalItems=${playlistItems.length}`);
   
   return {
     ok: true,
     snapshot: {
       sourceType,
       playlistId: expectedPlaylistId,
-      adsCount,
-      containsExpectedMedia,
+      adsCount: 1, // We verified 1 ad (the expected one)
+      containsExpectedMedia: true,
       expectedMediaId,
       playlistItems,
     },
