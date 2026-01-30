@@ -19453,6 +19453,59 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * GET /api/admin/media/:id/diagnostics
+   * Get forensic diagnostics for an asset
+   */
+  app.get("/api/admin/media/:id/diagnostics", requireAdminAccess, async (req, res) => {
+    try {
+      const { id: assetId } = req.params;
+      
+      const asset = await storage.getAdAsset(assetId);
+      
+      if (!asset) {
+        return res.status(404).json({ ok: false, error: "Asset niet gevonden" });
+      }
+
+      const diagnostics = asset.yodeckMetadataJson || {};
+      
+      res.json({
+        ok: true,
+        assetId: asset.id,
+        originalFileName: asset.originalFileName,
+        storedFilename: asset.storedFilename,
+        storagePath: asset.storagePath,
+        yodeckReadinessStatus: asset.yodeckReadinessStatus,
+        yodeckRejectReason: asset.yodeckRejectReason,
+        yodeckMediaId: asset.yodeckMediaId,
+        approvalStatus: asset.approvalStatus,
+        diagnostics: {
+          fileSizeBytes: diagnostics.fileSizeBytes,
+          firstBytesHex: diagnostics.firstBytesHex,
+          detectedMime: diagnostics.detectedMime,
+          isMp4Container: diagnostics.isMp4Container,
+          videoStreamCount: diagnostics.videoStreamCount,
+          audioStreamCount: diagnostics.audioStreamCount,
+          reasonCode: diagnostics.reasonCode,
+          ffprobeError: diagnostics.ffprobeError,
+          sha256: diagnostics.sha256,
+          container: diagnostics.container,
+          videoCodec: diagnostics.videoCodec,
+          audioCodec: diagnostics.audioCodec,
+          pixelFormat: diagnostics.pixelFormat,
+          width: diagnostics.width,
+          height: diagnostics.height,
+          durationSeconds: diagnostics.durationSeconds,
+          isYodeckCompatible: diagnostics.isYodeckCompatible,
+          compatibilityReasons: diagnostics.compatibilityReasons,
+        },
+      });
+    } catch (error: any) {
+      console.error("[MediaPipeline] Diagnostics error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/advertisers/:id/normalize-and-publish
    * Normalize existing asset and publish to Yodeck screens
    */

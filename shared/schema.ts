@@ -216,6 +216,16 @@ export const adAssets = pgTable("ad_assets", {
     moovAtStart?: boolean;
     isYodeckCompatible?: boolean;
     compatibilityReasons?: string[];
+    // Forensic diagnostics
+    fileSizeBytes?: number;
+    firstBytesHex?: string;
+    detectedMime?: string;
+    isMp4Container?: boolean;
+    videoStreamCount?: number;
+    audioStreamCount?: number;
+    reasonCode?: string; // NO_FILE | EMPTY_FILE | NOT_MP4 | NO_VIDEO_STREAM | FFPROBE_FAILED | CORRUPT_CONTAINER
+    ffprobeError?: string;
+    sha256?: string;
   }>(), // Raw metadata from validation
   normalizationProvider: text("normalization_provider"), // cloudconvert | ffmpeg_wasm | none
   normalizationStartedAt: timestamp("normalization_started_at"),

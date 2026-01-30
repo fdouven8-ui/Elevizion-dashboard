@@ -1,0 +1,41 @@
+We found the root cause: both advertiser media assets are being REJECTED with rejectReason "Bestand bevat geen video". That means the stored .mp4 files in objstore have NO video stream (likely 0 bytes, truncated, HTML/error page saved, or binary upload bug). Because of this, publish-now fails at RESOLVE_ASSET (no READY_FOR_YODECK asset).
+
+TASK: Make the media pipeline produce forensic diagnostics and harden upload/storage so we never silently store "non-video" files again. Keep all other features working.
+
+A) Add forensic diagnostics to validation results
+1) In the validator (the code behind POST /api/admin/media/:id/validate), include in `result`:
+   - fileSizeBytes
+   - firstBytesHex (first 64 bytes)
+   - detectedMime (best effort)
+   - isMp4Container (check for "ftyp" box in first bytes)
+   - ffprobeJson (if available) OR ffprobeStderr/stdout if ffprobe fails
+   - videoStreamCount, audioStreamCount
+   - reasonCode machine readable: NO_FILE | EMPTY_FILE | NOT_MP4 | NO_VIDEO_STREAM | FFPROBE_FAILED | CORRUPT_CONTAINER
+2) Persist these diagnostics in DB columns (or a JSON column) so later we can inspect per asset without rerunning validation.
+
+B) Harden upload pipeline (most important)
+1) In the upload endpoint that stores advertiser videos to objstore:
+   - Ensure we stream binary correctly (no text conversion, no utf-8 decoding).
+   - After saving, immediately verify:
+       - fileSizeBytes > 50KB (configurable)
+       - contains "ftyp" within first 16-64 bytes (for mp4/mov)
+   - If fails: delete the stored object and mark asset REJECTED with reasonCode EMPTY_FILE/NOT_MP4.
+   - Return a clear API error to the user (HTTP 422) with message "Upload is geen geldig videobestand, probeer opnieuw".
+2) If the upload is chunked/multipart, ensure the server uses raw buffer/stream and does not JSON parse it.
+3) Add logging with correlationId:
+   - [Upload] bytesWritten, sha256, firstBytesHex, path
+   - [Validate] fileSizeBytes, streams, reasonCode
+
+C) Make normalization conditional
+- Only attempt ffmpeg normalization when there is at least 1 video stream.
+- If NO_VIDEO_STREAM: do not enqueue normalization; keep REJECTED with diagnostics.
+
+D) Add a simple admin debug endpoint
+GET /api/admin/media/:id/diagnostics
+Returns the stored diagnostics JSON so we can see exactly what the file is.
+
+ACCEPTANCE
+- Re-upload a known good video -> validator shows videoStreamCount=1 and NOT rejected.
+- Upload a broken/empty file -> immediate 422 with clear error; nothing stored.
+- For the current rejected files, /diagnostics must show fileSizeBytes and firstBytesHex so we can confirm if it was HTML/0 bytes/etc.
+Return the file names/functions changed.

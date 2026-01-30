@@ -54,6 +54,69 @@ interface FfprobeMetadata {
   moovAtStart?: boolean;
   isYodeckCompatible?: boolean;
   compatibilityReasons?: string[];
+  // Forensic diagnostics
+  fileSizeBytes?: number;
+  firstBytesHex?: string;
+  detectedMime?: string;
+  isMp4Container?: boolean;
+  videoStreamCount?: number;
+  audioStreamCount?: number;
+  reasonCode?: string;
+  ffprobeError?: string;
+  sha256?: string;
+}
+
+const MIN_FILE_SIZE_BYTES = 50 * 1024; // 50KB minimum
+
+function getForensicDiagnostics(filePath: string): { 
+  fileSizeBytes: number; 
+  firstBytesHex: string; 
+  isMp4Container: boolean; 
+  detectedMime: string;
+  sha256: string;
+} {
+  const stats = fs.statSync(filePath);
+  const fileSizeBytes = stats.size;
+  
+  const buffer = Buffer.alloc(64);
+  const fd = fs.openSync(filePath, "r");
+  const bytesRead = fs.readSync(fd, buffer, 0, 64, 0);
+  fs.closeSync(fd);
+  
+  const firstBytes = buffer.slice(0, bytesRead);
+  const firstBytesHex = firstBytes.toString("hex");
+  
+  // Check for ftyp box (MP4/MOV signature)
+  // ftyp typically appears at bytes 4-7 as "ftyp" (0x66747970)
+  const hasFtyp = firstBytesHex.includes("66747970");
+  
+  // Detect MIME type from magic bytes
+  let detectedMime = "unknown";
+  if (hasFtyp) {
+    detectedMime = "video/mp4";
+  } else if (firstBytesHex.startsWith("1a45dfa3")) {
+    detectedMime = "video/webm";
+  } else if (firstBytesHex.startsWith("000001b")) {
+    detectedMime = "video/mpeg";
+  } else if (firstBytesHex.startsWith("52494646") && firstBytesHex.includes("41564920")) {
+    detectedMime = "video/avi";
+  } else if (firstBytesHex.startsWith("3c21") || firstBytesHex.startsWith("3c68") || firstBytesHex.startsWith("3c48")) {
+    detectedMime = "text/html"; // HTML file saved as video
+  } else if (firstBytesHex.startsWith("7b22") || firstBytesHex.startsWith("7b0a")) {
+    detectedMime = "application/json"; // JSON file
+  }
+  
+  // Calculate SHA256
+  const fileBuffer = fs.readFileSync(filePath);
+  const sha256 = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+  
+  return {
+    fileSizeBytes,
+    firstBytesHex,
+    isMp4Container: hasFtyp,
+    detectedMime,
+    sha256,
+  };
 }
 
 function log(correlationId: string, step: string, message: string, logs: PipelineLog[], assetId?: string, oldStatus?: string, newStatus?: string) {
@@ -109,8 +172,10 @@ function extractMetadata(ffprobeData: any): FfprobeMetadata {
   const streams = ffprobeData.streams || [];
   const format = ffprobeData.format || {};
 
-  const videoStream = streams.find((s: any) => s.codec_type === "video");
-  const audioStream = streams.find((s: any) => s.codec_type === "audio");
+  const videoStreams = streams.filter((s: any) => s.codec_type === "video");
+  const audioStreams = streams.filter((s: any) => s.codec_type === "audio");
+  const videoStream = videoStreams[0];
+  const audioStream = audioStreams[0];
 
   const metadata: FfprobeMetadata = {
     container: format.format_name,
@@ -121,8 +186,10 @@ function extractMetadata(ffprobeData: any): FfprobeMetadata {
     height: videoStream?.height,
     durationSeconds: parseFloat(format.duration) || parseFloat(videoStream?.duration) || 0,
     bitrate: parseInt(format.bit_rate) || 0,
-    hasVideoStream: !!videoStream,
-    hasAudioStream: !!audioStream,
+    hasVideoStream: videoStreams.length > 0,
+    hasAudioStream: audioStreams.length > 0,
+    videoStreamCount: videoStreams.length,
+    audioStreamCount: audioStreams.length,
   };
 
   const reasons: string[] = [];
@@ -336,16 +403,93 @@ export async function validateAdvertiserMedia(advertiserId: string): Promise<Val
       
       fs.writeFileSync(localPath, Buffer.from(downloadResult.value as ArrayBuffer));
 
+      // Get forensic diagnostics FIRST
+      const forensics = getForensicDiagnostics(localPath);
+      
+      log(correlationId, "FORENSICS", `size=${forensics.fileSizeBytes}, mime=${forensics.detectedMime}, isMp4=${forensics.isMp4Container}, firstBytes=${forensics.firstBytesHex.slice(0, 32)}...`, logs, asset.id);
+
+      // Early rejection: empty or too small file
+      if (forensics.fileSizeBytes < MIN_FILE_SIZE_BYTES) {
+        const metadata: FfprobeMetadata = {
+          ...forensics,
+          reasonCode: forensics.fileSizeBytes === 0 ? "EMPTY_FILE" : "EMPTY_FILE",
+          hasVideoStream: false,
+          videoStreamCount: 0,
+          audioStreamCount: 0,
+        };
+        
+        await db.update(adAssets)
+          .set({ yodeckMetadataJson: metadata })
+          .where(eq(adAssets.id, asset.id));
+        
+        try { fs.unlinkSync(localPath); } catch {}
+        throw new Error(`Bestand te klein (${forensics.fileSizeBytes} bytes, min ${MIN_FILE_SIZE_BYTES})`);
+      }
+
+      // Early rejection: not MP4/MOV container
+      if (!forensics.isMp4Container) {
+        const metadata: FfprobeMetadata = {
+          ...forensics,
+          reasonCode: "NOT_MP4",
+          hasVideoStream: false,
+          videoStreamCount: 0,
+          audioStreamCount: 0,
+        };
+        
+        await db.update(adAssets)
+          .set({ yodeckMetadataJson: metadata })
+          .where(eq(adAssets.id, asset.id));
+        
+        try { fs.unlinkSync(localPath); } catch {}
+        throw new Error(`Bestand is geen MP4/MOV (detected: ${forensics.detectedMime})`);
+      }
+
       log(correlationId, "FFPROBE", `Running ffprobe`, logs, asset.id);
 
       const probeResult = await runFfprobe(localPath);
+      
+      let metadata: FfprobeMetadata;
+      
       if (!probeResult.ok) {
+        metadata = {
+          ...forensics,
+          reasonCode: "FFPROBE_FAILED",
+          ffprobeError: probeResult.error,
+          hasVideoStream: false,
+          videoStreamCount: 0,
+          audioStreamCount: 0,
+        };
+        
+        await db.update(adAssets)
+          .set({ yodeckMetadataJson: metadata })
+          .where(eq(adAssets.id, asset.id));
+        
+        try { fs.unlinkSync(localPath); } catch {}
         throw new Error(`ffprobe failed: ${probeResult.error}`);
       }
 
-      const metadata = extractMetadata(probeResult.data);
+      metadata = extractMetadata(probeResult.data);
+      
+      // Add forensic data to metadata
+      metadata.fileSizeBytes = forensics.fileSizeBytes;
+      metadata.firstBytesHex = forensics.firstBytesHex;
+      metadata.detectedMime = forensics.detectedMime;
+      metadata.isMp4Container = forensics.isMp4Container;
+      metadata.sha256 = forensics.sha256;
 
-      log(correlationId, "METADATA", `codec=${metadata.videoCodec}, pix_fmt=${metadata.pixelFormat}, ${metadata.width}x${metadata.height}, compatible=${metadata.isYodeckCompatible}`, logs, asset.id);
+      // Check for NO_VIDEO_STREAM
+      if (!metadata.hasVideoStream || (metadata.videoStreamCount || 0) === 0) {
+        metadata.reasonCode = "NO_VIDEO_STREAM";
+        
+        await db.update(adAssets)
+          .set({ yodeckMetadataJson: metadata })
+          .where(eq(adAssets.id, asset.id));
+        
+        try { fs.unlinkSync(localPath); } catch {}
+        throw new Error(`Bestand bevat geen video stream (streams: video=${metadata.videoStreamCount}, audio=${metadata.audioStreamCount})`);
+      }
+
+      log(correlationId, "METADATA", `codec=${metadata.videoCodec}, pix_fmt=${metadata.pixelFormat}, ${metadata.width}x${metadata.height}, compatible=${metadata.isYodeckCompatible}, videoStreams=${metadata.videoStreamCount}`, logs, asset.id);
 
       await db.update(adAssets)
         .set({ yodeckMetadataJson: metadata })
@@ -353,7 +497,8 @@ export async function validateAdvertiserMedia(advertiserId: string): Promise<Val
 
       let finalPath = localPath;
 
-      if (!metadata.isYodeckCompatible) {
+      // Only normalize if there IS a video stream
+      if (!metadata.isYodeckCompatible && metadata.hasVideoStream) {
         log(correlationId, "NORMALIZE", `Asset needs normalization: ${metadata.compatibilityReasons?.join(", ")}`, logs, asset.id, "VALIDATING", "NORMALIZING");
 
         await db.update(adAssets)
