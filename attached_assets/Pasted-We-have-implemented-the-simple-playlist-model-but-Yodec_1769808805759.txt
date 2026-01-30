@@ -1,0 +1,80 @@
+We have implemented the simple playlist model, but Yodeck API calls return HTTP 401:
+"Invalid or empty authentication token" / "Authentication credentials were not provided."
+
+This is NOT acceptable as a vague "external config issue".
+We must produce definitive proof of where the token is lost, and fix it.
+
+GOAL
+- Every Yodeck request must include a valid Authorization header.
+- We must detect whether the token is missing, empty, wrong env var, wrong formatting, or wrong URL/workspace.
+- Provide an auth-status endpoint that proves token is present and accepted by Yodeck.
+
+IMPORTANT SAFETY
+- Never log the full token. Only log:
+  - tokenPresent boolean
+  - tokenLength integer
+  - tokenPrefix first 4 chars + "..." (optional)
+- Log sanitized headers (show if Authorization exists but do NOT show its value).
+
+TASKS
+
+1) Find the single place that builds Yodeck HTTP requests.
+   - Identify yodeckClient / fetch wrapper / axios instance.
+   - Ensure there is exactly ONE canonical client used everywhere (simplePlaylistModel + now-playing + admin endpoints).
+
+2) Normalize token loading.
+   - Define exactly one env var name: YODECK_API_TOKEN (or existing standard).
+   - Add a config module that reads it ONCE at startup:
+        const token = process.env.YODECK_API_TOKEN?.trim()
+     - If missing/empty: throw on startup in production, or return clear error in test mode.
+
+3) Ensure correct Authorization header.
+   - Determine from existing integration what header format is required.
+   - Implement in the client:
+       headers: { "Authorization": `Token ${token}` }   (or `Bearer ${token}` depending on current working codebase)
+   - Do not guess blindly:
+     - Search the repo for previous working Yodeck calls that succeeded (older commits or code).
+     - If there is any older code that worked, reuse its exact header scheme.
+
+4) Add deep diagnostics on every Yodeck request (sanitized).
+   - In the client wrapper, before sending:
+       log { url, method, tokenPresent, tokenLength, hasAuthHeader }
+   - After response:
+       log { status, ok, errorCode/message if present }
+   - Ensure errors include response body text (max 500 chars), sanitized.
+
+5) Implement /api/admin/yodeck/auth-status to prove auth.
+   - Endpoint should call a lightweight Yodeck endpoint (e.g. list screens or "me").
+   - Return JSON:
+       {
+         ok: true/false,
+         tokenPresent,
+         tokenLength,
+         baseUrl,
+         authHeaderScheme: "Token" or "Bearer",
+         probeEndpoint: "...",
+         status,
+         responseSample: {...} (limited),
+         error: sanitized
+       }
+
+6) Fix now-playing endpoint to use the canonical yodeckClient and provide a clean error.
+   - If auth fails, return:
+       { ok:false, errorType:"YODECK_AUTH", hint:"Check YODECK_API_TOKEN", tokenPresent, tokenLength }
+   - Do NOT attempt playlist actions.
+
+7) Verify the base URL/workspace is correct.
+   - Add /api/admin/yodeck/base-url-info that returns:
+       { baseUrlUsed, derivedWorkspaceOrAccountIfAny }
+   - If the baseUrl is configurable, ensure it is consistent and not overwritten.
+
+ACCEPTANCE CRITERIA
+- /api/admin/yodeck/auth-status returns ok:true in the environment where the server runs.
+- Logs show tokenPresent:true, tokenLength > 20, hasAuthHeader:true on requests.
+- now-playing no longer returns "Invalid or empty authentication token".
+- No token ever appears in logs.
+
+Proceed to implement now. Provide a short summary:
+- root cause found (missing env var name / wrong header / wrong base url / trim issue)
+- fixed files
+- how to set the env var correctly in Replit Secrets

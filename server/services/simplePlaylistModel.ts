@@ -11,42 +11,172 @@ let cachedBasePlaylistId: number | null = null;
 let cacheExpiry: number = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-function getYodeckApiKey(): string {
-  const key = process.env.YODECK_AUTH_TOKEN;
-  if (!key) {
-    throw new Error("YODECK_AUTH_TOKEN not configured");
+/**
+ * Parse and validate YODECK_AUTH_TOKEN
+ * Expected format: "label:apikey" (e.g., "myapp:abc123xyz")
+ * Header format: "Authorization: Token label:apikey"
+ */
+interface ParsedToken {
+  raw: string;
+  label: string;
+  value: string;
+  isValid: boolean;
+  error?: string;
+  tokenPresent: boolean;
+  tokenLength: number;
+  tokenPrefix: string; // first 4 chars + "..."
+}
+
+function parseYodeckToken(): ParsedToken {
+  const raw = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+  
+  if (!raw) {
+    return {
+      raw: "",
+      label: "",
+      value: "",
+      isValid: false,
+      error: "YODECK_AUTH_TOKEN not configured (empty or missing)",
+      tokenPresent: false,
+      tokenLength: 0,
+      tokenPrefix: "",
+    };
   }
-  return key;
+  
+  const colonIndex = raw.indexOf(":");
+  if (colonIndex === -1) {
+    return {
+      raw,
+      label: "",
+      value: "",
+      isValid: false,
+      error: "YODECK_AUTH_TOKEN missing colon separator (expected format: label:apikey)",
+      tokenPresent: true,
+      tokenLength: raw.length,
+      tokenPrefix: raw.substring(0, 4) + "...",
+    };
+  }
+  
+  const label = raw.substring(0, colonIndex).trim();
+  const value = raw.substring(colonIndex + 1).trim();
+  
+  if (!label) {
+    return {
+      raw,
+      label: "",
+      value,
+      isValid: false,
+      error: "YODECK_AUTH_TOKEN has empty label (expected format: label:apikey)",
+      tokenPresent: true,
+      tokenLength: raw.length,
+      tokenPrefix: raw.substring(0, 4) + "...",
+    };
+  }
+  
+  if (!value) {
+    return {
+      raw,
+      label,
+      value: "",
+      isValid: false,
+      error: "YODECK_AUTH_TOKEN has empty value after colon (expected format: label:apikey)",
+      tokenPresent: true,
+      tokenLength: raw.length,
+      tokenPrefix: raw.substring(0, 4) + "...",
+    };
+  }
+  
+  return {
+    raw,
+    label,
+    value,
+    isValid: true,
+    tokenPresent: true,
+    tokenLength: raw.length,
+    tokenPrefix: raw.substring(0, 4) + "...",
+  };
+}
+
+function getYodeckApiKey(): string {
+  const parsed = parseYodeckToken();
+  if (!parsed.isValid) {
+    throw new Error(parsed.error || "YODECK_AUTH_TOKEN not configured");
+  }
+  // Return full token in label:value format for Authorization: Token header
+  return parsed.raw;
 }
 
 async function yodeckRequest<T>(
   endpoint: string,
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET",
   body?: any
-): Promise<{ ok: boolean; data?: T; error?: string; status?: number }> {
-  const apiKey = getYodeckApiKey();
+): Promise<{ ok: boolean; data?: T; error?: string; status?: number; authDiagnostics?: any }> {
+  const parsed = parseYodeckToken();
+  
+  // Log sanitized diagnostics before request
+  const diagnostics = {
+    tokenPresent: parsed.tokenPresent,
+    tokenLength: parsed.tokenLength,
+    tokenPrefix: parsed.tokenPrefix,
+    hasLabel: Boolean(parsed.label),
+    hasValue: Boolean(parsed.value),
+    isValid: parsed.isValid,
+    error: parsed.error,
+  };
+  
+  if (!parsed.isValid) {
+    console.error(`${LOG_PREFIX} [AUTH] Token validation failed:`, diagnostics);
+    return { 
+      ok: false, 
+      error: parsed.error || "Invalid token",
+      authDiagnostics: diagnostics,
+    };
+  }
+  
+  const apiKey = parsed.raw; // Full "label:value" format
 
   try {
+    const url = `${YODECK_BASE_URL}${endpoint}`;
+    
+    // Log sanitized request info (NEVER log full token)
+    console.log(`${LOG_PREFIX} [API] ${method} ${endpoint} | tokenPresent=${parsed.tokenPresent} tokenLength=${parsed.tokenLength} hasAuthHeader=true`);
+    
     const options: RequestInit = {
       method,
       headers: {
-        "Authorization": `Api-Key ${apiKey}`,
+        // CORRECT FORMAT: "Token label:value" NOT "Api-Key" or "Bearer"
+        "Authorization": `Token ${apiKey}`,
         "Content-Type": "application/json",
       },
     };
     if (body) {
       options.body = JSON.stringify(body);
     }
-
-    const url = `${YODECK_BASE_URL}${endpoint}`;
-    console.log(`${LOG_PREFIX} [API] ${method} ${endpoint}`);
     
     const response = await fetch(url, options);
     
+    // Log sanitized response
+    console.log(`${LOG_PREFIX} [API] ${method} ${endpoint} -> status=${response.status} ok=${response.ok}`);
+    
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      console.error(`${LOG_PREFIX} [API] ${method} ${endpoint} -> ${response.status}: ${text}`);
-      return { ok: false, error: `HTTP ${response.status}: ${text}`, status: response.status };
+      const truncatedError = text.substring(0, 500);
+      console.error(`${LOG_PREFIX} [API] ${method} ${endpoint} -> ${response.status}: ${truncatedError}`);
+      
+      // Add auth hint for 401 errors
+      if (response.status === 401) {
+        return { 
+          ok: false, 
+          error: `HTTP 401 Unauthorized: ${truncatedError}`, 
+          status: response.status,
+          authDiagnostics: {
+            ...diagnostics,
+            hint: "Check YODECK_AUTH_TOKEN format (label:apikey) and validity",
+          },
+        };
+      }
+      
+      return { ok: false, error: `HTTP ${response.status}: ${truncatedError}`, status: response.status };
     }
 
     if (response.status === 204) {
@@ -684,17 +814,80 @@ export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPl
   };
 }
 
-export async function validateYodeckAuth(): Promise<{ ok: boolean; error?: string }> {
+export interface AuthStatusResult {
+  ok: boolean;
+  tokenPresent: boolean;
+  tokenLength: number;
+  tokenPrefix: string;
+  hasLabel: boolean;
+  hasValue: boolean;
+  baseUrl: string;
+  authHeaderScheme: string;
+  probeEndpoint: string;
+  status?: number;
+  screenCount?: number;
+  responseSample?: any;
+  error?: string;
+}
+
+export async function validateYodeckAuth(): Promise<AuthStatusResult> {
+  const parsed = parseYodeckToken();
+  
+  const baseResult: AuthStatusResult = {
+    ok: false,
+    tokenPresent: parsed.tokenPresent,
+    tokenLength: parsed.tokenLength,
+    tokenPrefix: parsed.tokenPrefix,
+    hasLabel: Boolean(parsed.label),
+    hasValue: Boolean(parsed.value),
+    baseUrl: YODECK_BASE_URL,
+    authHeaderScheme: "Token",
+    probeEndpoint: "/screens/",
+  };
+  
+  // Early exit if token is invalid
+  if (!parsed.isValid) {
+    console.error(`${LOG_PREFIX} [AUTH-STATUS] Token validation failed:`, {
+      tokenPresent: parsed.tokenPresent,
+      tokenLength: parsed.tokenLength,
+      error: parsed.error,
+    });
+    return {
+      ...baseResult,
+      error: parsed.error,
+    };
+  }
+  
   try {
-    const result = await yodeckRequest<{ count: number }>("/screens/");
-    if (result.ok) {
-      console.log(`${LOG_PREFIX} YODECK_AUTH_OK - API accessible`);
-      return { ok: true };
+    const result = await yodeckRequest<{ count: number; results: any[] }>("/screens/");
+    
+    if (result.ok && result.data) {
+      console.log(`${LOG_PREFIX} [AUTH-STATUS] SUCCESS - API accessible, ${result.data.count} screens`);
+      return {
+        ...baseResult,
+        ok: true,
+        status: result.status,
+        screenCount: result.data.count,
+        responseSample: {
+          count: result.data.count,
+          firstScreenName: result.data.results?.[0]?.name || null,
+        },
+      };
     }
-    console.error(`${LOG_PREFIX} YODECK_AUTH_FAILED: ${result.error}`);
-    return { ok: false, error: result.error };
+    
+    console.error(`${LOG_PREFIX} [AUTH-STATUS] FAILED: ${result.error}`);
+    return {
+      ...baseResult,
+      ok: false,
+      status: result.status,
+      error: result.error,
+    };
   } catch (err: any) {
-    console.error(`${LOG_PREFIX} YODECK_AUTH_FAILED: ${err.message}`);
-    return { ok: false, error: err.message };
+    console.error(`${LOG_PREFIX} [AUTH-STATUS] EXCEPTION: ${err.message}`);
+    return {
+      ...baseResult,
+      ok: false,
+      error: err.message,
+    };
   }
 }
