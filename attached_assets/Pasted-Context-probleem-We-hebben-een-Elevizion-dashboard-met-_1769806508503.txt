@@ -1,0 +1,262 @@
+Context / probleem
+We hebben een Elevizion dashboard met Yodeck-integratie. Het systeem is ontspoord:
+
+Elk scherm moet EXACT 1 playlist hebben (“EVZ | SCREEN | <playerId>” of “EVZ | COMBINED | SCREEN | <playerId>” – maar kies 1 model en forceer dat).
+
+Die playlist bevat: baseline content (4 vaste items) + toegewezen ads (uploads/approved assets).
+
+Op dit moment worden er veel te veel playlists gemaakt (±155 in Yodeck).
+
+Er “zweven” ads rond (wel geupload / approved) maar niet geplaatst.
+
+In logs zien we dat endpoints zoals now-playing of self-heal logica playlists aanmaakt en zelfs een “combined” playlist verwacht (expectedPlaylistId=30588132) maar die playlist is leeg (itemCount=0), terwijl de “oude” screen playlist (30532596) wél baseline items bevat (4 stuks).
+
+Dus: playlist selectie + vulling + push is inconsistent en niet idempotent.
+
+Doel
+
+Stop playlist-explosie: er mag per screen nog maar 1 canonical playlist bestaan en gebruikt worden.
+
+Idempotent vullen: baseline + ads moeten elke keer exact correct eindigen, zonder duplicaten.
+
+Correct publiceren: na upload/approve moet de juiste media in de juiste playlist komen en vervolgens naar het scherm gepusht worden.
+
+Fix “zwevende ads”: alle ads met status “approved/ready_for_yodeck/ready_for_publish” moeten in de playlist van hun target screen(s) komen.
+
+Hardening: self-heal / now-playing mag NOOIT meer playlists aanmaken als bij-effect.
+
+Stap 1 — Kies 1 playback model en enforceer het
+
+We hebben nu sporen van:
+
+PLAYLIST_ONLY met playlistId=30532596 (bevat baseline)
+
+“COMBINED” playlists die aangemaakt worden en leeg blijven
+
+location heeft velden yodeckPlaylistId=30461663, yodeckBaselinePlaylistId=30461645, maar screen-objecten hebben baselinePlaylistId=null, combinedPlaylistId=null, etc.
+
+Beslissing (implementeer dit hard):
+
+Per screen gebruiken we screen.playlistId als de enige waarheid.
+
+Geen combinedPlaylistId meer aanmaken.
+
+Geen aparte ADS/BASELINE playlists per screen.
+
+De playlist screen.playlistId wordt gevuld met baseline + ads.
+
+Actie:
+
+Zoek alle code die combinedPlaylistId creëert of verwacht (bijv. NowPlaying / selfHeal / ensurePlaylists / ensureLocationContent).
+
+Verwijder of disable die “create combined playlist” code.
+
+Maak een centrale functie:
+
+getCanonicalScreenPlaylist(screen) -> {playlistId, playlistName}
+
+Die:
+
+Als screen.playlistId bestaat: return die.
+
+Als die ontbreekt: 1x aanmaken met een vaste naam EVZ | SCREEN | <playerId> en direct opslaan in DB, daarna altijd hergebruiken.
+
+Dit is de enige plek waar een playlist aangemaakt mag worden.
+
+Acceptance criteria:
+
+GET /api/screens/:id/now-playing mag nooit playlists creëren. Alleen lezen en vergelijken.
+
+NowPlaying moet expectedPlaylistId == screen.playlistId.
+
+Stap 2 — Fix de oorzaak van de 155 playlists (root cause)
+
+Ik wil dat je exact uitzoekt waar de playlists aangemaakt worden. Voeg tijdelijke logging toe met correlationId:
+
+Elke keer als er een playlist create gebeurt:
+
+log stack context: endpoint, screenId, locationId, playerId, playlistName
+
+log “reason” (welke functie riep dit aan)
+
+Zoek vooral:
+
+ensureCanonicalPlaylist(...)
+
+ensureLocationContent()
+
+ensurePlaylistsForScreen()
+
+selfHeal / NowPlaying / “missing combinedPlaylistId, creating playlists…”
+
+events/cron workers
+
+Fix:
+
+Maak playlist create idempotent:
+
+Check eerst in DB (screen.playlistId)
+
+Anders zoek in Yodeck op exact canonical name (case-insensitive) en hergebruik als hij bestaat
+
+Pas als hij niet bestaat: create
+
+Extra hardening:
+
+Zet een mutex/lock per screenId (in memory of db-level) voor “playlist ensure + fill” zodat 2 requests niet tegelijk creates doen.
+
+Stap 3 — Bouw 1 “reconcile” pipeline voor playlist vulling
+
+Maak één functie:
+
+reconcileScreenPlaylist(screenId, options)
+
+Die:
+
+Haalt screen + yodeckPlayerId + playlistId op.
+
+Bepaalt baseline items (de 4 vaste mediaIds die al bestaan in Yodeck: NOS algemeen nieuws, Weer goed, NOS sport algemeen, 1Limburg).
+
+Bepaalt ad-items:
+
+alle advertisers met assetStatus in ('ready_for_yodeck','approved','ready_for_publish')
+
+die targetten op screen/location/city/region
+
+en waarvan contract/placement (als die bestaat) geldig is
+
+(in jouw huidige testdata zijn contracts/placements leeg, maar advertiser met linkKey bestaat. Zorg dat er een fallback pad is: “als advertiser target matcht op regio/city en heeft approved asset -> include”)
+
+Leest huidige playlist items vanuit Yodeck.
+
+Maakt het eindresultaat deterministisch:
+
+[baseline…] + [ads…]
+
+geen duplicates (op mediaId)
+
+behoud baseline altijd
+
+Patch de playlist in Yodeck (replace of sync):
+
+Bij voorkeur “replace playlist items” (clear + add in correct order)
+
+Push naar screen (Yodeck publish/push).
+
+Update DB: screen.lastPushAt, lastPushResult, etc.
+
+Acceptance criteria:
+
+Na reconcile heeft playlist itemCount >= 4.
+
+Als er 1 ad is, itemCount == 5.
+
+Een tweede reconcile mag niets extra aanmaken of dupliceren.
+
+Stap 4 — Fix “zwevende ads”
+
+We hebben ads die wel bestaan maar niet geplaatst worden. Dat is meestal:
+
+mapping ontbreekt (advertiser -> mediaId in Yodeck)
+
+of targeting/placement engine levert geen placements
+
+of playlist update gebruikt verkeerde playlistId (combined vs screen playlist)
+
+Implementatie:
+
+Maak “canonical media mapping”:
+
+op advertiser record een veld yodeckMediaIdCanonical
+
+als upload goed is afgerond, zet dat veld.
+
+In reconcileScreenPlaylist: pak ads alleen als yodeckMediaIdCanonical != null én media status ok.
+
+Als advertiser asset status “ready_for_yodeck” is maar yodeckMediaIdCanonical ontbreekt:
+
+run ensureAdvertiserMediaUploaded(advertiserId) (idempotent: als media al bestaat, hergebruik)
+
+daarna reconcile opnieuw.
+
+Acceptance criteria:
+
+Zodra een video is goedgekeurd, komt hij binnen 1 run in de playlist van het target screen.
+
+Stap 5 — Cleanup: verwijder/ignore de 155 foute playlists
+
+We willen geen handmatige chaos.
+
+Voeg een admin endpoint toe:
+
+POST /api/admin/yodeck/cleanup-playlists
+
+die:
+
+alle playlists ophaalt
+
+whitelist: playlists die canonical zijn per screen (de 2 screen.playlistId’s)
+
+de rest markeren als “orphaned”
+
+NIET meteen deleten (veiligheid), maar wel rapporteren met lijst + count
+
+In UI: toon “Orphan playlists detected: 155” + knop “Export lijst”.
+
+Stap 6 — Concrete testflow (moet jij in code zetten)
+
+Maak een admin endpoint voor één scherm:
+
+POST /api/admin/screens/:id/reconcile
+
+Return JSON:
+
+playlistId, playlistName
+
+baselineCount, adsCount, finalCount
+
+includedMediaIds
+
+pushResult
+
+Testplan:
+
+Run reconcile -> verwacht baseline 4
+
+Markeer 1 advertiser video als approved + yodeckMediaIdCanonical set -> reconcile -> verwacht 5
+
+Refresh now-playing -> expectedPlaylistId == actualSourceId == screen.playlistId
+
+Geen nieuwe playlists in Yodeck aangemaakt
+
+Belangrijk: wat je expliciet NIET meer mag doen
+
+Nooit playlists creëren in read endpoints (now-playing, content-status, etc.)
+
+Geen “COMBINED / ADS / BASELINE” playlists per screen aanmaken zolang we 1-playlist model gebruiken
+
+Geen tag-based playlist mode gebruiken als /tags endpoint toch niet werkt / 404 geeft; baseer op screen.playlistId
+
+Output die ik van je wil (Replit AI)
+
+Een korte root-cause analyse: waar kwamen de 155 playlists vandaan (welke functie/endpoint).
+
+De code changes:
+
+nieuwe canonical playlist resolver
+
+reconcile pipeline
+
+fixes in now-playing/self-heal
+
+lock/idempotency
+
+Nieuwe endpoints:
+
+/api/admin/screens/:id/reconcile
+
+/api/admin/yodeck/cleanup-playlists (report-only)
+
+Een checklist met “done = werkt” criteria + logs die dit bewijzen.
+
+Ga nu aan de slag in de repo.

@@ -16437,6 +16437,72 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.status(500).json({ ok: false, error: error.message });
     }
   });
+
+  // ============================================================================
+  // SINGLE PLAYLIST MODEL - 1 canonical playlist per screen
+  // ============================================================================
+
+  /**
+   * POST /api/admin/screens/:screenId/reconcile
+   * Reconcile screen playlist: ensure canonical playlist + baseline + ads
+   * This is the ONLY endpoint that may create a playlist (with forceCreate=true)
+   */
+  app.post("/api/admin/screens/:screenId/reconcile", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { dryRun = false, forceCreate = false } = req.body;
+      
+      console.log(`[Admin] Reconcile request for screen ${screenId} (dryRun=${dryRun}, forceCreate=${forceCreate})`);
+      
+      const { reconcileScreenPlaylist } = await import("./services/singlePlaylistService");
+      const result = await reconcileScreenPlaylist(screenId, { dryRun, forceCreate });
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Admin] Reconcile error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/yodeck/cleanup-playlists
+   * Detect orphaned playlists (report only, no delete)
+   */
+  app.post("/api/admin/yodeck/cleanup-playlists", requireAdminAccess, async (req, res) => {
+    try {
+      console.log(`[Admin] Cleanup playlists request`);
+      
+      const { detectOrphanedPlaylists } = await import("./services/singlePlaylistService");
+      const result = await detectOrphanedPlaylists();
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[Admin] Cleanup playlists error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/screens/:screenId/canonical-playlist
+   * Get canonical playlist info for screen (read-only, never creates)
+   */
+  app.get("/api/admin/screens/:screenId/canonical-playlist", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      
+      const screen = await storage.getScreen(screenId);
+      if (!screen) {
+        return res.status(404).json({ ok: false, error: "Screen not found" });
+      }
+      
+      const { getCanonicalScreenPlaylist } = await import("./services/singlePlaylistService");
+      const result = await getCanonicalScreenPlaylist(screen, { allowCreate: false });
+      
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
   
   // ============================================================================
   // RAW YODECK DEBUG ENDPOINTS - Direct API response for debugging
@@ -16803,53 +16869,18 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         return res.status(404).json({ ok: false, error: "Screen not found" });
       }
 
-      const { selfHealIfLayout, verifyScreenPlayback } = await import("./services/yodeckPlaybackEngine");
-      const { getScreenNowPlaying } = await import("./services/yodeckBroadcast");
+      // READ-ONLY: Never create playlists in now-playing endpoint
+      // Use the simple read-only version from singlePlaylistService
+      const { getScreenNowPlayingSimple } = await import("./services/singlePlaylistService");
       
-      let selfHealed = false;
-      let selfHealResult: any = null;
-
-      if (screen.yodeckPlayerId) {
-        // First ensure playlists exist if missing
-        if (!screen.combinedPlaylistId) {
-          const { ensureScreenPlaylists, seedBaselineIfEmpty, rebuildCombinedPlaylist, assignCombinedPlaylistToScreen } = await import("./services/yodeckPlaybackEngine");
-          console.log(`[NowPlaying] Screen ${screenId} missing combinedPlaylistId, creating playlists...`);
-          const ensureResult = await ensureScreenPlaylists(screen);
-          if (ensureResult.ok) {
-            const refreshed = await storage.getScreen(screenId);
-            if (refreshed) {
-              await seedBaselineIfEmpty(refreshed);
-              await rebuildCombinedPlaylist(refreshed);
-              // Assign and push to screen
-              await assignCombinedPlaylistToScreen(refreshed);
-            }
-          }
-        }
-        
-        // Now self-heal if in layout mode
-        const refreshedScreen = await storage.getScreen(screenId);
-        if (refreshedScreen) {
-          selfHealResult = await selfHealIfLayout(refreshedScreen);
-          selfHealed = selfHealResult.healed;
-          
-          if (selfHealResult.wasOnLayout) {
-            console.log(`[NowPlaying] LAYOUT_FORBIDDEN detected on screen ${screenId}, self-healed=${selfHealed}`);
-          }
-        }
+      const result = await getScreenNowPlayingSimple(screenId);
+      
+      // Log if there's a mismatch (but don't auto-fix - that's for reconcile)
+      if (result.ok && !result.isCorrect) {
+        console.log(`[NowPlaying] Screen ${screenId} mismatch: expected=${result.expectedPlaylistId}, actual=${result.actualSourceType}/${result.actualSourceId}`);
       }
-
-      const result = await getScreenNowPlaying(screenId);
       
-      res.json({
-        ...result,
-        selfHealed,
-        selfHealResult: selfHealResult ? {
-          wasOnLayout: selfHealResult.wasOnLayout,
-          healed: selfHealResult.healed,
-          correlationId: selfHealResult.correlationId,
-          error: selfHealResult.error,
-        } : undefined,
-      });
+      res.json(result);
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message });
     }
