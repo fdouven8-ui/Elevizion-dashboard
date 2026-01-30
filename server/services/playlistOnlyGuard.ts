@@ -239,8 +239,8 @@ export async function checkAndRevertLayoutMode(yodeckScreenId: number, expectedP
 }
 
 async function findCanonicalPlaylist(yodeckScreenId: number): Promise<number | null> {
-  const screens = await storage.getAllScreens();
-  const screen = screens.find(s => s.yodeckPlayerId === String(yodeckScreenId));
+  const allScreens = await storage.getScreens();
+  const screen = allScreens.find((s: any) => s.yodeckPlayerId === String(yodeckScreenId));
   
   if (screen?.playlistId) {
     return parseInt(screen.playlistId, 10);
@@ -249,7 +249,9 @@ async function findCanonicalPlaylist(yodeckScreenId: number): Promise<number | n
   if (screen?.locationId) {
     const location = await storage.getLocation(screen.locationId);
     if (location?.yodeckPlaylistId) {
-      return location.yodeckPlaylistId;
+      return typeof location.yodeckPlaylistId === "number" 
+        ? location.yodeckPlaylistId 
+        : parseInt(location.yodeckPlaylistId, 10);
     }
   }
 
@@ -381,7 +383,9 @@ export async function resolveEffectiveScreenSource(
     if (loc?.yodeckPlaylistId) {
       expected = {
         type: "playlist",
-        id: loc.yodeckPlaylistId,
+        id: typeof loc.yodeckPlaylistId === "number" 
+          ? loc.yodeckPlaylistId 
+          : parseInt(String(loc.yodeckPlaylistId), 10),
         source: "db_location",
       };
     }

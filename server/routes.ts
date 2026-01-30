@@ -16726,15 +16726,63 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   app.post("/api/admin/screens/:screenId/repair", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.params;
-      const { repairScreen } = await import("./services/screenPlaylistService");
+      const screen = await storage.getScreen(screenId);
+      const correlationId = `repair-${Date.now()}-${screenId.slice(-6)}`;
+      const actions: string[] = [];
       
-      console.log(`[ScreenRepair] Starting repair for screen: ${screenId}`);
+      console.log(`[ScreenRepair] ${correlationId} Starting repair for screen: ${screenId}`);
+      
+      // Step 1: Auto-heal if in layout mode (PLAYLIST-ONLY enforcement)
+      if (screen?.yodeckPlayerId) {
+        const { resolveEffectiveScreenSource, ensurePlayerUsesExpectedPlaylist } = await import("./services/playlistOnlyGuard");
+        const yodeckPlayerId = parseInt(screen.yodeckPlayerId, 10);
+        const resolution = await resolveEffectiveScreenSource(yodeckPlayerId);
+        
+        if (resolution.actual.type !== "playlist") {
+          actions.push(`[AutoHeal] Screen in ${resolution.actual.type} mode, healing to playlist`);
+          console.log(`[ScreenRepair] ${correlationId} Screen in ${resolution.actual.type} mode, auto-healing...`);
+          
+          if (resolution.expected) {
+            const healResult = await ensurePlayerUsesExpectedPlaylist(yodeckPlayerId, resolution.expected.id, correlationId);
+            actions.push(`[AutoHeal] outcome=${healResult.outcome}`);
+            
+            if (healResult.outcome !== "HEALED" && healResult.outcome !== "ALREADY_OK") {
+              console.error(`[ScreenRepair] ${correlationId} Auto-heal failed: ${healResult.error}`);
+              return res.status(422).json({
+                ok: false,
+                error: "SCREEN_SOURCE_MISMATCH_UNFIXED",
+                message: `Scherm staat in ${resolution.actual.type} mode en kon niet worden hersteld`,
+                correlationId,
+                actual: resolution.actual,
+                expected: resolution.expected,
+                healResult,
+                actions,
+              });
+            }
+            actions.push(`[AutoHeal] SUCCESS: Screen now in playlist mode`);
+          } else {
+            actions.push(`[AutoHeal] WARNING: No expected playlist found`);
+          }
+        } else {
+          actions.push(`[AutoHeal] Screen already in playlist mode`);
+        }
+      }
+      
+      // Step 2: Run normal repair
+      const { repairScreen } = await import("./services/screenPlaylistService");
       const result = await repairScreen(screenId);
       
-      result.logs.forEach(log => console.log(log));
-      console.log(`[ScreenRepair] Result: ok=${result.ok}, publishOk=${result.publishOk}, verificationOk=${result.verificationOk}`);
+      // Merge actions
+      const allLogs = [...actions, ...result.logs];
+      allLogs.forEach(log => console.log(log));
+      console.log(`[ScreenRepair] ${correlationId} Result: ok=${result.ok}, publishOk=${result.publishOk}, verificationOk=${result.verificationOk}`);
       
-      res.json(result);
+      res.json({
+        ...result,
+        correlationId,
+        logs: allLogs,
+        autoHealActions: actions,
+      });
     } catch (error: any) {
       console.error("[ScreenRepair] Error:", error);
       res.status(500).json({ ok: false, error: error.message });
@@ -17805,23 +17853,165 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * GET /api/admin/screens/:screenId/source-status
+   * PLAYLIST-ONLY: Get screen source resolution with mismatch detection
+   * Returns expected vs actual source for UI badges
+   */
+  app.get("/api/admin/screens/:screenId/source-status", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const screen = await storage.getScreen(screenId);
+      
+      if (!screen?.yodeckPlayerId) {
+        return res.status(404).json({ 
+          ok: false, 
+          error: "Screen not found or no yodeckPlayerId",
+          mismatch: false,
+        });
+      }
+      
+      const { resolveEffectiveScreenSource, PLAYLIST_ONLY_MODE } = await import("./services/playlistOnlyGuard");
+      const yodeckPlayerId = parseInt(screen.yodeckPlayerId, 10);
+      
+      const resolution = await resolveEffectiveScreenSource(yodeckPlayerId);
+      
+      res.json({
+        ok: true,
+        screenId,
+        yodeckPlayerId,
+        playlistOnlyMode: PLAYLIST_ONLY_MODE,
+        expected: resolution.expected,
+        actual: resolution.actual,
+        mismatch: resolution.mismatch,
+        mismatchReason: resolution.mismatchReason,
+        needsRepair: resolution.mismatch || resolution.actual.type !== "playlist",
+      });
+    } catch (error: any) {
+      console.error("[SourceStatus] Error:", error);
+      res.status(500).json({ ok: false, error: error.message, mismatch: false });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/:screenId/fix-playlist-mode
+   * PLAYLIST-ONLY: Auto-heal screen from layout/schedule to expected playlist
+   */
+  app.post("/api/admin/screens/:screenId/fix-playlist-mode", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const screen = await storage.getScreen(screenId);
+      
+      if (!screen?.yodeckPlayerId) {
+        return res.status(404).json({ ok: false, error: "Screen not found or no yodeckPlayerId" });
+      }
+      
+      const { resolveEffectiveScreenSource, ensurePlayerUsesExpectedPlaylist } = await import("./services/playlistOnlyGuard");
+      const yodeckPlayerId = parseInt(screen.yodeckPlayerId, 10);
+      const correlationId = `fix-${Date.now()}-${screenId.slice(-6)}`;
+      
+      console.log(`[FixPlaylistMode] ${correlationId} Starting for screen ${screenId}`);
+      
+      // First resolve expected playlist
+      const resolution = await resolveEffectiveScreenSource(yodeckPlayerId);
+      
+      if (!resolution.expected) {
+        console.warn(`[FixPlaylistMode] ${correlationId} No expected playlist found`);
+        return res.status(422).json({
+          ok: false,
+          error: "NO_EXPECTED_PLAYLIST",
+          message: "Kan geen verwachte playlist vinden voor dit scherm. Configureer eerst een locatie playlist.",
+          resolution,
+        });
+      }
+      
+      // Run auto-heal
+      const healResult = await ensurePlayerUsesExpectedPlaylist(
+        yodeckPlayerId, 
+        resolution.expected.id,
+        correlationId
+      );
+      
+      console.log(`[FixPlaylistMode] ${correlationId} outcome=${healResult.outcome}`);
+      healResult.steps.forEach(step => console.log(`[FixPlaylistMode] ${correlationId} step=${step.step} status=${step.status}`));
+      
+      res.json({
+        ok: healResult.outcome === "HEALED" || healResult.outcome === "ALREADY_OK",
+        correlationId,
+        outcome: healResult.outcome,
+        steps: healResult.steps,
+        before: healResult.beforeSnapshot,
+        after: healResult.afterSnapshot,
+        error: healResult.error,
+      });
+    } catch (error: any) {
+      console.error("[FixPlaylistMode] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/screens/:screenId/canonical-repair
    * CANONICAL PLAYLIST STRATEGY: Ensures screen has exactly ONE playlist
    * Named "Elevizion | Screen | {yodeckPlayerId}" with baseline items
+   * Now includes auto-heal from layout mode!
    */
   app.post("/api/admin/screens/:screenId/canonical-repair", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.params;
+      const screen = await storage.getScreen(screenId);
+      const correlationId = `repair-${Date.now()}-${screenId.slice(-6)}`;
+      const actions: string[] = [];
+      
+      // Step 1: Check if screen is in layout mode and auto-heal
+      if (screen?.yodeckPlayerId) {
+        const { resolveEffectiveScreenSource, ensurePlayerUsesExpectedPlaylist } = await import("./services/playlistOnlyGuard");
+        const yodeckPlayerId = parseInt(screen.yodeckPlayerId, 10);
+        const resolution = await resolveEffectiveScreenSource(yodeckPlayerId);
+        
+        if (resolution.actual.type !== "playlist") {
+          actions.push(`[AutoHeal] Screen in ${resolution.actual.type} mode, healing to playlist`);
+          console.log(`[CanonicalRepair] ${correlationId} Screen in ${resolution.actual.type} mode, auto-healing...`);
+          
+          if (resolution.expected) {
+            const healResult = await ensurePlayerUsesExpectedPlaylist(yodeckPlayerId, resolution.expected.id, correlationId);
+            actions.push(`[AutoHeal] outcome=${healResult.outcome}`);
+            
+            if (healResult.outcome !== "HEALED" && healResult.outcome !== "ALREADY_OK") {
+              console.error(`[CanonicalRepair] ${correlationId} Auto-heal failed: ${healResult.error}`);
+              return res.status(422).json({
+                ok: false,
+                error: "SCREEN_SOURCE_MISMATCH_UNFIXED",
+                message: `Scherm staat in ${resolution.actual.type} mode en kon niet worden hersteld`,
+                correlationId,
+                actual: resolution.actual,
+                expected: resolution.expected,
+                healResult,
+              });
+            }
+          } else {
+            actions.push(`[AutoHeal] WARNING: No expected playlist found, will create new`);
+          }
+        }
+      }
+      
+      // Step 2: Run canonical repair (playlist creation/sync)
       const { ensureCanonicalScreenPlayback } = await import("./services/yodeckBroadcast");
       
-      console.log(`[CanonicalRepair] Repairing screen ${screenId}`);
+      console.log(`[CanonicalRepair] ${correlationId} Running canonical repair for screen ${screenId}`);
       const result = await ensureCanonicalScreenPlayback(screenId);
       
-      console.log(`[CanonicalRepair] Result: ok=${result.ok}, selfHealed=${result.selfHealed}, verified=${result.verified}`);
-      result.actions.forEach(action => console.log(`[CanonicalRepair] ${action}`));
+      // Merge actions
+      const allActions = [...actions, ...result.actions];
+      
+      console.log(`[CanonicalRepair] ${correlationId} Result: ok=${result.ok}, selfHealed=${result.selfHealed}, verified=${result.verified}`);
+      allActions.forEach(action => console.log(`[CanonicalRepair] ${action}`));
       result.errors.forEach(err => console.error(`[CanonicalRepair] ERROR: ${err}`));
       
-      res.json(result);
+      res.json({
+        ...result,
+        correlationId,
+        actions: allActions,
+      });
     } catch (error: any) {
       console.error("[CanonicalRepair] Error:", error);
       res.status(500).json({ ok: false, error: error.message });

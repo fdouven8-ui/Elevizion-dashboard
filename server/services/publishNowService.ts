@@ -827,6 +827,59 @@ export async function publishNow(
   for (const screenId of targetScreens) {
     log(correlationId, "SCREEN", `Processing screen ${screenId}...`, logs);
 
+    // STEP 0: Auto-heal screen if in layout mode (PLAYLIST_ONLY enforcement)
+    stepStart = Date.now();
+    const { resolveEffectiveScreenSource, ensurePlayerUsesExpectedPlaylist, PLAYLIST_ONLY_MODE } = await import("./playlistOnlyGuard");
+    
+    const yodeckPlayerId = parseInt(screenId, 10);
+    const sourceCheck = await resolveEffectiveScreenSource(yodeckPlayerId);
+    
+    if (sourceCheck.actual.type !== "playlist") {
+      log(correlationId, "AUTO_HEAL", `Screen ${screenId} is in ${sourceCheck.actual.type} mode (actual=${sourceCheck.actual.type}:${sourceCheck.actual.id}), attempting auto-heal...`, logs);
+      
+      const expectedPlaylistId = sourceCheck.expected?.id;
+      if (!expectedPlaylistId) {
+        steps.push({
+          step: `AUTO_HEAL_${screenId}`,
+          status: "failed",
+          duration_ms: Date.now() - stepStart,
+          details: {
+            actualType: sourceCheck.actual.type,
+            actualId: sourceCheck.actual.id,
+            expectedPlaylistId: null,
+            reason: "NO_EXPECTED_PLAYLIST",
+          },
+        });
+        log(correlationId, "AUTO_HEAL", `FAILED: No expected playlist found for screen ${screenId}`, logs);
+        failedCount++;
+        continue;
+      }
+      
+      const healResult = await ensurePlayerUsesExpectedPlaylist(yodeckPlayerId, expectedPlaylistId, correlationId);
+      steps.push({
+        step: `AUTO_HEAL_${screenId}`,
+        status: healResult.outcome === "HEALED" ? "success" : "failed",
+        duration_ms: Date.now() - stepStart,
+        details: {
+          beforeType: healResult.beforeSnapshot.actual.type,
+          beforeId: healResult.beforeSnapshot.actual.id,
+          afterType: healResult.afterSnapshot?.actual.type,
+          afterId: healResult.afterSnapshot?.actual.id,
+          outcome: healResult.outcome,
+        },
+        error: healResult.error,
+      });
+      
+      if (healResult.outcome !== "HEALED" && healResult.outcome !== "ALREADY_OK") {
+        log(correlationId, "AUTO_HEAL", `FAILED for ${screenId}: ${healResult.error}`, logs);
+        failedCount++;
+        continue;
+      }
+      log(correlationId, "AUTO_HEAL", `SUCCESS: Screen ${screenId} now in playlist mode`, logs);
+    } else {
+      log(correlationId, "AUTO_HEAL", `Screen ${screenId} already in playlist mode, skipping heal`, logs);
+    }
+
     stepStart = Date.now();
     const playlistResult = await resolveEffectivePlaylistForScreen(screenId);
     steps.push({
@@ -842,7 +895,13 @@ export async function publishNow(
     });
 
     if (!playlistResult.ok) {
-      log(correlationId, "RESOLVE_PLAYLIST", `FAILED for ${screenId}: ${playlistResult.error?.message}`, logs);
+      log(correlationId, "RESOLVE_PLAYLIST", `FAILED for ${screenId}: ${playlistResult.error?.message} (code=${playlistResult.error?.code})`, logs);
+      
+      // Return 422 with SCREEN_SOURCE_MISMATCH_UNFIXED if still not in playlist mode
+      if (playlistResult.error?.code === "SCREEN_NOT_IN_PLAYLIST_MODE") {
+        log(correlationId, "RESOLVE_PLAYLIST", `Screen ${screenId} still not in playlist mode after heal attempt`, logs);
+      }
+      
       failedCount++;
       continue;
     }

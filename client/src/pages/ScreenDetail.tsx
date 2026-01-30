@@ -189,6 +189,65 @@ export default function ScreenDetail() {
     staleTime: 60000,
   });
 
+  // Source status - PLAYLIST-ONLY mode enforcement
+  const { data: sourceStatus, isLoading: sourceStatusLoading, refetch: refetchSourceStatus } = useQuery<{
+    ok: boolean;
+    screenId: string;
+    yodeckPlayerId: number;
+    playlistOnlyMode: boolean;
+    expected: { type: string; id: number; source: string } | null;
+    actual: { type: string; id: number | null; name?: string };
+    mismatch: boolean;
+    mismatchReason?: string;
+    needsRepair: boolean;
+    error?: string;
+  }>({
+    queryKey: ["screen-source-status", screenId],
+    queryFn: async () => {
+      const response = await fetch(`/api/admin/screens/${screenId}/source-status`, { credentials: "include" });
+      if (!response.ok) return { ok: false, mismatch: false, needsRepair: false };
+      return response.json();
+    },
+    enabled: !!screenId && isAdmin,
+    staleTime: 30000,
+  });
+
+  // Fix playlist mode mutation
+  const fixPlaylistModeMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`/api/admin/screens/${screenId}/fix-playlist-mode`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.message || data.error || "Fout bij herstellen playlist mode");
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      if (data.ok) {
+        toast({
+          title: "Playlist mode hersteld",
+          description: `Scherm is nu in playlist mode (outcome: ${data.outcome})`,
+        });
+      } else {
+        toast({
+          title: "Herstel mislukt",
+          description: data.error || "Kon playlist mode niet herstellen",
+          variant: "destructive",
+        });
+      }
+      refetchSourceStatus();
+      refetchNowPlaying();
+      queryClient.invalidateQueries({ queryKey: ["screen-source-status", screenId] });
+      queryClient.invalidateQueries({ queryKey: ["screen-now-playing", screenId] });
+    },
+    onError: (error: any) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
   // Now playing data - single source of truth for what's actually on screen
   const { data: nowPlaying, isLoading: nowPlayingLoading, refetch: refetchNowPlaying } = useQuery<{
     ok: boolean;
@@ -1067,6 +1126,50 @@ export default function ScreenDetail() {
                         <p className="font-medium text-red-800">Fout</p>
                         <p className="text-sm text-red-700">{nowPlaying.error}</p>
                       </div>
+                    </div>
+                  )}
+
+                  {/* Layout Mode Warning - PLAYLIST-ONLY enforcement */}
+                  {isAdmin && sourceStatus?.ok && sourceStatus?.actual?.type && sourceStatus.actual.type !== "playlist" && (
+                    <div className="flex items-center justify-between gap-2 p-3 bg-red-100 border border-red-300 rounded-lg" data-testid="layout-mode-warning">
+                      <div className="flex items-center gap-2">
+                        <XCircle className="h-5 w-5 text-red-600" />
+                        <div>
+                          <p className="font-medium text-red-800">Scherm in {sourceStatus.actual.type.toUpperCase()} mode</p>
+                          <p className="text-sm text-red-700">
+                            Verwacht: playlist:{sourceStatus.expected?.id ?? "?"} | Werkelijk: {sourceStatus.actual.type}:{sourceStatus.actual.id ?? "?"}
+                          </p>
+                        </div>
+                      </div>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={() => fixPlaylistModeMutation.mutate()}
+                        disabled={fixPlaylistModeMutation.isPending}
+                        data-testid="btn-fix-playlist-mode"
+                      >
+                        {fixPlaylistModeMutation.isPending ? (
+                          <>
+                            <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                            Herstellen...
+                          </>
+                        ) : (
+                          <>
+                            <Wrench className="h-4 w-4 mr-2" />
+                            Fix naar playlist
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )}
+
+                  {/* Source Status Badge */}
+                  {isAdmin && sourceStatus?.ok && !sourceStatusLoading && sourceStatus?.actual?.type === "playlist" && (
+                    <div className="flex items-center gap-2 p-2 bg-green-50 border border-green-200 rounded-lg" data-testid="playlist-mode-ok">
+                      <CheckCircle className="h-4 w-4 text-green-600" />
+                      <span className="text-sm text-green-700">
+                        Playlist mode OK (id: {sourceStatus.actual.id})
+                      </span>
                     </div>
                   )}
 
