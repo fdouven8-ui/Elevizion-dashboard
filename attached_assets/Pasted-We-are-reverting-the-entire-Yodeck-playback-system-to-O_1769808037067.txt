@@ -1,0 +1,109 @@
+We are reverting the entire Yodeck playback system to ONE simple model. Everything else must be removed.
+
+REQUIREMENTS (non-negotiable)
+1) There is exactly 1 GLOBAL base playlist in Yodeck called "Basis playlist".
+   - This playlist contains the fixed baseline items (news/weather/etc).
+   - This playlist is NEVER modified by the app except by the user in Yodeck UI.
+
+2) Each screen has EXACTLY 1 playlist in Yodeck (max 1 per screen).
+   - Screen playlist name format: "EVZ | SCREEN | <yodeckPlayerId>"
+   - The screen playlist items are:
+     [all items from "Basis playlist"] + [advertiser videos assigned to this screen]
+   - No other per-screen playlists exist. NO COMBINED, NO ADS, NO BASELINE per screen.
+
+3) Playback:
+   - The Yodeck player MUST always be configured to play the screen playlist only.
+   - After changes, we PUSH to the screen.
+
+4) Ads:
+   - When a video is uploaded, if it needs remux/transcode/renaming, do it automatically.
+   - After upload to Yodeck returns a mediaId, persist it to advertiser.yodeckMediaIdCanonical.
+   - Then add that mediaId to the correct screen playlist (based on targeting) and push.
+
+5) Everything else must be DELETED:
+   - Tag-based playlist mode
+   - yodeckPlaybackEngine that creates 3 playlists
+   - combinedPlaylistId/baselinePlaylistId/adsPlaylistId logic
+   - now-playing/self-heal code that creates playlists
+   - any service or worker that creates playlists besides this single simple flow
+
+CURRENT ISSUES OBSERVED (must be fixed)
+- /now-playing returns HTTP 401 Invalid/empty authentication token. Fix token usage globally so every Yodeck call works.
+- Current screen uses EVZ | COMBINED | SCREEN | 591896 which is empty. This must be replaced by the new screen playlist.
+- advertiser.yodeckMediaIdCanonical is null even though assetStatus=ready_for_yodeck. Ensure upload flow always sets it.
+
+IMPLEMENTATION PLAN
+A) Create a new service: server/services/simplePlaylistModel.ts with these functions:
+
+1) getBasePlaylistId():
+   - Find the Yodeck playlist by exact name "Basis playlist" (case-sensitive).
+   - Cache basePlaylistId in memory (with TTL).
+   - If not found: return a clear error "BASE_PLAYLIST_NOT_FOUND".
+
+2) ensureScreenPlaylist(screen):
+   - If screen.playlistId exists: verify it exists in Yodeck; if missing, recreate it and update DB.
+   - If screen.playlistId is null: create playlist "EVZ | SCREEN | <playerId>", store playlistId in DB.
+   - Absolutely NEVER create any other playlists.
+
+3) syncScreenPlaylistFromBase(screenPlaylistId):
+   - Fetch items from basePlaylistId.
+   - Replace all items in screenPlaylistId with base items first (preserve order).
+   - Return baseMediaIds list.
+
+4) addAdsToScreenPlaylist(screenPlaylistId, adMediaIds):
+   - Append adMediaIds after base items.
+   - Deduplicate by mediaId.
+   - Replace playlist items to match final deterministic order.
+
+5) applyPlayerSourceAndPush(playerId, screenPlaylistId):
+   - Set player content source to the screenPlaylistId.
+   - Push to screen.
+   - Then verify by calling a read endpoint (now playing or player status) that actual sourceId == screenPlaylistId.
+
+B) Replace/Remove old systems
+- Delete/disable: yodeckPlaybackEngine.ts, ensureScreenPlaylists, combinedPlaylist service, tag-based logic.
+- Remove DB fields usage: baselinePlaylistId, adsPlaylistId, combinedPlaylistId. Leave columns if migration is hard, but NEVER read/write them again.
+- Update any UI to display only:
+  - screen.playlistId
+  - base playlist name reference
+  - itemCount
+  - lastPushAt/result
+
+C) Single admin endpoint to force rebuild (safe)
+Add endpoint:
+POST /api/admin/screens/:screenId/rebuild-playlist
+Body: { "force": true }
+It must do:
+1) ensureScreenPlaylist()
+2) syncScreenPlaylistFromBase()
+3) collect adMediaIds for this screen (see targeting below)
+4) addAdsToScreenPlaylist()
+5) applyPlayerSourceAndPush()
+6) return a debug JSON: baseCount, adsCount, finalCount, basePlaylistId, screenPlaylistId, playerId, verifyOk
+
+D) Targeting / placement (simple for now)
+Because contracts/placements may be empty, implement fallback:
+- If advertiser.assetStatus in ['ready_for_yodeck','ready_for_publish','approved'] AND advertiser.yodeckMediaIdCanonical != null
+- Determine match:
+  - If advertiser.targetRegionCodes includes screen.location.citySlug OR screen.location.regionCode -> include
+  - If screen.location.city exists and matches -> include
+If no match logic available yet, add temporary manual mapping table OR include advertiser if screensIncluded=1 and only 1 active screen in that city.
+
+E) Fix Yodeck authentication
+- Find the code that calls Yodeck for /now-playing or player details; it currently returns 401 "Invalid or empty authentication token".
+- Ensure all Yodeck requests include the correct Authorization header.
+- Add startup validation: on boot, ping Yodeck API and log "YODECK_AUTH_OK" or fail loudly.
+
+F) Guardrails to prevent playlist explosion forever
+- Add a hard rule: any attempt to create playlist outside simplePlaylistModel.ts throws.
+- Optional: add a runtime assertion: if created playlists count > 5 in one run, abort.
+
+DELIVERABLES
+1) Remove old playback systems and confirm no code path creates COMBINED/ADS/BASELINE playlists.
+2) Implement the simple model fully.
+3) Provide test steps:
+   - Create "Basis playlist" in Yodeck and add 4 items.
+   - Run rebuild endpoint -> screen playlist should now have >=4 items.
+   - Upload 1 ad -> yodeckMediaIdCanonical must be set -> rebuild -> screen playlist should have 5 items -> push -> screen displays it.
+4) Provide clear logs for each step with correlationId.
+Proceed now and commit the changes.

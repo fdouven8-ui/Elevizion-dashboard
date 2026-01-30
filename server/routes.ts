@@ -16439,65 +16439,52 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
-  // SINGLE PLAYLIST MODEL - 1 canonical playlist per screen
+  // SIMPLE PLAYLIST MODEL - 1 base playlist + 1 screen playlist per screen
   // ============================================================================
 
   /**
-   * POST /api/admin/screens/:screenId/reconcile
-   * Reconcile screen playlist: ensure canonical playlist + baseline + ads
-   * This is the ONLY endpoint that may create a playlist (with forceCreate=true)
+   * POST /api/admin/screens/:screenId/rebuild-playlist
+   * Rebuild screen playlist from base + ads
+   * This is the ONLY endpoint that may create/modify screen playlists
    */
-  app.post("/api/admin/screens/:screenId/reconcile", requireAdminAccess, async (req, res) => {
+  app.post("/api/admin/screens/:screenId/rebuild-playlist", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.params;
-      const { dryRun = false, forceCreate = false } = req.body;
       
-      console.log(`[Admin] Reconcile request for screen ${screenId} (dryRun=${dryRun}, forceCreate=${forceCreate})`);
+      console.log(`[Admin] Rebuild playlist request for screen ${screenId}`);
       
-      const { reconcileScreenPlaylist } = await import("./services/singlePlaylistService");
-      const result = await reconcileScreenPlaylist(screenId, { dryRun, forceCreate });
+      const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
+      const result = await rebuildScreenPlaylist(screenId);
       
       res.json(result);
     } catch (error: any) {
-      console.error("[Admin] Reconcile error:", error);
+      console.error("[Admin] Rebuild playlist error:", error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });
 
   /**
-   * POST /api/admin/yodeck/cleanup-playlists
-   * Detect orphaned playlists (report only, no delete)
+   * GET /api/admin/yodeck/base-playlist
+   * Get base playlist info (read-only)
    */
-  app.post("/api/admin/yodeck/cleanup-playlists", requireAdminAccess, async (req, res) => {
+  app.get("/api/admin/yodeck/base-playlist", requireAdminAccess, async (req, res) => {
     try {
-      console.log(`[Admin] Cleanup playlists request`);
-      
-      const { detectOrphanedPlaylists } = await import("./services/singlePlaylistService");
-      const result = await detectOrphanedPlaylists();
-      
+      const { getBasePlaylistId } = await import("./services/simplePlaylistModel");
+      const result = await getBasePlaylistId();
       res.json(result);
     } catch (error: any) {
-      console.error("[Admin] Cleanup playlists error:", error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });
 
   /**
-   * GET /api/admin/screens/:screenId/canonical-playlist
-   * Get canonical playlist info for screen (read-only, never creates)
+   * GET /api/admin/yodeck/auth-status
+   * Validate Yodeck authentication
    */
-  app.get("/api/admin/screens/:screenId/canonical-playlist", requireAdminAccess, async (req, res) => {
+  app.get("/api/admin/yodeck/auth-status", requireAdminAccess, async (req, res) => {
     try {
-      const { screenId } = req.params;
-      
-      const screen = await storage.getScreen(screenId);
-      if (!screen) {
-        return res.status(404).json({ ok: false, error: "Screen not found" });
-      }
-      
-      const { getCanonicalScreenPlaylist } = await import("./services/singlePlaylistService");
-      const result = await getCanonicalScreenPlaylist(screen, { allowCreate: false });
-      
+      const { validateYodeckAuth } = await import("./services/simplePlaylistModel");
+      const result = await validateYodeckAuth();
       res.json(result);
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message });
@@ -16870,12 +16857,12 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       }
 
       // READ-ONLY: Never create playlists in now-playing endpoint
-      // Use the simple read-only version from singlePlaylistService
-      const { getScreenNowPlayingSimple } = await import("./services/singlePlaylistService");
+      // Use the simple read-only version from simplePlaylistModel
+      const { getScreenNowPlayingSimple } = await import("./services/simplePlaylistModel");
       
       const result = await getScreenNowPlayingSimple(screenId);
       
-      // Log if there's a mismatch (but don't auto-fix - that's for reconcile)
+      // Log if there's a mismatch (but don't auto-fix - that's for rebuild-playlist)
       if (result.ok && !result.isCorrect) {
         console.log(`[NowPlaying] Screen ${screenId} mismatch: expected=${result.expectedPlaylistId}, actual=${result.actualSourceType}/${result.actualSourceId}`);
       }

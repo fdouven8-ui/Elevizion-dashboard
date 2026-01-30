@@ -31,21 +31,24 @@ Authentication uses username/password with bcrypt hashing and session data store
 - **System Health**: Dedicated admin page (`/system-health`) for comprehensive health checks.
 - **Unified Availability Service**: Manages capacity (`MAX_ADS_PER_SCREEN`) to prevent overselling.
 - **Ad Publishing Workflow**: Includes video upload portals, validation, object storage integration, transcoding, and an admin review workflow for approval.
-- **Single Playlist Model** (CURRENT): Each screen has exactly ONE canonical playlist (`screen.playlistId`) named "EVZ | SCREEN | {playerId}". This replaces the previous 3-playlist model (BASELINE, ADS, COMBINED) to prevent playlist explosion.
-  - **Key Service**: `singlePlaylistService.ts` with:
-    - `getCanonicalScreenPlaylist()`: Resolves or creates the ONE playlist per screen (creation only via admin endpoints)
-    - `reconcileScreenPlaylist()`: Idempotent filling with baseline items (from configured playlist) + approved ads
-    - `getScreenNowPlayingSimple()`: READ-ONLY endpoint that never creates playlists
-    - `detectOrphanedPlaylists()`: Reports orphaned playlists for cleanup
+- **Simple Playlist Model** (CURRENT): Exactly 1 global "Basis playlist" + 1 screen playlist per screen.
+  - **Key Service**: `simplePlaylistModel.ts` with:
+    - `getBasePlaylistId()`: Finds "Basis playlist" in Yodeck (case-sensitive, cached)
+    - `ensureScreenPlaylist()`: Ensures screen has exactly 1 playlist named "EVZ | SCREEN | {playerId}"
+    - `syncScreenPlaylistFromBase()`: Copies items from base playlist to screen playlist
+    - `addAdsToScreenPlaylist()`: Appends ad media IDs (deduplicated)
+    - `applyPlayerSourceAndPush()`: Sets player source to playlist and verifies
+    - `rebuildScreenPlaylist()`: Full rebuild: base + ads + push + verify
+    - `getScreenNowPlayingSimple()`: READ-ONLY status check
   - **Hard Rules**:
     - `now-playing` endpoint NEVER creates playlists (read-only)
-    - Baseline items loaded from `AUTOPILOT_BASELINE_PLAYLIST_ID` configuration
-    - Reconcile is strict: fails if mutations fail or verification fails
+    - Only `rebuild-playlist` endpoint may create/modify playlists
+    - No COMBINED/ADS/BASELINE playlists per screen - only 1 screen playlist
     - Layout mode is forbidden; screens must be in playlist mode
 - **Admin Endpoints**:
-  - `POST /api/admin/screens/:screenId/reconcile`: The ONLY endpoint that may create/fill a playlist
-  - `POST /api/admin/yodeck/cleanup-playlists`: Report orphaned playlists (read-only, no delete)
-  - `GET /api/admin/screens/:screenId/canonical-playlist`: Read-only playlist info
+  - `POST /api/admin/screens/:screenId/rebuild-playlist`: The ONLY endpoint that creates/modifies playlists
+  - `GET /api/admin/yodeck/base-playlist`: Read-only base playlist info
+  - `GET /api/admin/yodeck/auth-status`: Validate Yodeck authentication
 - **Upload Worker Service**: Handles a two-step upload process with retries and validation, tracking media status.
 
 ## External Dependencies
