@@ -573,15 +573,21 @@ export async function getCanonicalAssetForAdvertiser(advertiserId: string): Prom
   // Filter to non-superseded assets
   const activeAssets = assets.filter(a => !a.isSuperseded);
   
-  // Find the newest READY_FOR_YODECK asset WITH valid video stream
+  // Find the newest READY_FOR_YODECK asset WITH verified video stream
   const readyAsset = activeAssets
     .filter(a => {
       if (a.yodeckReadinessStatus !== "READY_FOR_YODECK") return false;
       
-      // Check hasVideoStream from metadata
+      // STRICT REQUIREMENT: metadata must exist and confirm video stream
       const metadata = a.yodeckMetadataJson as any;
-      if (metadata && metadata.hasVideoStream === false) {
-        console.warn(`[CanonicalAsset] Asset ${a.id} is READY_FOR_YODECK but hasVideoStream=false, skipping`);
+      
+      if (!metadata) {
+        console.warn(`[CanonicalAsset] Asset ${a.id} is READY_FOR_YODECK but missing metadata, skipping (needs re-validation)`);
+        return false;
+      }
+      
+      if (metadata.hasVideoStream !== true) {
+        console.warn(`[CanonicalAsset] Asset ${a.id} is READY_FOR_YODECK but hasVideoStream=${metadata.hasVideoStream}, skipping`);
         return false;
       }
       
