@@ -1,0 +1,76 @@
+You are a senior backend engineer.
+
+Problem:
+Uploaded advertiser videos are being stored, but ffprobe validation shows:
+- container: "unknown"
+- hasVideoStream: false
+- hasAudioStream: false
+
+This means the upload pipeline is NOT persisting the binary video correctly.
+Downstream publish fails because there is no valid canonical asset.
+
+Goal:
+Make the upload → validate → normalize → publish pipeline bulletproof.
+
+Implement the following changes:
+
+1. HARDEN UPLOAD INGEST
+- Ensure upload endpoints ONLY accept binary streams (multipart/form-data or raw stream).
+- Never parse upload body as JSON or text.
+- Stream incoming file directly to disk/object storage.
+- After write, log:
+  - absolute file path
+  - file size in bytes
+
+2. IMMEDIATE POST-UPLOAD PROBE
+- After storing the file, immediately run:
+  ffprobe -v error -print_format json -show_streams -show_format <file>
+- Parse result and extract:
+  - container/format_name
+  - hasVideoStream
+  - hasAudioStream
+  - duration
+  - size
+- Persist this metadata on the media record.
+
+3. VALIDATION RULES (HARD)
+- If hasVideoStream === false → REJECT with reason "Bestand bevat geen video"
+- If container !== "mp4" → mark NEEDS_NORMALIZATION
+- If fileSize < 100kb → REJECT (likely corrupt upload)
+
+4. AUTO NORMALIZE
+- If video has a valid video stream but is not Yodeck compatible:
+  - Run ffmpeg normalize:
+    ffmpeg -y -i input \
+      -map 0:v:0 -map 0:a? \
+      -c:v libx264 -pix_fmt yuv420p -profile:v high -level 4.2 \
+      -movflags +faststart \
+      -c:a aac -b:a 128k \
+      output.mp4
+- Re-run ffprobe on normalized file.
+- If valid → mark asset READY_FOR_YODECK.
+
+5. CANONICAL ASSET LOGIC
+- Canonical asset must be:
+  - status === READY_FOR_YODECK
+  - hasVideoStream === true
+  - newest createdAt
+  - not superseded
+- If none exists → publish must fail with explicit reason.
+
+6. DIAGNOSTICS
+- Extend validate endpoint to return:
+  - fileSize
+  - ffprobe raw output
+  - detected mime-type
+- Log every reject with correlationId.
+
+7. SAFETY
+- Never allow PUBLISH if no READY_FOR_YODECK asset exists.
+- Return clear error messages to UI.
+
+Deliver:
+- Updated upload handler
+- Updated validation logic
+- Auto-normalization worker
+- Clear logs for debugging

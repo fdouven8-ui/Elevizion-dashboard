@@ -555,7 +555,13 @@ export async function getCanonicalMediaPath(assetId: string): Promise<{ path: st
 
 /**
  * Get the canonical (ready) asset for an advertiser
- * Returns the newest non-superseded READY_FOR_YODECK asset
+ * Returns the newest non-superseded READY_FOR_YODECK asset with valid video stream
+ * 
+ * CANONICAL ASSET REQUIREMENTS:
+ * - status === READY_FOR_YODECK
+ * - hasVideoStream === true (from yodeckMetadataJson)
+ * - newest createdAt
+ * - not superseded
  */
 export async function getCanonicalAssetForAdvertiser(advertiserId: string): Promise<{
   asset: any | null;
@@ -567,9 +573,20 @@ export async function getCanonicalAssetForAdvertiser(advertiserId: string): Prom
   // Filter to non-superseded assets
   const activeAssets = assets.filter(a => !a.isSuperseded);
   
-  // Find the newest READY_FOR_YODECK asset
+  // Find the newest READY_FOR_YODECK asset WITH valid video stream
   const readyAsset = activeAssets
-    .filter(a => a.yodeckReadinessStatus === "READY_FOR_YODECK")
+    .filter(a => {
+      if (a.yodeckReadinessStatus !== "READY_FOR_YODECK") return false;
+      
+      // Check hasVideoStream from metadata
+      const metadata = a.yodeckMetadataJson as any;
+      if (metadata && metadata.hasVideoStream === false) {
+        console.warn(`[CanonicalAsset] Asset ${a.id} is READY_FOR_YODECK but hasVideoStream=false, skipping`);
+        return false;
+      }
+      
+      return true;
+    })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
   
   if (readyAsset) {

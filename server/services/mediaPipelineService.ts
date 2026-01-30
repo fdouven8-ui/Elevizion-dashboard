@@ -66,7 +66,7 @@ interface FfprobeMetadata {
   sha256?: string;
 }
 
-const MIN_FILE_SIZE_BYTES = 50 * 1024; // 50KB minimum
+const MIN_FILE_SIZE_BYTES = 100 * 1024; // 100KB minimum - smaller files are likely corrupt
 
 function getForensicDiagnostics(filePath: string): { 
   fileSizeBytes: number; 
@@ -401,7 +401,7 @@ export async function validateAdvertiserMedia(advertiserId: string): Promise<Val
         throw new Error(`Download failed: ${downloadResult.error}`);
       }
       
-      fs.writeFileSync(localPath, Buffer.from(downloadResult.value as ArrayBuffer));
+      fs.writeFileSync(localPath, Buffer.from(downloadResult.value as unknown as ArrayBuffer));
 
       // Get forensic diagnostics FIRST
       const forensics = getForensicDiagnostics(localPath);
@@ -632,7 +632,7 @@ export async function backfillPendingAssets(): Promise<{ processed: number; erro
 
   console.log(`[MediaPipeline] Backfill: Found ${stuckAssets.length} stuck assets`);
 
-  const advertiserIds = [...new Set(stuckAssets.map(a => a.advertiserId))];
+  const advertiserIds = Array.from(new Set(stuckAssets.map(a => a.advertiserId)));
 
   for (const advertiserId of advertiserIds) {
     try {

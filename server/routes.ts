@@ -4093,7 +4093,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
             });
           }
           
-          console.log("[UploadPortal] Temp file verified:", file.path, "size:", fileStats.size);
+          console.log("[UploadPortal] Temp file verified:", {
+            absolutePath: file.path,
+            sizeBytes: fileStats.size,
+            originalName: file.originalname,
+            mimeType: file.mimetype,
+          });
           
           const { validatePortalTokenWithDetails, processAdAssetUpload } = await import("./services/adAssetUploadService");
           
