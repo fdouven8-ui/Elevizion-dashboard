@@ -607,6 +607,16 @@ export interface ApproveResult {
     screensPublished: number;
     message: string;
   } | null;
+  canonicalPublish?: {
+    success: boolean;
+    locationsUpdated: number;
+    errors: string[];
+  } | null;
+  mediaPipeline?: {
+    correlationId?: string;
+    completedCount?: number;
+    yodeckMediaId?: number;
+  } | null;
 }
 
 export async function approveAsset(
@@ -676,14 +686,46 @@ export async function approveAsset(
       console.error('[AdminReview] Auto-placement error:', autoPlacementError.message);
     }
     
+    // MEDIA PIPELINE: Trigger validation and Yodeck upload if no yodeckMediaId
+    let pipelineResult: { correlationId?: string; completedCount?: number; yodeckMediaId?: number } | null = null;
+    let effectiveYodeckMediaId = asset.yodeckMediaId;
+    
+    if (!asset.yodeckMediaId) {
+      console.log('[AdminReview] Asset has no yodeckMediaId, triggering media pipeline');
+      try {
+        const { validateAdvertiserMedia } = await import('./mediaPipelineService');
+        const result = await validateAdvertiserMedia(asset.advertiserId);
+        
+        pipelineResult = {
+          correlationId: result.correlationId,
+          completedCount: result.completedCount,
+        };
+        
+        if (result.completedCount > 0 && result.assets.length > 0) {
+          const processedAsset = result.assets.find(a => a.id === assetId);
+          if (processedAsset?.yodeckMediaId) {
+            effectiveYodeckMediaId = processedAsset.yodeckMediaId;
+            pipelineResult.yodeckMediaId = processedAsset.yodeckMediaId;
+            console.log(`[AdminReview] Media pipeline success: yodeckMediaId=${effectiveYodeckMediaId}`);
+          }
+        }
+        
+        if (result.failedCount > 0) {
+          console.warn(`[AdminReview] Media pipeline had ${result.failedCount} failures`);
+        }
+      } catch (pipelineError: any) {
+        console.error('[AdminReview] Media pipeline error:', pipelineError.message);
+      }
+    }
+    
     // CANONICAL PLAYLIST PUBLISHING: Add to location canonical playlists
     let canonicalPublishResult: { success: boolean; locationsUpdated: number; errors: string[] } | null = null;
     try {
       const { publishApprovedVideoToLocations } = await import('./canonicalBroadcastService');
       
-      // Only publish if the asset has a Yodeck media ID
-      if (asset.yodeckMediaId) {
-        canonicalPublishResult = await publishApprovedVideoToLocations(asset.yodeckMediaId, asset.advertiserId);
+      // Only publish if the asset has a Yodeck media ID (either existing or from pipeline)
+      if (effectiveYodeckMediaId) {
+        canonicalPublishResult = await publishApprovedVideoToLocations(effectiveYodeckMediaId, asset.advertiserId);
         
         if (canonicalPublishResult.success) {
           console.log(`[AdminReview] Canonical publish: ${canonicalPublishResult.locationsUpdated} locations updated`);
@@ -691,7 +733,7 @@ export async function approveAsset(
           console.warn('[AdminReview] Canonical publish had errors:', canonicalPublishResult.errors);
         }
       } else {
-        console.log('[AdminReview] Asset has no yodeckMediaId, skipping canonical publish');
+        console.log('[AdminReview] Asset still has no yodeckMediaId after pipeline, skipping canonical publish');
       }
     } catch (canonicalError: any) {
       console.error('[AdminReview] Canonical publish error:', canonicalError.message);
@@ -742,6 +784,7 @@ export async function approveAsset(
       placementPlanId: planId,
       autoPlacement: autoPlacementResult,
       canonicalPublish: canonicalPublishResult,
+      mediaPipeline: pipelineResult,
     };
   } catch (error: any) {
     console.error('[AdminReview] Error approving asset:', error);

@@ -1,0 +1,39 @@
+We discovered the root cause: /api/admin/advertisers/:id/media shows all assets stuck in status "pending" with canonical reason "Video wacht op validatie". Therefore publish-now fails at STEP=RESOLVE_ASSET because there is no READY_FOR_YODECK asset.
+
+Fix: ensure the media pipeline actually runs and transitions assets out of PENDING, and backfill existing APPROVED ads into the pipeline so older uploads are not stranded. Keep all existing functionality working.
+
+REQUIREMENTS
+1) When an ad is APPROVED (or when an upload completes), it must enqueue validation automatically.
+   - Transition: PENDING -> VALIDATING immediately.
+   - Then either: READY_FOR_YODECK (if compatible) OR NEEDS_NORMALIZATION -> NORMALIZING -> READY_FOR_YODECK.
+2) publish-now must not depend on a manual button. After READY_FOR_YODECK, it should auto publish (already intended) but currently never triggers because status never changes.
+3) Backfill: create a one-time migration/job that finds all APPROVED ads/assets with missing pipeline rows or stuck in PENDING and triggers validation for them.
+4) Add an admin endpoint to force-run validation for an advertiser and return trace:
+   POST /api/admin/advertisers/:id/validate-media-now
+   Response includes { correlationId, scannedCount, enqueuedCount, assets:[{id,status,action}] }
+5) Add strong logging:
+   - [MediaPipeline] correlationId assetId oldStatus->newStatus reason
+   - [MediaPipeline] validation started/finished outcome
+   - Include ffprobe json summary (codec, pix_fmt, width/height, duration, moov atom position) in logs/details (not full huge json, but key fields).
+6) Ensure the DB writes actually persist. The fact assets remain pending suggests either:
+   - enqueue is never called, OR
+   - pipeline worker not running, OR
+   - status updates not written to the correct table/source, OR
+   - canonical "media" endpoint is reading from a different table than the validator writes to.
+   Investigate and fix the source-of-truth mismatch so /api/admin/advertisers/:id/media reflects real pipeline status and yodeckMediaId.
+
+IMPLEMENTATION NOTES
+- Identify where APPROVED is set (video review approve action). Hook: after approval, call startValidation(assetId).
+- If there is already a worker/queue, ensure it is started on server boot and not disabled in production.
+- If normalization/upload uses ffmpeg, ensure ffmpeg is available in the runtime. If not, bundle static ffmpeg or use an npm ffmpeg-static approach.
+- When validation completes and asset is READY_FOR_YODECK but yodeckMediaId is null, upload to Yodeck and store yodeckMediaId.
+- After yodeckMediaId is set, trigger publishNow(advertiserId) automatically (existing logic), but include correlationId chaining.
+
+ACCEPTANCE TEST (manual)
+A) Call POST /api/admin/advertisers/9a99d555-8676-49d3-9862-f65859bdcfb1/validate-media-now
+   - should enqueue both assets and move them to VALIDATING.
+B) After completion, GET /api/admin/advertisers/9a99d555-8676-49d3-9862-f65859bdcfb1/media
+   - at least 1 asset should be READY_FOR_YODECK and have yodeckMediaId.
+C) Then POST /api/admin/advertisers/9a99d555-8676-49d3-9862-f65859bdcfb1/publish-now with targetYodeckPlayerIds ["591896"]
+   - should succeed and screen now-playing should show adsCount >= 1 while baseline remains.
+Return a short summary of what you changed and where (files/functions) plus sample logs.

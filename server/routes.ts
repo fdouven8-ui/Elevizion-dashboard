@@ -19400,6 +19400,59 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/advertisers/:id/validate-media-now
+   * Force validation and Yodeck upload for advertiser assets stuck in PENDING
+   */
+  app.post("/api/admin/advertisers/:id/validate-media-now", requireAdminAccess, async (req, res) => {
+    try {
+      const { id: advertiserId } = req.params;
+
+      console.log(`[MediaPipeline] validate-media-now triggered for advertiser ${advertiserId}`);
+      
+      const { validateAdvertiserMedia } = await import("./services/mediaPipelineService");
+      
+      const result = await validateAdvertiserMedia(advertiserId);
+
+      res.json({
+        ok: true,
+        correlationId: result.correlationId,
+        scannedCount: result.scannedCount,
+        enqueuedCount: result.enqueuedCount,
+        completedCount: result.completedCount,
+        failedCount: result.failedCount,
+        assets: result.assets,
+        logs: result.logs,
+      });
+    } catch (error: any) {
+      console.error("[MediaPipeline] validate-media-now error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/media-pipeline/backfill
+   * Backfill all stuck PENDING assets across all advertisers
+   */
+  app.post("/api/admin/media-pipeline/backfill", requireAdminAccess, async (req, res) => {
+    try {
+      console.log("[MediaPipeline] Backfill triggered");
+      
+      const { backfillPendingAssets } = await import("./services/mediaPipelineService");
+      
+      const result = await backfillPendingAssets();
+
+      res.json({
+        ok: true,
+        processed: result.processed,
+        errors: result.errors,
+      });
+    } catch (error: any) {
+      console.error("[MediaPipeline] Backfill error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/advertisers/:id/normalize-and-publish
    * Normalize existing asset and publish to Yodeck screens
    */
