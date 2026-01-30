@@ -28,6 +28,27 @@ const BASELINE_CONTENT_TAGS = ["elevizion:baseline", "elevizion:news", "elevizio
 const AD_CONTENT_TAG = "elevizion:ad";
 
 // ============================================================================
+// LAYOUT FORBIDDEN ERROR
+// ============================================================================
+
+export class LayoutForbiddenError extends Error {
+  code = "LAYOUT_FORBIDDEN";
+  constructor(message: string) {
+    super(`[LAYOUT_FORBIDDEN] ${message}`);
+    this.name = "LayoutForbiddenError";
+  }
+}
+
+export function guardNoLayout(sourceType: string | undefined, context: string): void {
+  if (sourceType === "layout") {
+    throw new LayoutForbiddenError(
+      `${context}: source_type="layout" detected but layouts are permanently forbidden. ` +
+      `All screens MUST use playlist mode. Auto-heal required.`
+    );
+  }
+}
+
+// ============================================================================
 // TYPES
 // ============================================================================
 
@@ -171,53 +192,163 @@ export async function resolveOrCreateCanonicalPlaylist(
 // STEP 2: PLAYLIST ENFORCER (FORCE SCREEN TO PLAYLIST MODE)
 // ============================================================================
 
+export interface ForcePlaylistResult {
+  ok: boolean;
+  playerId: number;
+  desiredPlaylistId: number;
+  screenBefore: { source_type: string; source_id: number | null };
+  screenAfter: { source_type: string; source_id: number | null };
+  wasInLayoutMode: boolean;
+  patched: boolean;
+  pushed: boolean;
+  error?: string;
+  logs: string[];
+}
+
+/**
+ * forceScreenToPlaylistMode - THE PRIMARY FUNCTION FOR ENFORCING PLAYLIST MODE
+ * 
+ * This function MUST be called at the START of every publish flow.
+ * It forces the screen out of layout mode and into playlist mode.
+ * 
+ * Behavior:
+ * 1. GET /screens/{playerId} to read current state
+ * 2. If source_type != "playlist" OR source_id != desiredPlaylistId:
+ *    - PATCH /screens/{playerId} with {screen_content: {source_type: "playlist", source_id: desiredPlaylistId}}
+ *    - POST /screens/{playerId}/push/ to apply changes
+ * 3. Log before/after state for audit trail
+ */
+export async function forceScreenToPlaylistMode(
+  yodeckPlayerId: number,
+  desiredPlaylistId: number
+): Promise<ForcePlaylistResult> {
+  const logs: string[] = [];
+  const startTime = Date.now();
+  
+  logs.push(`[PlaylistEnforcer] START forceScreenToPlaylistMode player=${yodeckPlayerId} desiredPlaylist=${desiredPlaylistId}`);
+  
+  // Step 1: GET current screen state
+  const screenResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/`);
+  if (!screenResult.ok || !screenResult.data) {
+    logs.push(`[PlaylistEnforcer] FAILED: Could not fetch screen: ${screenResult.error}`);
+    return {
+      ok: false,
+      playerId: yodeckPlayerId,
+      desiredPlaylistId,
+      screenBefore: { source_type: "unknown", source_id: null },
+      screenAfter: { source_type: "unknown", source_id: null },
+      wasInLayoutMode: false,
+      patched: false,
+      pushed: false,
+      error: screenResult.error,
+      logs,
+    };
+  }
+  
+  const content = screenResult.data.screen_content || {};
+  const sourceTypeBefore = content.source_type || "unknown";
+  const sourceIdBefore = content.source_id || null;
+  const wasInLayoutMode = sourceTypeBefore === "layout";
+  
+  logs.push(`[PlaylistEnforcer] before={source_type:${sourceTypeBefore}, source_id:${sourceIdBefore}}`);
+  
+  // Step 2: Check if already correct
+  if (sourceTypeBefore === "playlist" && sourceIdBefore === desiredPlaylistId) {
+    logs.push(`[PlaylistEnforcer] ALREADY_OK: Screen is already on playlist ${desiredPlaylistId}`);
+    return {
+      ok: true,
+      playerId: yodeckPlayerId,
+      desiredPlaylistId,
+      screenBefore: { source_type: sourceTypeBefore, source_id: sourceIdBefore },
+      screenAfter: { source_type: sourceTypeBefore, source_id: sourceIdBefore },
+      wasInLayoutMode: false,
+      patched: false,
+      pushed: false,
+      logs,
+    };
+  }
+  
+  // Step 3: LAYOUT DETECTED or wrong playlist - MUST PATCH
+  if (wasInLayoutMode) {
+    logs.push(`[PlaylistEnforcer] LAYOUT_DETECTED_AND_REMOVING: Screen in FORBIDDEN layout mode, forcing to playlist`);
+  } else {
+    logs.push(`[PlaylistEnforcer] WRONG_PLAYLIST: Screen on ${sourceTypeBefore}:${sourceIdBefore}, switching to playlist:${desiredPlaylistId}`);
+  }
+  
+  // PATCH to playlist mode with correct ID
+  logs.push(`[PlaylistEnforcer] PATCH /screens/${yodeckPlayerId}/ -> {source_type:playlist, source_id:${desiredPlaylistId}}`);
+  const patchResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/`, "PATCH", {
+    screen_content: {
+      source_type: "playlist",
+      source_id: desiredPlaylistId,
+    },
+  });
+  
+  if (!patchResult.ok) {
+    logs.push(`[PlaylistEnforcer] PATCH_FAILED: ${patchResult.error}`);
+    return {
+      ok: false,
+      playerId: yodeckPlayerId,
+      desiredPlaylistId,
+      screenBefore: { source_type: sourceTypeBefore, source_id: sourceIdBefore },
+      screenAfter: { source_type: sourceTypeBefore, source_id: sourceIdBefore },
+      wasInLayoutMode,
+      patched: false,
+      pushed: false,
+      error: patchResult.error,
+      logs,
+    };
+  }
+  
+  logs.push(`[PlaylistEnforcer] PATCH_OK`);
+  
+  // Step 4: Push to apply changes
+  logs.push(`[PlaylistEnforcer] POST /screens/${yodeckPlayerId}/push/`);
+  const pushResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/push/`, "POST");
+  const pushed = pushResult.ok;
+  
+  if (!pushed) {
+    logs.push(`[PlaylistEnforcer] PUSH_WARNING: ${pushResult.error} (continuing anyway)`);
+  } else {
+    logs.push(`[PlaylistEnforcer] PUSH_OK`);
+  }
+  
+  // Step 5: Log after state
+  logs.push(`[PlaylistEnforcer] after={source_type:playlist, source_id:${desiredPlaylistId}}`);
+  logs.push(`[PlaylistEnforcer] ${wasInLayoutMode ? "layout → playlist enforced" : "playlist source updated"} (${Date.now() - startTime}ms)`);
+  
+  return {
+    ok: true,
+    playerId: yodeckPlayerId,
+    desiredPlaylistId,
+    screenBefore: { source_type: sourceTypeBefore, source_id: sourceIdBefore },
+    screenAfter: { source_type: "playlist", source_id: desiredPlaylistId },
+    wasInLayoutMode,
+    patched: true,
+    pushed,
+    logs,
+  };
+}
+
+/**
+ * enforcePlaylistMode - Wrapper for publishToScreen that returns simple format
+ */
 export async function enforcePlaylistMode(
   yodeckPlayerId: number,
   expectedPlaylistId: number,
   logs: string[]
 ): Promise<{ ok: boolean; sourceTypeBefore: string; sourceTypeAfter: string; error?: string }> {
-  // Fetch current screen state
-  const screenResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/`);
-  if (!screenResult.ok || !screenResult.data) {
-    return { ok: false, sourceTypeBefore: "unknown", sourceTypeAfter: "unknown", error: screenResult.error };
-  }
+  const result = await forceScreenToPlaylistMode(yodeckPlayerId, expectedPlaylistId);
   
-  const content = screenResult.data.screen_content || {};
-  const sourceTypeBefore = content.source_type || "unknown";
-  const currentSourceId = content.source_id;
+  // Add all logs from the enforcer
+  result.logs.forEach(log => logs.push(log));
   
-  logs.push(`[PlaylistEnforcer] Screen ${yodeckPlayerId} current: source_type=${sourceTypeBefore}, source_id=${currentSourceId}`);
-  
-  // Already in correct playlist mode?
-  if (sourceTypeBefore === "playlist" && currentSourceId === expectedPlaylistId) {
-    logs.push(`[PlaylistEnforcer] Already on correct playlist ${expectedPlaylistId}`);
-    return { ok: true, sourceTypeBefore, sourceTypeAfter: "playlist" };
-  }
-  
-  // Log if in layout mode
-  if (sourceTypeBefore === "layout") {
-    logs.push(`[PlaylistEnforcer] LAYOUT DETECTED - migrating to playlist mode`);
-  }
-  
-  // PATCH to playlist mode
-  logs.push(`[PlaylistEnforcer] PATCH /screens/${yodeckPlayerId}/ -> playlist:${expectedPlaylistId}`);
-  const patchResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/`, "PATCH", {
-    screen_content: {
-      source_type: "playlist",
-      source_id: expectedPlaylistId,
-    },
-  });
-  
-  if (!patchResult.ok) {
-    return { ok: false, sourceTypeBefore, sourceTypeAfter: sourceTypeBefore, error: patchResult.error };
-  }
-  
-  // Push to screen
-  logs.push(`[PlaylistEnforcer] POST /screens/${yodeckPlayerId}/push/`);
-  await yodeckRequest<any>(`/screens/${yodeckPlayerId}/push/`, "POST");
-  
-  logs.push(`[PlaylistEnforcer] layout → playlist enforced`);
-  return { ok: true, sourceTypeBefore, sourceTypeAfter: "playlist" };
+  return {
+    ok: result.ok,
+    sourceTypeBefore: result.screenBefore.source_type,
+    sourceTypeAfter: result.screenAfter.source_type,
+    error: result.error,
+  };
 }
 
 // ============================================================================

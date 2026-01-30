@@ -1182,8 +1182,13 @@ export async function applyLayoutToLocation(locationId: string): Promise<LayoutA
 }
 
 /**
- * Ensure ads playlist is active on screen via layout or schedule
- * Called after successful publish to guarantee ads are visible
+ * DEPRECATED: ensureAdsSurfaceActive - LAYOUT MODE IS PERMANENTLY DISABLED
+ * 
+ * This function previously set screens to layout mode, which is now FORBIDDEN.
+ * All screens MUST use playlist mode exclusively.
+ * 
+ * This stub returns immediately with playlist mode OK to prevent breaking callers.
+ * New code should use deterministicPublishService.enforcePlaylistMode() instead.
  */
 export async function ensureAdsSurfaceActive(params: {
   locationId: string;
@@ -1193,14 +1198,36 @@ export async function ensureAdsSurfaceActive(params: {
   const { locationId, screenId, adsPlaylistId } = params;
   const logs: string[] = [];
   
-  // Guard against legacy writes when canonical mode is enforced
-  guardCanonicalWrite(`ensureAdsSurfaceActive for screen ${screenId}`);
+  // LAYOUT_FORBIDDEN: This function is permanently disabled
+  // Layouts are forbidden in Elevizion - only playlist mode is allowed
+  logs.push(`[LAYOUT_FORBIDDEN] ensureAdsSurfaceActive is DISABLED - layouts are permanently forbidden`);
+  logs.push(`[LAYOUT_FORBIDDEN] Use deterministicPublishService.enforcePlaylistMode() instead`);
+  logs.push(`[LAYOUT_FORBIDDEN] Returning playlist mode as OK to prevent breaking callers`);
+  
+  // Return OK with PLAYLIST mode (not LAYOUT) to allow callers to continue
+  // The actual playlist enforcement is done by deterministicPublishService
+  return {
+    ok: true,
+    surfaceActive: true,
+    mode: "FALLBACK_SCHEDULE" as LayoutMode, // Closest to "playlist" in old enum
+    logs,
+  };
+  
+  /* ORIGINAL CODE BELOW - PERMANENTLY DISABLED (LAYOUT_FORBIDDEN)
+  
+  The code below is kept for reference only. Layout mode is permanently disabled.
+  All screens must use playlist mode exclusively.
+  
+  Original behavior:
+  - Checked if location had layoutMode === "LAYOUT"
+  - Created layouts with regions for ads
+  - Assigned layouts to screens
+  
+  This is now replaced by:
+  - deterministicPublishService.enforcePlaylistMode()
+  - Direct playlist assignment via screen_content.source_type = "playlist"
   
   logs.push(`[AutoSurface] Checking ads surface for location ${locationId}, screen ${screenId}`);
-  
-  // Get location
-  const location = await db.select().from(locations).where(eq(locations.id, locationId)).limit(1);
-  if (!location[0]) {
     return { ok: false, surfaceActive: false, error: "Locatie niet gevonden", logs };
   }
   
@@ -1276,6 +1303,7 @@ export async function ensureAdsSurfaceActive(params: {
   
   logs.push(`[AutoSurface] Fallback schedule applied successfully`);
   return { ok: true, surfaceActive: true, mode: "FALLBACK_SCHEDULE", logs };
+  END OF ORIGINAL DISABLED CODE */
 }
 
 /**

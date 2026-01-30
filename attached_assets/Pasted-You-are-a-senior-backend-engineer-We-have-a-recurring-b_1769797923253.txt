@@ -1,0 +1,150 @@
+You are a senior backend engineer. We have a recurring bug: screens keep ending up in Yodeck layout mode even though layouts are “forbidden” in the app. Ads also do not appear in playlists. We must hard-fix this permanently.
+
+GOAL (NON-NEGOTIABLE):
+- Elevizion must use ONLY PLAYLIST mode.
+- One canonical playlist per screen/location that contains:
+  1) baseline items (news/weather/info/self-ad)
+  2) approved ad media
+- No layouts, no “surface modes”, no layout verify, no layout assignment. Ever.
+- Publish is only SUCCESS if the ad is actually present in the playlist and now-playing reports adsCount >= 1.
+
+CURRENT SYMPTOMS (from logs):
+- Screen shows mode=layout and layoutId exists (e.g., 7736579).
+- Publish reports success but ad is not in playlist.
+- AutoSurface / layout verification is still running (it keeps layout alive).
+
+IMPLEMENT THE FIX IN THREE LAYERS:
+===========================================================
+LAYER 1 — REMOVE/NEUTER ALL LAYOUT PATHS (PERMANENT)
+===========================================================
+
+1) Search the entire codebase for any of these and REMOVE/disable them:
+- ensureAdsSurfaceActive
+- AutoSurface
+- verifyElevizionLayout
+- layoutMode === "LAYOUT"
+- yodeckLayoutId usage for playback
+- any code that sets screen_content.source_type to "layout"
+- any code that “prefers” layouts over playlists
+- any code that treats “surfaceActive=true mode=LAYOUT” as OK
+
+2) Replace them with ONE simple rule:
+- Playback surface is ALWAYS a playlist.
+
+3) If any endpoint still returns “mode: LAYOUT” or logs mention layout, treat it as a BUG.
+- Add a guard: if a function tries to act on layout, throw an error with code LAYOUT_FORBIDDEN.
+
+===========================================================
+LAYER 2 — PLAYLIST ENFORCER (FORCE SCREEN OUT OF LAYOUT)
+===========================================================
+
+Add a single function and call it in EVERY publish flow BEFORE doing anything else:
+forceScreenToPlaylistMode(yodeckPlayerId, desiredPlaylistId)
+
+Pseudo-behavior:
+- GET /api/v2/screens/{playerId}
+- Read screen_content.source_type/source_id
+
+If source_type != "playlist" OR source_id != desiredPlaylistId:
+  - PATCH /api/v2/screens/{playerId} with:
+    { "screen_content": { "source_type": "playlist", "source_id": desiredPlaylistId } }
+  - Log before/after:
+    [PlaylistEnforcer] before={source_type:X, source_id:Y} after={source_type:playlist, source_id:desiredPlaylistId}
+
+IMPORTANT:
+- This MUST be a real Yodeck API call that actually changes the screen.
+- Do NOT just change DB.
+- If Yodeck API does not support that patch shape, implement the correct Yodeck-supported endpoint for changing screen content (use their API docs and current existing patterns in our repo).
+
+===========================================================
+LAYER 3 — CANONICAL PLAYLIST + DETERMINISTIC PUBLISH
+===========================================================
+
+We MUST stop using “auto-playlist crop” IDs like 30532596 as the target.
+Instead, use our intended canonical playlist for the location/screen:
+- Location has yodeckPlaylistId (example: 30461663) → THIS is the canonical playlist.
+- If missing, create a canonical playlist and store it.
+
+Publish must do:
+A) RESOLVE_TARGET_PLAYLIST
+- Determine desiredPlaylistId in this order:
+  1) location.yodeckPlaylistId (if exists)
+  2) screen.playlistId stored in DB (if exists)
+  3) else create playlist in Yodeck and persist to DB
+
+B) FORCE PLAYLIST MODE
+- forceScreenToPlaylistMode(playerId, desiredPlaylistId)
+
+C) ENSURE BASELINE SEEING
+- ensureBaselineItems(desiredPlaylistId)
+- Baseline items must always exist; never overwritten by ads.
+
+D) RESOLVE ASSET
+- pick the correct approved asset:
+  - READY_FOR_YODECK only
+  - the newest normalized canonical file
+  - ensure yodeckMediaId exists
+  - IMPORTANT: verify yodeck media is ready and fileSize > 0 via Yodeck media endpoint
+
+E) INSERT AD INTO PLAYLIST (NOT TAG BASED)
+- Fetch playlist items (Yodeck playlist items endpoint)
+- If the ad mediaId is not present:
+  - insert it AFTER baseline block (or append)
+- Deduplicate duplicates
+- Return counts
+
+F) PUSH + VERIFY (HARD)
+- Call Yodeck push/refresh if required
+- Verify via our now-playing endpoint or direct Yodeck state:
+  - screen_content.source_type must be playlist
+  - screen_content.source_id must equal desiredPlaylistId
+  - playlist must contain the ad mediaId
+  - adsCount >= 1 (our classifier must classify that mediaId as category=ad)
+
+If any fails -> outcome FAILED (not success).
+
+===========================================================
+DIAGNOSTICS REQUIREMENT (WHAT I NEED TO SEE)
+===========================================================
+
+Update publish endpoint(s) to return a FULL TRACE JSON:
+{
+  correlationId,
+  playerId,
+  desiredPlaylistId,
+  screenBefore: {source_type, source_id},
+  screenAfter: {source_type, source_id},
+  baseline: {beforeCount, afterCount},
+  adInsert: {mediaId, wasPresent, inserted, deduped, totalItems},
+  verify: {adsCount, itemCount, containsMediaId, mismatch},
+  outcome: "SUCCESS" | "FAILED",
+  reasonIfFailed
+}
+
+Also log the same correlationId through all steps.
+
+===========================================================
+CLEANUP (PREVENT REGRESSION)
+===========================================================
+
+- Remove any config flags that can re-enable layout mode.
+- Ensure no worker can “repair” screens by setting layout.
+- If a location has layoutMode stored, set it to PLAYLIST during migration.
+- If yodeckLayoutId exists in DB, keep for audit only, never use for playback.
+- Add a runtime safety guard: if we detect source_type=layout at any time, auto-call forceScreenToPlaylistMode immediately.
+
+===========================================================
+ACCEPTANCE TEST (MUST PASS)
+===========================================================
+
+With playerId=591896:
+1) Approve an ad video.
+2) Publish triggers automatically.
+3) Within 60 sec:
+   - screen is in playlist mode
+   - screen source_id equals desiredPlaylistId (30461663 or canonical)
+   - playlist contains the ad mediaId
+   - now-playing shows adsCount >= 1
+If not, publish must return FAILED with reason.
+
+Implement all changes carefully without breaking other features.
