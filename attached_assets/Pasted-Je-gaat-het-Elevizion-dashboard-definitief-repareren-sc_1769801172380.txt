@@ -1,0 +1,234 @@
+Je gaat het Elevizion dashboard definitief repareren: screens mogen NOOIT meer in layout-mode staan. Het systeem moet altijd werken via playlist-only.
+
+Context / Wat gaat nu fout (bewijs uit logs)
+
+Screen 591896 staat in Yodeck op screen_content.source_type = "layout" met actualSourceId = 7736579 (layout “Elevizion Standard | Bouwservice Douven”).
+
+Dashboard verwacht playlist: expectedPlaylistId = 30532596 (auto-playlist) maar ziet mismatch:
+
+/api/screens/.../now-playing -> actualSourceType:"layout" mismatch:true verificationOk:false selfHealed:false
+
+Location record heeft inconsistenties:
+
+layoutMode:"LAYOUT" + yodeckLayoutId:"7736579"
+
+playlistMode:"TAG_BASED"
+
+playlistTag is fout: bij Bouwservice Douven staat playlistTag:"elevizion:ad" (moet locatie-specifiek zijn of niet gebruikt worden)
+
+/api/admin/locations/.../content-status meldt mode “PLAYLIST” maar gebruikt als “ads.playlistId” de layoutId 7736579 (!!). Dus er is mapping/field mixup: layoutId wordt als playlistId gebruikt.
+
+Doel (hard requirements)
+
+Layout is verboden:
+
+Nergens in code mag nog een automatische actie bestaan die screen_content.source_type = "layout" zet.
+
+Alle “AutoSurface / Layout verify / Ensure layout” flows moeten of verwijderd of hard disabled worden.
+
+Elke screen moet altijd playlist draaien:
+
+Yodeck screen_content.source_type moet altijd "playlist".
+
+screen_content.source_id moet altijd de verwachte playlist zijn (bijv. screens.playlistId = 30532596 voor 591896).
+
+Baseline + Ads:
+
+De playlist die de screen draait moet altijd baseline items bevatten (nieuws/weer/…).
+
+Ads worden toegevoegd aan diezelfde playlist (of via duidelijke ADS-playlist merge, maar eindresultaat op screen is: playlist met baseline + ads).
+
+Self-heal verplicht:
+
+Als /now-playing ziet dat screen op layout staat, moet het systeem automatisch:
+
+screen terugzetten naar playlist (expectedPlaylistId)
+
+baseline re-seeden indien nodig
+
+pushen naar de screen
+
+en daarna opnieuw verifiëren (1 retry).
+
+Content-status en mapping correct:
+
+Nooit meer layoutId tonen/opslaan als playlistId.
+
+content-status moet correcte IDs tonen:
+
+expected playlistId (uit screens.playlistId)
+
+actual source id/type uit Yodeck
+
+baselineCount + adsCount uit de daadwerkelijke playlist items
+
+Logging:
+
+Voeg correlationId toe aan self-heal en publish flows (consistent), zodat ik 1 trace heb: START → SET_PLAYLIST → SEED_BASELINE → ADD_ADS → PUSH → VERIFY.
+
+Implementatieplan (doe exact dit)
+A) “Layout-ban” in code
+
+Zoek alle plekken waar layout wordt gebruikt:
+
+ensureElevizionLayout, verifyElevizionLayout, AutoSurface, layoutMode, “Layout mode already active…”
+
+Verwijder of disable deze volledig:
+
+Elk pad dat screen_content.source_type = "layout" zet moet eruit.
+
+Als er een fallback bestaat “als playlist faalt -> layout”, dat mag NIET. In plaats daarvan: repair playlist.
+
+B) Fix datamodel / mapping bugs (layoutId wordt als playlistId gebruikt)
+
+Audit content-status endpoint:
+
+Momenteel: ads.playlistId = 7736579 (layout) → fout.
+
+Corrigeer:
+
+adsPlaylistId moet komen van locations.yodeckPlaylistId (bijv. 30461663) of van screens.playlistId (30532596) afhankelijk van gekozen design.
+
+Kies 1 design (verplicht):
+
+Design keuze: ALWAYS SCREEN PLAYLIST (screens.playlistId) als “single source of truth”.
+
+Location kan baselinePlaylistId / adsPlaylistId hebben, maar screen draait ALTIJD screens.playlistId.
+
+Dus: publish/seed/add gebeurt altijd op screens.playlistId.
+
+C) Self-heal in /api/screens/:id/now-playing
+
+Als actualSourceType !== "playlist" of actualSourceId !== expectedPlaylistId:
+
+Log [SelfHeal] <correlationId> mismatch detected
+
+Call Yodeck API: set screen_content naar playlist:
+
+PATCH/PUT screen update (v2/legacy) naar:
+
+screen_content: { source_type: "playlist", source_id: expectedPlaylistId }
+
+Ensure baseline:
+
+Haal baseline media IDs uit jouw baseline library (news/weer/1Limburg/…) en zorg dat ze in playlist staan.
+
+Als baseline ontbreekt → voeg toe.
+
+Add approved ads:
+
+Lees canonical approved advertiser mediaId (yodeckMediaId) en voeg toe aan playlist.
+
+Push naar screen (Save & Push):
+
+Trigger Yodeck push / refresh
+
+Verify opnieuw (1 retry):
+
+fetch screen status opnieuw → verwacht source_type="playlist" en source_id=expectedPlaylistId
+
+Zet response velden:
+
+selfHealed:true, lastPushAt, lastPushResult, verificationOk:true wanneer gelukt.
+
+D) Publish flow: nooit tags-only zonder playlist
+
+Momenteel zie ik “tag-based publishing” en tags op media, maar de video komt niet in playlist en screen staat op layout.
+
+Verander publish flow zodat “publish” altijd doet:
+
+resolve canonical yodeckMediaId
+
+ensure screen playlist exists (expectedPlaylistId)
+
+add mediaId to expectedPlaylistId
+
+push to screen
+
+verify result
+
+Tags mogen eventueel blijven voor filtering, maar tags-only mag NOOIT de publicatie methode zijn.
+
+E) Data reparatie (one-time migration / repair script)
+
+Voeg een startup repair of admin endpoint toe om bestaande rot-data te fixen:
+
+Voor elke locatie waar:
+
+layoutMode == "LAYOUT" of yodeckLayoutId != null of playlistTag == "elevizion:ad":
+
+Doe:
+
+Set layoutMode = "PLAYLIST"
+
+Set yodeckLayoutId = null (of laat staan, maar wordt nooit gebruikt; voorkeur: null)
+
+Set playlistTag = "elevizion:location:<locationId>" OF zet playlistTag null als je tags niet nodig hebt.
+
+Ensure locations.yodeckPlaylistId klopt (30461663) maar screen gebruikt screens.playlistId voor draaien.
+
+Maak een admin endpoint:
+
+POST /api/admin/screens/:screenId/force-playlist
+
+zet screen_content naar playlist + seed baseline + push + verify.
+
+F) Acceptance criteria / Tests die ik meteen kan doen (verplicht leveren)
+
+Na fix moet dit waar zijn voor screen 591896:
+
+/api/screens/241377ce-a25e-4744-9ea7-cd9359515d07/now-playing
+
+actualSourceType:"playlist"
+
+actualSourceId:"30532596"
+
+mismatch:false
+
+baselineCount >= 3
+
+adsCount >= 1 (als ad approved is)
+
+verificationOk:true
+
+selfHealed:true als hij eerst fout stond
+
+Yodeck UI moet bij screen “Test (591896)” Screen Content = Playlist, niet Layout.
+
+Content-tab in dashboard moet ads onder “Ads” tonen (niet 0) zodra approved.
+
+Geef me in logs:
+
+[SelfHeal] trace met correlationId
+
+[YodeckSetContent] request/response status
+
+[SeedBaseline] added X
+
+[AddAds] added Y
+
+[Push] ok
+
+[Verify] ok
+
+Extra: voorkom regressie (belangrijk)
+
+Voeg een constante/feature flag toe: LAYOUT_MODE_DISABLED=true (default true).
+
+Als iemand per ongeluk later layout code terugzet: unit test / runtime assertion:
+
+“if attempting to set source_type=layout → throw + log CRITICAL”.
+
+Belangrijke IDs voor jouw huidige case (gebruik in debug)
+
+ScreenId: 241377ce-a25e-4744-9ea7-cd9359515d07
+
+Yodeck player: 591896
+
+Expected playlistId: 30532596
+
+Huidige foute layoutId: 7736579
+
+LocationId: 3321f9c7-4a76-4abd-9cc1-9472d6473d80
+
+Zorg dat je fix exact deze case repareert, niet alleen “algemeen

@@ -17775,6 +17775,71 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/screens/:screenId/force-playlist
+   * SELF-HEAL: Force screen to playlist mode, seed baseline, push, verify
+   */
+  app.post("/api/admin/screens/:screenId/force-playlist", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.params;
+      const { selfHealScreen, yodeckGetScreenSource, yodeckGetPlaylistItems } = await import("./services/yodeckBroadcast");
+      const { BASELINE_MEDIA_IDS } = await import("./config/contentPipeline");
+      
+      // Get screen from DB
+      const [screen] = await db.select().from(screens).where(eq(screens.id, screenId));
+      if (!screen) {
+        return res.status(404).json({ ok: false, error: "Screen niet gevonden" });
+      }
+      
+      if (!screen.yodeckPlayerId) {
+        return res.status(400).json({ ok: false, error: "Screen heeft geen Yodeck player ID" });
+      }
+      
+      if (!screen.playlistId) {
+        return res.status(400).json({ ok: false, error: "Screen heeft geen playlistId in database" });
+      }
+      
+      console.log(`[ForcePlaylist] Starting force-playlist for screen ${screenId}`);
+      
+      // Perform full self-heal
+      const result = await selfHealScreen(screenId, screen.yodeckPlayerId, screen.playlistId);
+      
+      // Get final counts
+      let baselineCount = 0;
+      let adsCount = 0;
+      const items = await yodeckGetPlaylistItems(screen.playlistId);
+      if (items.ok && items.items) {
+        const baselineSet = new Set(BASELINE_MEDIA_IDS);
+        for (const id of items.items) {
+          if (baselineSet.has(id)) {
+            baselineCount++;
+          } else {
+            adsCount++;
+          }
+        }
+      }
+      
+      res.json({
+        ok: result.success,
+        correlationId: result.correlationId,
+        screenId,
+        yodeckPlayerId: screen.yodeckPlayerId,
+        expectedPlaylistId: screen.playlistId,
+        beforeState: result.beforeState,
+        afterState: result.afterState,
+        steps: result.steps,
+        baselineAdded: result.baselineAdded,
+        baselineCount,
+        adsCount,
+        error: result.error,
+        logs: result.logs,
+      });
+    } catch (error: any) {
+      console.error("[ForcePlaylist] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/screens/:screenId/force-broadcast
    * PLAYLIST-ONLY ARCHITECTURE: Push screen's playlist to Yodeck
    */
@@ -17799,6 +17864,73 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       });
     } catch (error: any) {
       console.error("[ForceBroadcast] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/data-repair/remove-layout-mode
+   * One-time migration: Remove all layout mode references from locations
+   * Sets layoutMode = "FALLBACK_SCHEDULE", yodeckLayoutId = null
+   */
+  app.post("/api/admin/data-repair/remove-layout-mode", requireAdminAccess, async (req, res) => {
+    try {
+      const correlationId = `dr-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+      console.log(`[DataRepair] ${correlationId} Starting layout mode removal...`);
+      
+      // Find all locations with layout mode set to LAYOUT or with yodeckLayoutId
+      const affectedLocations = await db.select({
+        id: locations.id,
+        name: locations.name,
+        layoutMode: locations.layoutMode,
+        yodeckLayoutId: locations.yodeckLayoutId,
+        playlistTag: locations.playlistTag,
+      }).from(locations).where(
+        sql`${locations.layoutMode} = 'LAYOUT' OR ${locations.yodeckLayoutId} IS NOT NULL`
+      );
+      
+      console.log(`[DataRepair] ${correlationId} Found ${affectedLocations.length} locations with layout references`);
+      
+      const results = [];
+      for (const loc of affectedLocations) {
+        console.log(`[DataRepair] ${correlationId} Cleaning location: ${loc.name} (${loc.id})`);
+        
+        // Clear layout mode and layout ID
+        await db.update(locations).set({
+          layoutMode: "FALLBACK_SCHEDULE",
+          yodeckLayoutId: null,
+          // Also fix playlistTag if it's the generic "elevizion:ad" 
+          playlistTag: loc.playlistTag === "elevizion:ad" ? null : loc.playlistTag,
+          updatedAt: new Date(),
+        }).where(eq(locations.id, loc.id));
+        
+        results.push({
+          locationId: loc.id,
+          locationName: loc.name,
+          before: {
+            layoutMode: loc.layoutMode,
+            yodeckLayoutId: loc.yodeckLayoutId,
+            playlistTag: loc.playlistTag,
+          },
+          after: {
+            layoutMode: "FALLBACK_SCHEDULE",
+            yodeckLayoutId: null,
+            playlistTag: loc.playlistTag === "elevizion:ad" ? null : loc.playlistTag,
+          },
+        });
+      }
+      
+      console.log(`[DataRepair] ${correlationId} Complete: ${results.length} locations updated`);
+      
+      res.json({
+        ok: true,
+        correlationId,
+        totalAffected: affectedLocations.length,
+        results,
+        message: `Layout mode removed from ${results.length} locations`,
+      });
+    } catch (error: any) {
+      console.error("[DataRepair] Error:", error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });

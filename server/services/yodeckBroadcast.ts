@@ -711,6 +711,272 @@ export async function repairAllScreensCanonical(): Promise<{
   };
 }
 
+// =============================================================================
+// SELF-HEAL: FORCE SCREEN TO PLAYLIST MODE
+// =============================================================================
+
+export interface SelfHealResult {
+  correlationId: string;
+  screenId: string;
+  yodeckPlayerId: string;
+  expectedPlaylistId: string;
+  beforeState: {
+    sourceType: string;
+    sourceId: string | null;
+  };
+  afterState: {
+    sourceType: string;
+    sourceId: string | null;
+  };
+  steps: {
+    detectMismatch: boolean;
+    setPlaylist: boolean;
+    seedBaseline: boolean;
+    push: boolean;
+    verify: boolean;
+  };
+  baselineAdded: number;
+  success: boolean;
+  error?: string;
+  logs: string[];
+}
+
+/**
+ * FULL SELF-HEAL: Detect mismatch → Force playlist → Seed baseline → Push → Verify
+ * 
+ * This is the MANDATORY self-heal function that must be called when:
+ * - actualSourceType !== "playlist"
+ * - actualSourceId !== expectedPlaylistId
+ * 
+ * It performs the complete healing flow with correlation tracking.
+ */
+export async function selfHealScreen(
+  screenId: string,
+  yodeckPlayerId: string,
+  expectedPlaylistId: string
+): Promise<SelfHealResult> {
+  const correlationId = `sh-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+  const logs: string[] = [];
+  const startTime = Date.now();
+  
+  logs.push(`[SelfHeal] ${correlationId} START screen=${screenId} player=${yodeckPlayerId} expectedPlaylist=${expectedPlaylistId}`);
+  
+  const steps = {
+    detectMismatch: false,
+    setPlaylist: false,
+    seedBaseline: false,
+    push: false,
+    verify: false,
+  };
+  
+  // Step 1: Get current state
+  const beforeResult = await yodeckGetScreenSource(yodeckPlayerId);
+  const beforeState = {
+    sourceType: beforeResult.source?.sourceType || "unknown",
+    sourceId: beforeResult.source?.sourceId || null,
+  };
+  
+  logs.push(`[SelfHeal] ${correlationId} BEFORE: sourceType=${beforeState.sourceType} sourceId=${beforeState.sourceId}`);
+  
+  // Check if actually needs healing
+  if (beforeState.sourceType === "playlist" && beforeState.sourceId === expectedPlaylistId) {
+    logs.push(`[SelfHeal] ${correlationId} NO_HEALING_NEEDED: already on correct playlist`);
+    return {
+      correlationId,
+      screenId,
+      yodeckPlayerId,
+      expectedPlaylistId,
+      beforeState,
+      afterState: beforeState,
+      steps,
+      baselineAdded: 0,
+      success: true,
+      logs,
+    };
+  }
+  
+  steps.detectMismatch = true;
+  
+  // Log if layout mode detected (FORBIDDEN)
+  if (beforeState.sourceType === "layout") {
+    logs.push(`[SelfHeal] ${correlationId} LAYOUT_FORBIDDEN: Screen in layout mode, will force to playlist`);
+  }
+  
+  // Step 2: Force screen to playlist mode
+  logs.push(`[SelfHeal] ${correlationId} SET_PLAYLIST: PATCH /screens/${yodeckPlayerId}/ -> playlist:${expectedPlaylistId}`);
+  
+  const setResult = await yodeckSetScreenPlaylist(yodeckPlayerId, expectedPlaylistId);
+  if (!setResult.ok) {
+    logs.push(`[SelfHeal] ${correlationId} SET_PLAYLIST_FAILED: ${setResult.error}`);
+    return {
+      correlationId,
+      screenId,
+      yodeckPlayerId,
+      expectedPlaylistId,
+      beforeState,
+      afterState: beforeState,
+      steps,
+      baselineAdded: 0,
+      success: false,
+      error: `SET_PLAYLIST_FAILED: ${setResult.error}`,
+      logs,
+    };
+  }
+  
+  steps.setPlaylist = true;
+  logs.push(`[SelfHeal] ${correlationId} SET_PLAYLIST_OK`);
+  
+  // Step 3: Seed baseline items if needed
+  let baselineAdded = 0;
+  const currentItems = await yodeckGetPlaylistItems(expectedPlaylistId);
+  
+  if (currentItems.ok && currentItems.items) {
+    const existingSet = new Set(currentItems.items);
+    const missingBaseline = BASELINE_MEDIA_IDS.filter(id => !existingSet.has(id));
+    
+    if (missingBaseline.length > 0) {
+      logs.push(`[SelfHeal] ${correlationId} SEED_BASELINE: Adding ${missingBaseline.length} missing baseline items`);
+      
+      for (const mediaId of missingBaseline) {
+        const addResult = await yodeckAddMediaToPlaylist(expectedPlaylistId, mediaId);
+        if (addResult.ok) {
+          baselineAdded++;
+          logs.push(`[SelfHeal] ${correlationId} SEED_BASELINE: Added ${mediaId}`);
+        } else {
+          logs.push(`[SelfHeal] ${correlationId} SEED_BASELINE_WARN: Failed to add ${mediaId}: ${addResult.error}`);
+        }
+      }
+      
+      steps.seedBaseline = true;
+    } else {
+      logs.push(`[SelfHeal] ${correlationId} SEED_BASELINE: All baseline items present`);
+      steps.seedBaseline = true;
+    }
+  } else {
+    logs.push(`[SelfHeal] ${correlationId} SEED_BASELINE_SKIP: Could not fetch playlist items`);
+  }
+  
+  // Step 4: Push to screen
+  logs.push(`[SelfHeal] ${correlationId} PUSH: POST /screens/${yodeckPlayerId}/push/`);
+  
+  const pushResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/push/`, {
+    method: "POST",
+  });
+  
+  if (pushResult.ok) {
+    steps.push = true;
+    logs.push(`[SelfHeal] ${correlationId} PUSH_OK`);
+  } else {
+    logs.push(`[SelfHeal] ${correlationId} PUSH_WARN: ${pushResult.error} (continuing)`);
+  }
+  
+  // Step 5: Verify final state - HARD VERIFICATION
+  logs.push(`[SelfHeal] ${correlationId} VERIFY: GET /screens/${yodeckPlayerId}/`);
+  
+  const afterResult = await yodeckGetScreenSource(yodeckPlayerId);
+  const afterState = {
+    sourceType: afterResult.source?.sourceType || "unknown",
+    sourceId: afterResult.source?.sourceId || null,
+  };
+  
+  logs.push(`[SelfHeal] ${correlationId} AFTER: sourceType=${afterState.sourceType} sourceId=${afterState.sourceId}`);
+  
+  // HARD CHECK 1: Must be playlist mode
+  if (afterState.sourceType !== "playlist") {
+    const errorMsg = afterState.sourceType === "layout" 
+      ? `LAYOUT_FORBIDDEN: Screen still in layout mode after heal attempt`
+      : `VERIFY_FAILED: Screen in ${afterState.sourceType} mode, not playlist`;
+    logs.push(`[SelfHeal] ${correlationId} ${errorMsg}`);
+    logs.forEach(log => console.log(log));
+    return {
+      correlationId,
+      screenId,
+      yodeckPlayerId,
+      expectedPlaylistId,
+      beforeState,
+      afterState,
+      steps,
+      baselineAdded,
+      success: false,
+      error: errorMsg,
+      logs,
+    };
+  }
+  
+  // HARD CHECK 2: Must be on correct playlist
+  if (afterState.sourceId !== expectedPlaylistId) {
+    const errorMsg = `VERIFY_FAILED: Screen on wrong playlist ${afterState.sourceId} instead of ${expectedPlaylistId}`;
+    logs.push(`[SelfHeal] ${correlationId} ${errorMsg}`);
+    logs.forEach(log => console.log(log));
+    return {
+      correlationId,
+      screenId,
+      yodeckPlayerId,
+      expectedPlaylistId,
+      beforeState,
+      afterState,
+      steps,
+      baselineAdded,
+      success: false,
+      error: errorMsg,
+      logs,
+    };
+  }
+  
+  // HARD CHECK 3: Verify baseline items are in playlist
+  logs.push(`[SelfHeal] ${correlationId} VERIFY_BASELINE: Checking playlist contents`);
+  const finalItems = await yodeckGetPlaylistItems(expectedPlaylistId);
+  
+  if (!finalItems.ok || !finalItems.items) {
+    logs.push(`[SelfHeal] ${correlationId} VERIFY_BASELINE_WARN: Could not fetch playlist items`);
+  } else {
+    const itemSet = new Set(finalItems.items);
+    const missingBaseline = BASELINE_MEDIA_IDS.filter(id => !itemSet.has(id));
+    
+    if (missingBaseline.length > 0) {
+      logs.push(`[SelfHeal] ${correlationId} VERIFY_BASELINE_FAIL: Missing baseline items: ${missingBaseline.join(", ")}`);
+      logs.forEach(log => console.log(log));
+      return {
+        correlationId,
+        screenId,
+        yodeckPlayerId,
+        expectedPlaylistId,
+        beforeState,
+        afterState,
+        steps,
+        baselineAdded,
+        success: false,
+        error: `BASELINE_MISSING: ${missingBaseline.length} baseline items still missing after heal`,
+        logs,
+      };
+    }
+    
+    logs.push(`[SelfHeal] ${correlationId} VERIFY_BASELINE_OK: All ${BASELINE_MEDIA_IDS.length} baseline items present`);
+  }
+  
+  steps.verify = true;
+  
+  const duration = Date.now() - startTime;
+  logs.push(`[SelfHeal] ${correlationId} VERIFY_OK: Screen on playlist:${expectedPlaylistId} with baseline`);
+  logs.push(`[SelfHeal] ${correlationId} END success=true duration=${duration}ms baselineAdded=${baselineAdded}`);
+  
+  // Log to console for monitoring
+  logs.forEach(log => console.log(log));
+  
+  return {
+    correlationId,
+    screenId,
+    yodeckPlayerId,
+    expectedPlaylistId,
+    beforeState,
+    afterState,
+    steps,
+    baselineAdded,
+    success: true,
+    logs,
+  };
+}
+
 /**
  * Get the current playback status for a screen
  */
@@ -833,10 +1099,11 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
   }
 
   let expected = screen.playlistId;
-  const actual = actualResult.source;
+  let actual = actualResult.source;
   let selfHealed = false;
+  let selfHealResult: SelfHealResult | null = null;
   
-  // SELF-HEAL: If expected is empty but Yodeck is playing a playlist, save it to DB
+  // SELF-HEAL CASE 1: DB has no playlistId but Yodeck is playing a playlist - save it
   if (!expected && actual.sourceType === "playlist" && actual.sourceId) {
     console.log(`[NowPlaying] Self-heal: screen ${screenId} has no playlistId in DB but Yodeck plays ${actual.sourceId}`);
     
@@ -854,6 +1121,55 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     console.log(`[NowPlaying] Self-healed: playlistId=${expected} saved to screen ${screenId}`);
   }
   
+  // SELF-HEAL CASE 2: Screen on LAYOUT or wrong playlist -> FULL SELF-HEAL
+  const mismatchDetected = 
+    actual.sourceType !== "playlist" || 
+    actual.sourceId !== expected;
+  
+  // LAYOUT_FORBIDDEN check - log critical error if layout detected
+  if (actual.sourceType === "layout") {
+    console.error(`[NowPlaying] LAYOUT_FORBIDDEN: Screen ${screenId} (player ${screen.yodeckPlayerId}) is in layout mode - this is permanently forbidden`);
+  }
+    
+  if (mismatchDetected && expected && screen.yodeckPlayerId) {
+    console.log(`[NowPlaying] Mismatch detected: expected playlist:${expected}, got ${actual.sourceType}:${actual.sourceId}`);
+    
+    // Perform FULL SELF-HEAL with 1 retry
+    selfHealResult = await selfHealScreen(screenId, screen.yodeckPlayerId, expected);
+    
+    if (selfHealResult.success) {
+      selfHealed = true;
+      // Update actual with healed state
+      actual = {
+        sourceType: selfHealResult.afterState.sourceType,
+        sourceId: selfHealResult.afterState.sourceId,
+        sourceName: actual.sourceName, // Keep original name
+      };
+      
+      // Update DB with healed state
+      await db.update(screens).set({
+        lastVerifyAt: new Date(),
+        lastVerifyResult: "ok",
+        lastPushAt: new Date(),
+        lastPushResult: "self_healed",
+        yodeckSyncStatus: "linked",
+        updatedAt: new Date(),
+      }).where(eq(screens.id, screenId));
+    } else {
+      // HARD FAILURE: Self-heal failed
+      console.error(`[NowPlaying] SELF_HEAL_FAILED: ${selfHealResult.error}`);
+      console.error(`[NowPlaying] CorrelationId: ${selfHealResult.correlationId}`);
+      
+      // Update DB with failed state
+      await db.update(screens).set({
+        lastVerifyAt: new Date(),
+        lastVerifyResult: selfHealResult.error || "self_heal_failed",
+        yodeckSyncStatus: "error",
+        updatedAt: new Date(),
+      }).where(eq(screens.id, screenId));
+    }
+  }
+  
   // Update sync status if device is linked but status says not_linked
   if (screen.yodeckSyncStatus === "not_linked" && screen.yodeckPlayerId) {
     await db.update(screens).set({
@@ -862,6 +1178,7 @@ export async function getScreenNowPlaying(screenId: string): Promise<{
     }).where(eq(screens.id, screenId));
   }
   
+  // Recalculate mismatch after potential self-heal
   const mismatch = 
     actual.sourceType !== "playlist" || 
     actual.sourceId !== expected;
