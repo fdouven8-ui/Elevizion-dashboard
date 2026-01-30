@@ -1,0 +1,424 @@
+You are a senior full-stack engineer working in the existing Elevizion dashboard codebase.
+Implement a single uniform playback model for ALL screens:
+
+NON-NEGOTIABLE RULES (must be enforced everywhere)
+
+Layouts are forbidden. Never assign screen_content.source_type = "layout" in Yodeck.
+
+Every screen must run via PLAYLIST ONLY:
+
+Baseline playlist contains the fixed “base” items (news/weather/house ads/etc.)
+
+Ads playlist contains approved advertiser videos assigned to that screen/location
+
+Combined playlist is the ONLY playlist that gets assigned to the screen in Yodeck
+
+After any publish, the system must verify:
+
+Yodeck screen is assigned to combined playlist
+
+Combined playlist contains baseline items + assigned ads
+
+The entire flow must be repeatable:
+
+multiple screens per location
+
+multiple advertisers
+
+re-uploads replace old ad automatically (supersede)
+
+Implement robust “self-heal”: if a screen is found in layout mode, it is automatically switched back to playlist mode.
+
+0) DATABASE / MODEL NORMALIZATION (align with existing app completeness)
+
+You already have some playlist fields on locations and screens. Ensure a consistent model:
+
+Screens table should be the source of truth for “what the device should play”
+
+For each screen record ensure these fields exist (add migration if missing):
+
+yodeckPlayerId (string)
+
+baselinePlaylistId (string, yodeck playlist id)
+
+adsPlaylistId (string, yodeck playlist id)
+
+combinedPlaylistId (string, yodeck playlist id)
+
+playbackMode enum: PLAYLIST_ONLY (default)
+
+lastPushAt, lastPushResult, lastVerifyAt, lastVerifyResult, lastVerifyError
+
+If you prefer keeping playlist ids on locations, that is fine, but then also store them per screen to support multi-screen locations. Pick ONE approach and refactor consistently. My preference: store on screens.
+
+Locations are used for targeting / assignments
+
+Location must have:
+
+readyForAds
+
+region/city targeting fields already exist
+
+optional playlistTag can remain but is NOT used for publish anymore
+
+1) CANONICAL YODECK PLAYLIST SETUP (baseline/ads/combined)
+
+Create a single service: services/yodeckPlaybackEngine.ts
+
+Expose functions:
+
+ensureScreenPlaylists(screen)
+
+Creates or finds three playlists in Yodeck (idempotent):
+
+EVZ | BASELINE | SCREEN | <playerId>
+
+EVZ | ADS | SCREEN | <playerId>
+
+EVZ | COMBINED | SCREEN | <playerId>
+
+Store their ids on the screen record.
+If playlists already exist, verify they exist in Yodeck; recreate if missing.
+
+seedBaselineIfEmpty(screen)
+
+Ensure baseline playlist is never empty:
+
+Add baseline media items (existing IDs or existing “ensure baseline media” logic)
+
+If baseline media missing in Yodeck, return a clear error code and stop publish:
+
+BASELINE_MEDIA_MISSING
+
+rebuildCombinedPlaylist(screen)
+
+Combined playlist must equal:
+
+All items from baseline playlist (in order)
+
+Then all items from ads playlist (in order)
+Implementation:
+
+Fetch items baseline + ads from Yodeck
+
+Set combined playlist items to baseline+ads (idempotent)
+
+Avoid duplicates
+
+Return counts: baselineCount, adsCount, totalCount
+
+assignCombinedPlaylistToScreen(screen)
+
+This is the ONLY assignment allowed.
+
+Call Yodeck screen update to set:
+
+screen_content.source_type = "playlist"
+
+screen_content.source_id = <combinedPlaylistId>
+
+Then call “Save & Push to this screen” / push endpoint that your codebase already uses.
+
+verifyScreenPlayback(screen)
+
+Fetch Yodeck screen status:
+
+Confirm source_type === "playlist"
+
+Confirm source_id === combinedPlaylistId
+
+Optionally fetch combined playlist items and confirm baselineCount >= 1
+Return structured verification object.
+
+selfHealIfLayout(screen)
+
+If Yodeck shows source_type === "layout", automatically:
+
+ensure playlists
+
+rebuild combined
+
+assign combined
+
+push
+
+verify
+This must run in:
+
+now-playing endpoint
+
+sync workers
+
+publish pipeline
+
+2) AD ASSET PIPELINE: approved upload must become a Yodeck mediaId
+
+There are historic issues where validation said “bestand bevat geen video”. Now assume upload is OK and approval works. We need strict canonical behavior:
+
+Create/confirm service: services/adAssetService.ts with:
+
+getCanonicalApprovedAsset(advertiserId)
+
+Return one asset that is truly approved and usable:
+
+status in: APPROVED, READY_FOR_YODECK, ready_for_yodeck, etc. (match your enums)
+
+must have yodeckMediaId (or be able to create/upload to yodeck now)
+If missing yodeckMediaId but file exists: perform Yodeck upload step and store mediaId.
+Return:
+
+assetId, yodeckMediaId, duration, filename
+
+Supersede behavior
+
+If advertiser uploads a new video:
+
+mark old canonical asset isSuperseded=true
+
+new approved asset becomes canonical
+
+publish should remove old mediaId from all ADS playlists it was inserted into (optional but preferred)
+
+then insert new one
+
+3) TARGETING / ASSIGNMENT: which screens get this advertiser ad?
+
+Create service: services/placementResolver.ts
+
+resolveTargetScreensForAdvertiser(advertiser)
+
+Must use existing business logic:
+
+package screensIncluded
+
+targetRegionCodes / targetCities
+
+category rules (if applicable)
+
+location readyForAds
+Return a list of screens (screen records) with yodeckPlayerId.
+
+If no targets -> return 422 with NO_TARGET_SCREENS.
+
+4) PUBLISH FLOW (single path used everywhere)
+
+Create publishApprovedAdvertiser(advertiserId, options) that does:
+
+asset = getCanonicalApprovedAsset(advertiserId)
+
+targets = resolveTargetScreensForAdvertiser(advertiser)
+
+For each target screen:
+
+ensureScreenPlaylists(screen)
+
+seedBaselineIfEmpty(screen)
+
+Ensure asset mediaId is present in adsPlaylistId (idempotent):
+
+if already present -> skip
+
+else add to ADS playlist
+
+rebuildCombinedPlaylist(screen)
+
+assignCombinedPlaylistToScreen(screen) (force playlist mode)
+
+verifyScreenPlayback(screen)
+
+Return a full JSON report.
+
+Absolutely remove/disable any tag-based publish path
+
+Do not PATCH media tags for publishing
+
+Do not rely on media filtering tags
+
+Keep tags only as metadata if needed, but not for assignment.
+
+5) ENDPOINTS (must integrate cleanly with existing app)
+
+Implement/adjust these endpoints:
+
+A) POST /api/admin/advertisers/:id/publish-now
+
+This endpoint must call publishApprovedAdvertiser(id) and return:
+
+{
+  "ok": true,
+  "advertiserId": "...",
+  "asset": { "assetId":"...", "yodeckMediaId":123 },
+  "targets": [
+    {
+      "screenId":"...",
+      "yodeckPlayerId":"591896",
+      "baselinePlaylistId":"...",
+      "adsPlaylistId":"...",
+      "combinedPlaylistId":"...",
+      "baselineCount":4,
+      "adsCount":1,
+      "totalCount":5,
+      "assignedToScreen": true,
+      "pushed": true,
+      "verified": true,
+      "yodeck": { "source_type":"playlist", "source_id":"<combined>" }
+    }
+  ]
+}
+
+B) GET /api/screens/:id/now-playing
+
+Enhance it:
+
+fetch yodeck screen status
+
+if detects layout -> call selfHealIfLayout(screen) and include selfHealed:true
+
+return expected vs actual source, plus combined counts.
+
+C) POST /api/sync/yodeck/run
+
+Ensure it:
+
+loops all active screens
+
+runs ensureScreenPlaylists + seed baseline + rebuild combined
+
+if any screen is on layout -> self-heal
+
+writes verify results
+
+D) Debug helper endpoints (operator-safe)
+
+GET /api/admin/yodeck/playlists/:playlistId/items
+
+POST /api/admin/screens/:screenId/force-rebuild-playlists (calls ensure+seed+rebuild+assign+push+verify)
+
+6) UI INTEGRATION (so the app matches reality)
+
+Update these pages to reflect playlist model:
+
+Screen Detail -> “Wat draait nu?”
+
+Show:
+
+mode: playlist only
+
+combined playlist name/id
+
+baselineCount / adsCount
+
+verification status
+
+button “Repareer nu” -> calls force-rebuild endpoint
+
+Video Review -> Approve flow
+
+When user clicks “Goedkeuren”:
+
+approve asset
+
+immediately call publishApprovedAdvertiser(advertiserId)
+
+show toast: “Geplaatst op X schermen (baseline Y + ads Z)”
+
+if failure show clear reason and correlationId.
+
+7) TESTS (must prove full repeatability)
+
+Add integration tests (or minimal runtime test scripts if no test infra exists) for:
+
+Happy path: approved ad -> goes into ADS playlist -> combined rebuild -> assigned -> verify ok
+
+Idempotency: publish twice -> no duplicate playlist items
+
+Layout recovery: set screen to layout manually (mock) -> now-playing triggers self-heal -> becomes playlist
+
+Multiple advertisers: two approved ads for same screen -> combined contains baseline + 2 ads
+
+Supersede: upload new video for same advertiser -> old removed (or not re-added) -> new present
+
+Where possible, mock Yodeck API in tests. If not possible, add a “TEST_MODE fake yodeck adapter” that simulates playlists/screens in-memory.
+
+8) MIGRATION / CLEANUP
+
+Remove old layout assignment code paths
+
+Remove tag-based publish path
+
+Ensure logs are clean and consistent.
+
+Logging:
+
+Use correlationId across publish steps:
+
+[Publish] <id> START
+
+[Publish] <id> TARGET screen=<id> player=<id>
+
+[Playback] <id> ENSURE playlists ok
+
+[Playback] <id> ADS add ok
+
+[Playback] <id> COMBINED rebuild baseline=X ads=Y
+
+[Playback] <id> ASSIGN ok
+
+[Playback] <id> VERIFY ok
+
+ACCEPTANCE CRITERIA (must be met)
+
+A single approved advertiser video is visible in ADS playlist and in combined playlist.
+
+The Yodeck screen shows source_type=playlist and source_id=combinedPlaylistId.
+
+The dashboard now-playing shows mismatch=false and verificationOk=true.
+
+Repeating publish is safe (no duplicates).
+
+Works for multiple screens and multiple advertisers uniformly.
+
+Deliverables:
+
+list files changed
+
+sample JSON response for successful publish
+
+sample JSON for failure (no approved asset)
+
+confirm which Yodeck endpoints are used for:
+
+playlist items fetch
+
+playlist items set/add
+
+screen assignment
+
+push
+
+Implement now.
+
+🔥 Extra: exact “console test” for Frank (must work after deploy)
+
+After deploy, I will run:
+
+fetch("/api/admin/advertisers/9a99d555-8676-49d3-9862-f65859bdcfb1/publish-now", {
+  method:"POST",
+  headers:{"Content-Type":"application/json"},
+  body: JSON.stringify({})
+}).then(r=>r.json()).then(console.log)
+
+
+Then I will check now-playing:
+
+fetch("/api/screens/241377ce-a25e-4744-9ea7-cd9359515d07/now-playing")
+  .then(r=>r.json()).then(console.log)
+
+
+Expected:
+
+actualSourceType === "playlist"
+
+actualSourceId === combinedPlaylistId
+
+adsCount >= 1

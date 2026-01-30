@@ -723,10 +723,18 @@ export const screens = pgTable("screens", {
   yodeckLastSyncAt: timestamp("yodeck_last_sync_at"),
   // === ONBOARDING STATUS ===
   onboardingStatus: text("onboarding_status").default("draft"), // draft | invited | in_progress | completed
-  // === PLAYLIST-ONLY ARCHITECTURE (NEW) ===
-  // Each screen has exactly 1 playlist - this is the SINGLE SOURCE OF TRUTH
-  playlistId: text("playlist_id"), // Yodeck playlist ID assigned to this screen
-  playlistName: text("playlist_name"), // Cached playlist name for display
+  // === PLAYLIST-ONLY ARCHITECTURE (CANONICAL) ===
+  // Three-playlist model per screen: baseline + ads = combined
+  baselinePlaylistId: text("baseline_playlist_id"), // Yodeck playlist ID for baseline content (news/weather/house ads)
+  baselinePlaylistName: text("baseline_playlist_name"), // Cached name
+  adsPlaylistId: text("ads_playlist_id"), // Yodeck playlist ID for approved advertiser videos
+  adsPlaylistName: text("ads_playlist_name"), // Cached name
+  combinedPlaylistId: text("combined_playlist_id"), // Yodeck playlist ID = baseline + ads (assigned to screen)
+  combinedPlaylistName: text("combined_playlist_name"), // Cached name
+  playbackMode: text("playback_mode").default("PLAYLIST_ONLY"), // PLAYLIST_ONLY (only mode allowed)
+  // Legacy field for backward compatibility (maps to combinedPlaylistId)
+  playlistId: text("playlist_id"), // DEPRECATED: use combinedPlaylistId
+  playlistName: text("playlist_name"), // DEPRECATED: use combinedPlaylistName
   // Push tracking
   lastPushAt: timestamp("last_push_at"), // When playlist was last pushed to screen
   lastPushResult: text("last_push_result"), // ok | failed | pending
