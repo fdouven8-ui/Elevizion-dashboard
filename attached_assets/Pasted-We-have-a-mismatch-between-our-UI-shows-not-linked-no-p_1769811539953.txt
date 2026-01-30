@@ -1,0 +1,55 @@
+We have a mismatch between our UI (shows "not linked / no playlist") and backend screen summary (shows playlist assigned + 4 items).
+
+EVIDENCE:
+- GET /api/screens/:id shows yodeckContentSummary.sourceType="playlist" and sourceId=30590180 with 4 mediaIds.
+- content-status shows playlistId=30590180 itemCount=4 needsRepair=false.
+- BUT /api/screens/:id/now-playing returns actualSourceType/Id as undefined/undefined and itemCount=0.
+So the now-playing endpoint is parsing the Yodeck /screens/{playerId}/ response incorrectly.
+
+TASK 1 — Fix now-playing parsing (MUST)
+In server/services/simplePlaylistModel.ts (or wherever getScreenNowPlayingSimple lives):
+- After calling Yodeck v2 GET /screens/{playerId}/, inspect and log (sanitized) the response keys to find where source info lives.
+- Yodeck may return source in one of these shapes:
+  A) screen.source_type / screen.source_id
+  B) screen.content.source_type / screen.content.source_id
+  C) screen.screen_content.source_type / source_id
+  D) screen.current_content[...] (legacy)
+Implement robust extraction:
+  const {sourceType, sourceId} = extractScreenSource(screenJson)
+Where extractScreenSource checks all common paths and returns null only if none exist.
+Return in now-playing JSON:
+{
+  ok:true,
+  playerId,
+  expectedPlaylistId,
+  actualSourceType,
+  actualSourceId,
+  isCorrect: (actualSourceType==="playlist" && String(actualSourceId)===String(expectedPlaylistId)),
+  itemCount: <playlist item count if actual is playlist else 0>
+}
+
+Also: If actualSourceType is "playlist", fetch playlist items count using Yodeck API playlist items endpoint and return correct itemCount and a small list of top item names (max 5).
+
+IMPORTANT: The UI relies on now-playing. It must never return undefined for actual when Yodeck has a playlist assigned.
+
+TASK 2 — Ads are not added because advertiser.yodeckMediaIdCanonical is null (MUST)
+In rebuild-playlist flow:
+- Determine eligible advertisers for the screen (based on your existing logic/placement rules).
+- For each eligible advertiser:
+  - If advertiser.assetStatus is "ready_for_yodeck" AND yodeckMediaIdCanonical is null:
+    call ensureAdvertiserMediaUploaded(advertiserId) which:
+      1) finds the uploaded asset in our storage (the mp4 path)
+      2) auto-remux/transcode if needed to H264/AAC MP4 (yuv420p)
+      3) uploads to Yodeck (two-step if required)
+      4) saves advertiser.yodeckMediaIdCanonical
+  - Only then append that mediaId to the screen playlist.
+- Rebuild must end with verification: playlist contains base items + any ads that had mediaId.
+
+TASK 3 — Rebuild the second screen 591895 (optional but recommended)
+Ensure the rebuild endpoint works for that screen too so it gets assigned playlist and base items.
+
+DELIVERABLES:
+1) Update now-playing endpoint to show actualSourceType/sourceId correctly and itemCount>0 when playlist assigned.
+2) After rebuild, advertiser mediaId is set and playlist itemCount increases (>= baseCount + adsCount).
+3) Add clear diagnostics in rebuild response with correlationId and per-step ok flags.
+Proceed now.

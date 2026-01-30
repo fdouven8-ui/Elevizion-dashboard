@@ -57,7 +57,7 @@ async function createYodeckMedia(name: string, mimeType: string = "video/mp4"): 
     const resp = await fetch(`${YODECK_BASE}/media/`, {
       method: "POST",
       headers: {
-        "Authorization": `api-key ${YODECK_TOKEN}`,
+        "Authorization": `Token ${YODECK_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

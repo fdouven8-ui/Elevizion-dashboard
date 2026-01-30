@@ -1,7 +1,9 @@
 import { db } from "../db";
-import { screens } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { screens, advertisers, adAssets } from "@shared/schema";
+import { eq, and, desc } from "drizzle-orm";
 import { storage } from "../storage";
+import { yodeckPublishService } from "./yodeckPublishService";
+import { ObjectStorageService } from "../objectStorage";
 
 const LOG_PREFIX = "[SimplePlaylist]";
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
@@ -456,6 +458,118 @@ export async function syncScreenPlaylistFromBase(screenPlaylistId: number): Prom
   };
 }
 
+export interface EnsureMediaUploadResult {
+  ok: boolean;
+  advertiserId: string;
+  mediaId: number | null;
+  wasAlreadyUploaded: boolean;
+  error?: string;
+}
+
+export async function ensureAdvertiserMediaUploaded(advertiserId: string): Promise<EnsureMediaUploadResult> {
+  console.log(`${LOG_PREFIX} Ensuring media uploaded for advertiser ${advertiserId}...`);
+  
+  // Get advertiser
+  const advertiser = await storage.getAdvertiser(advertiserId);
+  if (!advertiser) {
+    return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: "Advertiser not found" };
+  }
+  
+  // If already has canonical media ID, we're done
+  if (advertiser.yodeckMediaIdCanonical) {
+    console.log(`${LOG_PREFIX} Advertiser ${advertiserId} already has mediaId=${advertiser.yodeckMediaIdCanonical}`);
+    return { ok: true, advertiserId, mediaId: advertiser.yodeckMediaIdCanonical, wasAlreadyUploaded: true };
+  }
+  
+  // Find approved ad asset for this advertiser
+  const [asset] = await db
+    .select()
+    .from(adAssets)
+    .where(
+      and(
+        eq(adAssets.advertiserId, advertiserId),
+        eq(adAssets.approvalStatus, "APPROVED"),
+        eq(adAssets.isSuperseded, false)
+      )
+    )
+    .orderBy(desc(adAssets.createdAt))
+    .limit(1);
+  
+  if (!asset) {
+    return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: "No approved ad asset found" };
+  }
+  
+  // Get the file path (prefer normalized/converted, fall back to original)
+  const storagePath = asset.normalizedStoragePath || asset.convertedStoragePath || asset.storagePath;
+  if (!storagePath) {
+    return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: "No storage path for ad asset" };
+  }
+  
+  console.log(`${LOG_PREFIX} Found approved asset: id=${asset.id}, path=${storagePath}`);
+  
+  try {
+    // Download file from object storage
+    const objectStorage = new ObjectStorageService();
+    const file = await objectStorage.getFileByPath(storagePath);
+    
+    if (!file) {
+      return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: "File not found in object storage" };
+    }
+    
+    const [fileBuffer] = await file.download();
+    console.log(`${LOG_PREFIX} Downloaded ${fileBuffer.length} bytes`);
+    
+    // Upload to Yodeck using the publish service singleton
+    const mediaName = advertiser.linkKey 
+      ? `${advertiser.linkKey}.mp4`
+      : `ADV-${advertiserId.substring(0, 8)}.mp4`;
+    
+    const uploadResult = await yodeckPublishService.twoStepUploadMedia({
+      bytes: fileBuffer,
+      name: mediaName,
+      contentType: 'video/mp4',
+    });
+    
+    if (!uploadResult.ok || !uploadResult.mediaId) {
+      const lastError = uploadResult.diagnostics?.lastError;
+      const errorMsg = typeof lastError === 'string' 
+        ? lastError 
+        : (lastError?.message || "Upload failed");
+      console.error(`${LOG_PREFIX} Upload failed for advertiser ${advertiserId}: ${errorMsg}`);
+      return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: errorMsg };
+    }
+    
+    const yodeckMediaId = uploadResult.mediaId;
+    console.log(`${LOG_PREFIX} Uploaded to Yodeck: mediaId=${yodeckMediaId}`);
+    
+    // Update advertiser with canonical media ID
+    await db.update(advertisers)
+      .set({
+        yodeckMediaIdCanonical: yodeckMediaId,
+        yodeckMediaIdCanonicalUpdatedAt: new Date(),
+        assetStatus: "live",
+        updatedAt: new Date(),
+      })
+      .where(eq(advertisers.id, advertiserId));
+    
+    // Update ad asset with Yodeck info
+    await db.update(adAssets)
+      .set({
+        yodeckMediaId: yodeckMediaId,
+        yodeckUploadedAt: new Date(),
+        approvalStatus: "PUBLISHED",
+      })
+      .where(eq(adAssets.id, asset.id));
+    
+    console.log(`${LOG_PREFIX} Updated advertiser and asset with yodeckMediaId=${yodeckMediaId}`);
+    
+    return { ok: true, advertiserId, mediaId: yodeckMediaId, wasAlreadyUploaded: false };
+  } catch (err: any) {
+    console.error(`${LOG_PREFIX} Error uploading media for advertiser ${advertiserId}:`, err);
+    return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: err.message };
+  }
+}
+
 export interface AddAdsResult {
   ok: boolean;
   adsAdded: number;
@@ -658,7 +772,7 @@ export interface RebuildPlaylistResult {
 export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPlaylistResult> {
   const correlationId = `rebuild_${screenId}_${Date.now()}`;
   const actions: string[] = [];
-  const skippedAds: Array<{ reason: string; advertiserId: string }> = [];
+  const skippedAds: Array<{ reason: string; advertiserId: string; detail?: string }> = [];
   
   // Helper to create error response
   const errorResponse = (step: string, message: string, partial: Partial<RebuildPlaylistResult> = {}): RebuildPlaylistResult => ({
@@ -728,31 +842,58 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
   }
   actions.push(`Copied ${syncResult.baseMediaIds.length} base items`);
 
-  // 5. Collect ad media IDs for this screen
+  // 5. Collect ad media IDs for this screen (with auto-upload if needed)
   actions.push(`Step 5: Collecting approved advertiser ads...`);
   const adMediaIds: number[] = [];
-  const advertisers = await storage.getAdvertisers();
+  const allAdvertisers = await storage.getAdvertisers();
   let adCandidates = 0;
+  let uploadAttempts = 0;
+  let uploadSuccesses = 0;
   
-  for (const advertiser of advertisers) {
-    // Check status
+  for (const advertiser of allAdvertisers) {
+    // Check status - include both ready_for_yodeck and approved statuses
     const status = advertiser.assetStatus || "";
-    if (!["approved", "ready_for_yodeck", "ready_for_publish"].includes(status)) {
+    if (!["approved", "ready_for_yodeck", "ready_for_publish", "live"].includes(status)) {
       continue;
     }
     
     adCandidates++;
     
-    // Check if has canonical media ID
-    if (!advertiser.yodeckMediaIdCanonical) {
+    // Check if has canonical media ID - if not, try to upload automatically
+    let mediaId = advertiser.yodeckMediaIdCanonical;
+    
+    if (!mediaId && ["ready_for_yodeck", "approved"].includes(status)) {
+      // Attempt automatic upload to Yodeck
+      actions.push(`Advertiser ${advertiser.id} has status=${status} but no mediaId - attempting upload...`);
+      uploadAttempts++;
+      
+      const uploadResult = await ensureAdvertiserMediaUploaded(advertiser.id);
+      
+      if (uploadResult.ok && uploadResult.mediaId) {
+        mediaId = uploadResult.mediaId;
+        uploadSuccesses++;
+        actions.push(`Upload SUCCESS for ${advertiser.id}: mediaId=${mediaId}`);
+      } else {
+        skippedAds.push({ 
+          reason: "upload_failed", 
+          advertiserId: advertiser.id, 
+          detail: uploadResult.error 
+        });
+        actions.push(`Upload FAILED for ${advertiser.id}: ${uploadResult.error}`);
+        continue;
+      }
+    } else if (!mediaId) {
       skippedAds.push({ reason: "no_yodeck_media_id", advertiserId: advertiser.id });
-      actions.push(`Skipped advertiser ${advertiser.id}: no yodeckMediaIdCanonical`);
+      actions.push(`Skipped advertiser ${advertiser.id}: no yodeckMediaIdCanonical and status=${status}`);
       continue;
     }
 
-    const mediaId = advertiser.yodeckMediaIdCanonical;
     adMediaIds.push(mediaId);
     actions.push(`Including ad from advertiser ${advertiser.id}: mediaId=${mediaId}`);
+  }
+  
+  if (uploadAttempts > 0) {
+    actions.push(`Auto-upload summary: ${uploadSuccesses}/${uploadAttempts} succeeded`);
   }
   actions.push(`Ads: ${adCandidates} candidates, ${adMediaIds.length} included, ${skippedAds.length} skipped`);
 
@@ -827,7 +968,69 @@ export interface NowPlayingSimpleResult {
   actualSourceId: number | null;
   isCorrect: boolean;
   itemCount: number;
+  topItems?: string[];
   error?: string;
+}
+
+interface ScreenSourceInfo {
+  sourceType: string | null;
+  sourceId: number | null;
+  extractedFrom: string;
+}
+
+function extractScreenSource(screenJson: any): ScreenSourceInfo {
+  // Try multiple known Yodeck response structures
+  
+  // Path A: screen_content.source_type / source_id (Yodeck v2)
+  if (screenJson?.screen_content?.source_type !== undefined) {
+    return {
+      sourceType: screenJson.screen_content.source_type,
+      sourceId: screenJson.screen_content.source_id,
+      extractedFrom: "screen_content",
+    };
+  }
+  
+  // Path B: content.source_type / source_id
+  if (screenJson?.content?.source_type !== undefined) {
+    return {
+      sourceType: screenJson.content.source_type,
+      sourceId: screenJson.content.source_id,
+      extractedFrom: "content",
+    };
+  }
+  
+  // Path C: top-level source_type / source_id
+  if (screenJson?.source_type !== undefined) {
+    return {
+      sourceType: screenJson.source_type,
+      sourceId: screenJson.source_id,
+      extractedFrom: "top_level",
+    };
+  }
+  
+  // Path D: current_content (legacy)
+  if (screenJson?.current_content?.source_type !== undefined) {
+    return {
+      sourceType: screenJson.current_content.source_type,
+      sourceId: screenJson.current_content.source_id,
+      extractedFrom: "current_content",
+    };
+  }
+  
+  // Path E: playlist_id directly (some responses)
+  if (screenJson?.playlist_id !== undefined) {
+    return {
+      sourceType: "playlist",
+      sourceId: screenJson.playlist_id,
+      extractedFrom: "playlist_id",
+    };
+  }
+  
+  // Log available keys for debugging
+  const keys = screenJson ? Object.keys(screenJson) : [];
+  console.log(`${LOG_PREFIX} extractScreenSource: No known source path found. Keys: ${keys.join(", ")}`);
+  
+  return { sourceType: null, sourceId: null, extractedFrom: "none" };
 }
 
 export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPlayingSimpleResult> {
@@ -862,7 +1065,7 @@ export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPl
   }
 
   // Get screen status from Yodeck (READ ONLY - no create!)
-  const screenResult = await yodeckRequest<{ source_type: string; source_id: number }>(
+  const screenResult = await yodeckRequest<any>(
     `/screens/${screen.yodeckPlayerId}/`
   );
 
@@ -880,20 +1083,31 @@ export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPl
     };
   }
 
-  const actualSourceType = screenResult.data.source_type;
-  const actualSourceId = screenResult.data.source_id;
+  // Use robust source extraction for multiple Yodeck API response formats
+  const sourceInfo = extractScreenSource(screenResult.data);
+  console.log(`${LOG_PREFIX} now-playing: screen=${screen.yodeckPlayerId}, extracted from=${sourceInfo.extractedFrom}, type=${sourceInfo.sourceType}, id=${sourceInfo.sourceId}`);
+  
+  const actualSourceType = sourceInfo.sourceType;
+  const actualSourceId = sourceInfo.sourceId;
   const expectedPlaylistId = screen.playlistId ? parseInt(screen.playlistId, 10) : null;
 
   const isCorrect = actualSourceType === "playlist" && 
                     expectedPlaylistId !== null && 
                     actualSourceId === expectedPlaylistId;
 
-  // Get playlist item count if in playlist mode
+  // Get playlist info if in playlist mode
   let itemCount = 0;
+  let topItems: string[] = [];
+  
   if (actualSourceType === "playlist" && actualSourceId) {
-    const itemsResult = await yodeckRequest<{ count: number }>(`/playlists/${actualSourceId}/items/`);
-    if (itemsResult.ok && itemsResult.data) {
-      itemCount = itemsResult.data.count || 0;
+    const playlistResult = await yodeckRequest<PlaylistResponse>(`/playlists/${actualSourceId}/`);
+    if (playlistResult.ok && playlistResult.data?.items) {
+      itemCount = playlistResult.data.items.length;
+      // Get top 5 item names
+      topItems = playlistResult.data.items
+        .slice(0, 5)
+        .map(item => item.name || `Media ${item.id}`)
+        .filter(Boolean);
     }
   }
 
@@ -906,6 +1120,7 @@ export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPl
     actualSourceId,
     isCorrect,
     itemCount,
+    topItems: topItems.length > 0 ? topItems : undefined,
   };
 }
 
