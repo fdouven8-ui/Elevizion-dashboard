@@ -1,0 +1,78 @@
+We need to fix two things in the Elevizion dashboard:
+
+A) UI must be updated to reflect the new simple playlist model.
+B) rebuild-playlist must actually add advertiser ads (including auto-upload) even when placements/contracts are empty.
+
+CONTEXT / HARD RULES:
+- There is exactly 1 playlist per screen in Yodeck.
+- There is 1 BASE playlist in Yodeck (manual “Basis playlist”) which contains the 4 baseline items.
+- A screen playlist must be rebuilt by copying all items from the base playlist + then appending advertiser videos.
+- now-playing endpoint is READ ONLY and must never create playlists.
+- The only mutating endpoint is:
+  POST /api/admin/screens/:screenId/rebuild-playlist
+
+A) UI FIX
+1) Find the screen detail UI section "Wat draait nu?"
+2) Replace any logic that checks old fields (combinedPlaylistId, baselinePlaylistId, adsPlaylistId, playlistId from old model).
+3) Use ONLY the now-playing response fields:
+   - actualSourceType, actualSourceId, actualSourceName, itemCount, topItems, isCorrect
+4) UI rules:
+   - if nowPlaying.ok && actualSourceType === "playlist":
+       show "Gekoppeld"
+       show "Actieve playlist: {actualSourceName} ({actualSourceId})"
+       show "Content: {itemCount} items"
+       show topItems (first 5)
+       show a green badge if isCorrect true else orange with mismatch message
+   - else:
+       show "Niet gekoppeld" and itemCount=0
+
+B) REBUILD-PLAYLIST MUST ADD ADS
+Problem: placements/contracts endpoints are empty in test data, so no ads are being selected. We need a fallback selection model based on targeting, so that advertiser videos get appended.
+
+In the rebuild-playlist service (simplePlaylistModel.ts or the file used by POST /rebuild-playlist):
+1) After copying base playlist items, compute candidate advertisers to add:
+   - query advertisers where status="active"
+   - AND assetStatus IN ("ready_for_yodeck","uploaded","approved")
+   - AND (targetRegionCodes includes normalized location city slug OR regionCode OR targetCities includes location.city)
+   - normalize: lower-case and trim values; treat location.city "Sittard" as "sittard"
+2) For each candidate advertiser:
+   - if advertiser.yodeckMediaIdCanonical is null AND advertiser.assetStatus == "ready_for_yodeck":
+       call ensureAdvertiserMediaUploaded(advertiserId) which:
+         - finds latest uploaded asset file for advertiser
+         - uploads to Yodeck using the correct v2 auth header: Authorization: Token <label:apikey>
+         - waits/polls for encoding readiness (or at least confirms status ok)
+         - stores yodeckMediaIdCanonical on advertiser
+   - then append a playlist item using that yodeckMediaIdCanonical
+3) Ensure dedupe:
+   - do not append an ad if the mediaId is already in the playlist items
+4) Enforce capacity:
+   - MAX ads per screen = 20 (or configurable)
+5) After mutation:
+   - push playlist to screen
+   - verify now-playing by fetching screen source and confirm it points to the playlistId
+
+Add a rebuild-playlist JSON response with:
+- ok
+- screenId, playerId
+- baseItemsCopiedCount
+- adsAddedCount
+- adsAdded (array of {advertiserId, mediaId, companyName})
+- pushed=true/false
+- verify.isCorrect, verify.actualSourceType, verify.actualSourceId
+
+Also add very clear server logs:
+[RebuildPlaylist] baseItems=...
+[RebuildPlaylist] candidateAds=...
+[RebuildPlaylist] uploadedAds=...
+[RebuildPlaylist] appendedAds=...
+[RebuildPlaylist] pushResult=...
+[RebuildPlaylist] verify=...
+
+IMPORTANT:
+- Do not reintroduce combined/baseline/ads playlist models.
+- Only 1 playlist per screen.
+- No other endpoints may create playlists.
+
+Finally:
+- ensure AUTOPILOT_BASE_PLAYLIST_ID (or similar env var) is used to read the base playlist items.
+- If base playlist has 0 items, rebuild must fail loudly with a clear error.

@@ -9,6 +9,97 @@ const LOG_PREFIX = "[SimplePlaylist]";
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const BASE_PLAYLIST_NAME = "Basis playlist";
 
+// ===============================================================
+// TARGETING HELPER - Robust city/region matching
+// ===============================================================
+
+/**
+ * Normalize a city/region string for comparison:
+ * - lowercase, trim whitespace
+ * - remove common Dutch prefixes ('s-, 't-)
+ * - strip accents/diacritics
+ */
+function normalizeForTargeting(value: string | null | undefined): string {
+  if (!value) return "";
+  let normalized = value.toLowerCase().trim();
+  // Remove Dutch prefixes like 's- and 't-
+  normalized = normalized.replace(/^['']s-/i, "").replace(/^['']t-/i, "");
+  // Remove diacritics
+  normalized = normalized.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  return normalized;
+}
+
+/**
+ * Parse targetCities from advertiser (handles both string and array formats)
+ */
+function parseTargetCities(targetCities: string | string[] | null | undefined): string[] {
+  if (!targetCities) return [];
+  if (Array.isArray(targetCities)) {
+    return targetCities.map(c => normalizeForTargeting(c)).filter(Boolean);
+  }
+  // Comma-separated string
+  return targetCities.split(",").map(c => normalizeForTargeting(c)).filter(Boolean);
+}
+
+/**
+ * Check if screen location matches advertiser targeting
+ * IMPORTANT: Both targetRegions and targetCities should be PRE-NORMALIZED before calling
+ * Returns { match: boolean, reason: string }
+ */
+function checkTargetingMatch(
+  screenCity: string,
+  screenRegion: string,
+  targetRegions: string[], // Pre-normalized
+  targetCities: string[]   // Pre-normalized
+): { match: boolean; reason: string } {
+  const normCity = normalizeForTargeting(screenCity);
+  const normRegion = normalizeForTargeting(screenRegion);
+  
+  // No targeting = matches all screens (nationwide advertiser)
+  if (targetRegions.length === 0 && targetCities.length === 0) {
+    return { match: true, reason: "no_targeting (matches all)" };
+  }
+  
+  // No location = can't match geo-targeted advertisers
+  if (!normCity && !normRegion) {
+    return { match: false, reason: "screen_no_location" };
+  }
+  
+  // Exact city match
+  if (normCity && targetCities.includes(normCity)) {
+    return { match: true, reason: `city_match: ${screenCity}` };
+  }
+  
+  // City in targetRegions (region codes can contain city names)
+  if (normCity && targetRegions.includes(normCity)) {
+    return { match: true, reason: `regionCode_city_match: ${screenCity}` };
+  }
+  
+  // Region match
+  if (normRegion && targetRegions.includes(normRegion)) {
+    return { match: true, reason: `region_match: ${screenRegion}` };
+  }
+  
+  // Partial match (for city name variations like "den bosch" vs "'s-hertogenbosch")
+  if (normCity) {
+    const partialCityMatch = targetCities.some(t => 
+      normCity.includes(t) || t.includes(normCity)
+    );
+    if (partialCityMatch) {
+      return { match: true, reason: `partial_city_match: ${screenCity}` };
+    }
+    
+    const partialRegionMatch = targetRegions.some(t => 
+      normCity.includes(t) || t.includes(normCity)
+    );
+    if (partialRegionMatch) {
+      return { match: true, reason: `partial_regionCode_match: ${screenCity}` };
+    }
+  }
+  
+  return { match: false, reason: "no_match" };
+}
+
 let cachedBasePlaylistId: number | null = null;
 let cacheExpiry: number = 0;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -749,7 +840,8 @@ export interface RebuildPlaylistResult {
   ads: {
     candidates: number;
     included: number;
-    skipped: Array<{ reason: string; advertiserId: string }>;
+    skipped: Array<{ reason: string; advertiserId: string; detail?: string }>;
+    adsAdded: Array<{ advertiserId: string; mediaId: number; companyName: string }>;
   };
   assign: {
     ok: boolean;
@@ -782,7 +874,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
     base: { found: false, basePlaylistId: null, baseItemCount: 0 },
     screenPlaylist: { existed: false, created: false, screenPlaylistId: null, screenPlaylistName: null },
     copy: { ok: false, copiedCount: 0 },
-    ads: { candidates: 0, included: 0, skipped: skippedAds },
+    ads: { candidates: 0, included: 0, skipped: skippedAds, adsAdded: [] },
     assign: { ok: false, screenSourceType: null, screenSourceId: null },
     push: { ok: false },
     verify: { ok: false, actualSourceType: null, actualSourceId: null, actualPlaylistItemCount: 0 },
@@ -842,29 +934,72 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
   }
   actions.push(`Copied ${syncResult.baseMediaIds.length} base items`);
 
-  // 5. Collect ad media IDs for this screen (with auto-upload if needed)
-  actions.push(`Step 5: Collecting approved advertiser ads...`);
+  // 5. Collect ad media IDs for this screen using TARGETING (not placements)
+  actions.push(`Step 5: Collecting ads via targeting...`);
+  const MAX_ADS_PER_SCREEN = 20;
   const adMediaIds: number[] = [];
+  const adsAdded: Array<{ advertiserId: string; mediaId: number; companyName: string }> = [];
+  
+  // Get screen's location for targeting
+  const location = screen.locationId ? await storage.getLocation(screen.locationId) : null;
+  const screenCity = (location?.city || "").toLowerCase().trim();
+  const screenRegion = (location?.region || "").toLowerCase().trim();
+  actions.push(`Screen location: city="${screenCity}", region="${screenRegion}"`);
+  
   const allAdvertisers = await storage.getAdvertisers();
   let adCandidates = 0;
   let uploadAttempts = 0;
   let uploadSuccesses = 0;
+  let targetingMatches = 0;
   
   for (const advertiser of allAdvertisers) {
-    // Check status - include both ready_for_yodeck and approved statuses
-    const status = advertiser.assetStatus || "";
-    if (!["approved", "ready_for_yodeck", "ready_for_publish", "live"].includes(status)) {
+    // Check advertiser status is active
+    if (advertiser.status !== "active") {
+      continue;
+    }
+    
+    // Check asset status - must be in approved/ready states
+    const assetStatus = advertiser.assetStatus || "";
+    if (!["approved", "ready_for_yodeck", "ready_for_publish", "live", "uploaded"].includes(assetStatus)) {
       continue;
     }
     
     adCandidates++;
     
+    // TARGETING CHECK using normalized matching helpers
+    const targetRegions = Array.isArray(advertiser.targetRegionCodes) 
+      ? advertiser.targetRegionCodes.map(r => normalizeForTargeting(r))
+      : [];
+    const targetCitiesList = parseTargetCities(advertiser.targetCities);
+    
+    const targetCheck = checkTargetingMatch(screenCity, screenRegion, targetRegions, targetCitiesList);
+    
+    if (!targetCheck.match) {
+      if (targetCheck.reason === "screen_no_location") {
+        skippedAds.push({ reason: "screen_no_location", advertiserId: advertiser.id });
+      } else {
+        skippedAds.push({ reason: "targeting_mismatch", advertiserId: advertiser.id });
+      }
+      continue;
+    }
+    
+    const matchReason = targetCheck.reason;
+    
+    targetingMatches++;
+    
+    // Check capacity
+    if (adMediaIds.length >= MAX_ADS_PER_SCREEN) {
+      skippedAds.push({ reason: "capacity_limit", advertiserId: advertiser.id });
+      actions.push(`Skipped ${advertiser.companyName}: capacity limit (${MAX_ADS_PER_SCREEN})`);
+      continue;
+    }
+    
     // Check if has canonical media ID - if not, try to upload automatically
     let mediaId = advertiser.yodeckMediaIdCanonical;
     
-    if (!mediaId && ["ready_for_yodeck", "approved"].includes(status)) {
+    if (!mediaId && ["ready_for_yodeck", "approved", "uploaded"].includes(assetStatus)) {
       // Attempt automatic upload to Yodeck
-      actions.push(`Advertiser ${advertiser.id} has status=${status} but no mediaId - attempting upload...`);
+      actions.push(`Advertiser ${advertiser.companyName} has status=${assetStatus} but no mediaId - attempting upload...`);
       uploadAttempts++;
       
       const uploadResult = await ensureAdvertiserMediaUploaded(advertiser.id);
@@ -872,30 +1007,41 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       if (uploadResult.ok && uploadResult.mediaId) {
         mediaId = uploadResult.mediaId;
         uploadSuccesses++;
-        actions.push(`Upload SUCCESS for ${advertiser.id}: mediaId=${mediaId}`);
+        actions.push(`Upload SUCCESS for ${advertiser.companyName}: mediaId=${mediaId}`);
       } else {
         skippedAds.push({ 
           reason: "upload_failed", 
           advertiserId: advertiser.id, 
           detail: uploadResult.error 
         });
-        actions.push(`Upload FAILED for ${advertiser.id}: ${uploadResult.error}`);
+        actions.push(`Upload FAILED for ${advertiser.companyName}: ${uploadResult.error}`);
         continue;
       }
     } else if (!mediaId) {
       skippedAds.push({ reason: "no_yodeck_media_id", advertiserId: advertiser.id });
-      actions.push(`Skipped advertiser ${advertiser.id}: no yodeckMediaIdCanonical and status=${status}`);
+      actions.push(`Skipped ${advertiser.companyName}: no yodeckMediaIdCanonical and status=${assetStatus}`);
       continue;
     }
 
     adMediaIds.push(mediaId);
-    actions.push(`Including ad from advertiser ${advertiser.id}: mediaId=${mediaId}`);
+    adsAdded.push({ 
+      advertiserId: advertiser.id, 
+      mediaId, 
+      companyName: advertiser.companyName || advertiser.id 
+    });
+    actions.push(`Including ad from ${advertiser.companyName}: mediaId=${mediaId} (${matchReason})`);
   }
+  
+  console.log(`[RebuildPlaylist] baseItems=${syncResult.baseMediaIds.length}`);
+  console.log(`[RebuildPlaylist] candidateAds=${adCandidates}`);
+  console.log(`[RebuildPlaylist] targetingMatches=${targetingMatches}`);
+  console.log(`[RebuildPlaylist] uploadAttempts=${uploadAttempts}, uploadSuccesses=${uploadSuccesses}`);
+  console.log(`[RebuildPlaylist] appendedAds=${adMediaIds.length}`);
   
   if (uploadAttempts > 0) {
     actions.push(`Auto-upload summary: ${uploadSuccesses}/${uploadAttempts} succeeded`);
   }
-  actions.push(`Ads: ${adCandidates} candidates, ${adMediaIds.length} included, ${skippedAds.length} skipped`);
+  actions.push(`Targeting: ${targetingMatches} matches from ${adCandidates} candidates, ${adMediaIds.length} ads to add`);
 
   // 6. Add ads to playlist
   actions.push(`Step 6: Adding ${adMediaIds.length} ads to screen playlist...`);
@@ -915,7 +1061,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
       screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
       copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
-      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds },
+      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
       assign: { ok: false, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
       push: { ok: pushResult.pushed },
       verify: { ok: false, actualSourceType: pushResult.actualSourceType, actualSourceId: pushResult.actualSourceId, actualPlaylistItemCount: addAdsResult.finalCount },
@@ -950,7 +1096,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
     base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
     screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
     copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
-    ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds },
+    ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
     assign: { ok: true, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
     push: { ok: true },
     verify: { ok: pushResult.verified, actualSourceType: pushResult.actualSourceType, actualSourceId: pushResult.actualSourceId, actualPlaylistItemCount },
@@ -966,6 +1112,7 @@ export interface NowPlayingSimpleResult {
   expectedPlaylistId: string | null;
   actualSourceType: string | null;
   actualSourceId: number | null;
+  actualSourceName: string | null;
   isCorrect: boolean;
   itemCount: number;
   topItems?: string[];
@@ -1044,6 +1191,7 @@ export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPl
       expectedPlaylistId: null,
       actualSourceType: null,
       actualSourceId: null,
+      actualSourceName: null,
       isCorrect: false,
       itemCount: 0,
       error: "Screen not found",
@@ -1058,6 +1206,7 @@ export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPl
       expectedPlaylistId: screen.playlistId,
       actualSourceType: null,
       actualSourceId: null,
+      actualSourceName: null,
       isCorrect: false,
       itemCount: 0,
       error: "Screen has no yodeckPlayerId",
@@ -1077,6 +1226,7 @@ export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPl
       expectedPlaylistId: screen.playlistId,
       actualSourceType: null,
       actualSourceId: null,
+      actualSourceName: null,
       isCorrect: false,
       itemCount: 0,
       error: screenResult.error,
@@ -1098,16 +1248,20 @@ export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPl
   // Get playlist info if in playlist mode
   let itemCount = 0;
   let topItems: string[] = [];
+  let actualSourceName: string | null = null;
   
   if (actualSourceType === "playlist" && actualSourceId) {
     const playlistResult = await yodeckRequest<PlaylistResponse>(`/playlists/${actualSourceId}/`);
-    if (playlistResult.ok && playlistResult.data?.items) {
-      itemCount = playlistResult.data.items.length;
-      // Get top 5 item names
-      topItems = playlistResult.data.items
-        .slice(0, 5)
-        .map(item => item.name || `Media ${item.id}`)
-        .filter(Boolean);
+    if (playlistResult.ok && playlistResult.data) {
+      actualSourceName = playlistResult.data.name || null;
+      if (playlistResult.data.items) {
+        itemCount = playlistResult.data.items.length;
+        // Get top 5 item names
+        topItems = playlistResult.data.items
+          .slice(0, 5)
+          .map(item => item.name || `Media ${item.id}`)
+          .filter(Boolean);
+      }
     }
   }
 
@@ -1118,6 +1272,7 @@ export async function getScreenNowPlayingSimple(screenId: string): Promise<NowPl
     expectedPlaylistId: screen.playlistId,
     actualSourceType,
     actualSourceId,
+    actualSourceName,
     isCorrect,
     itemCount,
     topItems: topItems.length > 0 ? topItems : undefined,

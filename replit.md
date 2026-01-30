@@ -38,8 +38,15 @@ Authentication uses username/password with bcrypt hashing and session data store
     - `syncScreenPlaylistFromBase()`: Copies items from base playlist to screen playlist
     - `addAdsToScreenPlaylist()`: Appends ad media IDs (deduplicated)
     - `applyPlayerSourceAndPush()`: Sets player source to playlist and verifies
-    - `rebuildScreenPlaylist()`: Full rebuild: base + ads + push + verify
-    - `getScreenNowPlayingSimple()`: READ-ONLY status check
+    - `rebuildScreenPlaylist()`: Full rebuild: base + targeting-matched ads + push + verify
+    - `getScreenNowPlayingSimple()`: READ-ONLY status check (returns actualSourceType, actualSourceId, actualSourceName, isCorrect, itemCount, topItems)
+  - **Targeting-Based Ad Selection** (in `rebuildScreenPlaylist`):
+    - Uses `targetRegionCodes` (text[] array) and `targetCities` (comma-separated string) from advertisers
+    - Matches screen's location city/region against advertiser targeting with normalization
+    - Nationwide advertisers (no targeting) match ALL screens
+    - Screens without location only receive nationwide advertisers
+    - MAX_ADS_PER_SCREEN = 20 capacity limit enforced
+    - Normalization handles Dutch prefixes ('s-, 't-) and diacritics
   - **Hard Rules**:
     - `now-playing` endpoint NEVER creates playlists (read-only)
     - Only `rebuild-playlist` endpoint may create/modify playlists

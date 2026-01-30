@@ -248,33 +248,18 @@ export default function ScreenDetail() {
     },
   });
 
-  // Now playing data - single source of truth for what's actually on screen
+  // Now playing data - single source of truth for what's actually on screen (simple model)
   const { data: nowPlaying, isLoading: nowPlayingLoading, refetch: refetchNowPlaying } = useQuery<{
     ok: boolean;
-    deviceStatus: {
-      status: "ONLINE" | "OFFLINE" | "UNLINKED";
-      isOnline: boolean;
-      lastSeenAt: string | null;
-      lastScreenshotAt: string | null;
-      yodeckDeviceId: string | null;
-      yodeckDeviceName: string | null;
-      source: string;
-      fetchedAt: string;
-      error?: string;
-    };
-    playlistId: string | null;
-    playlistName: string | null;
-    expectedPlaylistName: string | null;
+    screenId: string;
+    playerId: string | null;
+    expectedPlaylistId: string | null;
+    actualSourceType: string | null;
+    actualSourceId: number | null;
+    actualSourceName: string | null;
+    isCorrect: boolean;
     itemCount: number;
-    baselineCount: number | null;
-    baselineCountUnknown?: boolean;
-    adsCount: number;
-    lastPushAt: string | null;
-    lastPushResult: string | null;
-    verificationOk: boolean;
-    mismatch: boolean;
-    mismatchLevel?: "error" | "warning" | "info";
-    mismatchReason?: string;
+    topItems?: string[];
     error?: string;
   }>({
     queryKey: ["screen-now-playing", screenId],
@@ -948,145 +933,72 @@ export default function ScreenDetail() {
                 </div>
               ) : (
                 <>
-                  {/* Device Status */}
-                  <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <div className={`p-2 rounded-full ${
-                        nowPlaying?.deviceStatus?.status === "ONLINE" ? "bg-green-100" :
-                        nowPlaying?.deviceStatus?.status === "OFFLINE" ? "bg-red-100" :
-                        "bg-gray-100"
-                      }`}>
-                        {nowPlaying?.deviceStatus?.status === "ONLINE" ? (
-                          <Wifi className="h-5 w-5 text-green-600" />
-                        ) : nowPlaying?.deviceStatus?.status === "OFFLINE" ? (
-                          <WifiOff className="h-5 w-5 text-red-600" />
-                        ) : (
-                          <Link2 className="h-5 w-5 text-gray-500" />
-                        )}
-                      </div>
-                      <div>
-                        <p className="font-medium">
-                          {nowPlaying?.deviceStatus?.status === "ONLINE" ? "Online" :
-                           nowPlaying?.deviceStatus?.status === "OFFLINE" ? "Offline" :
-                           "Niet gekoppeld"}
-                        </p>
-                        {nowPlaying?.deviceStatus?.lastSeenAt && (
-                          <p className="text-sm text-muted-foreground">
-                            Laatst gezien: {formatLastSeen(nowPlaying.deviceStatus.lastSeenAt)}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    {nowPlaying?.deviceStatus?.status === "UNLINKED" && (
-                      <Badge variant="outline" className="bg-gray-50">Yodeck niet gekoppeld</Badge>
-                    )}
-                  </div>
-
-                  {/* Playlist Info with Verification */}
-                  {nowPlaying?.deviceStatus?.status !== "UNLINKED" && (
+                  {/* Playlist Connection Status */}
+                  {nowPlaying?.ok && nowPlaying.actualSourceType === "playlist" ? (
                     <>
-                      {/* Verification Status Banner */}
-                      {nowPlaying?.verificationOk !== undefined && (
-                        <div className={`flex items-center gap-2 p-3 rounded-lg border ${
-                          nowPlaying.verificationOk 
-                            ? "bg-green-50 border-green-200" 
-                            : "bg-red-50 border-red-200"
-                        }`} data-testid="verification-status">
-                          {nowPlaying.verificationOk ? (
-                            <>
-                              <CheckCircle2 className="h-5 w-5 text-green-600" />
-                              <span className="font-medium text-green-800">Geverifieerd OK</span>
-                            </>
-                          ) : (
-                            <>
-                              <AlertCircle className="h-5 w-5 text-red-600" />
-                              <span className="font-medium text-red-800">Verificatie mislukt</span>
-                              {nowPlaying?.lastPushResult && (
-                                <span className="text-sm text-red-600 ml-2">
-                                  ({nowPlaying.lastPushResult})
-                                </span>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      )}
+                      {/* Connected - Green status banner */}
+                      <div className={`flex items-center gap-2 p-3 rounded-lg border ${
+                        nowPlaying.isCorrect 
+                          ? "bg-green-50 border-green-200" 
+                          : "bg-amber-50 border-amber-200"
+                      }`} data-testid="connection-status">
+                        {nowPlaying.isCorrect ? (
+                          <>
+                            <CheckCircle2 className="h-5 w-5 text-green-600" />
+                            <span className="font-medium text-green-800">Gekoppeld</span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertCircle className="h-5 w-5 text-amber-600" />
+                            <span className="font-medium text-amber-800">Playlist mismatch</span>
+                            <span className="text-sm text-amber-600 ml-2">
+                              (verwacht: {nowPlaying.expectedPlaylistId})
+                            </span>
+                          </>
+                        )}
+                      </div>
                       
                       <div className="grid grid-cols-2 gap-4">
                         <div className="p-3 bg-muted/30 rounded-lg">
                           <p className="text-sm text-muted-foreground">Actieve playlist</p>
-                          <p className="font-medium truncate" title={nowPlaying?.playlistName || undefined}>
-                            {nowPlaying?.playlistName || "Geen playlist"}
+                          <p className="font-medium truncate" title={nowPlaying.actualSourceName || undefined}>
+                            {nowPlaying.actualSourceName || "Onbekend"}
                           </p>
-                          {nowPlaying?.playlistId && (
-                            <p className="text-xs text-muted-foreground">ID: {nowPlaying.playlistId}</p>
-                          )}
-                          {nowPlaying?.expectedPlaylistName && nowPlaying?.playlistName !== nowPlaying.expectedPlaylistName && (
-                            <p className="text-xs text-amber-600 mt-1">
-                              Verwacht: {nowPlaying.expectedPlaylistName}
-                            </p>
-                          )}
+                          <p className="text-xs text-muted-foreground">ID: {nowPlaying.actualSourceId}</p>
                         </div>
                         <div className="p-3 bg-muted/30 rounded-lg">
                           <p className="text-sm text-muted-foreground">Content</p>
-                          <p className="font-medium">{nowPlaying?.itemCount || 0} items</p>
-                          <p className="text-xs text-muted-foreground">
-                            {nowPlaying?.baselineCountUnknown 
-                              ? `? basis + ${nowPlaying?.itemCount || 0} items` 
-                              : `${nowPlaying?.baselineCount ?? 0} basis + ${nowPlaying?.adsCount || 0} ads`}
-                          </p>
-                          {nowPlaying?.itemCount === 0 && (
+                          <p className="font-medium">{nowPlaying.itemCount || 0} items</p>
+                          {nowPlaying.itemCount === 0 && (
                             <Badge variant="destructive" className="mt-1 text-xs">LEEG!</Badge>
                           )}
                         </div>
                       </div>
                       
-                      {/* Screenshot Thumbnail + Proof Status */}
-                      <div className="border rounded-lg p-3 space-y-3">
-                        <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium">Visueel bewijs</p>
-                          {nowPlaying?.proofStatus && (
-                            <Badge 
-                              variant={nowPlaying.proofStatus.ok ? "default" : "secondary"}
-                              className={nowPlaying.proofStatus.ok ? "bg-green-600" : ""}
-                              data-testid="proof-badge"
-                            >
-                              {nowPlaying.proofStatus.ok ? "PROOF OK" : "PROOF ONVOLLEDIG"}
-                            </Badge>
-                          )}
+                      {/* Top Items List */}
+                      {nowPlaying.topItems && nowPlaying.topItems.length > 0 && (
+                        <div className="p-3 bg-muted/20 rounded-lg">
+                          <p className="text-sm text-muted-foreground mb-2">Eerste items:</p>
+                          <ul className="text-sm space-y-1">
+                            {nowPlaying.topItems.map((item, idx) => (
+                              <li key={idx} className="flex items-center gap-2">
+                                <span className="text-muted-foreground">{idx + 1}.</span>
+                                <span className="truncate">{item}</span>
+                              </li>
+                            ))}
+                          </ul>
                         </div>
-                        
-                        {(proofResult?.urlWithBuster || nowPlaying?.screenshot?.url) ? (
-                          <div className="space-y-2">
-                            <img 
-                              src={proofResult?.urlWithBuster || `${nowPlaying.screenshot.url}${nowPlaying.screenshot.url.includes('?') ? '&' : '?'}t=${Date.now()}`} 
-                              alt="Screenshot" 
-                              className="w-full max-h-48 object-contain rounded border bg-black"
-                              data-testid="screen-screenshot"
-                            />
-                            <div className="flex items-center justify-between text-xs text-muted-foreground">
-                              <span>
-                                {nowPlaying.screenshot.lastOkAt 
-                                  ? `Laatst: ${new Date(nowPlaying.screenshot.lastOkAt).toLocaleString('nl-NL')}`
-                                  : "Geen timestamp"}
-                              </span>
-                              <span>
-                                {nowPlaying.screenshot.byteSize 
-                                  ? `${Math.round((nowPlaying.screenshot.byteSize || 0) / 1024)}KB`
-                                  : ""}
-                              </span>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-center justify-center h-32 bg-muted/50 rounded border border-dashed">
-                            <span className="text-muted-foreground text-sm">Geen screenshot beschikbaar</span>
-                          </div>
-                        )}
-                        
-                        {nowPlaying?.proofStatus && !nowPlaying.proofStatus.ok && (
-                          <p className="text-xs text-amber-600">{nowPlaying.proofStatus.reason}</p>
-                        )}
-                      </div>
+                      )}
                     </>
+                  ) : (
+                    /* Not connected */
+                    <div className="flex items-center gap-2 p-3 rounded-lg border bg-gray-50 border-gray-200" data-testid="connection-status">
+                      <Link2 className="h-5 w-5 text-gray-500" />
+                      <span className="font-medium text-gray-800">Niet gekoppeld</span>
+                      {nowPlaying?.error && (
+                        <span className="text-sm text-gray-600 ml-2">({nowPlaying.error})</span>
+                      )}
+                    </div>
                   )}
 
                   {/* Mismatch/Info Messages - differentiated by level */}
