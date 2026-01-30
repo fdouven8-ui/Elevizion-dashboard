@@ -246,13 +246,19 @@ export async function getBasePlaylistId(): Promise<BasePlaylistResult> {
   cachedBasePlaylistId = exactMatch.id;
   cacheExpiry = now + CACHE_TTL_MS;
   
-  console.log(`${LOG_PREFIX} Found basePlaylistId=${exactMatch.id} "${exactMatch.name}"`);
+  // Fetch full playlist to get item count
+  const fullPlaylist = await yodeckRequest<{ id: number; name: string; items: any[] }>(
+    `/playlists/${exactMatch.id}/`
+  );
+  const itemCount = fullPlaylist.ok && fullPlaylist.data?.items ? fullPlaylist.data.items.length : 0;
+  
+  console.log(`${LOG_PREFIX} Found basePlaylistId=${exactMatch.id} "${exactMatch.name}" with ${itemCount} items`);
   
   return { 
     ok: true, 
     basePlaylistId: exactMatch.id, 
     basePlaylistName: exactMatch.name,
-    itemCount: 0 
+    itemCount 
   };
 }
 
@@ -325,11 +331,15 @@ export async function ensureScreenPlaylist(
   }
 
   // 3. Create new playlist
+  // CRITICAL: Yodeck API v2 requires "items" field (empty array is fine)
   console.log(`${LOG_PREFIX} Creating new playlist: "${canonicalName}"`);
   
   const createResult = await yodeckRequest<{ id: number; name: string }>("/playlists/", "POST", {
     name: canonicalName,
     description: `Screen playlist for player ${playerId}`,
+    items: [],  // Required by Yodeck API v2
+    add_gaps: false,
+    shuffle_content: false,
   });
 
   if (!createResult.ok || !createResult.data?.id) {
@@ -362,6 +372,20 @@ export interface SyncFromBaseResult {
   error?: string;
 }
 
+interface PlaylistItem {
+  id: number;
+  priority: number;
+  duration: number;
+  name: string;
+  type: "media" | "widget" | "layout" | "playlist";
+}
+
+interface PlaylistResponse {
+  id: number;
+  name: string;
+  items: PlaylistItem[];
+}
+
 export async function syncScreenPlaylistFromBase(screenPlaylistId: number): Promise<SyncFromBaseResult> {
   console.log(`${LOG_PREFIX} Syncing playlist ${screenPlaylistId} from base...`);
   
@@ -376,49 +400,54 @@ export async function syncScreenPlaylistFromBase(screenPlaylistId: number): Prom
     };
   }
 
-  // 2. Fetch items from base playlist
-  const baseItemsResult = await yodeckRequest<{ count: number; results: Array<{ media: number; duration: number }> }>(
-    `/playlists/${baseResult.basePlaylistId}/items/`
+  // 2. Fetch base playlist (items are included in response, not separate endpoint)
+  const basePlaylistResult = await yodeckRequest<PlaylistResponse>(
+    `/playlists/${baseResult.basePlaylistId}/`
   );
 
-  if (!baseItemsResult.ok || !baseItemsResult.data) {
+  if (!basePlaylistResult.ok || !basePlaylistResult.data) {
     return { 
       ok: false, 
       baseMediaIds: [], 
       itemsReplaced: 0,
-      error: baseItemsResult.error || "Failed to fetch base playlist items" 
+      error: basePlaylistResult.error || "Failed to fetch base playlist" 
     };
   }
 
-  const baseItems = baseItemsResult.data.results || [];
-  const baseMediaIds = baseItems.map(item => item.media);
+  const baseItems = basePlaylistResult.data.items || [];
+  // The item.id is the playlist item ID, not the media ID
+  // We need to copy the item structure to the screen playlist
+  const baseMediaIds = baseItems.map(item => item.id);
   
-  console.log(`${LOG_PREFIX} Base playlist has ${baseItems.length} items: ${baseMediaIds.join(", ")}`);
+  console.log(`${LOG_PREFIX} Base playlist has ${baseItems.length} items: ${baseItems.map(i => `${i.name}(${i.id})`).join(", ")}`);
 
-  // 3. Clear current screen playlist items
-  const currentItemsResult = await yodeckRequest<{ count: number; results: Array<{ id: number; media: number }> }>(
-    `/playlists/${screenPlaylistId}/items/`
+  // 3. Get current screen playlist
+  const currentPlaylistResult = await yodeckRequest<PlaylistResponse>(
+    `/playlists/${screenPlaylistId}/`
   );
 
-  if (currentItemsResult.ok && currentItemsResult.data) {
-    for (const item of currentItemsResult.data.results || []) {
-      await yodeckRequest(`/playlists/${screenPlaylistId}/items/${item.id}/`, "DELETE");
-    }
-    console.log(`${LOG_PREFIX} Cleared ${currentItemsResult.data.results?.length || 0} existing items`);
-  }
-
-  // 4. Add base items to screen playlist
-  for (const item of baseItems) {
-    const addResult = await yodeckRequest(`/playlists/${screenPlaylistId}/items/`, "POST", {
-      media: item.media,
+  // 4. Replace screen playlist items with base items
+  // Use PATCH to replace the entire items array
+  const patchResult = await yodeckRequest(`/playlists/${screenPlaylistId}/`, "PATCH", {
+    items: baseItems.map((item, index) => ({
+      id: item.id,  // Keep the media/widget ID reference
+      priority: index + 1,
       duration: item.duration || 10,
-    });
-    if (!addResult.ok) {
-      console.warn(`${LOG_PREFIX} Failed to add media ${item.media}: ${addResult.error}`);
-    }
+      type: item.type,
+    })),
+  });
+
+  if (!patchResult.ok) {
+    console.error(`${LOG_PREFIX} Failed to patch playlist items: ${patchResult.error}`);
+    return { 
+      ok: false, 
+      baseMediaIds: [], 
+      itemsReplaced: 0,
+      error: patchResult.error || "Failed to replace playlist items" 
+    };
   }
 
-  console.log(`${LOG_PREFIX} Added ${baseItems.length} base items to playlist ${screenPlaylistId}`);
+  console.log(`${LOG_PREFIX} Replaced items in playlist ${screenPlaylistId} with ${baseItems.length} base items`);
   
   return { 
     ok: true, 
@@ -438,49 +467,67 @@ export async function addAdsToScreenPlaylist(
   screenPlaylistId: number, 
   adMediaIds: number[]
 ): Promise<AddAdsResult> {
+  // Get current playlist with items
+  const playlistResult = await yodeckRequest<PlaylistResponse>(
+    `/playlists/${screenPlaylistId}/`
+  );
+
+  if (!playlistResult.ok || !playlistResult.data) {
+    return { ok: false, adsAdded: 0, finalCount: 0, error: "Failed to fetch current playlist" };
+  }
+
+  const currentItems = playlistResult.data.items || [];
+  const existingIds = new Set(currentItems.map(item => item.id));
+  
   if (adMediaIds.length === 0) {
-    console.log(`${LOG_PREFIX} No ads to add`);
-    return { ok: true, adsAdded: 0, finalCount: 0 };
+    console.log(`${LOG_PREFIX} No ads to add, playlist has ${currentItems.length} items`);
+    return { ok: true, adsAdded: 0, finalCount: currentItems.length };
   }
 
   console.log(`${LOG_PREFIX} Adding ${adMediaIds.length} ads to playlist ${screenPlaylistId}`);
 
-  // Get current items to check for duplicates
-  const currentItemsResult = await yodeckRequest<{ count: number; results: Array<{ id: number; media: number }> }>(
-    `/playlists/${screenPlaylistId}/items/`
-  );
-
-  const existingMediaIds = new Set(
-    (currentItemsResult.data?.results || []).map(item => item.media)
-  );
-
-  let adsAdded = 0;
-  for (const mediaId of adMediaIds) {
-    if (existingMediaIds.has(mediaId)) {
-      console.log(`${LOG_PREFIX} Media ${mediaId} already in playlist, skipping`);
-      continue;
-    }
-
-    const addResult = await yodeckRequest(`/playlists/${screenPlaylistId}/items/`, "POST", {
-      media: mediaId,
-      duration: 15, // Default ad duration
-    });
-
-    if (addResult.ok) {
-      adsAdded++;
-      console.log(`${LOG_PREFIX} Added ad media ${mediaId}`);
-    } else {
-      console.warn(`${LOG_PREFIX} Failed to add ad media ${mediaId}: ${addResult.error}`);
-    }
+  // Filter out duplicates
+  const newAdIds = adMediaIds.filter(id => !existingIds.has(id));
+  const duplicateCount = adMediaIds.length - newAdIds.length;
+  
+  if (duplicateCount > 0) {
+    console.log(`${LOG_PREFIX} Skipping ${duplicateCount} ads already in playlist`);
   }
 
-  // Get final count
-  const finalItemsResult = await yodeckRequest<{ count: number }>(`/playlists/${screenPlaylistId}/items/`);
-  const finalCount = finalItemsResult.data?.count || 0;
+  if (newAdIds.length === 0) {
+    console.log(`${LOG_PREFIX} All ads already in playlist`);
+    return { ok: true, adsAdded: 0, finalCount: currentItems.length };
+  }
 
-  console.log(`${LOG_PREFIX} Added ${adsAdded} ads, final playlist count: ${finalCount}`);
+  // Build new items array: keep base items + add new ads
+  const newItems = [
+    ...currentItems.map((item, index) => ({
+      id: item.id,
+      priority: index + 1,
+      duration: item.duration || 10,
+      type: item.type,
+    })),
+    ...newAdIds.map((mediaId, index) => ({
+      id: mediaId,  // Media ID to add
+      priority: currentItems.length + index + 1,
+      duration: 15,  // Default ad duration
+      type: "media" as const,
+    })),
+  ];
+
+  // PATCH the playlist with updated items
+  const patchResult = await yodeckRequest(`/playlists/${screenPlaylistId}/`, "PATCH", {
+    items: newItems,
+  });
+
+  if (!patchResult.ok) {
+    console.error(`${LOG_PREFIX} Failed to add ads: ${patchResult.error}`);
+    return { ok: false, adsAdded: 0, finalCount: currentItems.length, error: patchResult.error };
+  }
+
+  console.log(`${LOG_PREFIX} Added ${newAdIds.length} ads, final playlist has ${newItems.length} items`);
   
-  return { ok: true, adsAdded, finalCount };
+  return { ok: true, adsAdded: newAdIds.length, finalCount: newItems.length };
 }
 
 export interface ApplyAndPushResult {
@@ -498,29 +545,41 @@ export async function applyPlayerSourceAndPush(
 ): Promise<ApplyAndPushResult> {
   console.log(`${LOG_PREFIX} Applying playlist ${screenPlaylistId} to player ${playerId}...`);
 
-  // 1. Set player content source to playlist
+  // 1. Set player content source to playlist using screen_content wrapper
+  // CRITICAL: Yodeck API v2 requires screen_content object, not top-level fields
   const patchResult = await yodeckRequest(`/screens/${playerId}/`, "PATCH", {
-    source_type: "playlist",
-    source_id: screenPlaylistId,
+    screen_content: {
+      source_type: "playlist",
+      source_id: screenPlaylistId,
+    },
   });
 
   if (!patchResult.ok) {
+    console.error(`${LOG_PREFIX} PATCH failed for player ${playerId}: ${patchResult.error}`);
     return { 
       ok: false, 
       pushed: false, 
       verified: false,
       actualSourceType: null,
       actualSourceId: null,
-      error: patchResult.error 
+      error: `PATCH failed: ${patchResult.error}` 
     };
   }
 
-  console.log(`${LOG_PREFIX} Set player ${playerId} source to playlist ${screenPlaylistId}`);
+  console.log(`${LOG_PREFIX} PATCH OK - set player ${playerId} source to playlist ${screenPlaylistId}`);
 
   // 2. Verify by reading player status
-  const verifyResult = await yodeckRequest<{ source_type: string; source_id: number }>(
-    `/screens/${playerId}/`
-  );
+  interface ScreenResponse {
+    id: number;
+    name: string;
+    screen_content?: {
+      source_type: string | null;
+      source_id: number | null;
+      source_name: string | null;
+    };
+  }
+  
+  const verifyResult = await yodeckRequest<ScreenResponse>(`/screens/${playerId}/`);
 
   if (!verifyResult.ok || !verifyResult.data) {
     return { 
@@ -533,11 +592,16 @@ export async function applyPlayerSourceAndPush(
     };
   }
 
-  const actualSourceType = verifyResult.data.source_type;
-  const actualSourceId = verifyResult.data.source_id;
+  // Extract from screen_content object
+  const actualSourceType = verifyResult.data.screen_content?.source_type || null;
+  const actualSourceId = verifyResult.data.screen_content?.source_id || null;
   const verified = actualSourceType === "playlist" && actualSourceId === screenPlaylistId;
 
   console.log(`${LOG_PREFIX} Verify: source_type=${actualSourceType}, source_id=${actualSourceId}, correct=${verified}`);
+
+  if (!verified) {
+    console.error(`${LOG_PREFIX} Verification FAILED: expected playlist ${screenPlaylistId}, got ${actualSourceType}/${actualSourceId}`);
+  }
 
   return { 
     ok: verified, 
@@ -551,174 +615,205 @@ export async function applyPlayerSourceAndPush(
 
 export interface RebuildPlaylistResult {
   ok: boolean;
+  correlationId: string;
   screenId: string;
-  playerId: string | null;
-  basePlaylistId: number | null;
-  screenPlaylistId: number | null;
-  baseCount: number;
-  adsCount: number;
-  finalCount: number;
-  verifyOk: boolean;
+  base: {
+    found: boolean;
+    basePlaylistId: number | null;
+    baseItemCount: number;
+  };
+  screenPlaylist: {
+    existed: boolean;
+    created: boolean;
+    screenPlaylistId: number | null;
+    screenPlaylistName: string | null;
+  };
+  copy: {
+    ok: boolean;
+    copiedCount: number;
+  };
+  ads: {
+    candidates: number;
+    included: number;
+    skipped: Array<{ reason: string; advertiserId: string }>;
+  };
+  assign: {
+    ok: boolean;
+    screenSourceType: string | null;
+    screenSourceId: number | null;
+  };
+  push: {
+    ok: boolean;
+  };
+  verify: {
+    ok: boolean;
+    actualSourceType: string | null;
+    actualSourceId: number | null;
+    actualPlaylistItemCount: number;
+  };
+  error: { step: string; message: string } | null;
   actions: string[];
-  error?: string;
 }
 
 export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPlaylistResult> {
   const correlationId = `rebuild_${screenId}_${Date.now()}`;
   const actions: string[] = [];
+  const skippedAds: Array<{ reason: string; advertiserId: string }> = [];
+  
+  // Helper to create error response
+  const errorResponse = (step: string, message: string, partial: Partial<RebuildPlaylistResult> = {}): RebuildPlaylistResult => ({
+    ok: false,
+    correlationId,
+    screenId,
+    base: { found: false, basePlaylistId: null, baseItemCount: 0 },
+    screenPlaylist: { existed: false, created: false, screenPlaylistId: null, screenPlaylistName: null },
+    copy: { ok: false, copiedCount: 0 },
+    ads: { candidates: 0, included: 0, skipped: skippedAds },
+    assign: { ok: false, screenSourceType: null, screenSourceId: null },
+    push: { ok: false },
+    verify: { ok: false, actualSourceType: null, actualSourceId: null, actualPlaylistItemCount: 0 },
+    error: { step, message },
+    actions,
+    ...partial,
+  });
   
   console.log(`${LOG_PREFIX} [${correlationId}] Starting rebuild for screen ${screenId}`);
-  actions.push(`Starting rebuild for screen ${screenId}`);
+  actions.push(`[${correlationId}] Starting rebuild for screen ${screenId}`);
 
   // 1. Get screen
   const screen = await storage.getScreen(screenId);
   if (!screen) {
-    return {
-      ok: false,
-      screenId,
-      playerId: null,
-      basePlaylistId: null,
-      screenPlaylistId: null,
-      baseCount: 0,
-      adsCount: 0,
-      finalCount: 0,
-      verifyOk: false,
-      actions,
-      error: "Screen not found",
-    };
+    actions.push(`ERROR: Screen not found`);
+    return errorResponse("get_screen", "Screen not found");
   }
 
   if (!screen.yodeckPlayerId) {
-    return {
-      ok: false,
-      screenId,
-      playerId: null,
-      basePlaylistId: null,
-      screenPlaylistId: null,
-      baseCount: 0,
-      adsCount: 0,
-      finalCount: 0,
-      verifyOk: false,
-      actions,
-      error: "Screen has no yodeckPlayerId",
-    };
+    actions.push(`ERROR: Screen has no yodeckPlayerId`);
+    return errorResponse("get_screen", "Screen has no yodeckPlayerId");
   }
 
   const playerId = screen.yodeckPlayerId;
   actions.push(`Player ID: ${playerId}`);
 
   // 2. Get base playlist
+  actions.push(`Step 2: Finding base playlist "${BASE_PLAYLIST_NAME}"...`);
   const baseResult = await getBasePlaylistId();
   if (!baseResult.ok || !baseResult.basePlaylistId) {
-    actions.push(`Base playlist error: ${baseResult.error}`);
-    return {
-      ok: false,
-      screenId,
-      playerId,
-      basePlaylistId: null,
-      screenPlaylistId: null,
-      baseCount: 0,
-      adsCount: 0,
-      finalCount: 0,
-      verifyOk: false,
-      actions,
-      error: baseResult.error,
-    };
+    actions.push(`ERROR: Base playlist not found: ${baseResult.error}`);
+    return errorResponse("get_base_playlist", baseResult.error || "BASE_PLAYLIST_NOT_FOUND");
   }
-  actions.push(`Base playlist: ${baseResult.basePlaylistId}`);
+  actions.push(`Base playlist found: id=${baseResult.basePlaylistId}, items=${baseResult.itemCount}`);
 
   // 3. Ensure screen playlist
+  const screenPlaylistName = `EVZ | SCREEN | ${playerId}`;
+  actions.push(`Step 3: Ensuring screen playlist "${screenPlaylistName}"...`);
   const ensureResult = await ensureScreenPlaylist(screen);
   if (!ensureResult.ok || !ensureResult.screenPlaylistId) {
-    actions.push(`Ensure playlist error: ${ensureResult.error}`);
-    return {
-      ok: false,
-      screenId,
-      playerId,
-      basePlaylistId: baseResult.basePlaylistId,
-      screenPlaylistId: null,
-      baseCount: 0,
-      adsCount: 0,
-      finalCount: 0,
-      verifyOk: false,
-      actions,
-      error: ensureResult.error,
-    };
+    actions.push(`ERROR: Failed to ensure screen playlist: ${ensureResult.error}`);
+    return errorResponse("ensure_screen_playlist", ensureResult.error || "Failed to ensure screen playlist", {
+      base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
+    });
   }
-  actions.push(`Screen playlist: ${ensureResult.screenPlaylistId} (created: ${ensureResult.wasCreated})`);
+  actions.push(`Screen playlist: id=${ensureResult.screenPlaylistId} (existed=${!ensureResult.wasCreated}, created=${ensureResult.wasCreated})`);
 
   // 4. Sync from base
+  actions.push(`Step 4: Copying items from base playlist...`);
   const syncResult = await syncScreenPlaylistFromBase(ensureResult.screenPlaylistId);
   if (!syncResult.ok) {
-    actions.push(`Sync error: ${syncResult.error}`);
-    return {
-      ok: false,
-      screenId,
-      playerId,
-      basePlaylistId: baseResult.basePlaylistId,
-      screenPlaylistId: ensureResult.screenPlaylistId,
-      baseCount: 0,
-      adsCount: 0,
-      finalCount: 0,
-      verifyOk: false,
-      actions,
-      error: syncResult.error,
-    };
+    actions.push(`ERROR: Failed to sync from base: ${syncResult.error}`);
+    return errorResponse("copy_base_items", syncResult.error || "Failed to copy base items", {
+      base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
+      screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
+    });
   }
-  actions.push(`Synced ${syncResult.baseMediaIds.length} base items`);
+  actions.push(`Copied ${syncResult.baseMediaIds.length} base items`);
 
   // 5. Collect ad media IDs for this screen
+  actions.push(`Step 5: Collecting approved advertiser ads...`);
   const adMediaIds: number[] = [];
   const advertisers = await storage.getAdvertisers();
+  let adCandidates = 0;
   
   for (const advertiser of advertisers) {
     // Check status
-    if (!["approved", "ready_for_yodeck", "ready_for_publish"].includes(advertiser.assetStatus || "")) {
+    const status = advertiser.assetStatus || "";
+    if (!["approved", "ready_for_yodeck", "ready_for_publish"].includes(status)) {
       continue;
     }
     
+    adCandidates++;
+    
     // Check if has canonical media ID
     if (!advertiser.yodeckMediaIdCanonical) {
-      actions.push(`Advertiser ${advertiser.id} has no yodeckMediaIdCanonical, skipping`);
+      skippedAds.push({ reason: "no_yodeck_media_id", advertiserId: advertiser.id });
+      actions.push(`Skipped advertiser ${advertiser.id}: no yodeckMediaIdCanonical`);
       continue;
     }
 
-    // Simple targeting: include all approved ads for now
-    // TODO: Add proper targeting based on location/city/region
     const mediaId = advertiser.yodeckMediaIdCanonical;
     adMediaIds.push(mediaId);
     actions.push(`Including ad from advertiser ${advertiser.id}: mediaId=${mediaId}`);
   }
+  actions.push(`Ads: ${adCandidates} candidates, ${adMediaIds.length} included, ${skippedAds.length} skipped`);
 
-  // 6. Add ads
+  // 6. Add ads to playlist
+  actions.push(`Step 6: Adding ${adMediaIds.length} ads to screen playlist...`);
   const addAdsResult = await addAdsToScreenPlaylist(ensureResult.screenPlaylistId, adMediaIds);
-  actions.push(`Added ${addAdsResult.adsAdded} ads`);
+  actions.push(`Added ${addAdsResult.adsAdded} new ads, final playlist has ${addAdsResult.finalCount} items`);
 
-  // 7. Apply and push
+  // 7. Assign screen content source to playlist (CRITICAL STEP)
+  actions.push(`Step 7: Assigning screen content to playlist ${ensureResult.screenPlaylistId}...`);
   const pushResult = await applyPlayerSourceAndPush(playerId, ensureResult.screenPlaylistId);
-  actions.push(`Push: ${pushResult.pushed ? "OK" : "FAILED"}, Verify: ${pushResult.verified ? "OK" : "FAILED"}`);
-
+  
   if (!pushResult.ok) {
-    actions.push(`Push/verify error: ${pushResult.error}`);
+    actions.push(`ERROR: Assign/push failed: ${pushResult.error}`);
+    return {
+      ok: false,
+      correlationId,
+      screenId,
+      base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
+      screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
+      copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
+      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds },
+      assign: { ok: false, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
+      push: { ok: pushResult.pushed },
+      verify: { ok: false, actualSourceType: pushResult.actualSourceType, actualSourceId: pushResult.actualSourceId, actualPlaylistItemCount: addAdsResult.finalCount },
+      error: { step: "assign_screen", message: pushResult.error || "Failed to assign screen content" },
+      actions,
+    };
   }
+  actions.push(`Assign OK: source_type=${pushResult.actualSourceType}, source_id=${pushResult.actualSourceId}`);
 
-  // 8. Update screen DB
+  // 8. Verify final state
+  actions.push(`Step 8: Verifying final state...`);
+  const verifyPlaylistResult = await yodeckRequest<PlaylistResponse>(`/playlists/${ensureResult.screenPlaylistId}/`);
+  const actualPlaylistItemCount = verifyPlaylistResult.ok && verifyPlaylistResult.data?.items 
+    ? verifyPlaylistResult.data.items.length 
+    : 0;
+  actions.push(`Final verification: playlist has ${actualPlaylistItemCount} items, screen content correctly assigned`);
+
+  // 9. Update screen DB
   await db.update(screens).set({
     playlistId: String(ensureResult.screenPlaylistId),
     playbackMode: "playlist",
     lastPushAt: new Date(),
   }).where(eq(screens.id, screenId));
+  actions.push(`DB updated: playlistId=${ensureResult.screenPlaylistId}, playbackMode=playlist`);
+
+  console.log(`${LOG_PREFIX} [${correlationId}] Rebuild complete: ok=true, verify=${pushResult.verified}`);
 
   return {
-    ok: pushResult.verified,
+    ok: true,
+    correlationId,
     screenId,
-    playerId,
-    basePlaylistId: baseResult.basePlaylistId,
-    screenPlaylistId: ensureResult.screenPlaylistId,
-    baseCount: syncResult.baseMediaIds.length,
-    adsCount: adMediaIds.length,
-    finalCount: addAdsResult.finalCount,
-    verifyOk: pushResult.verified,
+    base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
+    screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
+    copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
+    ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds },
+    assign: { ok: true, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
+    push: { ok: true },
+    verify: { ok: pushResult.verified, actualSourceType: pushResult.actualSourceType, actualSourceId: pushResult.actualSourceId, actualPlaylistItemCount },
+    error: null,
     actions,
   };
 }

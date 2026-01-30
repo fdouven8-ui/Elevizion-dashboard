@@ -1,0 +1,107 @@
+The simple playlist model is conceptually correct, but in Yodeck UI the screen shows:
+Screen Content: "No Content Assigned"
+and the screen playlist is not created/filled/pushed.
+
+We must fix rebuild-playlist so it ALWAYS does these steps and verifies each one:
+
+REQUIRED BEHAVIOR
+For POST /api/admin/screens/:screenId/rebuild-playlist:
+1) Find base playlist by exact name: "Basis playlist"
+2) Ensure screen playlist exists: "EVZ | SCREEN | <playerId>" (max 1 per screen)
+3) Copy all items from base playlist into screen playlist (replace, preserve order)
+4) Ensure advertiser media exists in Yodeck (upload/convert if needed) -> advertiser.yodeckMediaIdCanonical
+5) Append ad mediaIds to screen playlist (dedupe)
+6) Assign the screen's content source to the screen playlist
+7) Push to the screen
+8) Verify by reading back Yodeck:
+   - screen content is assigned to that playlist
+   - playlist contains >= baseCount items
+Return detailed diagnostics for each step.
+
+CRITICAL: DO NOT claim "push ok" unless verification passes.
+
+IMPLEMENTATION DETAILS
+
+A) Add correlationId for every rebuild call.
+Log each step with:
+- ok boolean
+- ids (basePlaylistId, screenPlaylistId, yodeckPlayerId)
+- counts
+- yodeck endpoint used + status code (no secrets)
+
+B) Make rebuild-playlist return JSON like:
+{
+  correlationId,
+  base: {found, basePlaylistId, baseItemCount},
+  screenPlaylist: {existed, created, screenPlaylistId, screenPlaylistName},
+  copy: {ok, copiedCount},
+  ads: {candidates, included, skipped:[{reason, advertiserId}]},
+  assign: {ok, screenSourceType, screenSourceId},
+  push: {ok},
+  verify: {ok, actualSourceType, actualSourceId, actualPlaylistItemCount},
+  error: null | {step, message}
+}
+
+C) Verify base playlist retrieval works
+Implement getBasePlaylistId() that searches playlists and matches EXACT name "Basis playlist".
+If not found -> fail with BASE_PLAYLIST_NOT_FOUND.
+
+D) Screen playlist creation must be strict
+- If DB has screen.playlistId: use it, verify it exists in Yodeck. If missing -> recreate and update DB.
+- If DB does NOT have it: create it and store.
+Do NOT create any COMBINED/ADS/BASELINE playlists.
+
+E) Copy items from base playlist
+Implement:
+- yodeck.getPlaylistItems(basePlaylistId)
+- yodeck.replacePlaylistItems(screenPlaylistId, itemsFromBase)
+If base has mixed types (media/apps/web): preserve item objects exactly.
+
+F) Assign screen content to playlist (THIS is the likely missing step)
+Right now the UI shows "No Content Assigned", so we must explicitly set the screen content source.
+Implement a function:
+assignScreenToPlaylist(yodeckPlayerId, screenPlaylistId)
+
+Use Yodeck v2 API fields:
+- set "source_type": "playlist"
+- set "source_id": <screenPlaylistId>
+or whatever the correct v2 screen update endpoint expects.
+
+After assigning, immediately GET the screen details and confirm source_type/source_id match.
+
+G) Push to screen
+Call the correct Yodeck endpoint to push content to the specific player.
+After push, verify with GET screen/player that content status updated and source still matches.
+
+H) Ads / upload conversion
+Current data shows advertiser.yodeckMediaIdCanonical may be null.
+If advertiser is ready_for_yodeck and has uploaded asset in our storage:
+- run ensureAdvertiserMediaUploaded(advertiserId)
+- this function must:
+  - if video needs remux/transcode to H264 mp4, do it automatically
+  - upload to Yodeck and capture mediaId
+  - persist advertiser.yodeckMediaIdCanonical
+Only include ads with a mediaId.
+
+I) Workspace mismatch protection
+Add baseUrl + workspace/account identifier into auth-status and also into rebuild response.
+Also add an endpoint:
+GET /api/admin/yodeck/whoami (or list workspaces if available)
+so we can confirm API points to the same account as the UI.
+
+J) Fail loudly
+If ANY Yodeck call returns non-2xx, rebuild must return ok:false with error.step and include response body snippet.
+
+FILES TO CHECK/UPDATE
+- server/services/simplePlaylistModel.ts (rebuild implementation)
+- server/services/yodeckClient.ts (ensure all calls go through same client)
+- server/routes/admin.ts (rebuild route)
+- any existing yodeck screen update function (must support assigning playlist)
+
+DELIVERABLES
+1) Fix rebuild-playlist end-to-end.
+2) Confirm in Yodeck UI the screen no longer shows "No Content Assigned" and instead shows the screen playlist.
+3) Confirm screen playlist contains base items.
+4) Confirm push happens.
+5) Provide example rebuild response JSON showing verify.ok=true.
+Proceed now.
