@@ -700,7 +700,8 @@ export async function approveAsset(
       console.log(`[VideoReviewApprove] ${approveCorrelationId} Asset has no yodeckMediaId, triggering media pipeline`);
       try {
         const { validateAdvertiserMedia } = await import('./mediaPipelineService');
-        const result = await validateAdvertiserMedia(asset.advertiserId);
+        // Pass correlationId through to pipeline for end-to-end tracing
+        const result = await validateAdvertiserMedia(asset.advertiserId, approveCorrelationId);
         
         pipelineResult = {
           correlationId: result.correlationId,
@@ -714,8 +715,8 @@ export async function approveAsset(
           if (processedAsset?.yodeckMediaId) {
             effectiveYodeckMediaId = processedAsset.yodeckMediaId;
             pipelineResult.yodeckMediaId = processedAsset.yodeckMediaId;
-            pipelineResult.status = processedAsset.status;
-            console.log(`[MediaBridge] ${approveCorrelationId} createdAssetId=${assetId} status=${processedAsset.status} yodeckMediaId=${effectiveYodeckMediaId}`);
+            pipelineResult.status = processedAsset.newStatus;
+            console.log(`[MediaBridge] ${approveCorrelationId} createdAssetId=${assetId} status=${processedAsset.newStatus} yodeckMediaId=${effectiveYodeckMediaId}`);
           } else {
             console.warn(`[MediaBridge] ${approveCorrelationId} Asset ${assetId} not found in pipeline results, assets: ${result.assets.map(a => a.id).join(', ')}`);
           }
@@ -724,8 +725,8 @@ export async function approveAsset(
         if (result.failedCount > 0) {
           console.warn(`[MediaBridge] ${approveCorrelationId} Pipeline had ${result.failedCount} failures`);
           for (const assetResult of result.assets) {
-            if (assetResult.status === 'REJECTED' || assetResult.error) {
-              console.warn(`[MediaBridge] ${approveCorrelationId} Asset ${assetResult.id} failed: ${assetResult.error || assetResult.rejectReason}`);
+            if (assetResult.newStatus === 'REJECTED' || assetResult.error) {
+              console.warn(`[MediaBridge] ${approveCorrelationId} Asset ${assetResult.id} failed: ${assetResult.error || 'unknown'}`);
             }
           }
         }
@@ -739,12 +740,19 @@ export async function approveAsset(
     // CANONICAL PLAYLIST PUBLISHING: Add to location canonical playlists
     let canonicalPublishResult: { success: boolean; locationsUpdated: number; errors: string[] } | null = null;
     try {
-      const { publishApprovedVideoToLocations } = await import('./canonicalBroadcastService');
+      const { publishApprovedAdToAllLocations } = await import('./yodeckAutopilotService');
       
       // Only publish if the asset has a Yodeck media ID (either existing or from pipeline)
       if (effectiveYodeckMediaId) {
-        console.log(`[AutoPublish] ${approveCorrelationId} Starting canonical publish with yodeckMediaId=${effectiveYodeckMediaId}`);
-        canonicalPublishResult = await publishApprovedVideoToLocations(effectiveYodeckMediaId, asset.advertiserId);
+        console.log(`[AutoPublish] ${approveCorrelationId} Starting canonical publish for assetId=${assetId} with yodeckMediaId=${effectiveYodeckMediaId}`);
+        const autopilotResult = await publishApprovedAdToAllLocations(assetId);
+        
+        // Map autopilot result to our expected format
+        canonicalPublishResult = {
+          success: autopilotResult.ok,
+          locationsUpdated: autopilotResult.locationsSuccess,
+          errors: autopilotResult.locationsFailed > 0 ? [`${autopilotResult.locationsFailed} location(s) failed`] : [],
+        };
         
         if (canonicalPublishResult.success) {
           console.log(`[AutoPublish] ${approveCorrelationId} outcome=SUCCESS locationsUpdated=${canonicalPublishResult.locationsUpdated}`);

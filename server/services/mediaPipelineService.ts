@@ -326,8 +326,9 @@ async function uploadToYodeck(
   }
 }
 
-export async function validateAdvertiserMedia(advertiserId: string): Promise<ValidationResult> {
-  const correlationId = `VAL-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
+export async function validateAdvertiserMedia(advertiserId: string, externalCorrelationId?: string): Promise<ValidationResult> {
+  // Use external correlationId if provided (for tracing from approve flow), otherwise generate one
+  const correlationId = externalCorrelationId || `VAL-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
   const logs: PipelineLog[] = [];
   const assetActions: AssetAction[] = [];
 
