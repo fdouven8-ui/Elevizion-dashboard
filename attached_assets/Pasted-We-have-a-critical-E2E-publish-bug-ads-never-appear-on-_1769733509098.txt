@@ -1,0 +1,60 @@
+We have a critical E2E publish bug: ads never appear on the screen playlist.
+
+Evidence (from /api/admin/approved-ads response):
+- logs: "Geen plaatsingen ... fallback naar globale approved ads" => placements table is empty, so publish-now resolves NO_TARGETS and does nothing.
+- approved ad 1 has yodeckMediaId=27476083, but that mediaId is clearly baseline content ("NOS algemeen nieuws") currently on the screen playlist. This means we are persisting the WRONG Yodeck mediaId for the advertiser asset (collision with baseline media). approved ad 2 has yodeckMediaId=null.
+
+Goal:
+1) Make targets resolvable even when placements are missing (at least in TEST_MODE), AND
+2) Fix Yodeck media mapping so an advertiser asset can NEVER point to an unrelated baseline mediaId,
+3) Ensure publish actually inserts the correct ad media into the effective playlist (screen_content.source_id), then pushes + verifies adsCount>0.
+
+Implement the following safely (do not break existing flows):
+
+A) Hard sanity checks when saving yodeckMediaId for an advertiser asset
+- Whenever we upload an asset to Yodeck and receive mediaId, immediately fetch Yodeck media details (name, filesize, status if available).
+- Persist yodeckMediaId ONLY if:
+  - filesize > 0
+  - name matches expected naming convention containing advertiser linkKey OR storedFilename (or we set the name ourselves deterministically during creation).
+- If mediaId does not match, mark asset as NEEDS_REUPLOAD / INVALID_MAPPING, and do NOT overwrite canonical id.
+- Add a one-time migration/repair check: if any approved asset has yodeckMediaId that matches one of the baseline mediaIds currently assigned to any screen playlist, treat it as INVALID_MAPPING and force re-upload to a new mediaId.
+
+B) Make publish targets resolvable even without placements (TEST_MODE fallback)
+- In publishNow(advertiserId, optional targetYodeckPlayerIds):
+  - First try normal: resolve targets via placements/contracts (production logic).
+  - If none found AND TEST_MODE=true:
+    - Fallback to advertiser's targeting (targetRegionCodes/targetCities) and resolve matching screens/locations that are readyForAds=true and yodeckDeviceId exists.
+    - If still none, as last resort for testing, allow explicit targetYodeckPlayerIds from request body.
+  - Return trace step RESOLVE_TARGETS with details: why placements were empty, what fallback used, how many targets found.
+
+C) Deterministic playlist update & verify
+- For each target screen:
+  - Resolve effective playlist from Yodeck screen content (source_type/source_id). Use that playlistId.
+  - Update playlist:
+    - Remove duplicates of the ad mediaId (if any).
+    - Insert ad mediaId (ensure it is categorized as ad in our local currentContent, but do not depend on tags endpoint).
+  - Push screen content (or "save & push" API equivalent).
+  - Verify via our existing now-playing endpoint that adsCount > 0 and that the ad mediaId is present in playlist items. Retry a few times with backoff.
+
+D) Add two debugging endpoints + UI surfacing (minimal)
+1) GET /api/admin/advertisers/:id/publish-dry-run
+   - returns the trace JSON without mutating Yodeck, so we can see where it would fail (asset id, yodeckMediaId, targets, playlistId).
+2) POST /api/admin/advertisers/:id/publish-now already exists; ensure it returns the full trace and also logs correlationId server-side.
+
+E) Update /api/admin/approved-ads response to include mapping health
+- For each ad in response, include:
+  - mappingHealth: OK | INVALID_MAPPING | MISSING_MEDIA_ID
+  - reason and suggestedAction (REUPLOAD, WAIT_NORMALIZATION)
+- This should make it obvious why an ad cannot be published.
+
+Acceptance criteria:
+- With current data, publish-now should either:
+  1) detect INVALID_MAPPING for yodeckMediaId=27476083 and automatically re-upload to a NEW Yodeck mediaId (correctly named), then publish it, OR
+  2) clearly return FAILED with mappingHealth details and nextAction=REUPLOAD (no silent success).
+- In TEST_MODE, even without placements, it must resolve at least 1 target screen based on advertiser targeting or explicit player id and insert the ad into playlist, resulting in now-playing adsCount>0.
+
+Be careful:
+- Do not touch Moneybird flows.
+- Do not remove baseline seeding logic.
+- Keep v2/legacy Yodeck compatibility and existing fallbacks.
+- Add comprehensive logs and include them in response trace, but do not spam console on every poll.

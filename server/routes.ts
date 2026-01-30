@@ -19350,6 +19350,55 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  /**
+   * GET /api/admin/advertisers/:id/publish-dry-run
+   * Dry run publish flow - no mutations, returns trace of what WOULD happen
+   */
+  app.get("/api/admin/advertisers/:id/publish-dry-run", requireAdminAccess, async (req, res) => {
+    try {
+      const { id: advertiserId } = req.params;
+      const targetYodeckPlayerIds = req.query.targetYodeckPlayerIds 
+        ? (req.query.targetYodeckPlayerIds as string).split(",")
+        : undefined;
+      
+      console.log(`[PublishDryRun] Starting dry run for advertiser ${advertiserId}`);
+      
+      const { publishDryRun } = await import("./services/publishNowService");
+      
+      const result = await publishDryRun(advertiserId, {
+        targetYodeckPlayerIds,
+      });
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PublishDryRun] Error:", error);
+      res.status(500).json({ 
+        ok: false, 
+        error: error.message,
+        correlationId: `err-${Date.now()}`,
+      });
+    }
+  });
+
+  /**
+   * GET /api/admin/advertisers/:id/mapping-health
+   * Check mapping health for an advertiser's assets
+   */
+  app.get("/api/admin/advertisers/:id/mapping-health", requireAdminAccess, async (req, res) => {
+    try {
+      const { id: advertiserId } = req.params;
+      
+      const { checkMappingHealth } = await import("./services/publishNowService");
+      
+      const result = await checkMappingHealth(advertiserId);
+      
+      res.json({ ok: result.mappingHealth === "OK", ...result });
+    } catch (error: any) {
+      console.error("[MappingHealth] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   // ============================================================================
   // YODECK MEDIA PIPELINE ROUTES
   // ============================================================================

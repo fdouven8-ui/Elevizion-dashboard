@@ -522,15 +522,30 @@ async function verifyNowPlaying(
 }
 
 // ============================================================================
-// STEP F: RESOLVE TARGET SCREENS FOR ADVERTISER
+// STEP F: RESOLVE TARGET SCREENS FOR ADVERTISER (with TEST_MODE fallback)
 // ============================================================================
 
-async function resolveTargetScreens(
+export interface TargetResolutionResult {
+  targets: string[];
+  method: "placements" | "targeting" | "explicit" | "test_mode_all";
+  placementsCount: number;
+  fallbackReason?: string;
+}
+
+const TEST_MODE = process.env.TEST_MODE === "true" || process.env.NODE_ENV === "development";
+
+async function resolveTargetScreensWithDetails(
   advertiserId: string,
-  targetYodeckPlayerIds?: string[]
-): Promise<string[]> {
+  targetYodeckPlayerIds?: string[],
+  logs?: string[]
+): Promise<TargetResolutionResult> {
   if (targetYodeckPlayerIds && targetYodeckPlayerIds.length > 0) {
-    return targetYodeckPlayerIds;
+    logs?.push(`[ResolveTargets] Using explicit targetYodeckPlayerIds: ${targetYodeckPlayerIds.join(", ")}`);
+    return {
+      targets: targetYodeckPlayerIds,
+      method: "explicit",
+      placementsCount: 0,
+    };
   }
 
   const activePlacements = await db
@@ -546,38 +561,136 @@ async function resolveTargetScreens(
       )
     );
 
-  if (activePlacements.length === 0) {
-    return [];
+  if (activePlacements.length > 0) {
+    const screenIds = Array.from(new Set(activePlacements.map((p) => p.screenId)));
+    
+    const allScreens = await db
+      .select({ 
+        id: screens.id,
+        yodeckPlayerId: screens.yodeckPlayerId
+      })
+      .from(screens)
+      .where(isNotNull(screens.yodeckPlayerId));
+
+    const screenIdSet = new Set(screenIds);
+    const targets = allScreens
+      .filter((s) => screenIdSet.has(s.id) && s.yodeckPlayerId)
+      .map((s) => s.yodeckPlayerId!)
+      .filter(Boolean);
+
+    logs?.push(`[ResolveTargets] Found ${activePlacements.length} placements -> ${targets.length} screens`);
+    return {
+      targets,
+      method: "placements",
+      placementsCount: activePlacements.length,
+    };
   }
 
-  const screenIds = Array.from(new Set(activePlacements.map((p) => p.screenId)));
+  logs?.push(`[ResolveTargets] No placements found for advertiser ${advertiserId}`);
 
-  const targetScreens = await db
-    .select({ 
-      yodeckPlayerId: screens.yodeckPlayerId 
-    })
+  if (!TEST_MODE) {
+    return {
+      targets: [],
+      method: "placements",
+      placementsCount: 0,
+      fallbackReason: "No placements and TEST_MODE is disabled",
+    };
+  }
+
+  logs?.push(`[ResolveTargets] TEST_MODE enabled, trying targeting fallback...`);
+
+  const advertiserRows = await db
+    .select()
+    .from((await import("@shared/schema")).advertisers)
+    .where(eq((await import("@shared/schema")).advertisers.id, advertiserId));
+
+  const advertiser = advertiserRows[0];
+
+  if (advertiser) {
+    const targetCities = advertiser.targetCities || [];
+    const targetRegions = advertiser.targetRegionCodes || [];
+
+    if (targetCities.length > 0 || targetRegions.length > 0) {
+      const allLocations = await db
+        .select()
+        .from(locations)
+        .where(eq(locations.readyForAds, true));
+
+      const matchingLocationIds = allLocations
+        .filter((loc) => {
+          if (targetCities.length > 0 && loc.city && (targetCities as string[]).includes(loc.city)) return true;
+          if (targetRegions.length > 0 && loc.city && (targetRegions as string[]).includes(loc.city)) return true;
+          return false;
+        })
+        .map((loc) => loc.id);
+
+      if (matchingLocationIds.length > 0) {
+        const locationIdSet = new Set(matchingLocationIds);
+        
+        const matchingScreens = await db
+          .select({ 
+            yodeckPlayerId: screens.yodeckPlayerId,
+            locationId: screens.locationId 
+          })
+          .from(screens)
+          .where(
+            and(
+              isNotNull(screens.yodeckPlayerId),
+              eq(screens.status, "active")
+            )
+          );
+
+        const targets = matchingScreens
+          .filter((s) => s.yodeckPlayerId && s.locationId && locationIdSet.has(s.locationId))
+          .map((s) => s.yodeckPlayerId!)
+          .slice(0, 5);
+
+        if (targets.length > 0) {
+          logs?.push(`[ResolveTargets] Targeting fallback found ${targets.length} screens in ${matchingLocationIds.length} matching locations`);
+          return {
+            targets,
+            method: "targeting",
+            placementsCount: 0,
+            fallbackReason: `Matched ${matchingLocationIds.length} locations via targeting (cities: ${(targetCities as string[]).join(",")}, regions: ${(targetRegions as string[]).join(",")})`,
+          };
+        }
+      }
+      
+      logs?.push(`[ResolveTargets] No screens found matching targeting criteria`);
+    }
+  }
+
+  logs?.push(`[ResolveTargets] TEST_MODE: Using first available active screens as fallback`);
+  
+  const anyActiveScreens = await db
+    .select({ yodeckPlayerId: screens.yodeckPlayerId })
     .from(screens)
     .where(
       and(
         isNotNull(screens.yodeckPlayerId),
         eq(screens.status, "active")
       )
-    );
+    )
+    .limit(3);
 
-  const screenIdSet = new Set(screenIds);
-  
-  const allScreens = await db
-    .select({ 
-      id: screens.id,
-      yodeckPlayerId: screens.yodeckPlayerId
-    })
-    .from(screens)
-    .where(isNotNull(screens.yodeckPlayerId));
+  const targets = anyActiveScreens
+    .filter((s) => s.yodeckPlayerId)
+    .map((s) => s.yodeckPlayerId!);
 
-  return allScreens
-    .filter((s) => screenIdSet.has(s.id) && s.yodeckPlayerId)
-    .map((s) => s.yodeckPlayerId!)
-    .filter(Boolean);
+  return {
+    targets,
+    method: "test_mode_all",
+    placementsCount: 0,
+    fallbackReason: "TEST_MODE fallback to first 3 active screens",
+  };
+}
+
+async function resolveTargetScreens(
+  advertiserId: string,
+  targetYodeckPlayerIds?: string[]
+): Promise<string[]> {
+  const result = await resolveTargetScreensWithDetails(advertiserId, targetYodeckPlayerIds);
+  return result.targets;
 }
 
 // ============================================================================
@@ -666,19 +779,27 @@ export async function publishNow(
   log(correlationId, "CHECK_YODECK_MEDIA", `OK: status=${mediaCheck.status}, fileSize=${mediaCheck.fileSize}`, logs);
 
   stepStart = Date.now();
-  const targetScreens = await resolveTargetScreens(advertiserId, request.targetYodeckPlayerIds);
+  const targetResolution = await resolveTargetScreensWithDetails(
+    advertiserId, 
+    request.targetYodeckPlayerIds,
+    logs
+  );
   steps.push({
     step: "RESOLVE_TARGETS",
-    status: targetScreens.length > 0 ? "success" : "failed",
+    status: targetResolution.targets.length > 0 ? "success" : "failed",
     duration_ms: Date.now() - stepStart,
     details: {
-      count: targetScreens.length,
-      screens: targetScreens,
+      count: targetResolution.targets.length,
+      screens: targetResolution.targets,
+      method: targetResolution.method,
+      placementsCount: targetResolution.placementsCount,
+      fallbackReason: targetResolution.fallbackReason,
+      testModeEnabled: TEST_MODE,
     },
   });
 
-  if (targetScreens.length === 0) {
-    log(correlationId, "RESOLVE_TARGETS", `No target screens found`, logs);
+  if (targetResolution.targets.length === 0) {
+    log(correlationId, "RESOLVE_TARGETS", `No target screens found (method=${targetResolution.method}, fallback=${targetResolution.fallbackReason})`, logs);
     return {
       correlationId,
       timestamp,
@@ -696,7 +817,8 @@ export async function publishNow(
     };
   }
 
-  log(correlationId, "RESOLVE_TARGETS", `Found ${targetScreens.length} screens: ${targetScreens.join(", ")}`, logs);
+  const targetScreens = targetResolution.targets;
+  log(correlationId, "RESOLVE_TARGETS", `Found ${targetScreens.length} screens via ${targetResolution.method}: ${targetScreens.join(", ")}`, logs);
 
   let successCount = 0;
   let failedCount = 0;
@@ -799,6 +921,223 @@ export async function publishNow(
       successCount,
       failedCount,
       adsInPlaylists: totalAdsInPlaylists,
+    },
+    logs,
+  };
+}
+
+// ============================================================================
+// MAPPING HEALTH CHECK
+// ============================================================================
+
+export type MappingHealth = "OK" | "INVALID_MAPPING" | "MISSING_MEDIA_ID" | "NEEDS_VALIDATION";
+
+export interface MappingHealthResult {
+  mappingHealth: MappingHealth;
+  reason: string;
+  suggestedAction: "NONE" | "REUPLOAD" | "WAIT_NORMALIZATION" | "VALIDATE";
+  yodeckMediaId: number | null;
+  assetId: string | null;
+  assetStatus: string | null;
+}
+
+export async function checkMappingHealth(
+  advertiserId: string,
+  knownBaselineMediaIds?: number[]
+): Promise<MappingHealthResult> {
+  const assetResult = await resolvePlayableAssetForAdvertiser(advertiserId);
+  
+  if (!assetResult.assetId) {
+    return {
+      mappingHealth: "MISSING_MEDIA_ID",
+      reason: "No asset found for advertiser",
+      suggestedAction: "REUPLOAD",
+      yodeckMediaId: null,
+      assetId: null,
+      assetStatus: null,
+    };
+  }
+
+  if (!assetResult.yodeckMediaId) {
+    if (assetResult.status === "READY_FOR_YODECK") {
+      return {
+        mappingHealth: "MISSING_MEDIA_ID",
+        reason: "Asset is READY_FOR_YODECK but missing yodeckMediaId",
+        suggestedAction: "REUPLOAD",
+        yodeckMediaId: null,
+        assetId: assetResult.assetId,
+        assetStatus: assetResult.status,
+      };
+    }
+    
+    if (assetResult.status === "NEEDS_NORMALIZATION" || assetResult.status === "NORMALIZING") {
+      return {
+        mappingHealth: "NEEDS_VALIDATION",
+        reason: `Asset status is ${assetResult.status}`,
+        suggestedAction: "WAIT_NORMALIZATION",
+        yodeckMediaId: null,
+        assetId: assetResult.assetId,
+        assetStatus: assetResult.status,
+      };
+    }
+
+    return {
+      mappingHealth: "NEEDS_VALIDATION",
+      reason: `Asset status is ${assetResult.status}, needs validation`,
+      suggestedAction: "VALIDATE",
+      yodeckMediaId: null,
+      assetId: assetResult.assetId,
+      assetStatus: assetResult.status,
+    };
+  }
+
+  if (knownBaselineMediaIds && knownBaselineMediaIds.includes(assetResult.yodeckMediaId)) {
+    return {
+      mappingHealth: "INVALID_MAPPING",
+      reason: `yodeckMediaId ${assetResult.yodeckMediaId} matches baseline content - collision detected`,
+      suggestedAction: "REUPLOAD",
+      yodeckMediaId: assetResult.yodeckMediaId,
+      assetId: assetResult.assetId,
+      assetStatus: assetResult.status,
+    };
+  }
+
+  const mediaCheck = await ensureYodeckMediaReady(assetResult.yodeckMediaId);
+  
+  if (!mediaCheck.ok) {
+    return {
+      mappingHealth: "INVALID_MAPPING",
+      reason: mediaCheck.error?.recommendation || "Yodeck media not ready",
+      suggestedAction: "REUPLOAD",
+      yodeckMediaId: assetResult.yodeckMediaId,
+      assetId: assetResult.assetId,
+      assetStatus: assetResult.status,
+    };
+  }
+
+  return {
+    mappingHealth: "OK",
+    reason: "Asset ready and yodeckMediaId valid",
+    suggestedAction: "NONE",
+    yodeckMediaId: assetResult.yodeckMediaId,
+    assetId: assetResult.assetId,
+    assetStatus: assetResult.status,
+  };
+}
+
+// ============================================================================
+// DRY RUN - NO MUTATIONS
+// ============================================================================
+
+export async function publishDryRun(
+  advertiserId: string,
+  request: PublishNowRequest
+): Promise<PublishNowTrace> {
+  const correlationId = `dry-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
+  const timestamp = new Date().toISOString();
+  const logs: string[] = [];
+  const steps: PublishStep[] = [];
+
+  log(correlationId, "DRY_RUN_START", `Dry run for advertiser ${advertiserId}`, logs);
+
+  let stepStart = Date.now();
+  const assetResult = await resolvePlayableAssetForAdvertiser(advertiserId);
+  steps.push({
+    step: "RESOLVE_ASSET",
+    status: assetResult.ok ? "success" : "failed",
+    duration_ms: Date.now() - stepStart,
+    details: {
+      assetId: assetResult.assetId,
+      yodeckMediaId: assetResult.yodeckMediaId,
+      status: assetResult.status,
+      storageUrl: assetResult.storageUrl,
+    },
+    error: assetResult.error?.message,
+  });
+
+  const mappingHealth = await checkMappingHealth(advertiserId);
+  steps.push({
+    step: "CHECK_MAPPING_HEALTH",
+    status: mappingHealth.mappingHealth === "OK" ? "success" : "failed",
+    duration_ms: 0,
+    details: {
+      mappingHealth: mappingHealth.mappingHealth,
+      reason: mappingHealth.reason,
+      suggestedAction: mappingHealth.suggestedAction,
+    },
+  });
+
+  if (assetResult.ok && assetResult.yodeckMediaId) {
+    stepStart = Date.now();
+    const mediaCheck = await ensureYodeckMediaReady(assetResult.yodeckMediaId);
+    steps.push({
+      step: "CHECK_YODECK_MEDIA",
+      status: mediaCheck.ok ? "success" : "failed",
+      duration_ms: Date.now() - stepStart,
+      details: {
+        yodeckMediaId: mediaCheck.yodeckMediaId,
+        status: mediaCheck.status,
+        fileSize: mediaCheck.fileSize,
+      },
+      error: mediaCheck.error?.recommendation,
+    });
+  }
+
+  stepStart = Date.now();
+  const targetResolution = await resolveTargetScreensWithDetails(
+    advertiserId, 
+    request.targetYodeckPlayerIds,
+    logs
+  );
+  steps.push({
+    step: "RESOLVE_TARGETS",
+    status: targetResolution.targets.length > 0 ? "success" : "failed",
+    duration_ms: Date.now() - stepStart,
+    details: {
+      count: targetResolution.targets.length,
+      screens: targetResolution.targets,
+      method: targetResolution.method,
+      placementsCount: targetResolution.placementsCount,
+      fallbackReason: targetResolution.fallbackReason,
+      testModeEnabled: TEST_MODE,
+    },
+  });
+
+  for (const screenId of targetResolution.targets.slice(0, 3)) {
+    stepStart = Date.now();
+    const playlistResult = await resolveEffectivePlaylistForScreen(screenId);
+    steps.push({
+      step: `RESOLVE_PLAYLIST_${screenId}`,
+      status: playlistResult.ok ? "success" : "failed",
+      duration_ms: Date.now() - stepStart,
+      details: {
+        playlistId: playlistResult.playlistId,
+        playlistName: playlistResult.playlistName,
+        sourceUsed: playlistResult.sourceUsed,
+      },
+      error: playlistResult.error?.message,
+    });
+  }
+
+  const wouldSucceed = 
+    assetResult.ok && 
+    mappingHealth.mappingHealth === "OK" && 
+    targetResolution.targets.length > 0;
+
+  log(correlationId, "DRY_RUN_COMPLETE", `Would succeed: ${wouldSucceed}`, logs);
+
+  return {
+    correlationId,
+    timestamp,
+    advertiserId,
+    steps,
+    outcome: wouldSucceed ? "SUCCESS" : "FAILED",
+    summary: {
+      targetsResolved: targetResolution.targets.length,
+      publishAttempts: 0,
+      successCount: 0,
+      failedCount: 0,
+      adsInPlaylists: 0,
     },
     logs,
   };
