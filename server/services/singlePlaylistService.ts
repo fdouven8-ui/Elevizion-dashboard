@@ -5,14 +5,29 @@ import { storage } from "../storage";
 
 const LOG_PREFIX = "[SinglePlaylist]";
 
-const BASELINE_MEDIA_IDS = [
-  30399637, // NOS algemeen nieuws
-  30399638, // Weer goed  
-  30399639, // NOS sport algemeen
-  30399640, // 1Limburg
-];
-
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
+
+async function getBaselineMediaIds(): Promise<number[]> {
+  const baselinePlaylistId = process.env.AUTOPILOT_BASELINE_PLAYLIST_ID || process.env.BASELINE_PLAYLIST_ID;
+  
+  if (!baselinePlaylistId) {
+    console.warn(`${LOG_PREFIX} No baseline playlist configured, using empty baseline`);
+    return [];
+  }
+
+  const result = await yodeckRequest<{ count: number; results: Array<{ media: number }> }>(
+    `/playlists/${baselinePlaylistId}/items/`
+  );
+
+  if (!result.ok || !result.data) {
+    console.error(`${LOG_PREFIX} Failed to fetch baseline items from playlist ${baselinePlaylistId}: ${result.error}`);
+    return [];
+  }
+
+  const mediaIds = (result.data.results || []).map((item) => item.media);
+  console.log(`${LOG_PREFIX} Loaded ${mediaIds.length} baseline items from playlist ${baselinePlaylistId}`);
+  return mediaIds;
+}
 
 function getYodeckApiKey(): string | null {
   return process.env.YODECK_AUTH_TOKEN || null;
@@ -238,9 +253,13 @@ export async function reconcileScreenPlaylist(
   actions.push(`Resolved playlist: ${playlistId} "${playlistName}" (created: ${playlistResult.wasCreated})`);
 
   // 3. Determine target media IDs
-  // Baseline items (always include)
-  const baselineMediaIds = [...BASELINE_MEDIA_IDS];
-  actions.push(`Baseline media: ${baselineMediaIds.length} items`);
+  // Baseline items from configured baseline playlist
+  const baselineMediaIds = await getBaselineMediaIds();
+  if (baselineMediaIds.length === 0) {
+    actions.push(`Warning: No baseline media configured`);
+  } else {
+    actions.push(`Baseline media: ${baselineMediaIds.length} items from configured playlist`);
+  }
 
   // 4. Find approved ads targeting this screen
   const adMediaIds: number[] = [];
@@ -318,6 +337,7 @@ export async function reconcileScreenPlaylist(
   actions.push(`To add: ${mediaToAdd.length}, to remove: ${mediaToRemove.length}`);
 
   // 8. Remove items that shouldn't be there
+  let removeErrors = 0;
   if (mediaToRemove.length > 0) {
     const currentItems = currentItemsResult.data?.results || [];
     for (const mediaId of mediaToRemove) {
@@ -327,13 +347,15 @@ export async function reconcileScreenPlaylist(
         if (deleteResult.ok) {
           actions.push(`Removed item ${item.id} (media ${mediaId})`);
         } else {
-          actions.push(`Failed to remove item ${item.id}: ${deleteResult.error}`);
+          actions.push(`FAILED to remove item ${item.id}: ${deleteResult.error}`);
+          removeErrors++;
         }
       }
     }
   }
 
   // 9. Add missing items
+  let addErrors = 0;
   for (const mediaId of mediaToAdd) {
     const addResult = await yodeckRequest(`/playlists/${playlistId}/items/`, "POST", {
       media: mediaId,
@@ -342,8 +364,15 @@ export async function reconcileScreenPlaylist(
     if (addResult.ok) {
       actions.push(`Added media ${mediaId}`);
     } else {
-      actions.push(`Failed to add media ${mediaId}: ${addResult.error}`);
+      actions.push(`FAILED to add media ${mediaId}: ${addResult.error}`);
+      addErrors++;
     }
+  }
+
+  // Check for mutation errors
+  const hadMutationErrors = removeErrors > 0 || addErrors > 0;
+  if (hadMutationErrors) {
+    actions.push(`MUTATION ERRORS: ${removeErrors} remove failures, ${addErrors} add failures`);
   }
 
   // 10. Push to screen
@@ -372,14 +401,25 @@ export async function reconcileScreenPlaylist(
     `/screens/${screen.yodeckPlayerId}/`
   );
   
+  let verified = false;
   if (verifyResult.ok && verifyResult.data) {
     const isPlaylist = verifyResult.data.source_type === "playlist";
     const correctPlaylist = verifyResult.data.source_id === parseInt(playlistId, 10);
-    actions.push(`Verify: source_type=${verifyResult.data.source_type}, source_id=${verifyResult.data.source_id}, correct=${isPlaylist && correctPlaylist}`);
+    verified = isPlaylist && correctPlaylist;
+    actions.push(`Verify: source_type=${verifyResult.data.source_type}, source_id=${verifyResult.data.source_id}, correct=${verified}`);
+  } else {
+    actions.push(`Verify FAILED: ${verifyResult.error}`);
+  }
+
+  // Determine overall success - strict mode
+  const overallOk = pushStatus === "success" && verified && !hadMutationErrors;
+  
+  if (!overallOk) {
+    actions.push(`RECONCILE INCOMPLETE: push=${pushStatus}, verified=${verified}, mutationErrors=${hadMutationErrors}`);
   }
 
   return {
-    ok: true,
+    ok: overallOk,
     playlistId,
     playlistName,
     baselineCount: baselineMediaIds.length,
@@ -388,6 +428,7 @@ export async function reconcileScreenPlaylist(
     includedMediaIds: allMediaIds,
     pushResult: pushStatus,
     actions,
+    error: overallOk ? undefined : "Reconcile incomplete - see actions for details",
   };
 }
 
