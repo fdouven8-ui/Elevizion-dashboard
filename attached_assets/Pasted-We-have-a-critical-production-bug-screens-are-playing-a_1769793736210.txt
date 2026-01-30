@@ -1,0 +1,77 @@
+We have a critical production bug: screens are playing a LAYOUT even though our system should be playlist-only. As a result, ads never appear even after approval/publish.
+
+Evidence (now-playing output):
+- expectedPlaylistId = 30532596
+- actualSourceType = "layout"
+- actualSourceId = 7736579 ("Elevizion Standard | Bouwservice Douven")
+- mismatch = true, adsCount = 0
+
+We believed layout mode was removed, so this must be eliminated entirely and made self-healing.
+
+GOALS
+1) Enforce PLAYLIST-ONLY mode globally (no layout assignment anywhere in codepaths).
+2) If a player is currently in layout mode, auto-correct it to the expected playlist BEFORE publish.
+3) Ensure ad publish is deterministic: after approval, the ad must appear in the target playlist and the screen must be pushed & verified with adsCount > 0.
+4) Keep baseline logic, dedup logic, media readiness gate, and existing endpoints working.
+
+IMPLEMENTATION TASKS
+
+A) Add a global “playlist-only enforcement” guard
+- Search the codebase for any Yodeck assignment of layout/schedule/layoutMode/source_type=layout.
+- Remove or hard-disable these paths.
+- Introduce a single config flag (default ON): PLAYLIST_ONLY_MODE=true.
+- When PLAYLIST_ONLY_MODE is true:
+  - Never set source_type=layout
+  - Never select layoutId as the effective source
+  - All screens must be driven by playlist source_id (playlistId)
+
+B) Create a single source of truth resolver
+Implement resolveEffectiveScreenSource(screen/player) that returns:
+{ expected: {type:"playlist", id:<playlistId>}, actual: {type, id}, mismatch:boolean }
+- expected should always be playlist, derived from:
+  - screen.playlistId in DB if present
+  - or canonical parse screen_content.source_id if playlist
+  - or fallback mapping if needed
+- actual comes from Yodeck screen_content/source_type + source_id
+
+C) Auto-heal mismatches (layout -> playlist) centrally
+Implement ensurePlayerUsesExpectedPlaylist(playerId, expectedPlaylistId, correlationId):
+- If actual.type != "playlist" OR actual.id != expectedPlaylistId:
+  - Call Yodeck API to set player content source to playlist/expectedPlaylistId
+  - Push to screen
+  - Re-fetch now-playing and verify mismatch=false
+- Return detailed trace.
+
+D) Update publish flow to self-heal before update
+In POST /api/admin/advertisers/:id/publish-now:
+- For each target player:
+  1) Resolve expected playlistId
+  2) ensurePlayerUsesExpectedPlaylist(...)
+  3) Update playlist: dedup + add mediaId
+  4) Push + verify: now-playing must show adsCount>0 and mismatch=false
+- If step 2 fails -> return 422 with code SCREEN_SOURCE_MISMATCH_UNFIXED and include actual/expected.
+
+E) Update repair endpoint to use the same auto-heal
+In POST /api/admin/screens/:id/repair:
+- Include action REASSIGN_TO_EXPECTED_PLAYLIST if mismatch or actualSourceType != "playlist"
+- Use ensurePlayerUsesExpectedPlaylist under the hood.
+
+F) UI/Operator clarity
+- On Screen detail page show a red badge if mismatch=true or actualSourceType!="playlist".
+- Add button "Fix scherm (playlist herstellen)" that calls /repair and shows the trace.
+
+G) Logging / Debug
+- Every publish/repair returns a trace JSON:
+  correlationId, steps[], before/after now-playing snapshots, yodeck api call summaries.
+- Add explicit log lines:
+  [EnforcePlaylist] <cid> actual=layout:7736579 expected=playlist:30532596 -> reassigning
+
+H) Tests (manual) required
+- Use playerId=591896.
+- Run publish-now and confirm:
+  - actualSourceType becomes playlist
+  - adsCount > 0
+  - content list contains the ad media id
+- Ensure baseline items remain and are not deleted by dedup.
+
+Deliver code changes without breaking existing functionality.

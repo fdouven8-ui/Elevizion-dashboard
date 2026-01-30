@@ -3,10 +3,57 @@
  * 
  * HARD REQUIREMENT: No screen may ever have source_type="layout"
  * If detected, automatically revert to playlist mode and log audit event.
+ * 
+ * CONFIG FLAG: PLAYLIST_ONLY_MODE (default: true)
+ * When true:
+ * - Never set source_type=layout
+ * - Never select layoutId as the effective source
+ * - All screens must be driven by playlist source_id
  */
 
 import { storage } from "../storage";
 import { getYodeckToken } from "./yodeckClient";
+import { db } from "../db";
+import { screens, locations } from "@shared/schema";
+import { eq } from "drizzle-orm";
+
+// Global config flag - always ON to enforce playlist-only mode
+export const PLAYLIST_ONLY_MODE = true;
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+export interface ScreenSourceResolution {
+  expected: {
+    type: "playlist";
+    id: number;
+    name?: string;
+    source: "db_screen" | "db_location" | "fallback";
+  } | null;
+  actual: {
+    type: "playlist" | "layout" | "schedule" | "unknown";
+    id: number | null;
+    name?: string;
+  };
+  mismatch: boolean;
+  mismatchReason?: string;
+}
+
+export interface AutoHealTrace {
+  correlationId: string;
+  playerId: number;
+  steps: {
+    step: string;
+    status: "success" | "failed" | "skipped";
+    duration_ms: number;
+    details: Record<string, any>;
+  }[];
+  beforeSnapshot: ScreenSourceResolution;
+  afterSnapshot: ScreenSourceResolution | null;
+  outcome: "HEALED" | "ALREADY_OK" | "HEAL_FAILED" | "NO_EXPECTED_PLAYLIST";
+  error?: string;
+}
 
 export interface LayoutDetectionResult {
   screenId: number;
@@ -268,4 +315,291 @@ export async function ensurePlaylistMode(yodeckScreenId: number, playlistId: num
 
 export function isLayoutSourceType(sourceType: string | null | undefined): boolean {
   return sourceType === "layout";
+}
+
+// ============================================================================
+// CORE: SINGLE SOURCE OF TRUTH RESOLVER
+// ============================================================================
+
+/**
+ * resolveEffectiveScreenSource - Single source of truth for screen content source
+ * 
+ * Returns:
+ * - expected: What the screen SHOULD be playing (always playlist if PLAYLIST_ONLY_MODE)
+ * - actual: What the screen is ACTUALLY playing (from Yodeck API)
+ * - mismatch: true if actual != expected
+ */
+export async function resolveEffectiveScreenSource(
+  yodeckPlayerId: number
+): Promise<ScreenSourceResolution> {
+  // 1. Get actual source from Yodeck
+  const screenResult = await yodeckGet(`/screens/${yodeckPlayerId}/`);
+  
+  let actual: ScreenSourceResolution["actual"] = {
+    type: "unknown",
+    id: null,
+  };
+  
+  if (screenResult.ok && screenResult.data) {
+    const content = screenResult.data.screen_content || {};
+    const sourceType = content.source_type || "unknown";
+    const sourceId = content.source_id;
+    const sourceName = content.source_name;
+    
+    actual = {
+      type: sourceType as any,
+      id: typeof sourceId === "number" ? sourceId : (sourceId ? parseInt(sourceId, 10) : null),
+      name: sourceName,
+    };
+  }
+  
+  // 2. Determine expected source (always playlist in PLAYLIST_ONLY_MODE)
+  let expected: ScreenSourceResolution["expected"] = null;
+  
+  // First check our DB for screen.playlistId
+  const dbScreens = await db
+    .select()
+    .from(screens)
+    .where(eq(screens.yodeckPlayerId, String(yodeckPlayerId)));
+  
+  const dbScreen = dbScreens[0];
+  
+  if (dbScreen?.playlistId) {
+    expected = {
+      type: "playlist",
+      id: parseInt(dbScreen.playlistId, 10),
+      source: "db_screen",
+    };
+  } else if (dbScreen?.locationId) {
+    // Fallback to location's canonical playlist
+    const locs = await db
+      .select()
+      .from(locations)
+      .where(eq(locations.id, dbScreen.locationId));
+    
+    const loc = locs[0];
+    if (loc?.yodeckPlaylistId) {
+      expected = {
+        type: "playlist",
+        id: loc.yodeckPlaylistId,
+        source: "db_location",
+      };
+    }
+  }
+  
+  // 3. Compute mismatch
+  let mismatch = false;
+  let mismatchReason: string | undefined;
+  
+  if (PLAYLIST_ONLY_MODE) {
+    if (actual.type !== "playlist") {
+      mismatch = true;
+      mismatchReason = `actual.type="${actual.type}" but PLAYLIST_ONLY_MODE requires "playlist"`;
+    } else if (expected && actual.id !== expected.id) {
+      mismatch = true;
+      mismatchReason = `actual.id=${actual.id} != expected.id=${expected.id}`;
+    }
+  }
+  
+  return {
+    expected,
+    actual,
+    mismatch,
+    mismatchReason,
+  };
+}
+
+// ============================================================================
+// CORE: AUTO-HEAL MISMATCH (layout -> playlist)
+// ============================================================================
+
+/**
+ * ensurePlayerUsesExpectedPlaylist - Auto-heal screen to use expected playlist
+ * 
+ * If actual.type != "playlist" OR actual.id != expectedPlaylistId:
+ * 1. PATCH screen to use playlist source
+ * 2. Push to screen
+ * 3. Re-fetch and verify mismatch=false
+ * 
+ * Returns detailed trace for debugging
+ */
+export async function ensurePlayerUsesExpectedPlaylist(
+  yodeckPlayerId: number,
+  expectedPlaylistId: number,
+  correlationId: string
+): Promise<AutoHealTrace> {
+  const startTime = Date.now();
+  const steps: AutoHealTrace["steps"] = [];
+  
+  console.log(`[EnforcePlaylist] ${correlationId} player=${yodeckPlayerId} expectedPlaylist=${expectedPlaylistId}`);
+  
+  // Step 1: Get current state (before snapshot)
+  const step1Start = Date.now();
+  const beforeSnapshot = await resolveEffectiveScreenSource(yodeckPlayerId);
+  steps.push({
+    step: "resolve_before",
+    status: "success",
+    duration_ms: Date.now() - step1Start,
+    details: {
+      actualType: beforeSnapshot.actual.type,
+      actualId: beforeSnapshot.actual.id,
+      expectedId: expectedPlaylistId,
+      mismatch: beforeSnapshot.mismatch,
+    },
+  });
+  
+  console.log(`[EnforcePlaylist] ${correlationId} actual=${beforeSnapshot.actual.type}:${beforeSnapshot.actual.id} expected=playlist:${expectedPlaylistId} -> ${beforeSnapshot.mismatch ? "MISMATCH" : "OK"}`);
+  
+  // Check if already OK
+  if (beforeSnapshot.actual.type === "playlist" && beforeSnapshot.actual.id === expectedPlaylistId) {
+    console.log(`[EnforcePlaylist] ${correlationId} outcome=ALREADY_OK`);
+    return {
+      correlationId,
+      playerId: yodeckPlayerId,
+      steps,
+      beforeSnapshot,
+      afterSnapshot: beforeSnapshot,
+      outcome: "ALREADY_OK",
+    };
+  }
+  
+  // Step 2: PATCH to playlist mode
+  const step2Start = Date.now();
+  const patchPayload = {
+    screen_content: {
+      source_type: "playlist",
+      source_id: expectedPlaylistId,
+    },
+  };
+  
+  console.log(`[EnforcePlaylist] ${correlationId} PATCH /screens/${yodeckPlayerId}/ with playlist ${expectedPlaylistId}`);
+  const patchResult = await yodeckPatch(`/screens/${yodeckPlayerId}/`, patchPayload);
+  
+  if (!patchResult.ok) {
+    steps.push({
+      step: "patch_playlist",
+      status: "failed",
+      duration_ms: Date.now() - step2Start,
+      details: { error: patchResult.error },
+    });
+    console.error(`[EnforcePlaylist] ${correlationId} outcome=HEAL_FAILED error=${patchResult.error}`);
+    return {
+      correlationId,
+      playerId: yodeckPlayerId,
+      steps,
+      beforeSnapshot,
+      afterSnapshot: null,
+      outcome: "HEAL_FAILED",
+      error: patchResult.error,
+    };
+  }
+  
+  steps.push({
+    step: "patch_playlist",
+    status: "success",
+    duration_ms: Date.now() - step2Start,
+    details: { playlistId: expectedPlaylistId },
+  });
+  
+  // Step 3: Push to screen
+  const step3Start = Date.now();
+  const pushResult = await yodeckPost(`/screens/${yodeckPlayerId}/push/`);
+  steps.push({
+    step: "push_screen",
+    status: pushResult.ok ? "success" : "failed",
+    duration_ms: Date.now() - step3Start,
+    details: { error: pushResult.error },
+  });
+  
+  if (!pushResult.ok) {
+    console.warn(`[EnforcePlaylist] ${correlationId} push_warning=${pushResult.error}`);
+  }
+  
+  // Step 4: Verify after snapshot
+  const step4Start = Date.now();
+  await new Promise(resolve => setTimeout(resolve, 500)); // Small delay for Yodeck to update
+  const afterSnapshot = await resolveEffectiveScreenSource(yodeckPlayerId);
+  
+  const healed = afterSnapshot.actual.type === "playlist" && afterSnapshot.actual.id === expectedPlaylistId;
+  steps.push({
+    step: "verify_after",
+    status: healed ? "success" : "failed",
+    duration_ms: Date.now() - step4Start,
+    details: {
+      actualType: afterSnapshot.actual.type,
+      actualId: afterSnapshot.actual.id,
+      healed,
+    },
+  });
+  
+  if (healed) {
+    console.log(`[EnforcePlaylist] ${correlationId} outcome=HEALED from=${beforeSnapshot.actual.type}:${beforeSnapshot.actual.id} to=playlist:${expectedPlaylistId}`);
+    return {
+      correlationId,
+      playerId: yodeckPlayerId,
+      steps,
+      beforeSnapshot,
+      afterSnapshot,
+      outcome: "HEALED",
+    };
+  } else {
+    console.error(`[EnforcePlaylist] ${correlationId} outcome=HEAL_FAILED verify_failed actual=${afterSnapshot.actual.type}:${afterSnapshot.actual.id}`);
+    return {
+      correlationId,
+      playerId: yodeckPlayerId,
+      steps,
+      beforeSnapshot,
+      afterSnapshot,
+      outcome: "HEAL_FAILED",
+      error: `Verification failed: expected playlist:${expectedPlaylistId}, got ${afterSnapshot.actual.type}:${afterSnapshot.actual.id}`,
+    };
+  }
+}
+
+// ============================================================================
+// BATCH OPERATIONS
+// ============================================================================
+
+/**
+ * healAllMismatchedScreens - Run auto-heal on all screens with mismatches
+ */
+export async function healAllMismatchedScreens(): Promise<{
+  screensChecked: number;
+  mismatchesFound: number;
+  healed: number;
+  failed: number;
+  traces: AutoHealTrace[];
+}> {
+  const allScreens = await storage.getScreens();
+  const traces: AutoHealTrace[] = [];
+  let mismatchesFound = 0;
+  let healed = 0;
+  let failed = 0;
+  
+  for (const screen of allScreens) {
+    if (!screen.yodeckPlayerId) continue;
+    
+    const yodeckId = parseInt(screen.yodeckPlayerId, 10);
+    if (isNaN(yodeckId)) continue;
+    
+    const resolution = await resolveEffectiveScreenSource(yodeckId);
+    
+    if (resolution.mismatch && resolution.expected) {
+      mismatchesFound++;
+      const correlationId = `heal-${Date.now()}-${yodeckId}`;
+      const trace = await ensurePlayerUsesExpectedPlaylist(yodeckId, resolution.expected.id, correlationId);
+      traces.push(trace);
+      
+      if (trace.outcome === "HEALED") healed++;
+      else failed++;
+    }
+  }
+  
+  return {
+    screensChecked: allScreens.filter(s => s.yodeckPlayerId).length,
+    mismatchesFound,
+    healed,
+    failed,
+    traces,
+  };
 }
