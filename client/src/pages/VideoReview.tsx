@@ -17,7 +17,20 @@ import { Link } from "wouter";
 interface ApprovalResult {
   success: boolean;
   message: string;
+  correlationId?: string;
+  yodeckMediaId?: number | null;
   placementPlanId?: string;
+  canonicalPublish?: {
+    success: boolean;
+    locationsUpdated: number;
+    errors: string[];
+  } | null;
+  mediaPipeline?: {
+    correlationId?: string;
+    completedCount?: number;
+    yodeckMediaId?: number;
+    status?: string;
+  } | null;
 }
 
 interface ProposalMatch {
@@ -183,7 +196,26 @@ export default function VideoReview() {
       return { ...result, companyName };
     },
     onSuccess: (data) => {
-      toast({ title: "Goedgekeurd", description: data.message });
+      // Build detailed status message
+      let statusDescription = data.message;
+      
+      if (data.canonicalPublish?.success && data.canonicalPublish.locationsUpdated > 0) {
+        statusDescription += ` | Gepubliceerd naar ${data.canonicalPublish.locationsUpdated} locatie(s)`;
+      } else if (data.mediaPipeline?.status === 'NORMALIZING') {
+        statusDescription += ' | Bezig met normaliseren...';
+      } else if (data.mediaPipeline?.status === 'REJECTED') {
+        statusDescription += ' | Publish failed - check logs';
+      }
+      
+      if (data.correlationId) {
+        statusDescription += ` (ID: ${data.correlationId.slice(0, 20)}...)`;
+      }
+      
+      toast({ 
+        title: data.canonicalPublish?.success ? "Gepubliceerd" : "Goedgekeurd", 
+        description: statusDescription,
+        duration: 8000,
+      });
       queryClient.invalidateQueries({ queryKey: ["/api/admin/video-review"] });
       setPreviewAsset(null);
       if (data.placementPlanId) {

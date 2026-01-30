@@ -600,6 +600,8 @@ export async function getPendingReviewAssets(): Promise<ReviewQueueItem[]> {
 export interface ApproveResult {
   success: boolean;
   message: string;
+  correlationId?: string;
+  yodeckMediaId?: number | null;
   placementPlanId?: string;
   autoPlacement?: {
     success: boolean;
@@ -616,6 +618,7 @@ export interface ApproveResult {
     correlationId?: string;
     completedCount?: number;
     yodeckMediaId?: number;
+    status?: string;
   } | null;
 }
 
@@ -687,11 +690,14 @@ export async function approveAsset(
     }
     
     // MEDIA PIPELINE: Trigger validation and Yodeck upload if no yodeckMediaId
-    let pipelineResult: { correlationId?: string; completedCount?: number; yodeckMediaId?: number } | null = null;
+    const approveCorrelationId = `approve-${assetId}-${Date.now()}`;
+    let pipelineResult: { correlationId?: string; completedCount?: number; yodeckMediaId?: number; status?: string } | null = null;
     let effectiveYodeckMediaId = asset.yodeckMediaId;
     
+    console.log(`[VideoReviewApprove] correlationId=${approveCorrelationId} advertiserId=${asset.advertiserId} assetId=${assetId} storedFile=${asset.storedFilename}`);
+    
     if (!asset.yodeckMediaId) {
-      console.log('[AdminReview] Asset has no yodeckMediaId, triggering media pipeline');
+      console.log(`[VideoReviewApprove] ${approveCorrelationId} Asset has no yodeckMediaId, triggering media pipeline`);
       try {
         const { validateAdvertiserMedia } = await import('./mediaPipelineService');
         const result = await validateAdvertiserMedia(asset.advertiserId);
@@ -701,21 +707,33 @@ export async function approveAsset(
           completedCount: result.completedCount,
         };
         
+        console.log(`[MediaBridge] ${approveCorrelationId} Pipeline returned: completed=${result.completedCount} failed=${result.failedCount} assets=${result.assets.length}`);
+        
         if (result.completedCount > 0 && result.assets.length > 0) {
           const processedAsset = result.assets.find(a => a.id === assetId);
           if (processedAsset?.yodeckMediaId) {
             effectiveYodeckMediaId = processedAsset.yodeckMediaId;
             pipelineResult.yodeckMediaId = processedAsset.yodeckMediaId;
-            console.log(`[AdminReview] Media pipeline success: yodeckMediaId=${effectiveYodeckMediaId}`);
+            pipelineResult.status = processedAsset.status;
+            console.log(`[MediaBridge] ${approveCorrelationId} createdAssetId=${assetId} status=${processedAsset.status} yodeckMediaId=${effectiveYodeckMediaId}`);
+          } else {
+            console.warn(`[MediaBridge] ${approveCorrelationId} Asset ${assetId} not found in pipeline results, assets: ${result.assets.map(a => a.id).join(', ')}`);
           }
         }
         
         if (result.failedCount > 0) {
-          console.warn(`[AdminReview] Media pipeline had ${result.failedCount} failures`);
+          console.warn(`[MediaBridge] ${approveCorrelationId} Pipeline had ${result.failedCount} failures`);
+          for (const assetResult of result.assets) {
+            if (assetResult.status === 'REJECTED' || assetResult.error) {
+              console.warn(`[MediaBridge] ${approveCorrelationId} Asset ${assetResult.id} failed: ${assetResult.error || assetResult.rejectReason}`);
+            }
+          }
         }
       } catch (pipelineError: any) {
-        console.error('[AdminReview] Media pipeline error:', pipelineError.message);
+        console.error(`[MediaBridge] ${approveCorrelationId} Pipeline error: ${pipelineError.message}`);
       }
+    } else {
+      console.log(`[VideoReviewApprove] ${approveCorrelationId} Asset already has yodeckMediaId=${asset.yodeckMediaId}`);
     }
     
     // CANONICAL PLAYLIST PUBLISHING: Add to location canonical playlists
@@ -725,18 +743,19 @@ export async function approveAsset(
       
       // Only publish if the asset has a Yodeck media ID (either existing or from pipeline)
       if (effectiveYodeckMediaId) {
+        console.log(`[AutoPublish] ${approveCorrelationId} Starting canonical publish with yodeckMediaId=${effectiveYodeckMediaId}`);
         canonicalPublishResult = await publishApprovedVideoToLocations(effectiveYodeckMediaId, asset.advertiserId);
         
         if (canonicalPublishResult.success) {
-          console.log(`[AdminReview] Canonical publish: ${canonicalPublishResult.locationsUpdated} locations updated`);
+          console.log(`[AutoPublish] ${approveCorrelationId} outcome=SUCCESS locationsUpdated=${canonicalPublishResult.locationsUpdated}`);
         } else {
-          console.warn('[AdminReview] Canonical publish had errors:', canonicalPublishResult.errors);
+          console.warn(`[AutoPublish] ${approveCorrelationId} outcome=PARTIAL_FAIL errors=${canonicalPublishResult.errors.join('; ')}`);
         }
       } else {
-        console.log('[AdminReview] Asset still has no yodeckMediaId after pipeline, skipping canonical publish');
+        console.log(`[AutoPublish] ${approveCorrelationId} outcome=SKIPPED reason=no_yodeckMediaId`);
       }
     } catch (canonicalError: any) {
-      console.error('[AdminReview] Canonical publish error:', canonicalError.message);
+      console.error(`[AutoPublish] ${approveCorrelationId} outcome=ERROR error=${canonicalError.message}`);
     }
     
     // Legacy: Also trigger placement plan for backward compatibility
@@ -781,10 +800,12 @@ export async function approveAsset(
     return { 
       success: true, 
       message,
+      correlationId: approveCorrelationId,
       placementPlanId: planId,
       autoPlacement: autoPlacementResult,
       canonicalPublish: canonicalPublishResult,
       mediaPipeline: pipelineResult,
+      yodeckMediaId: effectiveYodeckMediaId,
     };
   } catch (error: any) {
     console.error('[AdminReview] Error approving asset:', error);

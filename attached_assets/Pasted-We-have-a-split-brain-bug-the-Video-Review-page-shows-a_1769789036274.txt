@@ -1,0 +1,61 @@
+We have a split-brain bug: the Video Review page shows a newly uploaded ad (technically OK), but the publish pipeline fails at RESOLVE_ASSET because /api/admin/advertisers/:id/media returns assets: [] and canonical.assetId=null (“Geen video geüpload”). This means the upload used by /video-review is not being persisted into the ad-assets/media pipeline that publishNow() uses.
+
+GOAL
+Make Video Review the single source of truth for uploaded advertiser videos by bridging it into the existing media pipeline. After approving a video in /video-review, the system must:
+- create/update a MediaAsset (ad-asset) record for that upload
+- run validate/normalize as needed
+- set status READY_FOR_YODECK when compatible
+- automatically call publishNow(advertiserId) and verify adsCount > 0 on the target playlist
+This must NOT break existing advertiser upload link flow, baseline seeding, or any Yodeck operations.
+
+CONTEXT/OBSERVED
+- publishNow() returns 422 FAILED with logs showing STEP=RESOLVE_ASSET FAIL.
+- /api/admin/advertisers/:id/media returns assets: [] after uploading via /video-review, even though UI shows “Technisch OK”.
+- Earlier assets were rejected “Bestand bevat geen video” but the new Canva upload is valid (h264 yuv420p 1920x1080 15s).
+
+IMPLEMENTATION REQUIREMENTS
+1) Identify where /video-review stores uploads (DB table, storage path, entity id). Add a reliable mapping from that upload record to the MediaAsset/ad-assets table used by:
+   - GET /api/admin/advertisers/:id/media
+   - resolvePlayableAsset()/resolveCanonicalAsset()
+   - validate/normalize endpoints
+   - publishNow()
+2) On “Approve” action in Video Review:
+   - Persist or upsert a MediaAsset row with:
+     advertiserId
+     originalFileName
+     storedFileName
+     storageUrl/path (pointing to the actual uploaded file)
+     createdAt, fileSize if known
+     status initially PENDING or VALIDATING
+     isSuperseded logic: supersede older assets for same advertiser
+   - Immediately enqueue/trigger validation for that asset (same pipeline as POST /api/admin/media/:id/validate).
+   - If validation says NEEDS_NORMALIZATION, enqueue normalization; when completed, mark READY_FOR_YODECK.
+   - After asset becomes READY_FOR_YODECK, auto-trigger publishNow(advertiserId) (existing behavior) and include correlationId logging.
+3) Ensure GET /api/admin/advertisers/:id/media returns the newly approved asset and canonical resolves correctly (largest+newest, not superseded, READY_FOR_YODECK).
+4) Add extremely clear trace logs for the whole path:
+   [VideoReviewApprove] correlationId=... advertiserId=... uploadId=... storedFile=...
+   [MediaBridge] createdAssetId=... status=...
+   [Validate] ... result=...
+   [Normalize] ... outputFile=...
+   [AutoPublish] publish correlationId=... outcome=... adsInPlaylists=...
+5) Add a safety check: never overwrite baseline-only playlists; only add ad media to the resolved playlistId via UPDATE_PLAYLIST step; keep dedup.
+6) Add a small UI hint on Video Review card after approval:
+   - “Gepubliceerd” / “Bezig met normaliseren” / “Publish failed (open trace)”
+   - Show correlationId and a button to copy it.
+
+DELIVERABLES
+- Code changes + migration if needed
+- Confirm with a manual test:
+   a) Upload Canva mp4 via Video Review
+   b) Approve
+   c) Validate/normalize runs (if needed)
+   d) publishNow runs automatically
+   e) /api/screens/:id/now-playing shows adsCount > 0
+   f) Yodeck playlist contains the ad media id
+
+DO NOT
+- remove existing advertiser upload link flow
+- change Yodeck baseline content behavior
+- break current endpoints
+
+After implementing, print the exact endpoints/steps I should call to verify and the expected JSON fields.
