@@ -313,8 +313,66 @@ export async function forceScreenToPlaylistMode(
     logs.push(`[PlaylistEnforcer] PUSH_OK`);
   }
   
-  // Step 5: Log after state
-  logs.push(`[PlaylistEnforcer] after={source_type:playlist, source_id:${desiredPlaylistId}}`);
+  // Step 5: HARD VERIFICATION - GET again to confirm state change
+  logs.push(`[PlaylistEnforcer] VERIFY: GET /screens/${yodeckPlayerId}/ to confirm playlist mode`);
+  const verifyResult = await yodeckRequest<any>(`/screens/${yodeckPlayerId}/`);
+  
+  if (!verifyResult.ok || !verifyResult.data) {
+    logs.push(`[PlaylistEnforcer] VERIFY_FAILED: Could not fetch screen for verification`);
+    return {
+      ok: false,
+      playerId: yodeckPlayerId,
+      desiredPlaylistId,
+      screenBefore: { source_type: sourceTypeBefore, source_id: sourceIdBefore },
+      screenAfter: { source_type: "unknown", source_id: null },
+      wasInLayoutMode,
+      patched: true,
+      pushed,
+      error: "VERIFY_FAILED: Could not fetch screen for verification",
+      logs,
+    };
+  }
+  
+  const verifyContent = verifyResult.data.screen_content || {};
+  const sourceTypeAfter = verifyContent.source_type || "unknown";
+  const sourceIdAfter = verifyContent.source_id || null;
+  
+  logs.push(`[PlaylistEnforcer] VERIFY: after={source_type:${sourceTypeAfter}, source_id:${sourceIdAfter}}`);
+  
+  // HARD CHECK: Must be playlist mode with correct ID
+  if (sourceTypeAfter !== "playlist") {
+    logs.push(`[PlaylistEnforcer] HARD_FAIL: source_type=${sourceTypeAfter} but expected "playlist"`);
+    return {
+      ok: false,
+      playerId: yodeckPlayerId,
+      desiredPlaylistId,
+      screenBefore: { source_type: sourceTypeBefore, source_id: sourceIdBefore },
+      screenAfter: { source_type: sourceTypeAfter, source_id: sourceIdAfter },
+      wasInLayoutMode,
+      patched: true,
+      pushed,
+      error: `HARD_FAIL: Screen still in ${sourceTypeAfter} mode after PATCH`,
+      logs,
+    };
+  }
+  
+  if (sourceIdAfter !== desiredPlaylistId) {
+    logs.push(`[PlaylistEnforcer] HARD_FAIL: source_id=${sourceIdAfter} but expected ${desiredPlaylistId}`);
+    return {
+      ok: false,
+      playerId: yodeckPlayerId,
+      desiredPlaylistId,
+      screenBefore: { source_type: sourceTypeBefore, source_id: sourceIdBefore },
+      screenAfter: { source_type: sourceTypeAfter, source_id: sourceIdAfter },
+      wasInLayoutMode,
+      patched: true,
+      pushed,
+      error: `HARD_FAIL: Screen on wrong playlist ${sourceIdAfter} instead of ${desiredPlaylistId}`,
+      logs,
+    };
+  }
+  
+  logs.push(`[PlaylistEnforcer] VERIFY_OK: Screen confirmed on playlist:${desiredPlaylistId}`);
   logs.push(`[PlaylistEnforcer] ${wasInLayoutMode ? "layout → playlist enforced" : "playlist source updated"} (${Date.now() - startTime}ms)`);
   
   return {
@@ -322,7 +380,7 @@ export async function forceScreenToPlaylistMode(
     playerId: yodeckPlayerId,
     desiredPlaylistId,
     screenBefore: { source_type: sourceTypeBefore, source_id: sourceIdBefore },
-    screenAfter: { source_type: "playlist", source_id: desiredPlaylistId },
+    screenAfter: { source_type: sourceTypeAfter, source_id: sourceIdAfter },
     wasInLayoutMode,
     patched: true,
     pushed,
@@ -483,6 +541,25 @@ export async function verifyAdInPlaylist(
   const content = screenResult.data.screen_content || {};
   const sourceType = content.source_type || "unknown";
   const sourceId = content.source_id;
+  
+  // LAYOUT FORBIDDEN GUARD - hard fail on layout detection
+  try {
+    guardNoLayout(sourceType, `verifyAdInPlaylist screen=${yodeckPlayerId}`);
+  } catch (e) {
+    logs.push(`[Verify] LAYOUT_FORBIDDEN: ${(e as Error).message}`);
+    return {
+      ok: false,
+      snapshot: {
+        sourceType,
+        playlistId: sourceId || null,
+        adsCount: 0,
+        containsExpectedMedia: false,
+        expectedMediaId,
+        playlistItems: [],
+      },
+      error: `LAYOUT_FORBIDDEN: Screen ${yodeckPlayerId} in layout mode - ads cannot be visible`,
+    };
+  }
   
   // VERIFICATION CHECK 1: Must be in playlist mode
   if (sourceType !== "playlist") {
