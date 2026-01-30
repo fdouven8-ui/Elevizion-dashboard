@@ -19399,6 +19399,42 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  /**
+   * POST /api/admin/advertisers/:id/normalize-and-publish
+   * Normalize existing asset and publish to Yodeck screens
+   */
+  app.post("/api/admin/advertisers/:id/normalize-and-publish", requireAdminAccess, async (req, res) => {
+    try {
+      const { id: advertiserId } = req.params;
+      const { targetYodeckPlayerIds, force } = req.body;
+
+      if (!targetYodeckPlayerIds || !Array.isArray(targetYodeckPlayerIds) || targetYodeckPlayerIds.length === 0) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: "targetYodeckPlayerIds is required and must be a non-empty array" 
+        });
+      }
+
+      console.log(`[NormalizeAndPublish] Starting for advertiser ${advertiserId}, targets: ${targetYodeckPlayerIds.join(", ")}`);
+      
+      const { normalizeAndPublish } = await import("./services/normalizeAndPublishService");
+      
+      const result = await normalizeAndPublish(advertiserId, {
+        targetYodeckPlayerIds,
+        force: force === true,
+      });
+      
+      res.json(result);
+    } catch (error: any) {
+      console.error("[NormalizeAndPublish] Error:", error);
+      res.status(500).json({ 
+        ok: false, 
+        error: error.message,
+        correlationId: `err-${Date.now()}`,
+      });
+    }
+  });
+
   // ============================================================================
   // YODECK MEDIA PIPELINE ROUTES
   // ============================================================================

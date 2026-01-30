@@ -1,0 +1,77 @@
+We need to FIX the fact that an already-uploaded advertiser video is not playing on Yodeck.
+Current situation:
+- Screen playlist plays baseline only (adsCount=0).
+- We have APPROVED ads assets for advertiserId=9a99d555-8676-49d3-9862-f65859bdcfb1.
+- One asset has yodeckMediaId=null (newer one) and one asset has WRONG yodeckMediaId (27476083 is baseline “NOS algemeen nieuws”).
+- Placements are empty, so target resolution must support explicit target player id.
+
+Goal:
+Take the EXISTING uploaded file from storage, normalize it to a strict Yodeck-compatible MP4, create/upload it to Yodeck (two-step upload), then insert into the screen’s effective playlist and push+verify it plays.
+
+Implement these changes:
+
+A) Add a deterministic “normalize + publish existing asset” endpoint
+POST /api/admin/advertisers/:id/normalize-and-publish
+Body:
+{
+  "targetYodeckPlayerIds": ["591896"],
+  "force": true
+}
+Behavior:
+1) RESOLVE_ASSET:
+   - Pick the newest APPROVED asset for this advertiser.
+   - If it has yodeckMediaId that matches known baseline mediaIds or media name does NOT contain advertiser linkKey/storedFilename, mark it INVALID_MAPPING and ignore that yodeckMediaId.
+2) NORMALIZE:
+   - Ensure ffmpeg exists in runtime. If not, use a Node dependency (fluent-ffmpeg) with static ffmpeg binaries OR install via apt in Replit compatible way.
+   - Normalize to: MP4 (movflags +faststart), H.264 (libx264), yuv420p, 1920x1080 (or preserve aspect with pad), 25/30fps ok, AAC audio (or no audio), duration <= 15s if you want to enforce.
+   - Store normalized file alongside original: same folder but suffix “-yodeck.mp4”.
+   - Save ffprobe JSON for both original and normalized in DB (columns: ffprobeOriginalJson, ffprobeNormalizedJson).
+   - Mark asset status READY_FOR_YODECK only when normalized file passes checks (codec=h264, pix_fmt=yuv420p, moov atom front).
+3) UPLOAD_TO_YODECK:
+   - Create Yodeck media with deterministic name like: "EVZ-AD | {advertiserName} | {assetId} | {storedFilename}"
+   - Use Yodeck 2-step upload (create -> get upload_url -> PUT binary -> poll status until ready/live).
+   - Persist yodeckMediaId on THIS asset only after verifying:
+     - returned media name matches the deterministic name
+     - fileSize > 0
+     - status indicates ready/live
+4) RESOLVE_PLAYLIST:
+   - For each targetYodeckPlayerId: fetch canonical source_id from screen content (source_type=playlist), use that playlistId.
+5) UPDATE_PLAYLIST:
+   - Insert the new ad mediaId into that playlist (dedup first).
+   - IMPORTANT: Do NOT rely on tags endpoint. Just add media item by id.
+6) PUSH_VERIFY:
+   - Trigger “save & push” for the screen if API supports it, then verify via our /now-playing that:
+     - playlistId matches
+     - adsCount > 0
+     - and the playlist items include the new ad mediaId
+   - Retry verify up to N times with backoff.
+7) Return full trace JSON:
+   - correlationId
+   - steps with success/failed/skipped, durations, details
+   - include paths: original storage path, normalized path, ffprobe summary
+   - include yodeck calls: created mediaId, upload status, playlistId updated, push result.
+
+B) Fix mapping bug permanently
+- Never allow an advertiser asset to store a yodeckMediaId if that mediaId is currently present in baseline content items.
+- Add guard: if mediaId is in any screen’s baseline items, reject and force reupload.
+- Ensure the “approved ads” API returns mappingHealth + reason.
+
+C) Minimal operator UX
+- Add a button in Advertiser detail or Video Review: “Force normalize + publish to screen”
+  - Calls the endpoint with targetYodeckPlayerIds.
+- Show last trace outcome on screen page (adsCount, last publish correlationId).
+
+Acceptance criteria:
+- Calling normalize-and-publish for advertiser 9a99... to playerId 591896 results in:
+  - a NEW Yodeck mediaId (not 27476083)
+  - playlist itemCount increases OR adsCount becomes >=1
+  - /api/screens/{screenId}/now-playing returns adsCount > 0
+- Baseline items remain and still play; ad plays in the loop.
+
+Do not break:
+- Existing baseline seeding
+- Existing media validation pipeline
+- Moneybird
+- Existing Yodeck API fallbacks
+
+Add precise logging so we can diagnose failures quickly.

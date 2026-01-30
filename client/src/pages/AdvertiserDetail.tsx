@@ -1149,6 +1149,73 @@ export default function AdvertiserDetail() {
                 Reset upload status
               </Button>
             </div>
+            
+            {/* Force Normalize + Publish section */}
+            <div className="mt-3 p-3 border border-orange-300 rounded-lg bg-white/70">
+              <h4 className="text-sm font-medium text-orange-700 mb-2">Force Normalize & Publish</h4>
+              <div className="flex flex-col gap-2">
+                <div className="text-xs text-muted-foreground">
+                  Normaliseert de video met ffmpeg en publiceert naar opgegeven Yodeck player(s).
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="Yodeck Player ID (bijv: 591896)"
+                    className="flex-1 px-2 py-1 text-sm border border-orange-200 rounded focus:outline-none focus:ring-1 focus:ring-orange-400"
+                    id="normalize-target-player"
+                    data-testid="input-normalize-player-id"
+                  />
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="bg-orange-500 hover:bg-orange-600"
+                    data-testid="button-force-normalize-publish"
+                    onClick={async () => {
+                      const input = document.getElementById("normalize-target-player") as HTMLInputElement;
+                      const playerId = input?.value?.trim();
+                      if (!playerId) {
+                        toast({ title: "Voer een Yodeck Player ID in", variant: "destructive" });
+                        return;
+                      }
+                      try {
+                        toast({ title: "Normalize & Publish gestart...", description: "Dit kan even duren" });
+                        const res = await fetch(`/api/admin/advertisers/${advertiser.id}/normalize-and-publish`, {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            targetYodeckPlayerIds: [playerId],
+                            force: true
+                          })
+                        });
+                        const data = await res.json();
+                        if (data.outcome === "SUCCESS" || data.outcome === "PARTIAL") {
+                          toast({ 
+                            title: `Publicatie ${data.outcome}`, 
+                            description: `Yodeck Media ID: ${data.summary?.yodeckMediaId || "N/A"}, adsCount: ${data.summary?.adsCount || 0}`
+                          });
+                        } else {
+                          const failedStep = data.steps?.find((s: any) => s.status === "failed");
+                          toast({ 
+                            title: `Publicatie mislukt: ${data.outcome}`, 
+                            description: failedStep?.error || "Onbekende fout",
+                            variant: "destructive"
+                          });
+                        }
+                        console.log("[NormalizeAndPublish] Result:", data);
+                      } catch (e: any) {
+                        toast({ title: e.message || "Fout bij normalize & publish", variant: "destructive" });
+                      }
+                    }}
+                  >
+                    <Send className="h-4 w-4 mr-1" />
+                    Force Publish
+                  </Button>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Controleer console logs voor volledige trace.
+                </div>
+              </div>
+            </div>
             <div className="text-xs space-y-1 bg-white/50 rounded p-2 border border-orange-200">
               <div className="flex items-center gap-2">
                 <span className="text-muted-foreground">uploadEnabled:</span>
