@@ -13115,6 +13115,184 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  // ============================================================================
+  // YODECK PLAYLIST API - Always returns JSON (never HTML)
+  // ============================================================================
+
+  /**
+   * GET /api/yodeck/playlists/:playlistId
+   * Fetch raw playlist data from Yodeck - ALWAYS returns JSON
+   * This endpoint is explicitly mounted to prevent HTML fallback
+   */
+  app.get("/api/yodeck/playlists/:playlistId", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    
+    try {
+      const { playlistId } = req.params;
+      const { yodeckRequest } = await import("./services/yodeckLayoutService");
+      
+      const fetchedAt = new Date().toISOString();
+      const result = await yodeckRequest<any>(`/playlists/${playlistId}`);
+      
+      if (!result.ok) {
+        return res.status(502).json({
+          ok: false,
+          fetchedAt,
+          playlistId,
+          error: result.error || "Failed to fetch playlist from Yodeck",
+        });
+      }
+
+      const playlist = result.data;
+      const items = Array.isArray(playlist?.items) ? playlist.items : [];
+      
+      return res.json({
+        ok: true,
+        fetchedAt,
+        playlistId: Number(playlistId),
+        name: playlist?.name || null,
+        itemCount: items.length,
+        items: items.map((item: any) => ({
+          id: item.id,
+          mediaId: item.media,
+          type: item.type || "media",
+          duration: item.duration,
+          priority: item.priority,
+        })),
+        raw: playlist,
+      });
+    } catch (error: any) {
+      console.error(`[YodeckAPI] Error fetching playlist:`, error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Internal server error",
+      });
+    }
+  });
+
+  // ============================================================================
+  // DEBUG ENDPOINTS - Raw Yodeck data inspection
+  // ============================================================================
+
+  /**
+   * GET /api/debug/yodeck/playlist/:id/raw
+   * Raw playlist inspection with media status details
+   */
+  app.get("/api/debug/yodeck/playlist/:id/raw", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    
+    try {
+      const { id } = req.params;
+      const { yodeckRequest } = await import("./services/yodeckLayoutService");
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      
+      const fetchedAt = new Date().toISOString();
+      const playlistResult = await yodeckRequest<any>(`/playlists/${id}`);
+      
+      if (!playlistResult.ok) {
+        return res.status(502).json({
+          ok: false,
+          fetchedAt,
+          playlistId: id,
+          error: playlistResult.error || "Failed to fetch playlist",
+        });
+      }
+
+      const playlist = playlistResult.data;
+      const items = Array.isArray(playlist?.items) ? playlist.items : [];
+      
+      // Fetch media status for each item
+      const itemsWithStatus = await Promise.all(
+        items.map(async (item: any) => {
+          const mediaId = item.media;
+          let mediaStatus = null;
+          
+          if (mediaId) {
+            try {
+              const inspection = await yodeckPublishService.inspectMedia(mediaId);
+              mediaStatus = {
+                status: inspection.status,
+                duration: inspection.duration,
+                isValid: inspection.isValid,
+                playable: inspection.status === 'ready',
+              };
+            } catch {
+              mediaStatus = { status: 'unknown', error: 'Failed to fetch' };
+            }
+          }
+          
+          return {
+            id: item.id,
+            mediaId,
+            type: item.type || "media",
+            duration: item.duration,
+            priority: item.priority,
+            mediaStatus,
+          };
+        })
+      );
+
+      return res.json({
+        ok: true,
+        fetchedAt,
+        playlistId: Number(id),
+        name: playlist?.name || null,
+        itemCount: items.length,
+        items: itemsWithStatus,
+      });
+    } catch (error: any) {
+      console.error(`[Debug] Error in playlist raw:`, error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Internal server error",
+      });
+    }
+  });
+
+  /**
+   * GET /api/debug/yodeck/media/:id/status
+   * Media status inspection - uploadOk, encodingStatus, playable
+   */
+  app.get("/api/debug/yodeck/media/:id/status", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    
+    try {
+      const { id } = req.params;
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      
+      const fetchedAt = new Date().toISOString();
+      const inspection = await yodeckPublishService.inspectMedia(Number(id));
+      
+      if (!inspection.exists) {
+        return res.status(404).json({
+          ok: false,
+          fetchedAt,
+          mediaId: Number(id),
+          exists: false,
+          error: "Media not found in Yodeck",
+        });
+      }
+
+      return res.json({
+        ok: true,
+        fetchedAt,
+        mediaId: Number(id),
+        exists: true,
+        uploadOk: inspection.status === 'ready',
+        encodingStatus: inspection.status,
+        playable: inspection.isValid && inspection.status === 'ready',
+        duration: inspection.duration,
+        details: inspection,
+      });
+    } catch (error: any) {
+      console.error(`[Debug] Error in media status:`, error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Internal server error",
+      });
+    }
+  });
+
   // Mock data for when Yodeck API is not configured
   const MOCK_SCREENS = [
     {
@@ -16446,16 +16624,25 @@ KvK: 90982541 | BTW: NL004857473B37</p>
    * POST /api/admin/screens/:screenId/rebuild-playlist
    * Rebuild screen playlist from base + ads
    * This is the ONLY endpoint that may create/modify screen playlists
+   * 
+   * Query params:
+   *   dryRun=true - Simulate rebuild without mutating (returns what would happen)
    */
   app.post("/api/admin/screens/:screenId/rebuild-playlist", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.params;
+      const dryRun = req.query.dryRun === "true";
       
-      console.log(`[Admin] Rebuild playlist request for screen ${screenId}`);
+      console.log(`[Admin] Rebuild playlist request for screen ${screenId} (dryRun=${dryRun})`);
       
-      const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
+      const { rebuildScreenPlaylist, simulateRebuild } = await import("./services/simplePlaylistModel");
+      
+      if (dryRun) {
+        const simulation = await simulateRebuild(screenId);
+        return res.json(simulation);
+      }
+      
       const result = await rebuildScreenPlaylist(screenId);
-      
       res.json(result);
     } catch (error: any) {
       console.error("[Admin] Rebuild playlist error:", error);
@@ -16888,6 +17075,33 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       }
       
       res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/screens/:screenId/playback-state
+   * Get complete playback state (single source of truth for UI, backend, and Yodeck)
+   * Returns expected state (from DB), actual state (from Yodeck), and sync status
+   */
+  app.get("/api/screens/:screenId/playback-state", requirePermission("view_screens"), async (req, res) => {
+    res.set({
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store, no-cache, must-revalidate",
+    });
+    
+    try {
+      const { screenId } = req.params;
+      const { getScreenPlaybackState } = await import("./services/simplePlaylistModel");
+      
+      const state = await getScreenPlaybackState(screenId);
+      
+      if (!state) {
+        return res.status(404).json({ ok: false, error: "Screen not found" });
+      }
+      
+      res.json({ ok: true, ...state });
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message });
     }

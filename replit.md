@@ -40,6 +40,8 @@ Authentication uses username/password with bcrypt hashing and session data store
     - `applyPlayerSourceAndPush()`: Sets player source to playlist and verifies
     - `rebuildScreenPlaylist()`: Full rebuild: base + targeting-matched ads + push + verify
     - `getScreenNowPlayingSimple()`: READ-ONLY status check (returns actualSourceType, actualSourceId, actualSourceName, isCorrect, itemCount, topItems)
+    - `getScreenPlaybackState()`: Single source of truth combining expected state (DB), actual state (Yodeck), and sync status
+    - `simulateRebuild()`: Dry-run simulation using same targeting/status logic as actual rebuild
   - **Targeting-Based Ad Selection** (in `rebuildScreenPlaylist`):
     - Uses `targetRegionCodes` (text[] array) and `targetCities` (comma-separated string) from advertisers
     - Matches screen's location city/region against advertiser targeting with normalization
@@ -54,9 +56,18 @@ Authentication uses username/password with bcrypt hashing and session data store
     - Layout mode is forbidden; screens must be in playlist mode
 - **Admin Endpoints**:
   - `POST /api/admin/screens/:screenId/rebuild-playlist`: The ONLY endpoint that creates/modifies playlists
+  - `POST /api/admin/screens/:screenId/rebuild-playlist?dryRun=true`: Simulate rebuild without mutations
   - `GET /api/admin/yodeck/base-playlist`: Read-only base playlist info
   - `GET /api/admin/yodeck/auth-status`: Validate Yodeck authentication
   - `GET /api/admin/yodeck/media/:id/inspect`: Debug endpoint for media validation (returns status, duration, isValid)
+- **Screen Status Endpoints**:
+  - `GET /api/screens/:screenId/playback-state`: Single source of truth for UI - returns expected (DB), actual (Yodeck), sync status
+  - `GET /api/screens/:screenId/now-playing`: READ-ONLY status check
+  - `GET /api/screens/:screenId/device-status`: Unified online/offline status
+- **Debug Endpoints** (always return JSON, never HTML):
+  - `GET /api/yodeck/playlists/:id`: Fetch playlist data - explicitly JSON-only
+  - `GET /api/debug/yodeck/playlist/:id/raw`: Raw playlist inspection with media status for each item
+  - `GET /api/debug/yodeck/media/:id/status`: Media status (uploadOk, encodingStatus, playable)
 - **Upload Worker Service**: Handles a two-step upload process with:
   - **Reliable presigned PUT**: Always sends Content-Length and Content-Type headers (no chunked transfer)
   - **Media status polling**: After PUT success, polls Yodeck /media/{id}/ until status is 'ready' or timeout

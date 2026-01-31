@@ -1,0 +1,199 @@
+JE ROL
+Je bent een senior backend engineer met diepe kennis van:
+- REST API design
+- Session-based auth & routing
+- Yodeck API (media, playlists, push, encoding lifecycle)
+- State consistency tussen UI ↔ backend ↔ externe API’s
+
+Je werkt aan het Elevizion dashboard.
+
+====================================================
+EINDDOEL (HIER MAG NIET VAN WORDEN AFGEWEKEN)
+====================================================
+
+Voor elk scherm geldt:
+
+1. Exact 1 actieve playlist per screen
+2. Die playlist bevat:
+   - Alle baseline items
+   - Alle geldige advertenties (video’s)
+3. Elke ad video:
+   - Is volledig en correct geüpload naar Yodeck
+   - Heeft een geldige yodeckMediaId
+   - Staat daadwerkelijk in de playlist
+4. De playlist wordt:
+   - Opgeslagen
+   - Gepusht
+   - Afgespeeld op het scherm
+5. UI, backend en Yodeck tonen exact dezelfde waarheid
+
+====================================================
+HUIDIG PROBLEEM (FEITELIJKE OBSERVATIES)
+====================================================
+
+- Backend meldt:
+  adsAdded met mediaId (bijv. 29661498)
+- Playlist verify wisselt tussen itemCount 4 en 5
+- Yodeck UI toont:
+  - Video bestaat
+  - Status blijft "laden" / "aborted"
+- Endpoint /api/yodeck/playlists/:id retourneert HTML i.p.v. JSON
+- Browser error:
+  Unexpected token '<' <!DOCTYPE html>
+- /api/public/status werkt correct (JSON)
+- Yodeck encodeert zelf → wij hoeven alleen correct te uploaden
+- Handmatige upload in Yodeck werkt altijd → bestand is valide
+
+====================================================
+VERPLICHTE OPLOSSING (ARCHITECTUREEL)
+====================================================
+
+1. API ROUTING FIX (KRITIEK)
+Zorg dat:
+GET /api/yodeck/playlists/:playlistId
+ALTIJD JSON retourneert, nooit HTML.
+
+Acties:
+- Route expliciet mounten onder backend API router
+- Geen frontend fallback
+- Geen redirects
+- Forceer response type application/json
+- Zorg dat auth middleware geen HTML login page terugstuurt
+
+====================================================
+
+2. YODECK MEDIA UPLOAD FLOW (MOET EXACT ZO)
+
+Implementeer strikt deze flow:
+
+POST   /media                → create media
+GET    /media/:id/upload     → presigned upload URL
+PUT    presigned URL         → upload binary
+POLL   /media/:id/status     → wachten tot status === READY
+
+REGELS:
+- Voeg NOOIT media toe aan een playlist zolang status !== READY
+- Push NOOIT een playlist zolang er media in processing state zit
+
+====================================================
+
+3. PLAYLIST REBUILD MOET TRANSACTIONEEL
+
+Huidig probleem:
+"Added 1 ads" maar "Final playlist has 4 items"
+
+Dat betekent dat ads worden overschreven of niet persistent zijn.
+
+VERPLICHTE VOLGORDE:
+
+1. Clear playlist
+2. Add base items
+3. Add ads
+4. Save playlist
+5. Verify playlist items via Yodeck API
+6. Assign playlist aan screen
+7. Push naar screen
+8. Verify now-playing
+
+Als verify faalt → rollback of error status
+
+====================================================
+
+4. PUSH IS NU ONBETROUWBAAR (FIX)
+
+push.ok === true is NIET voldoende.
+
+Na elke push verplicht uitvoeren:
+
+GET screen now-playing
+
+Valideer:
+- sourceType === playlist
+- sourceId === playlistId
+- itemCount === verwacht aantal
+
+Als dit niet klopt:
+- push markeren als FAILED
+- UI informeren
+- niet als "live" tonen
+
+====================================================
+
+5. SINGLE SOURCE OF TRUTH AFDWINGEN
+
+Introduceer één waarheid:
+
+ScreenPlaybackState {
+  playlistId
+  mediaIds[]
+  lastVerifiedAt
+  isConsistent
+}
+
+- Backend schrijft dit
+- UI leest dit
+- Yodeck wordt hiertegen geverifieerd
+
+Geen UI-states meer die afwijken van Yodeck realiteit.
+
+====================================================
+VERPLICHTE DEBUG ENDPOINTS
+====================================================
+
+A. Raw playlist inspect
+GET /api/debug/yodeck/playlist/:id/raw
+
+Retourneer:
+- playlistId
+- items[]
+- mediaId
+- media status
+
+----------------------------------------------------
+
+B. Media status inspect
+GET /api/debug/yodeck/media/:id/status
+
+Retourneer:
+- uploadOk
+- encodingStatus
+- playable (true/false)
+
+----------------------------------------------------
+
+C. Rebuild dry-run
+POST /api/screens/:id/rebuild?dryRun=true
+
+Retourneer exact wat er zou gebeuren,
+zonder iets te muteren.
+
+====================================================
+ACCEPTATIECRITERIA (KEIHARD)
+====================================================
+
+De oplossing is PAS AF als:
+
+- Automatisch geüploade ads:
+  - Niet blijven laden in Yodeck
+  - Zichtbaar zijn in playlists
+  - Worden afgespeeld op schermen
+- /api/yodeck/playlists/:id JSON retourneert
+- verify.actualPlaylistItemCount altijd klopt
+- UI exact toont wat Yodeck afspeelt
+- Geen handmatige Yodeck acties meer nodig zijn
+
+====================================================
+BELANGRIJK
+====================================================
+
+- Geen workarounds
+- Geen UI-only fixes
+- Geen aannames
+- Alles verifiëren via Yodeck API
+
+OPDRACHT:
+Implementeer dit volledig.
+Rapporteer per stap:
+- Wat fout was
+- Wat is aangepast
+- Hoe het nu wordt geverifieerd

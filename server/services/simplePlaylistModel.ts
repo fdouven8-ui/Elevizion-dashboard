@@ -1356,3 +1356,312 @@ export async function validateYodeckAuth(): Promise<AuthStatusResult> {
     };
   }
 }
+
+/**
+ * Simulate a playlist rebuild without making any changes
+ * Returns what WOULD happen if we rebuilt the playlist
+ */
+export async function simulateRebuild(screenId: string): Promise<{
+  dryRun: true;
+  ok: boolean;
+  screenId: string;
+  screen: {
+    name: string | null;
+    yodeckPlayerId: string | null;
+    locationId: string | null;
+    city: string | null;
+  } | null;
+  basePlaylist: {
+    found: boolean;
+    playlistId: number | null;
+    itemCount: number;
+  };
+  targetedAds: Array<{
+    advertiserId: string;
+    companyName: string;
+    mediaId: number | null;
+    mediaStatus: string | null;
+    wouldBeAdded: boolean;
+    skipReason?: string;
+  }>;
+  expectedResult: {
+    baseItems: number;
+    adsToAdd: number;
+    totalItems: number;
+  };
+  errors: string[];
+}> {
+  const errors: string[] = [];
+  
+  // 1. Get screen data
+  const [screen] = await db.select({
+    name: screens.name,
+    yodeckPlayerId: screens.yodeckPlayerId,
+    locationId: screens.locationId,
+    city: screens.city,
+  }).from(screens).where(eq(screens.id, screenId));
+  
+  if (!screen) {
+    return {
+      dryRun: true,
+      ok: false,
+      screenId,
+      screen: null,
+      basePlaylist: { found: false, playlistId: null, itemCount: 0 },
+      targetedAds: [],
+      expectedResult: { baseItems: 0, adsToAdd: 0, totalItems: 0 },
+      errors: ["Screen not found"],
+    };
+  }
+  
+  // 2. Get base playlist
+  const baseResult = await getBasePlaylistId();
+  const baseItemCount = baseResult.ok && baseResult.basePlaylistId ? baseResult.itemCount ?? 0 : 0;
+  
+  // 3. Find targeted advertisers
+  const allAdvertisers = await db.select({
+    id: advertisers.id,
+    companyName: advertisers.companyName,
+    targetRegionCodes: advertisers.targetRegionCodes,
+    targetCities: advertisers.targetCities,
+    status: advertisers.status,
+    yodeckMediaIdCanonical: advertisers.yodeckMediaIdCanonical,
+    assetStatus: advertisers.assetStatus,
+  }).from(advertisers)
+    .where(eq(advertisers.status, "active"));
+  
+  const targetedAds: Array<{
+    advertiserId: string;
+    companyName: string;
+    mediaId: number | null;
+    mediaStatus: string | null;
+    wouldBeAdded: boolean;
+    skipReason?: string;
+  }> = [];
+  
+  let adsToAddCount = 0;
+  
+  // Get location for region check
+  const location = screen.locationId ? await storage.getLocation(screen.locationId) : null;
+  const screenCity = (location?.city || screen.city || "").toLowerCase().trim();
+  const screenRegion = ((location as any)?.region || "").toLowerCase().trim();
+  
+  // Allowed asset statuses (same as rebuildScreenPlaylist)
+  const ALLOWED_ASSET_STATUSES = ["approved", "ready_for_yodeck", "ready_for_publish", "live", "uploaded"];
+  
+  for (const adv of allAdvertisers) {
+    let wouldBeAdded = false;
+    let skipReason: string | undefined;
+    
+    // Check asset status - must be in approved/ready states (same logic as rebuild)
+    const assetStatus = (adv.assetStatus || "").toLowerCase();
+    if (!ALLOWED_ASSET_STATUSES.includes(assetStatus)) {
+      skipReason = `Asset status "${adv.assetStatus}" not in allowed list`;
+      targetedAds.push({
+        advertiserId: adv.id,
+        companyName: adv.companyName,
+        mediaId: adv.yodeckMediaIdCanonical,
+        mediaStatus: adv.assetStatus,
+        wouldBeAdded: false,
+        skipReason,
+      });
+      continue;
+    }
+    
+    // Check targeting using same helpers as rebuildScreenPlaylist
+    const targetRegions = Array.isArray(adv.targetRegionCodes) 
+      ? adv.targetRegionCodes.map(r => normalizeForTargeting(r))
+      : [];
+    const targetCitiesList = parseTargetCities(adv.targetCities);
+    
+    const targetCheck = checkTargetingMatch(screenCity, screenRegion, targetRegions, targetCitiesList);
+    
+    if (!targetCheck.match) {
+      skipReason = targetCheck.reason;
+    } else {
+      // Check media ID
+      if (!adv.yodeckMediaIdCanonical) {
+        skipReason = "No canonical media ID";
+      } else {
+        wouldBeAdded = true;
+      }
+    }
+    
+    if (wouldBeAdded) {
+      adsToAddCount++;
+    }
+    
+    targetedAds.push({
+      advertiserId: adv.id,
+      companyName: adv.companyName,
+      mediaId: adv.yodeckMediaIdCanonical,
+      mediaStatus: adv.assetStatus,
+      wouldBeAdded,
+      skipReason,
+    });
+  }
+  
+  // Apply MAX_ADS limit
+  const maxAds = 20;
+  const actualAdsToAdd = Math.min(adsToAddCount, maxAds);
+  
+  return {
+    dryRun: true,
+    ok: true,
+    screenId,
+    screen: {
+      name: screen.name,
+      yodeckPlayerId: screen.yodeckPlayerId,
+      locationId: screen.locationId,
+      city: screen.city,
+    },
+    basePlaylist: {
+      found: baseResult.ok,
+      playlistId: baseResult.basePlaylistId,
+      itemCount: baseItemCount,
+    },
+    targetedAds,
+    expectedResult: {
+      baseItems: baseItemCount,
+      adsToAdd: actualAdsToAdd,
+      totalItems: baseItemCount + actualAdsToAdd,
+    },
+    errors,
+  };
+}
+
+// =============================================================================
+// SCREEN PLAYBACK STATE: Single Source of Truth
+// =============================================================================
+
+export interface ScreenPlaybackState {
+  screenId: string;
+  screenName: string;
+  playerId: string | null;
+  locationId: string | null;
+  
+  // Expected state (from database)
+  expected: {
+    playlistId: string | null;
+    playlistName: string | null;
+    adsCount: number;
+    lastRebuildAt: Date | null;
+  };
+  
+  // Actual state (from Yodeck)
+  actual: {
+    sourceType: string | null;
+    sourceId: number | null;
+    sourceName: string | null;
+    isOnline: boolean;
+    lastSeenAt: Date | null;
+  };
+  
+  // Sync status
+  sync: {
+    isCorrect: boolean;
+    mismatchReason: string | null;
+    recommendedAction: "none" | "rebuild" | "verify" | "investigate";
+  };
+  
+  // Timestamps
+  fetchedAt: Date;
+}
+
+export async function getScreenPlaybackState(screenId: string): Promise<ScreenPlaybackState | null> {
+  const screen = await storage.getScreen(screenId);
+  if (!screen) return null;
+  
+  // Get now-playing info from Yodeck
+  const nowPlaying = await getScreenNowPlayingSimple(screenId);
+  
+  // Get location for proper targeting (same as rebuildScreenPlaylist)
+  const location = screen.locationId ? await storage.getLocation(screen.locationId) : null;
+  const screenCity = (location?.city || screen.city || "").toLowerCase().trim();
+  const screenRegion = ((location as any)?.region || "").toLowerCase().trim();
+  
+  // Count targeted ads using same logic as rebuildScreenPlaylist
+  const advertisers = await storage.getAllAdvertisers();
+  const ALLOWED_STATUSES = ["approved", "ready_for_yodeck", "ready_for_publish", "live", "uploaded"];
+  let adsCount = 0;
+  
+  for (const adv of advertisers) {
+    const assetStatus = (adv.assetStatus || "").toLowerCase();
+    if (!ALLOWED_STATUSES.includes(assetStatus)) continue;
+    if (!adv.yodeckMediaIdCanonical) continue;
+    
+    // Use same targeting logic as rebuildScreenPlaylist
+    const targetRegions = Array.isArray(adv.targetRegionCodes) 
+      ? adv.targetRegionCodes.map(r => normalizeForTargeting(r))
+      : [];
+    const targetCitiesList = parseTargetCities(adv.targetCities);
+    
+    const targetCheck = checkTargetingMatch(screenCity, screenRegion, targetRegions, targetCitiesList);
+    if (targetCheck.match) {
+      adsCount++;
+    }
+  }
+  
+  // Get expected playlist name from DB (not from Yodeck actual state)
+  const expectedPlaylistName = screen.playlistId 
+    ? `EVZ | SCREEN | ${screen.playerId || 'unknown'}` 
+    : null;
+  
+  // Determine sync status with proper error handling
+  let isCorrect = false;
+  let mismatchReason: string | null = null;
+  let recommendedAction: "none" | "rebuild" | "verify" | "investigate" = "none";
+  
+  // Handle Yodeck API errors first
+  if (!nowPlaying.ok) {
+    mismatchReason = nowPlaying.error || "Failed to fetch Yodeck status";
+    recommendedAction = "verify";
+    isCorrect = false;
+  } else if (!screen.playerId) {
+    mismatchReason = "Screen has no Yodeck player ID";
+    recommendedAction = "investigate";
+  } else if (!screen.playlistId) {
+    mismatchReason = "Screen has no playlist ID - needs rebuild";
+    recommendedAction = "rebuild";
+  } else if (!nowPlaying.isCorrect) {
+    isCorrect = false;
+    if (nowPlaying.actualSourceType === "layout") {
+      mismatchReason = "Screen is in layout mode instead of playlist mode";
+      recommendedAction = "rebuild";
+    } else if (!nowPlaying.actualSourceId) {
+      mismatchReason = "Screen has no content assigned";
+      recommendedAction = "rebuild";
+    } else {
+      mismatchReason = `Expected playlist ${screen.playlistId} but playing ${nowPlaying.actualSourceType}/${nowPlaying.actualSourceId}`;
+      recommendedAction = "rebuild";
+    }
+  } else {
+    isCorrect = true;
+  }
+  
+  return {
+    screenId: screen.id,
+    screenName: screen.name,
+    playerId: screen.playerId,
+    locationId: screen.locationId,
+    expected: {
+      playlistId: screen.playlistId,
+      playlistName: expectedPlaylistName,
+      adsCount: Math.min(adsCount, 20), // MAX_ADS_PER_SCREEN
+      lastRebuildAt: (screen as any).lastRebuildAt || null,
+    },
+    actual: {
+      sourceType: nowPlaying.actualSourceType,
+      sourceId: nowPlaying.actualSourceId,
+      sourceName: nowPlaying.actualSourceName,
+      isOnline: (screen as any).yodeckOnline ?? false,
+      lastSeenAt: (screen as any).yodeckLastSeen ?? null,
+    },
+    sync: {
+      isCorrect,
+      mismatchReason,
+      recommendedAction,
+    },
+    fetchedAt: new Date(),
+  };
+}
