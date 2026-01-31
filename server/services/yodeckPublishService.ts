@@ -1326,8 +1326,101 @@ class YodeckPublishService {
       console.log(`[YodeckPublish][${corrId}] Media status verified OK: ${pollResult.finalStatus}`);
     }
     
+    // === STEP 5: FINAL VERIFICATION - GET /media/:id to confirm media exists ===
+    // CRITICAL: This is the SINGLE SOURCE OF TRUTH. If this fails, the upload is NOT real.
+    if (diagnostics.metadata.ok && diagnostics.binaryUpload.ok && mediaId) {
+      console.log(`[YodeckPublish][${corrId}] FINAL VERIFICATION: GET /media/${mediaId} to confirm existence...`);
+      
+      const apiKey = await this.getApiKey();
+      try {
+        const verifyResponse = await axios.get(`${YODECK_BASE_URL}/media/${mediaId}/`, {
+          headers: {
+            "Authorization": `Token ${apiKey}`,
+            "Accept": "application/json",
+          },
+          timeout: 30000,
+          validateStatus: () => true,
+        });
+        
+        console.log(`[YodeckPublish][${corrId}] Final verify response: status=${verifyResponse.status}`);
+        
+        if (verifyResponse.status === 404) {
+          console.error(`[YodeckPublish][${corrId}] FINAL VERIFICATION FAILED: Media ${mediaId} returns 404 - upload was NOT real`);
+          diagnostics.binaryUpload.ok = false;
+          diagnostics.binaryUpload.error = 'FINAL_VERIFY_404: Media not found after upload';
+          diagnostics.lastError = {
+            message: `CRITICAL: Final verification failed. GET /media/${mediaId} returned 404. The upload was NOT successful.`,
+            status: 404,
+          };
+          
+          return {
+            ok: false,
+            mediaId: undefined,
+            uploadMethodUsed: 'two-step',
+            diagnostics,
+          };
+        }
+        
+        if (verifyResponse.status !== 200) {
+          console.error(`[YodeckPublish][${corrId}] FINAL VERIFICATION FAILED: Unexpected status ${verifyResponse.status}`);
+          diagnostics.binaryUpload.ok = false;
+          diagnostics.binaryUpload.error = `FINAL_VERIFY_ERROR: HTTP ${verifyResponse.status}`;
+          diagnostics.lastError = {
+            message: `Final verification failed with status ${verifyResponse.status}`,
+            status: verifyResponse.status,
+            bodySnippet: JSON.stringify(verifyResponse.data || {}).substring(0, 500),
+          };
+          
+          return {
+            ok: false,
+            mediaId: undefined,
+            uploadMethodUsed: 'two-step',
+            diagnostics,
+          };
+        }
+        
+        // Verify the response contains expected fields
+        const verifyData = verifyResponse.data;
+        if (!verifyData || !verifyData.id) {
+          console.error(`[YodeckPublish][${corrId}] FINAL VERIFICATION FAILED: Response missing id field`);
+          diagnostics.binaryUpload.ok = false;
+          diagnostics.binaryUpload.error = 'FINAL_VERIFY_INVALID: Response missing id';
+          diagnostics.lastError = {
+            message: 'Final verification response is missing required fields',
+            status: 200,
+            bodySnippet: JSON.stringify(verifyData || {}).substring(0, 500),
+          };
+          
+          return {
+            ok: false,
+            mediaId: undefined,
+            uploadMethodUsed: 'two-step',
+            diagnostics,
+          };
+        }
+        
+        console.log(`[YodeckPublish][${corrId}] FINAL VERIFICATION PASSED: Media ${mediaId} confirmed in Yodeck (name=${verifyData.name}, status=${verifyData.status})`);
+        
+      } catch (err: any) {
+        console.error(`[YodeckPublish][${corrId}] FINAL VERIFICATION ERROR: ${err.message}`);
+        diagnostics.binaryUpload.ok = false;
+        diagnostics.binaryUpload.error = `FINAL_VERIFY_EXCEPTION: ${err.message}`;
+        diagnostics.lastError = {
+          message: `Final verification threw exception: ${err.message}`,
+          status: err.response?.status,
+        };
+        
+        return {
+          ok: false,
+          mediaId: undefined,
+          uploadMethodUsed: 'two-step',
+          diagnostics,
+        };
+      }
+    }
+    
     // === Final result ===
-    // uploadOk = metadata.ok AND binaryUpload.ok (confirm is optional)
+    // uploadOk = metadata.ok AND binaryUpload.ok AND final verification passed
     const uploadOk = diagnostics.metadata.ok && diagnostics.binaryUpload.ok;
     
     console.log(`[YodeckPublish][${corrId}] Two-step upload complete: uploadOk=${uploadOk}, mediaId=${mediaId}`);

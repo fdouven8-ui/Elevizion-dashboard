@@ -149,6 +149,55 @@ async function pollMediaStatus(mediaId: number): Promise<{
       console.log(`[UploadWorker] Poll ${attempt}: status=${readiness.status}, fileSize=${readiness.fileSize}, usable=${readiness.usable}`);
 
       if (readiness.usable) {
+        // FINAL VERIFICATION: Confirm media exists via GET /media/:id
+        console.log(`[UploadWorker] FINAL VERIFICATION: GET /media/${mediaId} to confirm existence...`);
+        const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+        const verifyResponse = await fetch(`https://app.yodeck.com/api/v2/media/${mediaId}/`, {
+          headers: { Authorization: `Token ${token}` },
+        });
+        
+        if (verifyResponse.status === 404) {
+          console.error(`[UploadWorker] FINAL VERIFICATION FAILED: Media ${mediaId} returns 404 - upload was NOT real`);
+          return {
+            ok: false,
+            status: "FINAL_VERIFY_404",
+            error: `CRITICAL: Final verification failed. GET /media/${mediaId} returned 404. The upload was NOT successful.`,
+          };
+        }
+        
+        if (!verifyResponse.ok) {
+          console.error(`[UploadWorker] FINAL VERIFICATION FAILED: Unexpected status ${verifyResponse.status}`);
+          return {
+            ok: false,
+            status: `FINAL_VERIFY_ERROR_${verifyResponse.status}`,
+            error: `Final verification failed with status ${verifyResponse.status}`,
+          };
+        }
+        
+        // Validate response body has required fields (not just HTTP 200)
+        let verifyData: any;
+        try {
+          verifyData = await verifyResponse.json();
+        } catch {
+          console.error(`[UploadWorker] FINAL VERIFICATION FAILED: Invalid JSON response`);
+          return {
+            ok: false,
+            status: "FINAL_VERIFY_INVALID_JSON",
+            error: `Final verification failed: response is not valid JSON`,
+          };
+        }
+        
+        if (!verifyData.id) {
+          console.error(`[UploadWorker] FINAL VERIFICATION FAILED: Response missing 'id' field`);
+          return {
+            ok: false,
+            status: "FINAL_VERIFY_INVALID",
+            error: `Final verification failed: response missing 'id' field`,
+          };
+        }
+        
+        console.log(`[UploadWorker] FINAL VERIFICATION PASSED: Media ${mediaId} confirmed in Yodeck (status=${verifyData.status})`);
+        
         return {
           ok: true,
           status: readiness.status || "ready",
@@ -312,6 +361,16 @@ export async function processUploadJob(job: UploadJob): Promise<{
 
   } catch (error: any) {
     console.error(`[UploadWorker] Job ${job.id} failed:`, error.message);
+
+    // DATABASE STATE MUST NEVER LIE - clear advertiser canonical ID on failure
+    const advertiser = await storage.getAdvertiser(job.advertiserId);
+    if (advertiser) {
+      await storage.updateAdvertiser(job.advertiserId, {
+        assetStatus: "upload_failed",
+        yodeckMediaIdCanonical: null,  // Clear to prevent stale/false ID
+      } as any);
+      console.log(`[UploadWorker] Cleared advertiser ${job.advertiserId} assetStatus/yodeckMediaIdCanonical due to failure`);
+    }
 
     // Check if we should retry
     if (attempt >= job.maxAttempts) {

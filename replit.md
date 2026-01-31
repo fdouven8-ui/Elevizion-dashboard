@@ -78,10 +78,14 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/debug/yodeck/whoami`: Identify Yodeck workspace/account (tokenHashHint, sampleScreen, workspace info)
   - `GET /api/debug/yodeck/media/:id/raw`: Raw proxy for Yodeck media API (media details + status)
   - `POST /api/debug/yodeck/selftest`: Integration self-test (whoami + optional media check + playlists)
-- **Upload Worker Service**: Handles a two-step upload process with:
-  - **Reliable presigned PUT**: Always sends Content-Length and Content-Type headers (no chunked transfer)
-  - **Media status polling**: After PUT success, polls Yodeck /media/{id}/ until status is 'ready' or timeout
-  - **Abort detection**: If media status becomes 'aborted' or 'failed', deletes media and reports failure
+- **Upload Worker Service**: Handles a verified upload process with:
+  - **Step 1: Create metadata**: POST /api/v2/media returns mediaId and get_upload_url
+  - **Step 2: Presigned PUT**: Always sends Content-Length and Content-Type headers (no chunked transfer)
+  - **Step 3: Status polling**: Polls Yodeck /media/{id}/ until status is 'ready' or timeout
+  - **Step 4: Abort detection**: If media status becomes 'aborted' or 'failed', deletes media and reports failure
+  - **Step 5: FINAL VERIFICATION**: GET /media/:id MUST return 200 with valid data, else upload is NOT real
+  - **Database integrity**: Only sets assetStatus="live" after Step 5 verification passes
+  - **Failure handling**: Sets assetStatus="upload_failed" if any step fails
   - **Diagnostics**: Comprehensive logging with correlationId for debugging (never logs tokens)
 
 ## External Dependencies

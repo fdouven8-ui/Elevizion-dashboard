@@ -1,0 +1,82 @@
+You are a senior backend engineer. Fix the Elevizion → Yodeck auto-upload pipeline.
+
+CURRENT PROBLEM (confirmed by evidence):
+- Advertiser record shows assetStatus=live and yodeckMediaIdCanonical=29661498.
+- But debug endpoint shows: "Media not found in Yodeck" (404) for mediaId 29661498 and even for a manually existing mediaId (because our debug route likely queries wrong or the media never existed).
+- In Yodeck UI (All Media), only the manually uploaded video is visible. The automatically uploaded one is NOT present.
+=> Our system produces FALSE POSITIVES: it marks uploads as successful/live while Yodeck never received the file.
+
+GOAL:
+Auto-upload must be REAL, deterministic, and verifiable.
+After auto-upload:
+- The media must appear in Yodeck "All Media"
+- The media must be addable to playlists
+- The screen playlist must include that media
+- Push must reflect real state
+
+MANDATORY CHANGES:
+
+A) UPLOAD PIPELINE MUST BE 2-STEP AND VERIFIED
+Implement a single function uploadVideoToYodeck(advertiserId, localFilePath) that does:
+
+1) Create media object in Yodeck (API v2) -> returns mediaId
+2) Request presigned upload URL:
+   GET /api/v2/media/{mediaId}/upload  (or the correct endpoint used earlier in this project)
+3) PUT binary MP4 to the presigned URL with correct headers:
+   - Content-Type: video/mp4
+   - Content-Length: exact bytes
+   - No JSON, no multipart; raw binary PUT
+   Use streaming (fs.createReadStream) to avoid memory spikes.
+   Treat only HTTP 200/204 as success.
+4) Confirm upload by polling:
+   GET /api/v2/media/{mediaId}/status
+   until status is one of: processing/encoding/ready (whatever Yodeck returns),
+   with timeout + clear error if it never changes.
+5) FINAL VERIFY:
+   GET /api/v2/media/{mediaId}
+   If this returns 404 or missing fields => upload is NOT real => FAIL.
+
+B) DATABASE STATE MUST NEVER LIE
+- Only set advertiser.yodeckMediaIdCanonical = mediaId AND assetStatus = "live"
+  AFTER step A5 verifies Yodeck GET /media/{id} succeeds.
+- If upload fails at any point, set:
+  assetStatus = "upload_failed"
+  yodeckMediaIdCanonical = null (or keep previous known-good)
+  and store lastUploadError with the exact failing step.
+
+C) PLAYLIST UPDATE MUST ALSO BE VERIFIED
+After adding media to playlist:
+- Re-fetch playlist from Yodeck and confirm mediaId is included.
+If not included => return ok:false and do not say "push ok".
+
+D) FIX DEBUG/INSPECTION ENDPOINTS (so we can trust output)
+Add these endpoints that ALWAYS return JSON (no SPA fallback):
+1) GET /api/debug/yodeck/media/:id
+   - calls Yodeck GET /api/v2/media/:id
+   - returns { ok, exists, statusCode, bodyPreview }
+2) GET /api/debug/yodeck/media/:id/status
+   - calls Yodeck status endpoint and returns it
+3) GET /api/debug/yodeck/playlists/:id
+   - returns playlist items mediaIds
+
+Ensure Express routes are registered BEFORE the SPA catch-all.
+Set Content-Type application/json always.
+
+E) LOGGING (MANDATORY)
+Log with correlationId across steps:
+- create mediaId
+- presigned url obtained
+- PUT upload status code
+- status polling results
+- final verify GET /media ok
+If any error occurs, log stepName + HTTP status + response text (first 500 chars)
+
+ACCEPTANCE TEST (must pass):
+- Trigger rebuild/publish for screen 241377ce-a25e-4744-9ea7-cd9359515d07
+- System uploads advertiser video
+- Yodeck All Media shows it
+- Screen playlist includes it
+- GET /api/screens/:id returns mediaIds that include the advertiser mediaId
+- If Yodeck does not contain the media, the API must return ok:false with reason.
+
+Do not add new UI features. Focus only on making auto-upload + playlist linking correct and verifiable.

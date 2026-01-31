@@ -700,13 +700,25 @@ export async function ensureAdvertiserMediaUploaded(advertiserId: string): Promi
         ? lastError 
         : (lastError?.message || "Upload failed");
       console.error(`${LOG_PREFIX} Upload failed for advertiser ${advertiserId}: ${errorMsg}`);
+      
+      // DATABASE STATE MUST NEVER LIE - set upload_failed status AND clear invalid canonical ID
+      await db.update(advertisers)
+        .set({
+          assetStatus: "upload_failed",
+          yodeckMediaIdCanonical: null,  // Clear to prevent stale/false ID
+          updatedAt: new Date(),
+        })
+        .where(eq(advertisers.id, advertiserId));
+      console.log(`${LOG_PREFIX} Set advertiser ${advertiserId} assetStatus=upload_failed, cleared yodeckMediaIdCanonical due to: ${errorMsg}`);
+      
       return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: errorMsg };
     }
     
     const yodeckMediaId = uploadResult.mediaId;
-    console.log(`${LOG_PREFIX} Uploaded to Yodeck: mediaId=${yodeckMediaId}`);
+    console.log(`${LOG_PREFIX} Uploaded to Yodeck and VERIFIED: mediaId=${yodeckMediaId}`);
     
-    // Update advertiser with canonical media ID
+    // DATABASE STATE MUST NEVER LIE - only set live AFTER final verification succeeded
+    // (uploadMediaWithRetry now includes final GET /media/:id verification)
     await db.update(advertisers)
       .set({
         yodeckMediaIdCanonical: yodeckMediaId,

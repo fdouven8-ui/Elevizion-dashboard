@@ -315,6 +315,26 @@ async function uploadToYodeck(
         const status = statusData.status;
 
         if (fileSize > 0 && (status === "active" || status === "ready")) {
+          // STEP 5: FINAL VERIFICATION - Confirm media exists with one more GET
+          console.log(`[MediaPipeline] FINAL VERIFICATION: GET /media/${mediaId} to confirm existence...`);
+          const verifyResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+            headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+          });
+          
+          if (verifyResp.status === 404) {
+            return { ok: false, error: `FINAL_VERIFY_404: Media ${mediaId} returns 404 - upload was NOT real` };
+          }
+          
+          if (!verifyResp.ok) {
+            return { ok: false, error: `FINAL_VERIFY_ERROR: Unexpected status ${verifyResp.status}` };
+          }
+          
+          const verifyData = await verifyResp.json();
+          if (!verifyData.id) {
+            return { ok: false, error: `FINAL_VERIFY_INVALID: Response missing 'id' field` };
+          }
+          
+          console.log(`[MediaPipeline] FINAL VERIFICATION PASSED: Media ${mediaId} confirmed in Yodeck`);
           return { ok: true, mediaId };
         }
       }
@@ -592,6 +612,16 @@ export async function validateAdvertiserMedia(advertiserId: string, externalCorr
           normalizationError: error,
         })
         .where(eq(adAssets.id, asset.id));
+      
+      // DATABASE STATE MUST NEVER LIE - clear canonical ID on failure
+      await db.update(advertisers)
+        .set({
+          assetStatus: "upload_failed",
+          yodeckMediaIdCanonical: null,  // Clear to prevent stale/false ID
+          updatedAt: new Date(),
+        })
+        .where(eq(advertisers.id, advertiserId));
+      log(correlationId, "DB_UPDATE", `Cleared yodeckMediaIdCanonical due to failure`, logs);
     }
 
     assetActions.push({
