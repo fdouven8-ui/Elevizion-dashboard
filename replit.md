@@ -36,11 +36,18 @@ Authentication uses username/password with bcrypt hashing and session data store
     - `getBasePlaylistId()`: Finds "Basis playlist" in Yodeck (case-sensitive, cached)
     - `ensureScreenPlaylist()`: Ensures screen has exactly 1 playlist named "EVZ | SCREEN | {playerId}"
     - `syncScreenPlaylistFromBase()`: Copies items from base playlist to screen playlist
-    - `addAdsToScreenPlaylist()`: Appends ad media IDs (deduplicated)
+    - `addAdsToScreenPlaylist()`: Appends ad media IDs (deduplicated) WITH HARD VERIFICATION - re-fetches playlist after PATCH and fails if media not present
     - `applyPlayerSourceAndPush()`: Sets player source to playlist and verifies
-    - `rebuildScreenPlaylist()`: Full rebuild: base + targeting-matched ads + push + verify
+    - `rebuildScreenPlaylist()`: Full rebuild with DOUBLE VERIFICATION:
+      1. After addAds: Verify all ads added to playlist
+      2. After push: FINAL re-fetch from Yodeck to confirm all expected mediaIds present
+      - Returns `ok:false` with `AD_MEDIA_NOT_IN_PLAYLIST` error if verification fails
+      - Response includes: actualMediaIds, expectedAdMediaIds, missingMediaIds
     - `getScreenNowPlayingSimple()`: READ-ONLY status check (returns actualSourceType, actualSourceId, actualSourceName, isCorrect, itemCount, topItems)
-    - `getScreenPlaybackState()`: Single source of truth combining expected state (DB), actual state (Yodeck), and sync status
+    - `getScreenPlaybackState()`: Single source of truth combining:
+      - expected state (DB)
+      - actual state (Yodeck) including REAL mediaIds from playlist
+      - sync status with recommendedAction
     - `simulateRebuild()`: Dry-run simulation using same targeting/status logic as actual rebuild
   - **Targeting-Based Ad Selection** (in `rebuildScreenPlaylist`):
     - Uses `targetRegionCodes` (text[] array) and `targetCities` (comma-separated string) from advertisers

@@ -1,0 +1,86 @@
+You are a senior backend engineer.
+
+We have a critical bug in the Elevizion Dashboard Yodeck integration.
+
+FACTS (confirmed via live console):
+
+- Screen playlistId: 30590180
+- Screen content (GET /api/screens/:id) returns mediaIds:
+  [27476141, 27477130, 27476083, 27478775]
+- Auto-uploaded advertiser media:
+  mediaId = 29661498
+- contains(mediaId) === false → the ad is NOT in the real playlist
+
+However:
+- rebuild endpoint reports:
+  adsAdded: [{ mediaId: 29661498 }]
+  push.ok = true
+  verify.ok = true
+
+This is a false-positive rebuild.
+
+GOAL:
+Make the rebuild/publish flow CORRECT and VERIFIABLE.
+
+REQUIRED FIXES (ALL):
+
+1. SINGLE SOURCE OF TRUTH
+   After rebuild + push, always re-fetch the REAL playlist from Yodeck:
+   - GET /playlists/:playlistId
+   - Extract actual mediaIds
+   - Compare with expected mediaIds (base + ads)
+
+2. HARD VERIFICATION
+   If expected ad mediaId is NOT present:
+   - Mark rebuild as FAILED
+   - Do NOT return ok:true
+   - Return:
+     {
+       ok: false,
+       error: "AD_MEDIA_NOT_IN_PLAYLIST",
+       expectedMediaId: 29661498,
+       actualMediaIds: [...]
+     }
+
+3. ORDER OF OPERATIONS (IMPORTANT)
+   Ensure this exact sequence:
+   a) ensure screen playlist exists
+   b) CLEAR playlist items (or create fresh)
+   c) COPY base playlist items
+   d) ADD advertiser media items
+   e) SAVE playlist
+   f) ASSIGN playlist to screen
+   g) PUSH to screen
+   h) VERIFY via fresh GET from Yodeck
+
+   Any deviation = bug.
+
+4. YODECK API SAFETY
+   - Never assume add-to-playlist succeeded
+   - Always re-fetch playlist after mutation
+   - Never rely on local counters or optimistic logs
+
+5. LOGGING (MANDATORY)
+   Log clearly:
+   - playlistId written to
+   - mediaIds before rebuild
+   - mediaIds after rebuild
+   - mediaIds after push
+   - mismatch detection
+
+6. UI / API CONTRACT
+   Update endpoints so:
+   - /api/screens/:id
+   - /api/screens/:id/playback-state
+
+   reflect the REAL playlist content, not assumptions.
+
+EXPECTED RESULT:
+After rebuild, GET /api/screens/:id must show:
+
+contains(29661498) === true
+
+If not, rebuild must FAIL loudly.
+
+Do NOT add new features.
+ONLY make this flow correct, deterministic, and verifiable.

@@ -738,6 +738,8 @@ export interface AddAdsResult {
   ok: boolean;
   adsAdded: number;
   finalCount: number;
+  actualMediaIds: number[];
+  missingMediaIds: number[];
   error?: string;
 }
 
@@ -745,24 +747,26 @@ export async function addAdsToScreenPlaylist(
   screenPlaylistId: number, 
   adMediaIds: number[]
 ): Promise<AddAdsResult> {
-  // Get current playlist with items
+  // Get current playlist with items BEFORE modification
   const playlistResult = await yodeckRequest<PlaylistResponse>(
     `/playlists/${screenPlaylistId}/`
   );
 
   if (!playlistResult.ok || !playlistResult.data) {
-    return { ok: false, adsAdded: 0, finalCount: 0, error: "Failed to fetch current playlist" };
+    return { ok: false, adsAdded: 0, finalCount: 0, actualMediaIds: [], missingMediaIds: adMediaIds, error: "Failed to fetch current playlist" };
   }
 
   const currentItems = playlistResult.data.items || [];
   const existingIds = new Set(currentItems.map(item => item.id));
   
+  console.log(`${LOG_PREFIX} [addAds] Playlist ${screenPlaylistId} BEFORE: ${currentItems.length} items, mediaIds=[${currentItems.map(i => i.id).join(",")}]`);
+  
   if (adMediaIds.length === 0) {
     console.log(`${LOG_PREFIX} No ads to add, playlist has ${currentItems.length} items`);
-    return { ok: true, adsAdded: 0, finalCount: currentItems.length };
+    return { ok: true, adsAdded: 0, finalCount: currentItems.length, actualMediaIds: currentItems.map(i => i.id), missingMediaIds: [] };
   }
 
-  console.log(`${LOG_PREFIX} Adding ${adMediaIds.length} ads to playlist ${screenPlaylistId}`);
+  console.log(`${LOG_PREFIX} Adding ${adMediaIds.length} ads to playlist ${screenPlaylistId}: mediaIds=[${adMediaIds.join(",")}]`);
 
   // Filter out duplicates
   const newAdIds = adMediaIds.filter(id => !existingIds.has(id));
@@ -774,7 +778,7 @@ export async function addAdsToScreenPlaylist(
 
   if (newAdIds.length === 0) {
     console.log(`${LOG_PREFIX} All ads already in playlist`);
-    return { ok: true, adsAdded: 0, finalCount: currentItems.length };
+    return { ok: true, adsAdded: 0, finalCount: currentItems.length, actualMediaIds: currentItems.map(i => i.id), missingMediaIds: [] };
   }
 
   // Build new items array: keep base items + add new ads
@@ -793,6 +797,9 @@ export async function addAdsToScreenPlaylist(
     })),
   ];
 
+  const expectedMediaIds = newItems.map(i => i.id);
+  console.log(`${LOG_PREFIX} [addAds] Sending PATCH with ${newItems.length} items, expectedMediaIds=[${expectedMediaIds.join(",")}]`);
+
   // PATCH the playlist with updated items
   const patchResult = await yodeckRequest(`/playlists/${screenPlaylistId}/`, "PATCH", {
     items: newItems,
@@ -800,12 +807,41 @@ export async function addAdsToScreenPlaylist(
 
   if (!patchResult.ok) {
     console.error(`${LOG_PREFIX} Failed to add ads: ${patchResult.error}`);
-    return { ok: false, adsAdded: 0, finalCount: currentItems.length, error: patchResult.error };
+    return { ok: false, adsAdded: 0, finalCount: currentItems.length, actualMediaIds: currentItems.map(i => i.id), missingMediaIds: newAdIds, error: patchResult.error };
   }
 
-  console.log(`${LOG_PREFIX} Added ${newAdIds.length} ads, final playlist has ${newItems.length} items`);
+  // CRITICAL: Re-fetch playlist to verify items were actually added
+  console.log(`${LOG_PREFIX} [addAds] PATCH returned ok, re-fetching playlist to VERIFY...`);
+  const verifyResult = await yodeckRequest<PlaylistResponse>(`/playlists/${screenPlaylistId}/`);
   
-  return { ok: true, adsAdded: newAdIds.length, finalCount: newItems.length };
+  if (!verifyResult.ok || !verifyResult.data) {
+    console.error(`${LOG_PREFIX} [addAds] VERIFICATION FAILED: Could not re-fetch playlist after PATCH`);
+    return { ok: false, adsAdded: 0, finalCount: newItems.length, actualMediaIds: [], missingMediaIds: newAdIds, error: "Failed to verify playlist after PATCH" };
+  }
+
+  const actualItems = verifyResult.data.items || [];
+  const actualMediaIds = actualItems.map(item => item.id);
+  const actualMediaIdSet = new Set(actualMediaIds);
+  
+  console.log(`${LOG_PREFIX} [addAds] Playlist ${screenPlaylistId} AFTER: ${actualItems.length} items, actualMediaIds=[${actualMediaIds.join(",")}]`);
+
+  // Check which expected mediaIds are missing
+  const missingMediaIds = newAdIds.filter(id => !actualMediaIdSet.has(id));
+  
+  if (missingMediaIds.length > 0) {
+    console.error(`${LOG_PREFIX} [addAds] VERIFICATION FAILED: ${missingMediaIds.length} ads NOT in playlist! missing=[${missingMediaIds.join(",")}]`);
+    return { 
+      ok: false, 
+      adsAdded: newAdIds.length - missingMediaIds.length, 
+      finalCount: actualItems.length, 
+      actualMediaIds,
+      missingMediaIds,
+      error: `AD_MEDIA_NOT_IN_PLAYLIST: missing mediaIds=[${missingMediaIds.join(",")}]` 
+    };
+  }
+
+  console.log(`${LOG_PREFIX} [addAds] VERIFIED: All ${newAdIds.length} ads confirmed in playlist`);
+  return { ok: true, adsAdded: newAdIds.length, finalCount: actualItems.length, actualMediaIds, missingMediaIds: [] };
 }
 
 export interface ApplyAndPushResult {
@@ -929,6 +965,9 @@ export interface RebuildPlaylistResult {
     actualSourceType: string | null;
     actualSourceId: number | null;
     actualPlaylistItemCount: number;
+    actualMediaIds?: number[];
+    expectedAdMediaIds?: number[];
+    missingMediaIds?: number[];
   };
   error: { step: string; message: string } | null;
   actions: string[];
@@ -1138,10 +1177,45 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
   }
   actions.push(`Targeting: ${targetingMatches} matches from ${adCandidates} candidates, ${adMediaIds.length} ads to add`);
 
-  // 6. Add ads to playlist
+  // 6. Add ads to playlist (with HARD verification)
   actions.push(`Step 6: Adding ${adMediaIds.length} ads to screen playlist...`);
   const addAdsResult = await addAdsToScreenPlaylist(ensureResult.screenPlaylistId, adMediaIds);
-  actions.push(`Added ${addAdsResult.adsAdded} new ads, final playlist has ${addAdsResult.finalCount} items`);
+  
+  console.log(`${LOG_PREFIX} [${correlationId}] addAds result: ok=${addAdsResult.ok}, added=${addAdsResult.adsAdded}, final=${addAdsResult.finalCount}, missing=[${addAdsResult.missingMediaIds.join(",")}]`);
+  actions.push(`addAds: added=${addAdsResult.adsAdded}, final=${addAdsResult.finalCount} items`);
+  actions.push(`addAds actualMediaIds: [${addAdsResult.actualMediaIds.join(",")}]`);
+  
+  // HARD VERIFICATION: If ads failed to add, FAIL immediately
+  if (!addAdsResult.ok) {
+    console.error(`${LOG_PREFIX} [${correlationId}] HARD FAIL: addAdsToScreenPlaylist failed - ${addAdsResult.error}`);
+    actions.push(`ERROR: AD_MEDIA_NOT_IN_PLAYLIST - missing=[${addAdsResult.missingMediaIds.join(",")}]`);
+    return {
+      ok: false,
+      correlationId,
+      screenId,
+      base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
+      screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
+      copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
+      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
+      assign: { ok: false, screenSourceType: null, screenSourceId: null },
+      push: { ok: false },
+      verify: { 
+        ok: false, 
+        actualSourceType: null, 
+        actualSourceId: null, 
+        actualPlaylistItemCount: addAdsResult.finalCount,
+        actualMediaIds: addAdsResult.actualMediaIds,
+        expectedAdMediaIds: adMediaIds,
+        missingMediaIds: addAdsResult.missingMediaIds,
+      },
+      error: { 
+        step: "add_ads_to_playlist", 
+        message: addAdsResult.error || `AD_MEDIA_NOT_IN_PLAYLIST: missing mediaIds=[${addAdsResult.missingMediaIds.join(",")}]` 
+      },
+      actions,
+    };
+  }
+  actions.push(`VERIFIED: All ${adMediaIds.length} ads confirmed in playlist`);
 
   // 7. Assign screen content source to playlist (CRITICAL STEP)
   actions.push(`Step 7: Assigning screen content to playlist ${ensureResult.screenPlaylistId}...`);
@@ -1159,20 +1233,92 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
       assign: { ok: false, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
       push: { ok: pushResult.pushed },
-      verify: { ok: false, actualSourceType: pushResult.actualSourceType, actualSourceId: pushResult.actualSourceId, actualPlaylistItemCount: addAdsResult.finalCount },
+      verify: { 
+        ok: false, 
+        actualSourceType: pushResult.actualSourceType, 
+        actualSourceId: pushResult.actualSourceId, 
+        actualPlaylistItemCount: addAdsResult.finalCount,
+        actualMediaIds: addAdsResult.actualMediaIds,
+        expectedAdMediaIds: adMediaIds,
+        missingMediaIds: [],
+      },
       error: { step: "assign_screen", message: pushResult.error || "Failed to assign screen content" },
       actions,
     };
   }
   actions.push(`Assign OK: source_type=${pushResult.actualSourceType}, source_id=${pushResult.actualSourceId}`);
 
-  // 8. Verify final state
-  actions.push(`Step 8: Verifying final state...`);
+  // 8. FINAL HARD VERIFICATION: Re-fetch playlist from Yodeck and verify ALL expected ads are present
+  actions.push(`Step 8: FINAL HARD VERIFICATION - re-fetching playlist from Yodeck...`);
   const verifyPlaylistResult = await yodeckRequest<PlaylistResponse>(`/playlists/${ensureResult.screenPlaylistId}/`);
-  const actualPlaylistItemCount = verifyPlaylistResult.ok && verifyPlaylistResult.data?.items 
-    ? verifyPlaylistResult.data.items.length 
-    : 0;
-  actions.push(`Final verification: playlist has ${actualPlaylistItemCount} items, screen content correctly assigned`);
+  
+  if (!verifyPlaylistResult.ok || !verifyPlaylistResult.data) {
+    actions.push(`ERROR: Failed to re-fetch playlist for final verification`);
+    return {
+      ok: false,
+      correlationId,
+      screenId,
+      base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
+      screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
+      copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
+      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
+      assign: { ok: true, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
+      push: { ok: true },
+      verify: { 
+        ok: false, 
+        actualSourceType: pushResult.actualSourceType, 
+        actualSourceId: pushResult.actualSourceId, 
+        actualPlaylistItemCount: 0,
+        actualMediaIds: [],
+        expectedAdMediaIds: adMediaIds,
+        missingMediaIds: adMediaIds,
+      },
+      error: { step: "final_verification", message: "Failed to re-fetch playlist for verification" },
+      actions,
+    };
+  }
+
+  const finalPlaylistItems = verifyPlaylistResult.data.items || [];
+  const finalMediaIds = finalPlaylistItems.map(item => item.id);
+  const finalMediaIdSet = new Set(finalMediaIds);
+  
+  console.log(`${LOG_PREFIX} [${correlationId}] FINAL VERIFY: playlist ${ensureResult.screenPlaylistId} has ${finalPlaylistItems.length} items, mediaIds=[${finalMediaIds.join(",")}]`);
+  actions.push(`Final playlist: ${finalPlaylistItems.length} items, mediaIds=[${finalMediaIds.join(",")}]`);
+  
+  // Check if ALL expected ad mediaIds are present
+  const finalMissingMediaIds = adMediaIds.filter(id => !finalMediaIdSet.has(id));
+  
+  if (finalMissingMediaIds.length > 0) {
+    console.error(`${LOG_PREFIX} [${correlationId}] FINAL HARD FAIL: ${finalMissingMediaIds.length} ads NOT in playlist after push! missing=[${finalMissingMediaIds.join(",")}]`);
+    actions.push(`HARD FAIL: AD_MEDIA_NOT_IN_PLAYLIST after push - missing=[${finalMissingMediaIds.join(",")}]`);
+    return {
+      ok: false,
+      correlationId,
+      screenId,
+      base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
+      screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
+      copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
+      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
+      assign: { ok: true, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
+      push: { ok: true },
+      verify: { 
+        ok: false, 
+        actualSourceType: pushResult.actualSourceType, 
+        actualSourceId: pushResult.actualSourceId, 
+        actualPlaylistItemCount: finalPlaylistItems.length,
+        actualMediaIds: finalMediaIds,
+        expectedAdMediaIds: adMediaIds,
+        missingMediaIds: finalMissingMediaIds,
+      },
+      error: { 
+        step: "final_verification", 
+        message: `AD_MEDIA_NOT_IN_PLAYLIST: expected mediaIds=[${adMediaIds.join(",")}], missing=[${finalMissingMediaIds.join(",")}], actual=[${finalMediaIds.join(",")}]` 
+      },
+      actions,
+    };
+  }
+  
+  actions.push(`FINAL VERIFIED: All ${adMediaIds.length} expected ads confirmed in playlist`);
 
   // 9. Update screen DB
   await db.update(screens).set({
@@ -1182,7 +1328,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
   }).where(eq(screens.id, screenId));
   actions.push(`DB updated: playlistId=${ensureResult.screenPlaylistId}, playbackMode=playlist`);
 
-  console.log(`${LOG_PREFIX} [${correlationId}] Rebuild complete: ok=true, verify=${pushResult.verified}`);
+  console.log(`${LOG_PREFIX} [${correlationId}] Rebuild complete: ok=true, verify=true, ads=${adMediaIds.length}, finalItems=${finalPlaylistItems.length}`);
 
   return {
     ok: true,
@@ -1194,7 +1340,15 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
     ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
     assign: { ok: true, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
     push: { ok: true },
-    verify: { ok: pushResult.verified, actualSourceType: pushResult.actualSourceType, actualSourceId: pushResult.actualSourceId, actualPlaylistItemCount },
+    verify: { 
+      ok: true, 
+      actualSourceType: pushResult.actualSourceType, 
+      actualSourceId: pushResult.actualSourceId, 
+      actualPlaylistItemCount: finalPlaylistItems.length,
+      actualMediaIds: finalMediaIds,
+      expectedAdMediaIds: adMediaIds,
+      missingMediaIds: [],
+    },
     error: null,
     actions,
   };
@@ -1643,13 +1797,17 @@ export interface ScreenPlaybackState {
     lastRebuildAt: Date | null;
   };
   
-  // Actual state (from Yodeck)
+  // Actual state (from Yodeck - SINGLE SOURCE OF TRUTH)
   actual: {
     sourceType: string | null;
     sourceId: number | null;
     sourceName: string | null;
     isOnline: boolean;
     lastSeenAt: Date | null;
+    // REAL playlist content from Yodeck (only populated when source is playlist and API ok)
+    playlistItemCount: number;
+    mediaIds: number[];
+    playlistFetchError: string | null;
   };
   
   // Sync status
@@ -1702,6 +1860,31 @@ export async function getScreenPlaybackState(screenId: string): Promise<ScreenPl
     ? `EVZ | SCREEN | ${screen.playerId || 'unknown'}` 
     : null;
   
+  // SINGLE SOURCE OF TRUTH: Fetch REAL playlist content from Yodeck
+  // ONLY fetch when nowPlaying is ok AND source is a playlist - avoid misleading data
+  let actualMediaIds: number[] = [];
+  let actualPlaylistItemCount = 0;
+  let playlistFetchError: string | null = null;
+  
+  if (nowPlaying.ok && nowPlaying.actualSourceType === "playlist" && nowPlaying.actualSourceId) {
+    console.log(`${LOG_PREFIX} [playbackState] Fetching REAL playlist content for ${nowPlaying.actualSourceId}...`);
+    const playlistResult = await yodeckRequest<PlaylistResponse>(`/playlists/${nowPlaying.actualSourceId}/`);
+    
+    if (playlistResult.ok && playlistResult.data?.items) {
+      const items = playlistResult.data.items;
+      actualMediaIds = items.map(item => item.id);
+      actualPlaylistItemCount = items.length;
+      console.log(`${LOG_PREFIX} [playbackState] REAL playlist ${nowPlaying.actualSourceId}: ${actualPlaylistItemCount} items, mediaIds=[${actualMediaIds.join(",")}]`);
+    } else {
+      playlistFetchError = playlistResult.error || "Failed to fetch playlist content";
+      console.warn(`${LOG_PREFIX} [playbackState] Failed to fetch playlist ${nowPlaying.actualSourceId}: ${playlistFetchError}`);
+    }
+  } else if (!nowPlaying.ok) {
+    playlistFetchError = "Yodeck API error - cannot fetch playlist content";
+  } else if (nowPlaying.actualSourceType !== "playlist") {
+    playlistFetchError = `Source is ${nowPlaying.actualSourceType || 'none'}, not playlist`;
+  }
+  
   // Determine sync status with proper error handling
   let isCorrect = false;
   let mismatchReason: string | null = null;
@@ -1751,6 +1934,11 @@ export async function getScreenPlaybackState(screenId: string): Promise<ScreenPl
       sourceName: nowPlaying.actualSourceName,
       isOnline: (screen as any).yodeckOnline ?? false,
       lastSeenAt: (screen as any).yodeckLastSeen ?? null,
+      // REAL playlist content from Yodeck - SINGLE SOURCE OF TRUTH
+      // Only populated when source is playlist AND API is ok - treat as authoritative only when sync.isCorrect is true
+      playlistItemCount: actualPlaylistItemCount,
+      mediaIds: actualMediaIds,
+      playlistFetchError,
     },
     sync: {
       isCorrect,
