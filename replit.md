@@ -88,9 +88,18 @@ Authentication uses username/password with bcrypt hashing and session data store
   - **Database Integrity**: assetStatus="live" and yodeckMediaIdCanonical only set after VERIFIED_EXISTS/READY
   - **Failure Handling**: Sets assetStatus="ready_for_yodeck", clears yodeckMediaIdCanonical to prevent stale IDs
   - **ensureAdvertiserMediaIsValid()**: Checks if existing mediaId is valid in Yodeck, clears invalid IDs
-- **Upload Worker Service**: Handles a verified upload process with retry logic
-  - Uses same 5-step verification flow with final GET /media/:id
-  - Database integrity enforced with assetStatus/yodeckMediaIdCanonical clearing on failure
+- **Upload Worker Service** (DEPRECATED): Legacy upload path - disabled by default
+  - Set LEGACY_UPLOAD_DISABLED=false to re-enable (not recommended)
+  - All new uploads should use transactionalUploadService
+- **API Routing Safety**:
+  - All /api/* routes return JSON only (never HTML)
+  - SPA fallback only for non-API routes
+  - API 404 guard in static.ts prevents HTML responses for unknown API paths
+- **E2E Test Endpoint**: POST /api/admin/test-yodeck-e2e
+  - Full end-to-end test for Yodeck integration
+  - Parameters: { screenId, advertiserId, forceUpload? }
+  - Runs: validate advertiser → upload/verify media → rebuild playlist → verify playback-state
+  - Returns HTTP 500 if any step fails (media missing, playlist mismatch, wrong source)
 
 ## External Dependencies
 

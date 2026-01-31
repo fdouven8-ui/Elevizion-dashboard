@@ -13742,6 +13742,199 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  /**
+   * POST /api/admin/test-yodeck-e2e
+   * End-to-end test for Yodeck integration.
+   * 
+   * Tests the complete flow:
+   * 1. Validates advertiser has video asset
+   * 2. Runs transactional upload (or verifies existing media)
+   * 3. Runs rebuild for screen
+   * 4. Fetches playback-state
+   * 5. Returns comprehensive results
+   * 
+   * FAILS (HTTP 500) if:
+   * - media exists=false
+   * - playlist misses mediaId
+   * - screen source_type != playlist
+   * - playback-state isCorrect != true
+   */
+  app.post("/api/admin/test-yodeck-e2e", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    
+    const { screenId, advertiserId, forceUpload = false } = req.body || {};
+    const correlationId = `E2E-${Date.now().toString(36).toUpperCase()}`;
+    
+    console.log(`[E2E Test] [${correlationId}] Starting: screenId=${screenId}, advertiserId=${advertiserId}, forceUpload=${forceUpload}`);
+    
+    if (!screenId || !advertiserId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Missing required parameters: screenId, advertiserId",
+        correlationId,
+      });
+    }
+    
+    const results: any = {
+      correlationId,
+      screenId,
+      advertiserId,
+      steps: [],
+      uploadJob: null,
+      mediaCheck: null,
+      rebuild: null,
+      playbackState: null,
+      finalVerdict: null,
+    };
+    
+    try {
+      // Step 1: Get advertiser and check asset status
+      results.steps.push("Step 1: Fetching advertiser...");
+      const advertiser = await storage.getAdvertiser(advertiserId);
+      if (!advertiser) {
+        throw new Error(`Advertiser not found: ${advertiserId}`);
+      }
+      
+      results.advertiser = {
+        id: advertiser.id,
+        companyName: advertiser.companyName,
+        assetStatus: advertiser.assetStatus,
+        yodeckMediaIdCanonical: advertiser.yodeckMediaIdCanonical,
+      };
+      results.steps.push(`Advertiser: ${advertiser.companyName}, status=${advertiser.assetStatus}, mediaId=${advertiser.yodeckMediaIdCanonical}`);
+      
+      // Step 2: Check/run upload if needed
+      const { ensureAdvertiserMediaIsValid, uploadVideoToYodeckTransactional } = await import("./services/transactionalUploadService");
+      
+      if (forceUpload || !advertiser.yodeckMediaIdCanonical) {
+        results.steps.push("Step 2: Running transactional upload...");
+        
+        // Get existing upload job to find asset path
+        const latestJob = await db.query.uploadJobs.findFirst({
+          where: eq(uploadJobs.advertiserId, advertiserId),
+          orderBy: [desc(uploadJobs.createdAt)],
+        });
+        
+        if (!latestJob?.localAssetPath) {
+          throw new Error(`No upload job found with asset path for advertiser - cannot upload`);
+        }
+        
+        const uploadResult = await uploadVideoToYodeckTransactional(
+          advertiserId,
+          latestJob.localAssetPath,
+          `E2E-${advertiser.companyName || advertiserId}`,
+          latestJob.localFileSize || 0
+        );
+        
+        results.uploadJob = {
+          jobId: uploadResult.jobId,
+          ok: uploadResult.ok,
+          yodeckMediaId: uploadResult.yodeckMediaId,
+          finalState: uploadResult.finalState,
+          errorCode: uploadResult.errorCode,
+          errorDetails: uploadResult.errorDetails,
+        };
+        results.steps.push(`Upload: ok=${uploadResult.ok}, mediaId=${uploadResult.yodeckMediaId}, state=${uploadResult.finalState}`);
+        
+        if (!uploadResult.ok) {
+          throw new Error(`Upload failed: ${uploadResult.errorCode} - ${JSON.stringify(uploadResult.errorDetails)}`);
+        }
+      } else {
+        results.steps.push("Step 2: Validating existing media...");
+        const validationResult = await ensureAdvertiserMediaIsValid(advertiserId);
+        
+        results.mediaCheck = {
+          ok: validationResult.ok,
+          mediaId: validationResult.mediaId,
+          reason: validationResult.reason,
+          status: validationResult.status,
+          isReady: validationResult.isReady,
+        };
+        results.steps.push(`Validation: ok=${validationResult.ok}, status=${validationResult.status}, ready=${validationResult.isReady}`);
+        
+        if (!validationResult.ok) {
+          throw new Error(`Media validation failed: ${validationResult.reason}`);
+        }
+      }
+      
+      // Step 3: Run rebuild for screen
+      results.steps.push("Step 3: Running screen playlist rebuild...");
+      const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
+      const rebuildResult = await rebuildScreenPlaylist(screenId);
+      
+      results.rebuild = {
+        ok: rebuildResult.ok,
+        correlationId: rebuildResult.correlationId,
+        screenPlaylist: rebuildResult.screenPlaylist,
+        ads: rebuildResult.ads,
+        verify: rebuildResult.verify,
+        error: rebuildResult.error,
+        actionsCount: rebuildResult.actions?.length || 0,
+      };
+      results.steps.push(`Rebuild: ok=${rebuildResult.ok}, playlist=${rebuildResult.screenPlaylist?.screenPlaylistId}`);
+      
+      if (!rebuildResult.ok) {
+        throw new Error(`Rebuild failed: ${rebuildResult.error?.message || 'Unknown error'}`);
+      }
+      
+      // Step 4: Fetch playback-state
+      results.steps.push("Step 4: Fetching playback-state...");
+      const { getScreenPlaybackState } = await import("./services/simplePlaylistModel");
+      const playbackState = await getScreenPlaybackState(screenId);
+      
+      if (!playbackState) {
+        throw new Error(`Failed to get playback state for screen ${screenId}`);
+      }
+      
+      results.playbackState = {
+        screenId: playbackState.screenId,
+        isCorrect: playbackState.sync.isCorrect,
+        mismatchReason: playbackState.sync.mismatchReason,
+        recommendedAction: playbackState.sync.recommendedAction,
+        expected: playbackState.expected,
+        actual: playbackState.actual,
+      };
+      results.steps.push(`PlaybackState: isCorrect=${playbackState.sync.isCorrect}, mismatch=${playbackState.sync.mismatchReason}`);
+      
+      // Final verification
+      const allPassed = 
+        rebuildResult.ok && 
+        playbackState.sync.isCorrect === true &&
+        rebuildResult.verify?.ok === true;
+      
+      results.finalVerdict = {
+        passed: allPassed,
+        rebuildOk: rebuildResult.ok,
+        playbackCorrect: playbackState.sync.isCorrect,
+        verifyOk: rebuildResult.verify?.ok,
+      };
+      
+      if (!allPassed) {
+        results.steps.push(`FAILED: E2E test did not pass all checks`);
+        return res.status(500).json({
+          ok: false,
+          ...results,
+          error: `E2E verification failed: rebuild=${rebuildResult.ok}, playbackCorrect=${playbackState.sync.isCorrect}, verifyOk=${rebuildResult.verify?.ok}`,
+        });
+      }
+      
+      results.steps.push(`SUCCESS: All E2E checks passed`);
+      return res.json({
+        ok: true,
+        ...results,
+      });
+      
+    } catch (error: any) {
+      console.error(`[E2E Test] [${correlationId}] Error:`, error);
+      results.steps.push(`ERROR: ${error.message}`);
+      return res.status(500).json({
+        ok: false,
+        ...results,
+        error: error.message,
+      });
+    }
+  });
+
   // Mock data for when Yodeck API is not configured
   const MOCK_SCREENS = [
     {
