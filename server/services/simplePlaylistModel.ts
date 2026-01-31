@@ -1148,24 +1148,31 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
     }
 
     // CRITICAL: Verify media exists and is ready in Yodeck before adding
-    const verification = await verifyMediaInYodeck(mediaId);
-    if (!verification.exists) {
+    // Use ensureAdvertiserMediaIsValid to also CLEAR invalid canonical IDs
+    const { ensureAdvertiserMediaIsValid } = await import("./transactionalUploadService");
+    const validationResult = await ensureAdvertiserMediaIsValid(advertiser.id);
+    
+    if (!validationResult.ok || !validationResult.mediaId) {
       skippedAds.push({ 
         reason: "media_not_found_in_yodeck", 
         advertiserId: advertiser.id, 
-        detail: `mediaId=${mediaId}: ${verification.error || 'not found'}` 
+        detail: `mediaId=${mediaId}: ${validationResult.reason || 'not found'} - canonical ID CLEARED` 
       });
-      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} not found in Yodeck (token/workspace mismatch?)`);
+      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} not found in Yodeck - canonical ID cleared (reason: ${validationResult.reason})`);
       continue;
     }
     
-    if (!verification.isReady) {
+    // Use the validated mediaId (should be same as advertiser.yodeckMediaIdCanonical)
+    mediaId = validationResult.mediaId;
+    
+    // Check readiness from the same API call (no duplicate request)
+    if (!validationResult.isReady) {
       skippedAds.push({ 
         reason: "media_not_ready", 
         advertiserId: advertiser.id, 
-        detail: `mediaId=${mediaId}: status=${verification.status}` 
+        detail: `mediaId=${mediaId}: status=${validationResult.status}` 
       });
-      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} not ready (status=${verification.status})`);
+      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} not ready (status=${validationResult.status})`);
       continue;
     }
 

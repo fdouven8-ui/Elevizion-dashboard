@@ -2788,20 +2788,33 @@ export const uploadJobs = pgTable("upload_jobs", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),
   adAssetId: varchar("ad_asset_id").references(() => adAssets.id, { onDelete: "set null" }),
+  // Correlation tracking
+  correlationId: text("correlation_id"), // For tracing across logs
   // Local file reference
   localAssetPath: text("local_asset_path").notNull(), // Path in object storage
   localFileSize: integer("local_file_size").notNull(), // File size in bytes
   localDurationSeconds: decimal("local_duration_seconds", { precision: 10, scale: 2 }), // FFprobe duration
+  desiredFilename: text("desired_filename"), // Original filename
   // Yodeck media tracking
   yodeckMediaId: integer("yodeck_media_id"), // Assigned after create call
   yodeckMediaName: text("yodeck_media_name"), // Name in Yodeck
-  // Upload status
+  // Transactional upload tracking
+  createResponse: jsonb("create_response"), // Response from POST /media
+  uploadUrl: text("upload_url"), // Presigned PUT URL
+  putStatus: integer("put_status"), // HTTP status from PUT (should be 200/204)
+  putEtag: text("put_etag"), // ETag from PUT response
+  confirmResponse: jsonb("confirm_response"), // Response from verify GET /media/:id
+  pollAttempts: integer("poll_attempts").notNull().default(0), // Number of poll attempts
+  // Upload status - now includes transactional states
   status: text("status").notNull().default("QUEUED"), // QUEUED | UPLOADING | POLLING | READY | RETRYABLE_FAIL | PERMANENT_FAIL
+  finalState: text("final_state"), // CREATED | UPLOADED | VERIFIED_EXISTS | ENCODING | READY | FAILED
   attempt: integer("attempt").notNull().default(0), // Current attempt number (1-5)
   maxAttempts: integer("max_attempts").notNull().default(5),
   // Error tracking
   lastError: text("last_error"), // Last error message
   lastErrorAt: timestamp("last_error_at"),
+  errorCode: text("error_code"), // Structured error code (e.g., PUT_FAILED, VERIFY_404)
+  errorDetails: jsonb("error_details"), // Detailed error info as JSON
   // Yodeck verification snapshot (from poll)
   yodeckFileSize: integer("yodeck_file_size"), // File size reported by Yodeck
   yodeckDuration: decimal("yodeck_duration", { precision: 10, scale: 2 }), // Duration reported by Yodeck
@@ -2833,4 +2846,15 @@ export const UPLOAD_JOB_STATUS = {
   PERMANENT_FAIL: "PERMANENT_FAIL",
 } as const;
 export type UploadJobStatus = typeof UPLOAD_JOB_STATUS[keyof typeof UPLOAD_JOB_STATUS];
+
+// Upload job finalState - transactional upload states
+export const UPLOAD_FINAL_STATE = {
+  CREATED: "CREATED",           // POST /media succeeded, have mediaId
+  UPLOADED: "UPLOADED",         // PUT binary succeeded (200/204)
+  VERIFIED_EXISTS: "VERIFIED_EXISTS", // GET /media/:id returned 200
+  ENCODING: "ENCODING",         // Yodeck is encoding/processing
+  READY: "READY",               // Yodeck reports ready/ok
+  FAILED: "FAILED",             // Any step failed
+} as const;
+export type UploadFinalState = typeof UPLOAD_FINAL_STATE[keyof typeof UPLOAD_FINAL_STATE];
 

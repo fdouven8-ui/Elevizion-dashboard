@@ -1,0 +1,613 @@
+import { db } from "../db";
+import { uploadJobs, advertisers, UPLOAD_JOB_STATUS, UPLOAD_FINAL_STATE } from "@shared/schema";
+import { eq } from "drizzle-orm";
+import { Client } from "@replit/object-storage";
+
+const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
+const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+const LOG_PREFIX = "[TransactionalUpload]";
+
+const POLL_TIMEOUT_MS = 120000;
+const POLL_INTERVALS_MS = [2000, 3000, 5000, 5000, 5000, 10000, 10000, 10000];
+
+export interface TransactionalUploadResult {
+  ok: boolean;
+  jobId: string;
+  advertiserId: string;
+  yodeckMediaId: number | null;
+  finalState: string;
+  errorCode?: string;
+  errorDetails?: any;
+}
+
+function generateCorrelationId(): string {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `TXN-${timestamp}-${random}`;
+}
+
+async function updateJob(
+  jobId: string,
+  updates: Partial<typeof uploadJobs.$inferSelect>
+): Promise<void> {
+  await db.update(uploadJobs)
+    .set({
+      ...updates,
+      updatedAt: new Date(),
+    })
+    .where(eq(uploadJobs.id, jobId));
+}
+
+async function markJobFailed(
+  jobId: string,
+  errorCode: string,
+  errorDetails: any,
+  lastError: string
+): Promise<void> {
+  await updateJob(jobId, {
+    status: UPLOAD_JOB_STATUS.PERMANENT_FAIL,
+    finalState: UPLOAD_FINAL_STATE.FAILED,
+    errorCode,
+    errorDetails,
+    lastError,
+    lastErrorAt: new Date(),
+  });
+}
+
+export async function uploadVideoToYodeckTransactional(
+  advertiserId: string,
+  assetPath: string,
+  desiredFilename: string,
+  fileSize: number
+): Promise<TransactionalUploadResult> {
+  const correlationId = generateCorrelationId();
+  console.log(`${LOG_PREFIX} [${correlationId}] Starting transactional upload for advertiser=${advertiserId}`);
+
+  const [job] = await db.insert(uploadJobs)
+    .values({
+      advertiserId,
+      localAssetPath: assetPath,
+      localFileSize: fileSize,
+      desiredFilename,
+      correlationId,
+      status: UPLOAD_JOB_STATUS.UPLOADING,
+      finalState: null,
+      attempt: 1,
+      maxAttempts: 5,
+      pollAttempts: 0,
+    })
+    .returning();
+
+  const jobId = job.id;
+  console.log(`${LOG_PREFIX} [${correlationId}] Created job=${jobId}`);
+
+  try {
+    const fileBuffer = await readFileFromStorage(assetPath, correlationId);
+    if (!fileBuffer) {
+      await markJobFailed(jobId, "FILE_READ_FAILED", { path: assetPath }, "Failed to read file from storage");
+      return makeFailResult(jobId, advertiserId, "FILE_READ_FAILED", { path: assetPath });
+    }
+
+    console.log(`${LOG_PREFIX} [${correlationId}] File read: ${fileBuffer.length} bytes`);
+
+    const createResult = await step1CreateMedia(jobId, desiredFilename, correlationId);
+    if (!createResult.ok) {
+      return makeFailResult(jobId, advertiserId, createResult.errorCode!, createResult.errorDetails);
+    }
+    const { mediaId, presignUrl } = createResult;
+
+    const uploadUrlResult = await step2StoreUploadUrl(jobId, presignUrl!, correlationId);
+    if (!uploadUrlResult.ok) {
+      return makeFailResult(jobId, advertiserId, "UPLOAD_URL_MISSING", null);
+    }
+
+    const putResult = await step3PutBinary(jobId, presignUrl!, fileBuffer, correlationId);
+    if (!putResult.ok) {
+      return makeFailResult(jobId, advertiserId, putResult.errorCode!, putResult.errorDetails);
+    }
+
+    const verifyResult = await step4VerifyExistsImmediately(jobId, mediaId!, correlationId);
+    if (!verifyResult.ok) {
+      await clearAdvertiserCanonical(advertiserId, correlationId);
+      return makeFailResult(jobId, advertiserId, verifyResult.errorCode!, verifyResult.errorDetails);
+    }
+
+    const pollResult = await step5PollStatus(jobId, mediaId!, correlationId);
+    if (!pollResult.ok) {
+      await clearAdvertiserCanonical(advertiserId, correlationId);
+      return makeFailResult(jobId, advertiserId, pollResult.errorCode!, pollResult.errorDetails);
+    }
+
+    await updateJob(jobId, {
+      status: UPLOAD_JOB_STATUS.READY,
+      finalState: UPLOAD_FINAL_STATE.READY,
+      completedAt: new Date(),
+    });
+
+    await updateAdvertiserSuccess(advertiserId, mediaId!, correlationId);
+
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE: Job=${jobId} mediaId=${mediaId} finalState=READY`);
+    
+    return {
+      ok: true,
+      jobId,
+      advertiserId,
+      yodeckMediaId: mediaId!,
+      finalState: UPLOAD_FINAL_STATE.READY,
+    };
+
+  } catch (error: any) {
+    console.error(`${LOG_PREFIX} [${correlationId}] Unexpected error:`, error);
+    await markJobFailed(jobId, "UNEXPECTED_ERROR", { message: error.message }, error.message);
+    await clearAdvertiserCanonical(advertiserId, correlationId);
+    return makeFailResult(jobId, advertiserId, "UNEXPECTED_ERROR", { message: error.message });
+  }
+}
+
+async function readFileFromStorage(path: string, correlationId: string): Promise<Buffer | null> {
+  try {
+    const client = new Client();
+    const result = await client.downloadAsBytes(path);
+    if (!result.ok) {
+      console.error(`${LOG_PREFIX} [${correlationId}] Failed to read from storage: ${path}`);
+      return null;
+    }
+    return Buffer.from(result.value as Uint8Array);
+  } catch (error: any) {
+    console.error(`${LOG_PREFIX} [${correlationId}] Storage read error:`, error);
+    return null;
+  }
+}
+
+async function step1CreateMedia(
+  jobId: string,
+  name: string,
+  correlationId: string
+): Promise<{ ok: boolean; mediaId?: number; presignUrl?: string; errorCode?: string; errorDetails?: any }> {
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 1: CREATE_MEDIA`);
+  
+  try {
+    const response = await fetch(`${YODECK_API_BASE}/media/`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Token ${YODECK_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name,
+        media_type: "video",
+        url_type: "upload",
+      }),
+    });
+
+    const responseText = await response.text();
+    let responseData: any;
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      responseData = { rawText: responseText.substring(0, 500) };
+    }
+
+    await updateJob(jobId, {
+      createResponse: responseData,
+    });
+
+    if (!response.ok) {
+      const errorCode = `CREATE_FAILED_${response.status}`;
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FAILED: ${response.status}`);
+      await markJobFailed(jobId, errorCode, responseData, `Create media failed: ${response.status}`);
+      return { ok: false, errorCode, errorDetails: responseData };
+    }
+
+    const mediaId = responseData.id;
+    const presignUrl = responseData.get_upload_url || responseData.presign_url;
+
+    if (!mediaId) {
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FAILED: No mediaId in response`);
+      await markJobFailed(jobId, "CREATE_NO_MEDIA_ID", responseData, "Create response missing id");
+      return { ok: false, errorCode: "CREATE_NO_MEDIA_ID", errorDetails: responseData };
+    }
+
+    await updateJob(jobId, {
+      yodeckMediaId: mediaId,
+      finalState: UPLOAD_FINAL_STATE.CREATED,
+    });
+
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 SUCCESS: mediaId=${mediaId}`);
+    return { ok: true, mediaId, presignUrl };
+
+  } catch (error: any) {
+    console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 ERROR:`, error);
+    await markJobFailed(jobId, "CREATE_EXCEPTION", { message: error.message }, error.message);
+    return { ok: false, errorCode: "CREATE_EXCEPTION", errorDetails: { message: error.message } };
+  }
+}
+
+async function step2StoreUploadUrl(
+  jobId: string,
+  presignUrl: string,
+  correlationId: string
+): Promise<{ ok: boolean }> {
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 2: STORE_UPLOAD_URL`);
+  
+  if (!presignUrl) {
+    console.error(`${LOG_PREFIX} [${correlationId}] STEP 2 FAILED: No presign URL`);
+    await markJobFailed(jobId, "NO_PRESIGN_URL", null, "No presign URL in create response");
+    return { ok: false };
+  }
+
+  await updateJob(jobId, { uploadUrl: presignUrl });
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 2 SUCCESS: URL stored`);
+  return { ok: true };
+}
+
+async function step3PutBinary(
+  jobId: string,
+  presignUrl: string,
+  fileBuffer: Buffer,
+  correlationId: string
+): Promise<{ ok: boolean; errorCode?: string; errorDetails?: any }> {
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 3: PUT_BINARY (${fileBuffer.length} bytes)`);
+  
+  try {
+    const response = await fetch(presignUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "video/mp4",
+        "Content-Length": fileBuffer.length.toString(),
+      },
+      body: fileBuffer,
+    });
+
+    const putStatus = response.status;
+    const putEtag = response.headers.get("etag") || null;
+
+    await updateJob(jobId, {
+      putStatus,
+      putEtag,
+    });
+
+    if (putStatus !== 200 && putStatus !== 204) {
+      const errorCode = `PUT_FAILED_${putStatus}`;
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 3 FAILED: status=${putStatus}`);
+      await markJobFailed(jobId, errorCode, { status: putStatus }, `PUT failed with status ${putStatus}`);
+      return { ok: false, errorCode, errorDetails: { status: putStatus } };
+    }
+
+    await updateJob(jobId, { finalState: UPLOAD_FINAL_STATE.UPLOADED });
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 3 SUCCESS: status=${putStatus} etag=${putEtag}`);
+    return { ok: true };
+
+  } catch (error: any) {
+    console.error(`${LOG_PREFIX} [${correlationId}] STEP 3 ERROR:`, error);
+    await markJobFailed(jobId, "PUT_EXCEPTION", { message: error.message }, error.message);
+    return { ok: false, errorCode: "PUT_EXCEPTION", errorDetails: { message: error.message } };
+  }
+}
+
+async function step4VerifyExistsImmediately(
+  jobId: string,
+  mediaId: number,
+  correlationId: string
+): Promise<{ ok: boolean; errorCode?: string; errorDetails?: any }> {
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 4: VERIFY_EXISTS_IMMEDIATELY for mediaId=${mediaId}`);
+  
+  await new Promise(r => setTimeout(r, 1000));
+
+  try {
+    const response = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+      headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+    });
+
+    let responseData: any;
+    try {
+      responseData = await response.json();
+    } catch {
+      responseData = { status: response.status };
+    }
+
+    await updateJob(jobId, {
+      confirmResponse: responseData,
+      pollAttempts: 1,
+    });
+
+    if (response.status === 404) {
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 4 FAILED: 404 - Media does NOT exist in Yodeck`);
+      await markJobFailed(jobId, "VERIFY_404", responseData, "Media not found in Yodeck after upload");
+      return { ok: false, errorCode: "VERIFY_404", errorDetails: responseData };
+    }
+
+    if (!response.ok) {
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 4 FAILED: status=${response.status}`);
+      await markJobFailed(jobId, `VERIFY_ERROR_${response.status}`, responseData, `Verify failed: ${response.status}`);
+      return { ok: false, errorCode: `VERIFY_ERROR_${response.status}`, errorDetails: responseData };
+    }
+
+    if (!responseData.id) {
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 4 FAILED: Response missing id field`);
+      await markJobFailed(jobId, "VERIFY_INVALID_RESPONSE", responseData, "Verify response missing id");
+      return { ok: false, errorCode: "VERIFY_INVALID_RESPONSE", errorDetails: responseData };
+    }
+
+    await updateJob(jobId, { finalState: UPLOAD_FINAL_STATE.VERIFIED_EXISTS });
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 4 SUCCESS: Media exists in Yodeck`);
+    return { ok: true };
+
+  } catch (error: any) {
+    console.error(`${LOG_PREFIX} [${correlationId}] STEP 4 ERROR:`, error);
+    await markJobFailed(jobId, "VERIFY_EXCEPTION", { message: error.message }, error.message);
+    return { ok: false, errorCode: "VERIFY_EXCEPTION", errorDetails: { message: error.message } };
+  }
+}
+
+async function step5PollStatus(
+  jobId: string,
+  mediaId: number,
+  correlationId: string
+): Promise<{ ok: boolean; errorCode?: string; errorDetails?: any }> {
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 5: POLL_STATUS for mediaId=${mediaId}`);
+  
+  await updateJob(jobId, { status: UPLOAD_JOB_STATUS.POLLING });
+
+  const startTime = Date.now();
+  let attempt = 0;
+
+  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed"];
+  const FAILED_STATUSES = ["failed", "error", "aborted", "rejected"];
+
+  while (Date.now() - startTime < POLL_TIMEOUT_MS) {
+    const delay = POLL_INTERVALS_MS[Math.min(attempt, POLL_INTERVALS_MS.length - 1)];
+    await new Promise(r => setTimeout(r, delay));
+    attempt++;
+
+    try {
+      const response = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+        headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+      });
+
+      await updateJob(jobId, { pollAttempts: attempt + 1 });
+
+      if (response.status === 404) {
+        console.error(`${LOG_PREFIX} [${correlationId}] STEP 5 FAILED: 404 during poll`);
+        await markJobFailed(jobId, "POLL_404", null, "Media disappeared during polling");
+        return { ok: false, errorCode: "POLL_404", errorDetails: null };
+      }
+
+      if (!response.ok) {
+        console.log(`${LOG_PREFIX} [${correlationId}] Poll ${attempt}: non-ok status ${response.status}`);
+        continue;
+      }
+
+      const data = await response.json();
+      const status = (data.status || "").toLowerCase();
+      const fileSize = data.filesize || data.file_size || 0;
+
+      console.log(`${LOG_PREFIX} [${correlationId}] Poll ${attempt}: status=${status} fileSize=${fileSize}`);
+
+      await updateJob(jobId, {
+        yodeckStatus: status,
+        yodeckFileSize: fileSize,
+      });
+
+      if (READY_STATUSES.includes(status) && fileSize > 0) {
+        const finalVerify = await finalVerification(mediaId, correlationId);
+        if (!finalVerify.ok) {
+          await markJobFailed(jobId, finalVerify.errorCode!, finalVerify.errorDetails, "Final verification failed");
+          return { ok: false, errorCode: finalVerify.errorCode, errorDetails: finalVerify.errorDetails };
+        }
+        
+        console.log(`${LOG_PREFIX} [${correlationId}] STEP 5 SUCCESS: Media is READY`);
+        return { ok: true };
+      }
+
+      if (FAILED_STATUSES.includes(status)) {
+        console.error(`${LOG_PREFIX} [${correlationId}] STEP 5 FAILED: status=${status}`);
+        await markJobFailed(jobId, `YODECK_STATUS_${status.toUpperCase()}`, data, `Yodeck status: ${status}`);
+        return { ok: false, errorCode: `YODECK_STATUS_${status.toUpperCase()}`, errorDetails: data };
+      }
+
+      if (status.includes("encoding") || status.includes("processing")) {
+        await updateJob(jobId, { finalState: UPLOAD_FINAL_STATE.ENCODING });
+      }
+
+    } catch (error: any) {
+      console.error(`${LOG_PREFIX} [${correlationId}] Poll ${attempt} error:`, error);
+    }
+  }
+
+  console.error(`${LOG_PREFIX} [${correlationId}] STEP 5 FAILED: Timeout after ${attempt} polls`);
+  await markJobFailed(jobId, "POLL_TIMEOUT", { attempts: attempt }, "Timeout waiting for media to become ready");
+  return { ok: false, errorCode: "POLL_TIMEOUT", errorDetails: { attempts: attempt } };
+}
+
+async function finalVerification(
+  mediaId: number,
+  correlationId: string
+): Promise<{ ok: boolean; errorCode?: string; errorDetails?: any }> {
+  console.log(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION: GET /media/${mediaId}`);
+  
+  try {
+    const response = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+      headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+    });
+
+    if (response.status === 404) {
+      console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: 404`);
+      return { ok: false, errorCode: "FINAL_VERIFY_404", errorDetails: { status: 404 } };
+    }
+
+    if (!response.ok) {
+      console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: ${response.status}`);
+      return { ok: false, errorCode: `FINAL_VERIFY_${response.status}`, errorDetails: { status: response.status } };
+    }
+
+    const data = await response.json();
+    if (!data.id) {
+      console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: missing id`);
+      return { ok: false, errorCode: "FINAL_VERIFY_INVALID", errorDetails: data };
+    }
+
+    console.log(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION PASSED`);
+    return { ok: true };
+
+  } catch (error: any) {
+    console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION ERROR:`, error);
+    return { ok: false, errorCode: "FINAL_VERIFY_EXCEPTION", errorDetails: { message: error.message } };
+  }
+}
+
+async function updateAdvertiserSuccess(
+  advertiserId: string,
+  mediaId: number,
+  correlationId: string
+): Promise<void> {
+  console.log(`${LOG_PREFIX} [${correlationId}] Updating advertiser ${advertiserId}: assetStatus=live, yodeckMediaIdCanonical=${mediaId}`);
+  
+  await db.update(advertisers)
+    .set({
+      assetStatus: "live",
+      yodeckMediaIdCanonical: mediaId,
+      yodeckMediaIdCanonicalUpdatedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(advertisers.id, advertiserId));
+}
+
+async function clearAdvertiserCanonical(
+  advertiserId: string,
+  correlationId: string
+): Promise<void> {
+  console.log(`${LOG_PREFIX} [${correlationId}] Clearing advertiser ${advertiserId}: assetStatus=ready_for_yodeck, yodeckMediaIdCanonical=NULL`);
+  
+  await db.update(advertisers)
+    .set({
+      assetStatus: "ready_for_yodeck",
+      yodeckMediaIdCanonical: null,
+      updatedAt: new Date(),
+    })
+    .where(eq(advertisers.id, advertiserId));
+}
+
+function makeFailResult(
+  jobId: string,
+  advertiserId: string,
+  errorCode: string,
+  errorDetails: any
+): TransactionalUploadResult {
+  return {
+    ok: false,
+    jobId,
+    advertiserId,
+    yodeckMediaId: null,
+    finalState: UPLOAD_FINAL_STATE.FAILED,
+    errorCode,
+    errorDetails,
+  };
+}
+
+export async function ensureAdvertiserMediaIsValid(
+  advertiserId: string
+): Promise<{ ok: boolean; mediaId: number | null; reason?: string; status?: string; isReady?: boolean }> {
+  const LOG = "[EnsureMediaValid]";
+  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed"];
+  
+  const advertiser = await db.query.advertisers.findFirst({
+    where: eq(advertisers.id, advertiserId),
+  });
+
+  if (!advertiser) {
+    return { ok: false, mediaId: null, reason: "ADVERTISER_NOT_FOUND" };
+  }
+
+  const existingMediaId = advertiser.yodeckMediaIdCanonical;
+
+  if (existingMediaId) {
+    console.log(`${LOG} Checking if mediaId=${existingMediaId} exists in Yodeck...`);
+    
+    try {
+      const response = await fetch(`${YODECK_API_BASE}/media/${existingMediaId}/`, {
+        headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+      });
+
+      if (response.status === 404) {
+        console.log(`${LOG} Media ${existingMediaId} NOT FOUND in Yodeck - clearing canonical`);
+        await db.update(advertisers)
+          .set({
+            assetStatus: "ready_for_yodeck",
+            yodeckMediaIdCanonical: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(advertisers.id, advertiserId));
+        return { ok: false, mediaId: null, reason: "MEDIA_MISSING_IN_YODECK" };
+      }
+
+      if (!response.ok) {
+        console.warn(`${LOG} Media ${existingMediaId} check returned ${response.status}`);
+        return { ok: false, mediaId: null, reason: `MEDIA_CHECK_ERROR_${response.status}` };
+      }
+
+      const data = await response.json();
+      if (!data.id) {
+        console.warn(`${LOG} Media ${existingMediaId} response missing id field`);
+        return { ok: false, mediaId: null, reason: "MEDIA_INVALID_RESPONSE" };
+      }
+
+      const status = (data.status || "").toLowerCase();
+      const isReady = READY_STATUSES.includes(status);
+      
+      console.log(`${LOG} Media ${existingMediaId} VERIFIED EXISTS in Yodeck (status=${status}, isReady=${isReady})`);
+      return { ok: true, mediaId: existingMediaId, status, isReady };
+
+    } catch (error: any) {
+      console.error(`${LOG} Error checking media:`, error);
+      return { ok: false, mediaId: null, reason: "MEDIA_CHECK_EXCEPTION" };
+    }
+  }
+
+  return { ok: false, mediaId: null, reason: "NO_CANONICAL_MEDIA_ID" };
+}
+
+export async function getRecentUploadJobs(
+  advertiserId?: string,
+  limit: number = 20
+): Promise<typeof uploadJobs.$inferSelect[]> {
+  if (advertiserId) {
+    return await db.query.uploadJobs.findMany({
+      where: eq(uploadJobs.advertiserId, advertiserId),
+      orderBy: (jobs, { desc }) => [desc(jobs.createdAt)],
+      limit,
+    });
+  }
+  
+  return await db.query.uploadJobs.findMany({
+    orderBy: (jobs, { desc }) => [desc(jobs.createdAt)],
+    limit,
+  });
+}
+
+export async function checkMediaExistsInYodeck(
+  mediaId: number
+): Promise<{ ok: boolean; exists: boolean; httpStatus: number; responseSnippet: string }> {
+  try {
+    const response = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+      headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+    });
+
+    const text = await response.text();
+    const snippet = text.substring(0, 300);
+
+    return {
+      ok: true,
+      exists: response.ok,
+      httpStatus: response.status,
+      responseSnippet: snippet,
+    };
+  } catch (error: any) {
+    return {
+      ok: false,
+      exists: false,
+      httpStatus: 0,
+      responseSnippet: error.message,
+    };
+  }
+}

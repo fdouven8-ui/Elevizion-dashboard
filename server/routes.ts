@@ -13598,6 +13598,150 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  /**
+   * GET /api/debug/yodeck/media/:id/exists
+   * Simple check if media exists in Yodeck - returns JSON only.
+   */
+  app.get("/api/debug/yodeck/media/:id/exists", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    
+    try {
+      const mediaId = parseInt(req.params.id);
+      const { checkMediaExistsInYodeck } = await import("./services/transactionalUploadService");
+      
+      const result = await checkMediaExistsInYodeck(mediaId);
+      
+      return res.json({
+        ok: result.ok,
+        mediaId,
+        exists: result.exists,
+        httpStatus: result.httpStatus,
+        responseSnippet: result.responseSnippet,
+        checkedAt: new Date().toISOString(),
+      });
+    } catch (error: any) {
+      console.error(`[Debug] Error checking media exists:`, error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Internal server error",
+      });
+    }
+  });
+
+  /**
+   * GET /api/debug/yodeck/upload-jobs
+   * List recent upload jobs with their finalState and errors.
+   */
+  app.get("/api/debug/yodeck/upload-jobs", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    
+    try {
+      const { advertiserId, limit } = req.query;
+      const { getRecentUploadJobs } = await import("./services/transactionalUploadService");
+      
+      const jobs = await getRecentUploadJobs(
+        advertiserId as string | undefined,
+        limit ? parseInt(limit as string) : 20
+      );
+      
+      return res.json({
+        ok: true,
+        count: jobs.length,
+        jobs: jobs.map(job => ({
+          id: job.id,
+          correlationId: job.correlationId,
+          advertiserId: job.advertiserId,
+          yodeckMediaId: job.yodeckMediaId,
+          status: job.status,
+          finalState: job.finalState,
+          errorCode: job.errorCode,
+          errorDetails: job.errorDetails,
+          lastError: job.lastError,
+          putStatus: job.putStatus,
+          pollAttempts: job.pollAttempts,
+          yodeckStatus: job.yodeckStatus,
+          createdAt: job.createdAt,
+          completedAt: job.completedAt,
+        })),
+      });
+    } catch (error: any) {
+      console.error(`[Debug] Error fetching upload jobs:`, error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Internal server error",
+      });
+    }
+  });
+
+  /**
+   * POST /api/admin/reconcile-media
+   * Reconciliation endpoint: Fix advertisers with invalid yodeckMediaIdCanonical
+   */
+  app.post("/api/admin/reconcile-media", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    
+    try {
+      const { dryRun = true } = req.body || {};
+      const { checkMediaExistsInYodeck } = await import("./services/transactionalUploadService");
+      
+      const allAdvertisers = await db.query.advertisers.findMany({
+        where: eq(advertisers.assetStatus, "live"),
+      });
+      
+      const results: any[] = [];
+      let fixedCount = 0;
+      let validCount = 0;
+      let errorCount = 0;
+      
+      for (const adv of allAdvertisers) {
+        if (!adv.yodeckMediaIdCanonical) continue;
+        
+        const check = await checkMediaExistsInYodeck(adv.yodeckMediaIdCanonical);
+        
+        if (!check.exists) {
+          if (!dryRun) {
+            await db.update(advertisers)
+              .set({
+                assetStatus: "ready_for_yodeck",
+                yodeckMediaIdCanonical: null,
+                updatedAt: new Date(),
+              })
+              .where(eq(advertisers.id, adv.id));
+          }
+          
+          results.push({
+            advertiserId: adv.id,
+            companyName: adv.companyName,
+            oldMediaId: adv.yodeckMediaIdCanonical,
+            httpStatus: check.httpStatus,
+            action: dryRun ? "WOULD_FIX" : "FIXED",
+          });
+          fixedCount++;
+        } else {
+          validCount++;
+        }
+      }
+      
+      console.log(`[Reconcile] Checked ${allAdvertisers.length} advertisers: ${validCount} valid, ${fixedCount} ${dryRun ? 'would fix' : 'fixed'}`);
+      
+      return res.json({
+        ok: true,
+        dryRun,
+        totalChecked: allAdvertisers.length,
+        validCount,
+        fixedCount,
+        errorCount,
+        results,
+      });
+    } catch (error: any) {
+      console.error(`[Reconcile] Error:`, error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Internal server error",
+      });
+    }
+  });
+
   // Mock data for when Yodeck API is not configured
   const MOCK_SCREENS = [
     {

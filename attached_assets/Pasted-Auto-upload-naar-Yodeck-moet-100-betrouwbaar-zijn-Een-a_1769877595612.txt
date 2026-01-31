@@ -1,0 +1,237 @@
+Auto-upload naar Yodeck moet 100% betrouwbaar zijn. Een ad wordt pas “live” als:
+
+binary upload echt is gedaan (presigned PUT 200/204), én
+
+Yodeck media bestaat (GET media by id werkt), én
+
+status/encoding is OK (of minimaal “processing/encoding” maar niet “missing”), én
+
+playlist add call succesvol is, én
+
+playlist items tonen de mediaId in Yodeck.
+
+HUIDIG PROBLEEM (BEWIJS):
+
+Advertiser heeft yodeckMediaIdCanonical = 29661498 en assetStatus = live
+
+Maar /api/debug/yodeck/media/29661498/status => “Media not found in Yodeck”
+
+Screen playlist bevat alleen baseline items (mediaIds 27476141/27477130/27476083/27478775). Geen 29661498.
+
+Dus code zet IDs/statussen fout en logt success terwijl upload niet bestaat.
+
+A) Maak “Yodeck Upload = Transaction” (nooit meer fake-success)
+
+1) Nieuwe DB tabel yodeck_upload_jobs
+Velden:
+
+id (uuid)
+
+correlationId (string)
+
+advertiserId (uuid)
+
+localAssetPath (string) // path in jouw storage
+
+desiredFilename (string)
+
+yodeckMediaId (int, nullable)
+
+createResponse (json)
+
+uploadUrl (string, nullable)
+
+putStatus (int, nullable)
+
+putEtag (string, nullable)
+
+confirmResponse (json, nullable)
+
+pollAttempts (int default 0)
+
+finalState (enum: CREATED, UPLOADED, VERIFIED_EXISTS, ENCODING, READY, FAILED)
+
+errorCode (string nullable)
+
+errorDetails (json nullable)
+
+createdAt, updatedAt
+
+2) Nieuwe helper uploadVideoToYodeckTransactional(advertiserId, assetPath)
+Flow (hard requirements):
+
+Step 1: CREATE_MEDIA
+
+POST Yodeck create media (v2) → return mediaId
+
+Sla createResponse op in job
+
+Als create faalt: job FAILED
+
+Step 2: GET_UPLOAD_URL
+
+GET /api/v2/media/{id}/upload (of jouw bestaande endpoint) → pak presigned PUT url
+
+Sla uploadUrl op
+
+Step 3: PUT_BINARY
+
+Doe fetch(uploadUrl, { method:"PUT", body: <binary>, headers: { "Content-Type":"video/mp4" }})
+
+Vereist status 200 of 204
+
+Sla putStatus + etag op
+
+Als status != 200/204: job FAILED (NIET verder)
+
+Step 4: VERIFY_EXISTS_IMMEDIATELY
+
+DIRECT: GET /api/v2/media/{id} of jouw “get media by id”
+
+Als 404: job FAILED (DIT IS JOUW HUIDIGE BUG: jij markeert live terwijl dit gebeurt)
+
+Als 200: job → VERIFIED_EXISTS
+
+Step 5: POLL_STATUS
+
+Poll /api/v2/media/{id}/status elke 2s, max 60s (30 pogingen)
+
+Acceptable states:
+
+encoding/processing → blijf pollen
+
+ready/ok/available → READY
+
+Onacceptable:
+
+failed/error → FAILED
+
+404 → FAILED
+
+3) Pas advertiser status update aan
+
+assetStatus = live en yodeckMediaIdCanonical = mediaId alleen als job VERIFIED_EXISTS of READY is.
+
+Als job FAILED:
+
+zet assetStatus = ready_for_yodeck (of upload_failed)
+
+zet yodeckMediaIdCanonical = NULL (of laat oude staan maar markeer mismatch)
+
+log errorCode + details
+
+B) Fix rebuild: voeg alleen ads toe die écht bestaan in Yodeck
+
+1) Nieuwe helper ensureAdvertiserMediaIsValid(advertiser)
+
+Als yodeckMediaIdCanonical bestaat:
+
+check GET media by id
+
+als 404 → invalid → zet assetStatus=ready_for_yodeck, yodeckMediaIdCanonical=NULL, return null
+
+als 200 → return mediaId
+
+Als geen mediaId:
+
+start transactional upload job
+
+return mediaId alleen als verified exists / ready
+
+2) In rebuild flow:
+
+Bij “Collecting ads via targeting…”
+
+Voor elke advertiser match:
+
+mediaId = await ensureAdvertiserMediaIsValid(advertiser)
+
+Als mediaId == null → SKIP met duidelijke reason: MEDIA_MISSING_IN_YODECK of UPLOAD_FAILED
+
+Bij “Adding ads to playlist”
+
+Gebruik alleen mediaIds die verified zijn.
+
+3) Na playlist update:
+
+Haal playlist items opnieuw op bij Yodeck
+
+Check dat mediaIds echt in playlist zitten
+
+Als niet: markeer rebuild als failed met PLAYLIST_ADD_MISSING
+
+C) Maak 2 debug endpoints die altijd kloppen
+
+1) GET /api/debug/yodeck/media/:id/exists
+Returns JSON:
+
+ok
+
+mediaId
+
+exists (true/false)
+
+httpStatus
+
+responseSnippet (max 300 chars)
+
+yodeckRequestId (als beschikbaar)
+
+2) GET /api/debug/yodeck/upload-jobs?advertiserId=...
+Return laatste 20 jobs + finalState + errors.
+
+Belangrijk: deze endpoints mogen NOOIT HTML teruggeven. Forceer res.json(...) en zet Content-Type: application/json.
+
+D) “Single source of truth” in de UI: laat direct zien waarom een ad niet draait
+
+Op advertiser detail / screen detail:
+
+Toon:
+
+assetStatus
+
+yodeckMediaIdCanonical
+
+“Exists in Yodeck: yes/no”
+
+laatste upload job state
+
+“Recommended action” (reupload / relink / investigate)
+
+E) Acceptatie tests (moeten slagen)
+
+Upload via dashboard → job eindigt in VERIFIED_EXISTS (of READY)
+
+Yodeck “All Media” toont nieuw item (auto upload)
+
+Rebuild screen → playlist bevat baseline + auto mediaId
+
+Screen Content status in Yodeck → Updated en speelt af
+
+Als upload faalt (PUT != 200/204) → advertiser wordt NIET live en mediaId wordt NIET gezet.
+
+F) Concreet jouw huidige data fixen (reconciliatie)
+
+Schrijf een admin script/endpoint:
+
+Voor alle advertisers met assetStatus=live:
+
+check media exists
+
+als 404:
+
+zet assetStatus=ready_for_yodeck
+
+zet yodeckMediaIdCanonical=NULL
+
+log “reconciliation fixed”
+
+Daarna run rebuild voor alle screens.
+
+LEVERING:
+
+Implementatie + logging met correlationId
+
+Unit-test achtige checks (minimaal: integration test route die upload simuleert met dummy mp4)
+
+Geen “ok: true” meer als media niet bestaat in Yodeck

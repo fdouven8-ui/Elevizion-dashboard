@@ -78,15 +78,19 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/debug/yodeck/whoami`: Identify Yodeck workspace/account (tokenHashHint, sampleScreen, workspace info)
   - `GET /api/debug/yodeck/media/:id/raw`: Raw proxy for Yodeck media API (media details + status)
   - `POST /api/debug/yodeck/selftest`: Integration self-test (whoami + optional media check + playlists)
-- **Upload Worker Service**: Handles a verified upload process with:
-  - **Step 1: Create metadata**: POST /api/v2/media returns mediaId and get_upload_url
-  - **Step 2: Presigned PUT**: Always sends Content-Length and Content-Type headers (no chunked transfer)
-  - **Step 3: Status polling**: Polls Yodeck /media/{id}/ until status is 'ready' or timeout
-  - **Step 4: Abort detection**: If media status becomes 'aborted' or 'failed', deletes media and reports failure
-  - **Step 5: FINAL VERIFICATION**: GET /media/:id MUST return 200 with valid data, else upload is NOT real
-  - **Database integrity**: Only sets assetStatus="live" after Step 5 verification passes
-  - **Failure handling**: Sets assetStatus="upload_failed" if any step fails
-  - **Diagnostics**: Comprehensive logging with correlationId for debugging (never logs tokens)
+- **Transactional Upload Service** (transactionalUploadService.ts): Ensures uploads are 100% reliable:
+  - **Step 1: CREATE_MEDIA**: POST /api/v2/media returns mediaId and get_upload_url
+  - **Step 2: GET_UPLOAD_URL**: Store presigned PUT URL in job
+  - **Step 3: PUT_BINARY**: Presigned PUT with Content-Length/Content-Type headers, requires 200/204
+  - **Step 4: VERIFY_EXISTS_IMMEDIATELY**: GET /media/:id to confirm media exists, if 404 = FAILED
+  - **Step 5: POLL_STATUS**: Poll until ready/ok or failed/404
+  - **Job Tracking**: All steps recorded in `upload_jobs` table with finalState (CREATED, UPLOADED, VERIFIED_EXISTS, ENCODING, READY, FAILED)
+  - **Database Integrity**: assetStatus="live" and yodeckMediaIdCanonical only set after VERIFIED_EXISTS/READY
+  - **Failure Handling**: Sets assetStatus="ready_for_yodeck", clears yodeckMediaIdCanonical to prevent stale IDs
+  - **ensureAdvertiserMediaIsValid()**: Checks if existing mediaId is valid in Yodeck, clears invalid IDs
+- **Upload Worker Service**: Handles a verified upload process with retry logic
+  - Uses same 5-step verification flow with final GET /media/:id
+  - Database integrity enforced with assetStatus/yodeckMediaIdCanonical clearing on failure
 
 ## External Dependencies
 
