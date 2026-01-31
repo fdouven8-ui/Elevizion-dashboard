@@ -16490,6 +16490,26 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.status(500).json({ ok: false, error: error.message });
     }
   });
+
+  /**
+   * GET /api/admin/yodeck/media/:id/inspect
+   * Inspect a Yodeck media item - returns details + status + validation
+   * Used to quickly validate if a media upload is usable
+   */
+  app.get("/api/admin/yodeck/media/:id/inspect", requireAdminAccess, async (req, res) => {
+    try {
+      const mediaId = parseInt(req.params.id, 10);
+      if (isNaN(mediaId)) {
+        return res.status(400).json({ ok: false, error: "Invalid media ID" });
+      }
+      
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const result = await yodeckPublishService.inspectMedia(mediaId);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
   
   // ============================================================================
   // RAW YODECK DEBUG ENDPOINTS - Direct API response for debugging

@@ -615,7 +615,7 @@ export async function ensureAdvertiserMediaUploaded(advertiserId: string): Promi
       ? `${advertiser.linkKey}.mp4`
       : `ADV-${advertiserId.substring(0, 8)}.mp4`;
     
-    const uploadResult = await yodeckPublishService.twoStepUploadMedia({
+    const uploadResult = await yodeckPublishService.uploadMediaWithRetry({
       bytes: fileBuffer,
       name: mediaName,
       contentType: 'video/mp4',

@@ -56,7 +56,12 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `POST /api/admin/screens/:screenId/rebuild-playlist`: The ONLY endpoint that creates/modifies playlists
   - `GET /api/admin/yodeck/base-playlist`: Read-only base playlist info
   - `GET /api/admin/yodeck/auth-status`: Validate Yodeck authentication
-- **Upload Worker Service**: Handles a two-step upload process with retries and validation, tracking media status.
+  - `GET /api/admin/yodeck/media/:id/inspect`: Debug endpoint for media validation (returns status, duration, isValid)
+- **Upload Worker Service**: Handles a two-step upload process with:
+  - **Reliable presigned PUT**: Always sends Content-Length and Content-Type headers (no chunked transfer)
+  - **Media status polling**: After PUT success, polls Yodeck /media/{id}/ until status is 'ready' or timeout
+  - **Abort detection**: If media status becomes 'aborted' or 'failed', deletes media and reports failure
+  - **Diagnostics**: Comprehensive logging with correlationId for debugging (never logs tokens)
 
 ## External Dependencies
 

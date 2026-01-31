@@ -115,11 +115,61 @@ interface TwoStepUploadDiagnostics {
     status?: number;
     error?: string;
   };
+  mediaStatusPoll?: {
+    attempted: boolean;
+    finalStatus?: string;
+    isAborted: boolean;
+    shouldRetry: boolean;
+  };
   lastError?: {
     message: string;
     status?: number;
     bodySnippet?: string;
   };
+}
+
+// Media status response from Yodeck
+export interface YodeckMediaStatus {
+  id: number;
+  name: string;
+  status: 'ready' | 'uploading' | 'encoding' | 'failed' | 'aborted' | string;
+  duration?: number;
+  file_size?: number;
+  thumbnail_url?: string;
+  created_at?: string;
+  updated_at?: string;
+  is_ready?: boolean;
+  encoding_progress?: number;
+}
+
+// Media inspect result for debug endpoint
+export interface MediaInspectResult {
+  ok: boolean;
+  mediaId: number;
+  status: string;
+  isValid: boolean;
+  validationDetails: {
+    hasFile: boolean;
+    hasDuration: boolean;
+    durationSeconds: number;
+    encodingState: string;
+    isAborted: boolean;
+    isUploading: boolean;
+    isReady: boolean;
+  };
+  rawResponse?: any;
+  error?: string;
+}
+
+// Polling result for media status
+interface MediaStatusPollResult {
+  ok: boolean;
+  finalStatus: string;
+  isUsable: boolean;
+  isAborted: boolean;
+  pollAttempts: number;
+  error?: string;
+  mediaDetails?: YodeckMediaStatus;
 }
 
 class YodeckPublishService {
@@ -136,6 +186,206 @@ class YodeckPublishService {
    */
   getPredefinedTags(): readonly string[] {
     return PREDEFINED_TAGS;
+  }
+
+  /**
+   * Get media details from Yodeck API
+   * Used for status checking and inspection
+   */
+  async getMediaDetails(mediaId: number, correlationId?: string): Promise<{ ok: boolean; media?: YodeckMediaStatus; error?: string }> {
+    const corrId = correlationId || crypto.randomUUID().substring(0, 8);
+    const apiKey = await this.getApiKey();
+    
+    try {
+      const response = await axios.get(`${YODECK_BASE_URL}/media/${mediaId}/`, {
+        headers: {
+          "Authorization": `Token ${apiKey}`,
+          "Accept": "application/json",
+        },
+        timeout: 30000,
+        validateStatus: () => true,
+      });
+      
+      console.log(`[YodeckPublish][${corrId}] GET /media/${mediaId}/ status=${response.status}`);
+      
+      if (response.status === 200 && response.data) {
+        const data = response.data;
+        const media: YodeckMediaStatus = {
+          id: data.id,
+          name: data.name || 'unknown',
+          status: data.status || data.media_status || data.encoding_status || 'unknown',
+          duration: data.duration || data.file_duration || 0,
+          file_size: data.file_size || data.size || 0,
+          thumbnail_url: data.thumbnail_url || data.thumbnail,
+          created_at: data.created_at,
+          updated_at: data.updated_at,
+          is_ready: data.is_ready ?? (data.status === 'ready'),
+          encoding_progress: data.encoding_progress || data.progress,
+        };
+        return { ok: true, media };
+      }
+      
+      return { ok: false, error: `HTTP ${response.status}: ${JSON.stringify(response.data).substring(0, 200)}` };
+    } catch (err: any) {
+      console.error(`[YodeckPublish][${corrId}] getMediaDetails error:`, err.message);
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Poll media status until it's usable or fails/times out
+   * Returns when media is 'ready' or encounters 'failed'/'aborted' status
+   */
+  async pollMediaStatus(mediaId: number, options?: {
+    maxAttempts?: number;
+    intervalMs?: number;
+    correlationId?: string;
+  }): Promise<MediaStatusPollResult> {
+    const { maxAttempts = 30, intervalMs = 2000, correlationId } = options || {};
+    const corrId = correlationId || crypto.randomUUID().substring(0, 8);
+    
+    console.log(`[YodeckPublish][${corrId}] Starting media status poll for ${mediaId} (max ${maxAttempts} attempts)`);
+    
+    let lastStatus = 'unknown';
+    let attempts = 0;
+    
+    while (attempts < maxAttempts) {
+      attempts++;
+      
+      const result = await this.getMediaDetails(mediaId, corrId);
+      
+      if (!result.ok) {
+        console.log(`[YodeckPublish][${corrId}] Poll attempt ${attempts}: API error - ${result.error}`);
+        await new Promise(r => setTimeout(r, intervalMs));
+        continue;
+      }
+      
+      const media = result.media!;
+      lastStatus = media.status;
+      
+      console.log(`[YodeckPublish][${corrId}] Poll attempt ${attempts}: status="${lastStatus}" duration=${media.duration || 0}s`);
+      
+      // Check for terminal success states
+      if (lastStatus === 'ready' || media.is_ready) {
+        return {
+          ok: true,
+          finalStatus: lastStatus,
+          isUsable: true,
+          isAborted: false,
+          pollAttempts: attempts,
+          mediaDetails: media,
+        };
+      }
+      
+      // Check for terminal failure states
+      if (['failed', 'aborted', 'error', 'deleted'].includes(lastStatus.toLowerCase())) {
+        return {
+          ok: false,
+          finalStatus: lastStatus,
+          isUsable: false,
+          isAborted: lastStatus.toLowerCase() === 'aborted',
+          pollAttempts: attempts,
+          error: `Media reached terminal state: ${lastStatus}`,
+          mediaDetails: media,
+        };
+      }
+      
+      // Still processing (uploading, encoding, etc.)
+      await new Promise(r => setTimeout(r, intervalMs));
+    }
+    
+    // Timeout - check if media is usable anyway (has duration > 0)
+    const finalCheck = await this.getMediaDetails(mediaId, corrId);
+    const finalMedia = finalCheck.media;
+    const isUsable = finalMedia?.duration && finalMedia.duration > 0;
+    
+    return {
+      ok: isUsable || false,
+      finalStatus: lastStatus,
+      isUsable: isUsable || false,
+      isAborted: false,
+      pollAttempts: attempts,
+      error: isUsable ? undefined : `Poll timeout after ${attempts} attempts, last status: ${lastStatus}`,
+      mediaDetails: finalMedia,
+    };
+  }
+
+  /**
+   * Delete a media item from Yodeck (for cleanup after failed uploads)
+   */
+  async deleteMedia(mediaId: number, correlationId?: string): Promise<{ ok: boolean; error?: string }> {
+    const corrId = correlationId || crypto.randomUUID().substring(0, 8);
+    const apiKey = await this.getApiKey();
+    
+    try {
+      console.log(`[YodeckPublish][${corrId}] Deleting media ${mediaId}...`);
+      
+      const response = await axios.delete(`${YODECK_BASE_URL}/media/${mediaId}/`, {
+        headers: {
+          "Authorization": `Token ${apiKey}`,
+        },
+        timeout: 30000,
+        validateStatus: () => true,
+      });
+      
+      if ([200, 204].includes(response.status)) {
+        console.log(`[YodeckPublish][${corrId}] Media ${mediaId} deleted successfully`);
+        return { ok: true };
+      }
+      
+      return { ok: false, error: `HTTP ${response.status}` };
+    } catch (err: any) {
+      console.error(`[YodeckPublish][${corrId}] deleteMedia error:`, err.message);
+      return { ok: false, error: err.message };
+    }
+  }
+
+  /**
+   * Inspect a media item - returns validation details for debugging
+   */
+  async inspectMedia(mediaId: number): Promise<MediaInspectResult> {
+    const corrId = crypto.randomUUID().substring(0, 8);
+    
+    const result = await this.getMediaDetails(mediaId, corrId);
+    
+    if (!result.ok || !result.media) {
+      return {
+        ok: false,
+        mediaId,
+        status: 'unknown',
+        isValid: false,
+        validationDetails: {
+          hasFile: false,
+          hasDuration: false,
+          durationSeconds: 0,
+          encodingState: 'unknown',
+          isAborted: false,
+          isUploading: false,
+          isReady: false,
+        },
+        error: result.error,
+      };
+    }
+    
+    const media = result.media;
+    const status = media.status.toLowerCase();
+    
+    return {
+      ok: true,
+      mediaId,
+      status: media.status,
+      isValid: (media.duration || 0) > 0 && !['failed', 'aborted', 'error'].includes(status),
+      validationDetails: {
+        hasFile: (media.file_size || 0) > 0,
+        hasDuration: (media.duration || 0) > 0,
+        durationSeconds: media.duration || 0,
+        encodingState: status,
+        isAborted: status === 'aborted',
+        isUploading: ['uploading', 'encoding', 'processing'].includes(status),
+        isReady: status === 'ready' || media.is_ready === true,
+      },
+      rawResponse: media,
+    };
   }
 
   /**
@@ -1031,17 +1281,127 @@ class YodeckPublishService {
       }
     }
     
+    // === STEP 4: Poll media status to verify upload succeeded ===
+    // Only if binary upload returned success, verify media is actually usable
+    if (diagnostics.metadata.ok && diagnostics.binaryUpload.ok && mediaId) {
+      console.log(`[YodeckPublish][${corrId}] Polling media status to verify upload...`);
+      
+      const pollResult = await this.pollMediaStatus(mediaId, {
+        maxAttempts: 15,  // 15 attempts * 2s = 30s max wait
+        intervalMs: 2000,
+        correlationId: corrId,
+      });
+      
+      // Set structured poll status for retry logic
+      diagnostics.mediaStatusPoll = {
+        attempted: true,
+        finalStatus: pollResult.finalStatus,
+        isAborted: pollResult.isAborted || false,
+        shouldRetry: (!pollResult.ok || pollResult.isAborted) && diagnostics.binaryUpload.ok,
+      };
+      
+      if (!pollResult.ok || pollResult.isAborted) {
+        console.log(`[YodeckPublish][${corrId}] Media status indicates failure: ${pollResult.finalStatus}`);
+        
+        // Media upload was aborted or failed - cleanup and report failure
+        diagnostics.binaryUpload.ok = false;
+        diagnostics.binaryUpload.error = `Media status: ${pollResult.finalStatus}`;
+        diagnostics.lastError = {
+          message: `Upload appeared to succeed but media status is ${pollResult.finalStatus}. This indicates the upload was interrupted or corrupted.`,
+          status: undefined,
+        };
+        
+        // Delete the failed media to clean up
+        console.log(`[YodeckPublish][${corrId}] Cleaning up failed media ${mediaId}...`);
+        await this.deleteMedia(mediaId, corrId);
+        
+        return {
+          ok: false,
+          mediaId: undefined,
+          uploadMethodUsed: 'two-step',
+          diagnostics,
+        };
+      }
+      
+      console.log(`[YodeckPublish][${corrId}] Media status verified OK: ${pollResult.finalStatus}`);
+    }
+    
     // === Final result ===
     // uploadOk = metadata.ok AND binaryUpload.ok (confirm is optional)
     const uploadOk = diagnostics.metadata.ok && diagnostics.binaryUpload.ok;
     
-    console.log(`[YodeckPublish] Two-step upload complete: uploadOk=${uploadOk}, mediaId=${mediaId}`);
+    console.log(`[YodeckPublish][${corrId}] Two-step upload complete: uploadOk=${uploadOk}, mediaId=${mediaId}`);
     
     return {
       ok: uploadOk,
       mediaId: uploadOk ? mediaId : undefined,
       uploadMethodUsed: uploadOk ? 'two-step' : 'unknown',
       diagnostics,
+    };
+  }
+
+  /**
+   * Upload media with single retry on failure/abort
+   * Wraps twoStepUploadMedia with retry-once logic for resilience
+   */
+  async uploadMediaWithRetry(params: {
+    bytes: Buffer;
+    name: string;
+    contentType?: string;
+  }): Promise<{
+    ok: boolean;
+    mediaId?: number;
+    uploadMethodUsed: 'two-step' | 'unknown';
+    attempts: number;
+    diagnostics: TwoStepUploadDiagnostics;
+  }> {
+    const { bytes, name, contentType } = params;
+    const corrId = crypto.randomUUID().substring(0, 8);
+    
+    console.log(`[YodeckPublish][${corrId}] uploadMediaWithRetry: Starting upload for "${name}"`);
+    
+    // First attempt
+    let result = await this.twoStepUploadMedia({ bytes, name, contentType });
+    
+    if (result.ok) {
+      console.log(`[YodeckPublish][${corrId}] uploadMediaWithRetry: First attempt succeeded, mediaId=${result.mediaId}`);
+      return {
+        ...result,
+        attempts: 1,
+      };
+    }
+    
+    // Check if we should retry using structured flag (media status failure, not API error)
+    const shouldRetry = result.diagnostics.mediaStatusPoll?.shouldRetry === true;
+    
+    if (!shouldRetry) {
+      const reason = result.diagnostics.mediaStatusPoll?.attempted 
+        ? `media poll ok=${result.diagnostics.mediaStatusPoll.finalStatus}`
+        : 'no media poll attempted (API error or early failure)';
+      console.log(`[YodeckPublish][${corrId}] uploadMediaWithRetry: First attempt failed, not retryable: ${reason}`);
+      return {
+        ...result,
+        attempts: 1,
+      };
+    }
+    
+    console.log(`[YodeckPublish][${corrId}] uploadMediaWithRetry: First attempt failed with media status ${result.diagnostics.mediaStatusPoll?.finalStatus}, retrying once...`);
+    
+    // Wait a moment before retry
+    await new Promise(resolve => setTimeout(resolve, 2000));
+    
+    // Retry with fresh metadata
+    result = await this.twoStepUploadMedia({ bytes, name, contentType });
+    
+    if (result.ok) {
+      console.log(`[YodeckPublish][${corrId}] uploadMediaWithRetry: Retry succeeded, mediaId=${result.mediaId}`);
+    } else {
+      console.log(`[YodeckPublish][${corrId}] uploadMediaWithRetry: Retry also failed`);
+    }
+    
+    return {
+      ...result,
+      attempts: 2,
     };
   }
 
@@ -1275,8 +1635,8 @@ class YodeckPublishService {
       // Normalize name
       const normalizedName = this.normalizeMp4Name(mediaName);
       
-      // === Use shared two-step upload ===
-      const uploadResult = await this.twoStepUploadMedia({
+      // === Use shared two-step upload with retry ===
+      const uploadResult = await this.uploadMediaWithRetry({
         bytes: fileBuffer,
         name: normalizedName,
         contentType: 'video/mp4',
