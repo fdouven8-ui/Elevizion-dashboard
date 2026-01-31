@@ -13293,6 +13293,311 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  /**
+   * GET /api/debug/yodeck/whoami
+   * Identifies which Yodeck workspace/account the backend is connected to.
+   * CRITICAL for diagnosing token/workspace mismatch issues.
+   */
+  app.get("/api/debug/yodeck/whoami", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const correlationId = `whoami-${Date.now()}`;
+    
+    try {
+      const crypto = await import("crypto");
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const tokenPresent = !!token;
+      const tokenHashHint = tokenPresent 
+        ? crypto.createHash("sha256").update(token).digest("hex").substring(0, 8)
+        : null;
+      
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+      
+      // Try to fetch workspace info via screens endpoint (provides workspace context)
+      let workspace: { id?: number; name?: string } | null = null;
+      let account: { id?: number; email?: string } | null = null;
+      let sampleScreen: { id: number; name: string; uuid?: string } | null = null;
+      let apiError: string | null = null;
+      
+      if (tokenPresent) {
+        try {
+          // Fetch one screen to identify workspace
+          const screensResponse = await fetch(`${yodeckBaseUrl}/screens?limit=1`, {
+            headers: { Authorization: `Token ${token}` },
+          });
+          
+          if (screensResponse.ok) {
+            const screensData = await screensResponse.json();
+            const screens = screensData.results || [];
+            
+            if (screens.length > 0) {
+              const screen = screens[0];
+              sampleScreen = { 
+                id: screen.id, 
+                name: screen.name,
+                uuid: screen.uuid,
+              };
+              // Yodeck screens may contain workspace info
+              if (screen.workspace) {
+                workspace = { 
+                  id: screen.workspace.id || screen.workspace,
+                  name: screen.workspace.name,
+                };
+              }
+            }
+            
+            // Try to extract account info from /me or /users/me if available
+            try {
+              const meResponse = await fetch(`${yodeckBaseUrl}/users/me/`, {
+                headers: { Authorization: `Token ${token}` },
+              });
+              if (meResponse.ok) {
+                const meData = await meResponse.json();
+                account = { 
+                  id: meData.id,
+                  email: meData.email,
+                };
+                if (meData.workspace) {
+                  workspace = {
+                    id: meData.workspace.id || meData.workspace,
+                    name: meData.workspace.name || workspace?.name,
+                  };
+                }
+              }
+            } catch {
+              // /users/me may not exist, ignore
+            }
+          } else {
+            apiError = `Yodeck API returned ${screensResponse.status}: ${screensResponse.statusText}`;
+          }
+        } catch (error: any) {
+          apiError = error.message || "Network error";
+        }
+      }
+      
+      const result = {
+        ok: tokenPresent && !apiError,
+        yodeckBaseUrl,
+        tokenPresent,
+        tokenHashHint,
+        workspace,
+        account,
+        sampleScreen,
+        apiError,
+        time: new Date().toISOString(),
+        correlationId,
+      };
+      
+      console.log(`[YodeckWhoAmI] ${correlationId}: baseUrl=${yodeckBaseUrl}, tokenHash=${tokenHashHint}, ` +
+        `workspace=${workspace?.id || 'unknown'}, sampleScreen=${sampleScreen?.id || 'none'}`);
+      
+      return res.json(result);
+    } catch (error: any) {
+      console.error(`[YodeckWhoAmI] ${correlationId}: Error:`, error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Internal server error",
+        correlationId,
+      });
+    }
+  });
+
+  /**
+   * GET /api/debug/yodeck/media/:id/raw
+   * Raw proxy for Yodeck media API - fetches both media details and status.
+   * Used to diagnose token/workspace mismatch when media exists in UI but not in API.
+   */
+  app.get("/api/debug/yodeck/media/:id/raw", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const correlationId = `media-raw-${Date.now()}`;
+    
+    try {
+      const { id } = req.params;
+      const mediaId = Number(id);
+      const crypto = await import("crypto");
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const tokenHashHint = token 
+        ? crypto.createHash("sha256").update(token).digest("hex").substring(0, 8)
+        : null;
+      
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+      
+      let media: any = null;
+      let mediaStatus: any = null;
+      let mediaStatusCode = 0;
+      let statusStatusCode = 0;
+      let notFound = false;
+      
+      // Fetch media details
+      try {
+        const mediaResponse = await fetch(`${yodeckBaseUrl}/media/${mediaId}/`, {
+          headers: { Authorization: `Token ${token}` },
+        });
+        mediaStatusCode = mediaResponse.status;
+        
+        if (mediaResponse.ok) {
+          media = await mediaResponse.json();
+        } else if (mediaResponse.status === 404) {
+          notFound = true;
+        }
+      } catch (error: any) {
+        console.error(`[MediaRaw] ${correlationId}: Media fetch error:`, error.message);
+      }
+      
+      // Fetch media status (encoding status)
+      try {
+        const statusResponse = await fetch(`${yodeckBaseUrl}/media/${mediaId}/status/`, {
+          headers: { Authorization: `Token ${token}` },
+        });
+        statusStatusCode = statusResponse.status;
+        
+        if (statusResponse.ok) {
+          mediaStatus = await statusResponse.json();
+        } else if (statusResponse.status === 404) {
+          notFound = true;
+        }
+      } catch (error: any) {
+        console.error(`[MediaRaw] ${correlationId}: Status fetch error:`, error.message);
+      }
+      
+      const result = {
+        ok: !notFound && media !== null,
+        mediaId,
+        media,
+        status: mediaStatus,
+        http: { mediaStatusCode, statusStatusCode },
+        notFound,
+        tokenHashHint,
+        time: new Date().toISOString(),
+        correlationId,
+      };
+      
+      console.log(`[MediaRaw] ${correlationId}: mediaId=${mediaId}, found=${!notFound}, ` +
+        `mediaStatus=${mediaStatusCode}, statusStatus=${statusStatusCode}, tokenHash=${tokenHashHint}`);
+      
+      return res.json(result);
+    } catch (error: any) {
+      console.error(`[MediaRaw] ${correlationId}: Error:`, error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Internal server error",
+        correlationId,
+      });
+    }
+  });
+
+  /**
+   * POST /api/debug/yodeck/selftest
+   * Integration self-test: runs whoami + optional media check + screen list.
+   * Only available in TEST_MODE.
+   */
+  app.post("/api/debug/yodeck/selftest", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const correlationId = `selftest-${Date.now()}`;
+    
+    try {
+      const { mediaId } = req.body || {};
+      const crypto = await import("crypto");
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const tokenPresent = !!token;
+      const tokenHashHint = tokenPresent 
+        ? crypto.createHash("sha256").update(token).digest("hex").substring(0, 8)
+        : null;
+      
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+      const results: any = {
+        correlationId,
+        time: new Date().toISOString(),
+        tokenPresent,
+        tokenHashHint,
+        tests: {},
+      };
+      
+      // Test 1: Fetch screens (whoami equivalent)
+      try {
+        const screensResponse = await fetch(`${yodeckBaseUrl}/screens?limit=3`, {
+          headers: { Authorization: `Token ${token}` },
+        });
+        results.tests.screens = {
+          ok: screensResponse.ok,
+          status: screensResponse.status,
+          count: 0,
+          sample: null,
+        };
+        if (screensResponse.ok) {
+          const data = await screensResponse.json();
+          results.tests.screens.count = data.count || 0;
+          if (data.results?.length > 0) {
+            results.tests.screens.sample = data.results.map((s: any) => ({
+              id: s.id,
+              name: s.name,
+              uuid: s.uuid,
+            }));
+          }
+        }
+      } catch (error: any) {
+        results.tests.screens = { ok: false, error: error.message };
+      }
+      
+      // Test 2: Media check (if mediaId provided)
+      if (mediaId) {
+        try {
+          const mediaResponse = await fetch(`${yodeckBaseUrl}/media/${mediaId}/`, {
+            headers: { Authorization: `Token ${token}` },
+          });
+          results.tests.media = {
+            ok: mediaResponse.ok,
+            status: mediaResponse.status,
+            found: mediaResponse.ok,
+            data: null,
+          };
+          if (mediaResponse.ok) {
+            const data = await mediaResponse.json();
+            results.tests.media.data = {
+              id: data.id,
+              name: data.name,
+              type: data.media_type || data.type,
+              status: data.status,
+            };
+          }
+        } catch (error: any) {
+          results.tests.media = { ok: false, error: error.message };
+        }
+      }
+      
+      // Test 3: Playlists (verify API access)
+      try {
+        const playlistsResponse = await fetch(`${yodeckBaseUrl}/playlists?limit=1`, {
+          headers: { Authorization: `Token ${token}` },
+        });
+        results.tests.playlists = {
+          ok: playlistsResponse.ok,
+          status: playlistsResponse.status,
+          count: 0,
+        };
+        if (playlistsResponse.ok) {
+          const data = await playlistsResponse.json();
+          results.tests.playlists.count = data.count || 0;
+        }
+      } catch (error: any) {
+        results.tests.playlists = { ok: false, error: error.message };
+      }
+      
+      results.ok = results.tests.screens?.ok && results.tests.playlists?.ok;
+      
+      console.log(`[YodeckSelftest] ${correlationId}: screens=${results.tests.screens?.ok}, ` +
+        `playlists=${results.tests.playlists?.ok}, media=${results.tests.media?.ok ?? 'skipped'}`);
+      
+      return res.json(results);
+    } catch (error: any) {
+      console.error(`[YodeckSelftest] ${correlationId}: Error:`, error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Internal server error",
+        correlationId,
+      });
+    }
+  });
+
   // Mock data for when Yodeck API is not configured
   const MOCK_SCREENS = [
     {

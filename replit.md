@@ -68,6 +68,9 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/yodeck/playlists/:id`: Fetch playlist data - explicitly JSON-only
   - `GET /api/debug/yodeck/playlist/:id/raw`: Raw playlist inspection with media status for each item
   - `GET /api/debug/yodeck/media/:id/status`: Media status (uploadOk, encodingStatus, playable)
+  - `GET /api/debug/yodeck/whoami`: Identify Yodeck workspace/account (tokenHashHint, sampleScreen, workspace info)
+  - `GET /api/debug/yodeck/media/:id/raw`: Raw proxy for Yodeck media API (media details + status)
+  - `POST /api/debug/yodeck/selftest`: Integration self-test (whoami + optional media check + playlists)
 - **Upload Worker Service**: Handles a two-step upload process with:
   - **Reliable presigned PUT**: Always sends Content-Length and Content-Type headers (no chunked transfer)
   - **Media status polling**: After PUT success, polls Yodeck /media/{id}/ until status is 'ready' or timeout

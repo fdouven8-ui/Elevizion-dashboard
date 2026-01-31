@@ -10,6 +10,79 @@ const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const BASE_PLAYLIST_NAME = "Basis playlist";
 
 // ===============================================================
+// MEDIA VERIFICATION HELPER - Verify media exists and is ready in Yodeck
+// ===============================================================
+
+interface MediaVerificationResult {
+  exists: boolean;
+  isReady: boolean;
+  status: string | null;
+  error?: string;
+}
+
+/**
+ * Verify that a media item exists and is ready in Yodeck.
+ * Checks both /media/:id and /media/:id/status endpoints for thorough verification.
+ * Returns { exists, isReady, status, error }
+ */
+async function verifyMediaInYodeck(mediaId: number): Promise<MediaVerificationResult> {
+  try {
+    const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+    if (!token) {
+      // Token missing is a system config error, not a media issue
+      console.error(`${LOG_PREFIX} verifyMediaInYodeck(${mediaId}): SYSTEM ERROR - No Yodeck token configured`);
+      return { exists: false, isReady: false, status: null, error: "SYSTEM_ERROR: No Yodeck token configured" };
+    }
+    
+    // Fetch media details first
+    const mediaResponse = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/`, {
+      headers: { Authorization: `Token ${token}` },
+    });
+    
+    if (!mediaResponse.ok) {
+      if (mediaResponse.status === 404) {
+        return { exists: false, isReady: false, status: null, error: "Media not found in Yodeck (404)" };
+      }
+      if (mediaResponse.status === 401 || mediaResponse.status === 403) {
+        return { exists: false, isReady: false, status: null, error: `Auth error (${mediaResponse.status}) - token/workspace mismatch?` };
+      }
+      return { exists: false, isReady: false, status: null, error: `Yodeck API error: ${mediaResponse.status}` };
+    }
+    
+    const mediaData = await mediaResponse.json();
+    let status = mediaData.status || mediaData.encoding_status || "unknown";
+    
+    // Also check /media/:id/status endpoint for authoritative encoding status
+    try {
+      const statusResponse = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/status/`, {
+        headers: { Authorization: `Token ${token}` },
+      });
+      
+      if (statusResponse.ok) {
+        const statusData = await statusResponse.json();
+        // Prefer status endpoint data if available
+        if (statusData.status) {
+          status = statusData.status;
+        } else if (statusData.encoding_status) {
+          status = statusData.encoding_status;
+        }
+      }
+    } catch {
+      // Status endpoint might not exist for all media types, ignore errors
+    }
+    
+    // Consider ready if status is "ready", "done", "encoded", "active", or upload completed
+    const readyStatuses = ["ready", "done", "encoded", "active", "ok", "completed"];
+    const isReady = readyStatuses.includes(String(status).toLowerCase());
+    
+    return { exists: true, isReady, status: String(status) };
+  } catch (error: any) {
+    console.error(`${LOG_PREFIX} verifyMediaInYodeck(${mediaId}): Error:`, error.message);
+    return { exists: false, isReady: false, status: null, error: error.message };
+  }
+}
+
+// ===============================================================
 // TARGETING HELPER - Robust city/region matching
 // ===============================================================
 
@@ -1020,6 +1093,28 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
     } else if (!mediaId) {
       skippedAds.push({ reason: "no_yodeck_media_id", advertiserId: advertiser.id });
       actions.push(`Skipped ${advertiser.companyName}: no yodeckMediaIdCanonical and status=${assetStatus}`);
+      continue;
+    }
+
+    // CRITICAL: Verify media exists and is ready in Yodeck before adding
+    const verification = await verifyMediaInYodeck(mediaId);
+    if (!verification.exists) {
+      skippedAds.push({ 
+        reason: "media_not_found_in_yodeck", 
+        advertiserId: advertiser.id, 
+        detail: `mediaId=${mediaId}: ${verification.error || 'not found'}` 
+      });
+      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} not found in Yodeck (token/workspace mismatch?)`);
+      continue;
+    }
+    
+    if (!verification.isReady) {
+      skippedAds.push({ 
+        reason: "media_not_ready", 
+        advertiserId: advertiser.id, 
+        detail: `mediaId=${mediaId}: status=${verification.status}` 
+      });
+      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} not ready (status=${verification.status})`);
       continue;
     }
 

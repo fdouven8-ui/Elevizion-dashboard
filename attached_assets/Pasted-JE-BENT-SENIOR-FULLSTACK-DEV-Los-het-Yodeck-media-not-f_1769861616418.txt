@@ -1,0 +1,88 @@
+JE BENT SENIOR FULLSTACK DEV. Los het Yodeck “media not found” probleem definitief op.
+
+Context:
+- In Yodeck UI bestaat mediaId 29661685 (handmatig upload werkt en is zichtbaar).
+- In dashboard call: GET /api/debug/yodeck/media/29661685/status geeft ok:false exists:false "Media not found in Yodeck".
+- Dit wijst vrijwel zeker op Yodeck token/workspace mismatch: backend praat met andere Yodeck account/workspace dan de UI.
+- Daarnaast moet upload pas “success” zijn als backend na upload ook kan verifiëren dat media écht bestaat + encoding status opvraagbaar is.
+
+Doelen:
+1) Maak een debug endpoint dat 100% aantoont welke Yodeck omgeving de backend gebruikt.
+2) Voeg harde “post-upload verification” toe: upload is pas SUCCESS als mediaId via API terug te vinden is.
+3) Zorg dat playlist rebuild alleen ads toevoegt als media verified is.
+4) Zorg dat API endpoints altijd JSON + juiste headers teruggeven (no HTML).
+
+Implementatie-eisen:
+
+A) Voeg endpoint toe:
+GET /api/debug/yodeck/whoami
+Return JSON:
+{
+  ok: true,
+  yodeckBaseUrl,
+  tokenPresent: boolean,
+  tokenHashHint: first8(sha256(token)),
+  workspace: { id?, name? } (haal op via een Yodeck endpoint die dit kan geven),
+  account: { id?, email? } indien beschikbaar,
+  time: ISO
+}
+Als Yodeck geen “whoami” endpoint heeft: haal minimaal iets op dat workspace/account uniek maakt:
+- bv. lijst screens (limit 1) en return screen id + name + workspace info als dat in response zit.
+Belangrijk: log ook server-side: [YodeckWhoAmI] baseUrl, tokenHashHint, sampleScreen.
+
+B) Voeg endpoint toe:
+GET /api/debug/yodeck/media/:id/raw
+Deze proxy’t exact de Yodeck API call voor media details + status (2 calls):
+- GET /api/v2/media/:id (of juiste route)
+- GET /api/v2/media/:id/status (of juiste route)
+Return:
+{
+  ok: true,
+  media: {...} | null,
+  status: {...} | null,
+  http: { mediaStatusCode, statusStatusCode },
+  notFound: boolean,
+  tokenHashHint
+}
+Als één van de calls 404 geeft, zet notFound=true.
+
+C) Fix upload flow:
+In ensureAdvertiserMediaUploaded / uploadToYodeck:
+- Na het ontvangen van mediaId van Yodeck: voer direct verificatie uit via dezelfde client:
+  - probeer GET media/:id en media/:id/status.
+- Als verificatie 404 is: markeer upload als FAIL (niet success) en sla yodeckMediaIdCanonical NIET op.
+- Als status endpoint bestaat maar “encoding/pending”: sla mediaId op met field:
+  yodeckMediaVerifyStatus = "ENCODING"
+  yodeckMediaLastVerifyAt
+  yodeckMediaLastVerifyError
+En laat worker later opnieuw verifiëren.
+- Pas als status = ready/encoded/active => yodeckMediaVerifyStatus="OK".
+
+D) Rebuild playlist logic:
+- Alleen ads toevoegen als advertiser assetStatus in allowed states EN yodeckMediaVerifyStatus="OK".
+- Als assetStatus=ready_for_yodeck maar verifyStatus != OK => trigger upload/verify worker en SKIP ad toevoegen (log duidelijke reason).
+
+E) UI / operator debug:
+- Toon in ScreenPlaybackState (of bij screen detail) een waarschuwing:
+  “Yodeck token/workspace mismatch vermoed” wanneer:
+  - media bestaat in UI (handmatige id), maar backend raw endpoint zegt 404
+  - of wanneer whoami sample screen ids niet overeenkomen met verwachte screens uit db
+
+F) Tests:
+- Voeg een kleine integratie-test route (alleen in TEST_MODE) toe:
+POST /api/debug/yodeck/selftest
+Body: { mediaId?: number }
+Run:
+1) whoami
+2) media raw check (als mediaId meegegeven)
+3) list 1 screen
+Return alles als JSON.
+
+Belangrijk:
+- Geen HTML responses, altijd res.json()
+- Voeg server logs toe met correlationId
+- Maak het backward compatible met bestaande Yodeck client wrapper.
+
+Deliverables:
+- Code + routes + logs
+- Korte checklist in comments: hoe Frank kan checken: /api/debug/yodeck/whoami en /api/debug/yodeck/media/:id/raw
