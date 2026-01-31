@@ -1,0 +1,89 @@
+Je bent een senior full-stack engineer. Los het Elevizion/Yodeck probleem definitief op.
+
+CONTEXT
+- Frontend draait op elevizion.nl (marketing) + dashboard op elevizion.nl/login (zelfde domain, andere routes).
+- Soms geven /api/yodeck/* endpoints HTML terug (index.html van marketing) i.p.v. JSON → dit breekt debugging + console fetch.
+- Rebuild endpoint rapporteert “ok:true, push:true”, maar de advertentie video staat niet in Yodeck All Media en niet in de playlist items van het scherm.
+- Handmatig uploaden in Yodeck werkt altijd.
+- We hebben al een Transactional Upload Service (5 stappen):
+  CREATE_MEDIA → GET_UPLOAD_URL → PUT_BINARY → VERIFY_EXISTS_IMMEDIATELY → POLL_STATUS
+  + upload job logging met correlationId
+  + ensureAdvertiserMediaIsValid() die invalid canonical IDs wist
+- Architect note: legacy upload paths (uploadWorkerService, mediaPipelineService) zijn nog niet volledig gerouteerd via transactional flow.
+
+DOEL (HARD REQUIREMENTS)
+1) Er mag nog maar 1 upload pad bestaan: transactionalUploadService.uploadVideoToYodeckTransactional(...)
+   - ALLE legacy upload codepaden moeten OF:
+     a) direct doorrouteren naar transactional service, OF
+     b) hard crashen met error: LEGACY_UPLOAD_PATH_DISABLED_USE_TRANSACTIONAL
+   - Er mag nergens anders meer presigned url logic / PUT binary zitten.
+2) DB mag yodeckMediaIdCanonical + assetStatus=live alleen zetten na succesvolle VERIFY_EXISTS (en bij voorkeur POLL_STATUS ok).
+   - Maak 1 centrale functie: setAdvertiserYodeckCanonical(advertiserId, mediaId, meta)
+   - Deze mag ALLEEN door transactional service aangeroepen worden.
+3) Rebuild moet nooit “ok:true” teruggeven als de ad niet echt in Yodeck playlist items zit.
+   - Na “add ads to playlist”: fetch playlist items uit Yodeck en verify dat mediaId(s) aanwezig zijn.
+   - Ontbreekt mediaId → ok:false + mismatchReason:"AD_NOT_PRESENT_IN_PLAYLIST_AFTER_ADD" + recommendedAction
+4) Fix de /api routing zodat API nooit door de SPA fallback naar index.html gaat.
+   - In Express/Vite: plaats alle /api routes vóór de catch-all (app.get("*", serveIndexHtml)).
+   - Zorg dat elevizion.nl (marketing) óók /api/* correct proxyt naar backend of dezelfde server gebruikt.
+   - Voeg middleware toe die detecteert: als pad start met /api en response content-type text/html wil worden → log error + force 404 JSON.
+5) Maak/ensure debug endpoints bestaan en werken op dezelfde host (elevizion.nl/login) en retourneren altijd JSON:
+   - GET /api/debug/yodeck/media/:id/exists  -> {ok, mediaId, exists, httpStatus, fetchedAt}
+   - GET /api/debug/yodeck/media/:id/status  -> {ok, mediaId, status, httpStatus, fetchedAt}
+   - GET /api/debug/yodeck/upload-jobs?limit=20 -> lijst jobs met correlationId, finalState, errors
+6) Playlist & screen assignment must be repeatable & uniform:
+   - ensureBasePlaylist() (Basis playlist) altijd aanwezig
+   - ensureScreenPlaylist(playerId) -> "EVZ | SCREEN | <playerId>"
+   - rebuild flow:
+     - copy base items
+     - determine targeting matches
+     - for each advertiser candidate: ensureAdvertiserMediaIsValid() (clears bad canonical)
+     - if no valid mediaId: auto-upload via transactional upload
+     - add the media to the screen playlist
+     - assign screen source_type=playlist source_id=screenPlaylistId
+     - push screen update
+     - verify final: screen assigned correct + playlist contains base items + ad media
+7) Voeg een “single source of truth” endpoint toe/behouw:
+   - GET /api/screens/:screenId/playback-state
+   - Combineert expected state (db) + actual (yodeck) + mismatch + recommendedAction
+   - Dit endpoint moet ALTIJD JSON leveren.
+
+IMPLEMENTATIE DETAILS (BELANGRIJK)
+- Voeg een helper toe: safeJson(res, payload, status=200) die altijd application/json zet.
+- Voeg een middleware toe:
+  - if req.path startsWith "/api/" and next() would serve html -> block and return JSON 404
+- Voeg uitgebreide logs toe met correlationId in elke stap.
+- Voeg retries toe voor Yodeck calls (max 3) met backoff (250ms, 750ms, 1500ms) op 429/5xx.
+- Zorg dat in rebuild de playlist item fetch de echte media ids teruggeeft (let op mogelijke schema verschillen: items[].media_id vs items[].media.id).
+- Zorg dat in rebuild “Added 0 new ads” betekent: ad zat er al in en is nog steeds aanwezig (verifieer).
+
+TESTPLAN (MOET AUTOMATISCH UITGEVOERD WORDEN)
+Maak een script/test route (alleen admin/dev):
+- POST /api/admin/test-yodeck-e2e?screenId=<id>&advertiserId=<id>
+Wat doet het:
+1) haalt advertiser op, forceert “upload needed” (tijdelijk canonical clear) OF maakt nieuwe upload job
+2) draait transactional upload
+3) draait rebuild voor screen
+4) haalt /playback-state op
+5) returns één JSON met:
+   - uploadJob summary
+   - new mediaId + exists/status
+   - playlistId + playlistItems (ids + names)
+   - playback-state (isCorrect + mismatchReason)
+En de route faalt (HTTP 500) als:
+- media exists=false
+- playlist mist mediaId
+- screen source_type != playlist
+- playback-state isCorrect != true
+
+OPRUIMEN / VEILIGHEID
+- Verwijder oude endpoints of markeer deprecated met duidelijke 410 JSON.
+- Zorg dat UI niet meer afhankelijk is van endpoints die HTML kunnen teruggeven.
+- Update docs/comments in code.
+
+LEVEREN
+- Commit alle wijzigingen
+- Geef korte samenvatting welke files zijn aangepast + welke oude upload paden zijn uitgeschakeld
+- Geef voorbeeld output van de E2E test route als alles goed is.
+
+Ga nu implementeren.

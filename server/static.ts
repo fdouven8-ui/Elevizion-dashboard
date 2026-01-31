@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, Request, Response, NextFunction } from "express";
 import fs from "fs";
 import path from "path";
 
@@ -12,7 +12,18 @@ export function serveStatic(app: Express) {
 
   app.use(express.static(distPath));
 
-  // fall through to index.html if the file doesn't exist
+  // API routes should NEVER fall through to index.html - return JSON 404
+  app.use("/api/*", (req: Request, res: Response) => {
+    console.error(`[API Guard] 404: No route handler for ${req.method} ${req.originalUrl}`);
+    res.setHeader("Content-Type", "application/json");
+    res.status(404).json({
+      ok: false,
+      error: `No API route: ${req.method} ${req.originalUrl}`,
+      code: "API_NOT_FOUND",
+    });
+  });
+
+  // fall through to index.html if the file doesn't exist (SPA fallback for non-API routes only)
   app.use("*", (_req, res) => {
     res.sendFile(path.resolve(distPath, "index.html"));
   });

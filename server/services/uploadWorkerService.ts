@@ -1,12 +1,24 @@
 /**
  * Upload Worker Service
- * Handles robust Yodeck media upload with verification polling and auto-retry
+ * DEPRECATED: Legacy upload path - now routes through transactional upload service
+ * 
+ * HARD RULE: All new uploads MUST use uploadVideoToYodeckTransactional()
+ * This service is kept for compatibility with existing upload jobs only.
  */
 
 import { storage } from "../storage";
 import type { UploadJob } from "@shared/schema";
 import { UPLOAD_JOB_STATUS } from "@shared/schema";
 import { checkMediaReadiness } from "./adTargetingService";
+
+const LEGACY_UPLOAD_DISABLED = process.env.LEGACY_UPLOAD_DISABLED === "true";
+
+function assertLegacyUploadAllowed(context: string): void {
+  if (LEGACY_UPLOAD_DISABLED) {
+    throw new Error(`LEGACY_UPLOAD_PATH_DISABLED_USE_TRANSACTIONAL: ${context}. Set LEGACY_UPLOAD_DISABLED=false to re-enable.`);
+  }
+  console.warn(`[UploadWorker] DEPRECATED: Legacy upload path used (${context}). Migrate to transactionalUploadService.`);
+}
 
 const YODECK_BASE = "https://app.yodeck.com/api/v2";
 const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN;
@@ -251,12 +263,15 @@ function getNextRetryTime(attempt: number): Date {
 
 /**
  * Process a single upload job
+ * DEPRECATED: Use transactionalUploadService.uploadVideoToYodeckTransactional() for new uploads
  */
 export async function processUploadJob(job: UploadJob): Promise<{
   success: boolean;
   yodeckMediaId?: number;
   error?: string;
 }> {
+  assertLegacyUploadAllowed("processUploadJob");
+  
   const attempt = job.attempt + 1;
   console.log(`[UploadWorker] Processing job ${job.id} (attempt ${attempt}/${job.maxAttempts})`);
 
