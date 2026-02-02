@@ -78,6 +78,8 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/debug/yodeck/whoami`: Identify Yodeck workspace/account (tokenHashHint, sampleScreen, workspace info)
   - `GET /api/debug/yodeck/media/:id/raw`: Raw proxy for Yodeck media API (media details + status)
   - `POST /api/debug/yodeck/selftest`: Integration self-test (whoami + optional media check + playlists)
+  - `GET /api/debug/storage/object?key=<path>`: Inspect storage object (exists, contentType, contentLength, signedUrl)
+  - `POST /api/admin/test-e2e-advertiser-upload`: Full 7-step E2E test (asset lookup → storage check → download → upload → verify media → rebuild → verify playback)
 - **Transactional Upload Service** (transactionalUploadService.ts): Ensures uploads are 100% reliable:
   - **Step 1: CREATE_MEDIA**: POST /api/v2/media with `media_origin: { type: "video", source: "upload" }`, name ends with .mp4
   - **Step 2: GET_UPLOAD_URL**: Store presigned PUT URL in job
