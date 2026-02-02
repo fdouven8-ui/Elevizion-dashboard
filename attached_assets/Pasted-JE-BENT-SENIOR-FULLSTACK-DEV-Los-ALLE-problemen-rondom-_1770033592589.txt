@@ -1,0 +1,123 @@
+JE BENT SENIOR FULLSTACK DEV. Los ALLE problemen rondom Elevizion ↔ Yodeck in 1 implementatie op.
+Het moet E2E werken: (upload asset) → (Yodeck media bestaat + is READY) → (ad wordt in juiste playlist gezet) → (screen content wordt assigned) → (push) → (verify via Yodeck + screenshot/now-playing).
+
+PROBLEEMBEWIJS (wat nu mis gaat):
+- Upload lijkt te slagen maar media status blijft "initialized" en wordt opgeruimd.
+- In Yodeck UI zie ik alleen handmatig geuploade media, niet de automatische.
+- Screen now-playing toont playlist met alleen baseline items, geen advertentie mediaId.
+- Contract/placement gating zit in de weg; dat moet tijdelijk NIET blokkeren tot finetune klaar is.
+
+DOEL (harde eisen):
+A) Upload is betrouwbaar: geen "initialized" stuck; bij failure exacte reden.
+B) Media verschijnt in Yodeck Media (zichtbaar in UI) en is speelbaar.
+C) Rebuild zet baseline + ad(s) in de SCREEN playlist, daarna assign + push naar screen.
+D) Alles verifieert strict (playlist bevat mediaId’s + screen_content wijst naar juiste playlist).
+E) API endpoints geven altijd JSON (nooit HTML fallback).
+F) 1 E2E endpoint die ALLES test en faalt met HTTP 500 als 1 stap niet klopt.
+
+IMPLEMENTATIEPLAN (uitvoeren, minimale refactor, bestaande structuur respecteren):
+
+1) ROUTING / API GUARD (moet blijven)
+- Zorg dat ALLE /api/* routes vóór SPA fallback zitten.
+- Onbekende /api/* => {ok:false, code:"API_NOT_FOUND"} JSON.
+
+2) UPLOAD: maak het TRANSACTIONEEL EN STRICT (kernfix)
+- Alle uploadpaden moeten via één service: uploadMediaTransactional().
+- Legacy upload paden volledig uitfaseren of hard rerouten naar deze service.
+- Stappen (met correlationId, in DB tabel upload_jobs):
+  (1) CREATE_MEDIA (Yodeck API)
+  (2) GET_UPLOAD_URL (presigned PUT url)
+  (3) PUT_BINARY (STRICT):
+      - upload vanuit fs.createReadStream() (nooit hergebruikte stream/buffer)
+      - Content-Length exact = bestandsgrootte
+      - Content-Type correct (video/mp4)
+      - GEEN auth headers/cookies op presigned PUT
+      - log bytesSent + fileSize
+      - als putStatus niet 200/204 => fail
+      - als bytesSent != fileSize => fail UPLOAD_TRUNCATED
+  (4) COMPLETE_UPLOAD (als Yodeck endpoint /upload/complete bestaat in onze codebase: altijd callen)
+  (5) VERIFY_EXISTS_IMMEDIATELY: GET /media/:id => must be 200
+  (6) POLL_STATUS max 120s:
+      - succes = status != "initialized"
+      - ideal = status in ["ready","active","processed","completed"] (map afhankelijk van Yodeck response)
+      - als timeout of status blijft "initialized" => fail STUCK_INITIALIZED en DELETE media
+- Belangrijk: NOOIT "Upload SUCCESS" loggen tenzij bytes ok + poll ok.
+- Bij success: return {ok:true, mediaId, status, duration, correlationId}
+
+3) CANONICAL MEDIA ID = alleen zetten als upload écht READY is
+- ensureAdvertiserMediaIsValid(advertiser):
+   - als yodeckMediaIdCanonical bestaat maar /media/:id geeft 404 => clear canonical + set assetStatus terug (bv pending/needs_upload)
+   - als media bestaat maar status nog niet ready => treat as not usable (geen playlist add)
+- yodeckMediaIdCanonical alleen setten op verified ready.
+
+4) ADS GATING UIT (tijdelijk) zodat finetunen niet blokkeert
+- Voeg env flag toe:
+  ADS_REQUIRE_CONTRACT=true (default)
+- Als TEST_MODE true => force ADS_REQUIRE_CONTRACT=false
+- In selectie van advertentie candidates:
+  - Als ADS_REQUIRE_CONTRACT=false:
+      include ad als assetStatus in ["live","ready_for_yodeck"] en er is een storage asset aanwezig.
+      Upload media zo nodig eerst (via transactional upload) en pas toevoegen na success.
+  - Als ADS_REQUIRE_CONTRACT=true:
+      huidig contract/placement gedrag behouden.
+- Dit moet alleen bepalen OF ads mogen; upload moet altijd kunnen.
+
+5) PLAYLIST ARCHITECTUUR CONSISTENT (zoals jij wilt)
+- Per screen 1 playlist die draait: "EVZ | SCREEN | {playerId}"
+- Rebuild flow:
+  Step 1: ensure base playlist "Basis playlist" bestaat en items >0
+  Step 2: ensure screen playlist bestaat
+  Step 3: reset/copy base items -> screen playlist
+  Step 4: bepaal ads (met gating flag)
+  Step 5: voeg ads media toe aan screen playlist (dedupe op mediaId)
+  Step 6: assign screen content -> playlistId (source_type="playlist")
+  Step 7: push to screen (Yodeck push endpoint)
+  Step 8: verify:
+      - GET /screens/:playerId => screen_content source_type playlist & source_id match
+      - GET /playlists/:playlistId => items bevatten base + ad mediaId
+      - Return verify payload met itemCount + mediaIds
+
+6) FIX: mismatch tussen interne playlistId en yodeckContentSummary
+- Jij ziet in dashboard nu playlistId=30590180 maar yodeckContentSummary mediaIds tonen alleen baseline ids.
+- Zorg dat rebuild daadwerkelijk playlist items update via Yodeck API endpoint die items toevoegt.
+- Als de huidige code alleen "db update" doet maar niet echte playlist update: fix dat.
+- Gebruik 1 officiële add-to-playlist call (v2), en log response.
+
+7) DEBUG ENDPOINTS (moeten bestaan en altijd JSON)
+- GET /api/debug/yodeck/media/:id/exists
+  => {ok:true, exists:true/false, status?, raw?}
+- GET /api/debug/yodeck/media/:id/status
+  => {ok:true, mediaId, status, createdAt, updatedAt, raw}
+- GET /api/debug/yodeck/playlists/:id
+  => {ok:true, playlistId, itemCount, mediaIds[], items[] (compact)}
+- GET /api/debug/yodeck/screens/:playerId
+  => {ok:true, playerId, sourceType, sourceId, sourceName, isOnline, raw}
+
+8) ÉÉN E2E TEST ENDPOINT (de knop die alles bewijst)
+- POST /api/admin/test-yodeck-e2e
+  input: {screenId, advertiserId, forceIncludeWithoutContract?: boolean}
+  doet:
+   - laad advertiser asset uit storage (moet bestaan)
+   - uploadMediaTransactional (krijg mediaId)
+   - set canonical id na ready
+   - rebuild screen (includeAdsWithoutContract true als input of TEST_MODE)
+   - verify playlist bevat mediaId
+   - verify screen content assigned en push gedaan
+  output JSON met correlationId + elke stap status + final ok.
+  Als 1 stap faalt: HTTP 500 met duidelijke error + correlationId.
+
+9) LOGGING & STABILITEIT
+- Elke stap logt met correlationId en korte codes: UPLOAD_PUT_FAILED, UPLOAD_TRUNCATED, STUCK_INITIALIZED, PLAYLIST_ADD_FAILED, PUSH_FAILED, VERIFY_FAILED.
+- Timeouts niet te kort (poll 120s) want Yodeck encoding kan even duren.
+- Concurrency: voorkom dubbele uploads tegelijk voor dezelfde advertiser asset (lock op advertiserId of storageKey).
+
+OPLEVERING:
+- Voer dit uit, run build, en zet in replit.md:
+  - welke env flags bestaan (ADS_REQUIRE_CONTRACT, TEST_MODE)
+  - hoe ik E2E endpoint aanroep
+  - voorbeeld responses
+- Geef ook aan welke files zijn aangepast.
+
+BELANGRIJK:
+- Geen grote refactor van de hele app; alleen: upload service unificeren, rebuild echt playlist updaten, gating flag, debug + e2e endpoints.
+- Alles moet aansluiten op bestaande database en endpoints, en direct testbaar zijn.

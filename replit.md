@@ -100,6 +100,11 @@ Authentication uses username/password with bcrypt hashing and session data store
   - Parameters: { screenId, advertiserId, forceUpload? }
   - Runs: validate advertiser → upload/verify media → rebuild playlist → verify playback-state
   - Returns HTTP 500 if any step fails (media missing, playlist mismatch, wrong source)
+- **Environment Flags**:
+  - `TEST_MODE=true`: Enables test mode, bypasses contract gating for ads
+  - `ADS_REQUIRE_CONTRACT=false`: Allows ads without active contracts (default: true)
+  - `LEGACY_UPLOAD_DISABLED=true`: Blocks legacy upload paths (default: true)
+  - When TEST_MODE=true, ADS_REQUIRE_CONTRACT is automatically bypassed
 
 ## External Dependencies
 

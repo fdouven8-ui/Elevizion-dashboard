@@ -1,13 +1,22 @@
 import { db } from "../db";
-import { screens, advertisers, adAssets } from "@shared/schema";
+import { screens, advertisers, adAssets, contracts } from "@shared/schema";
 import { eq, and, desc } from "drizzle-orm";
 import { storage } from "../storage";
 import { yodeckPublishService } from "./yodeckPublishService";
 import { ObjectStorageService } from "../objectStorage";
+import { uploadVideoToYodeckTransactional } from "./transactionalUploadService";
 
 const LOG_PREFIX = "[SimplePlaylist]";
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
 const BASE_PLAYLIST_NAME = "Basis playlist";
+
+// ADS_REQUIRE_CONTRACT flag - when false, ads can be included without contract/placement
+// In TEST_MODE, this is automatically false
+const ADS_REQUIRE_CONTRACT = (process.env.ADS_REQUIRE_CONTRACT || "true").toLowerCase() === "true";
+const TEST_MODE = (process.env.TEST_MODE || "false").toLowerCase() === "true";
+const BYPASS_CONTRACT_GATING = TEST_MODE || !ADS_REQUIRE_CONTRACT;
+
+console.log(`[SimplePlaylist] ADS_REQUIRE_CONTRACT=${ADS_REQUIRE_CONTRACT}, TEST_MODE=${TEST_MODE}, BYPASS_CONTRACT_GATING=${BYPASS_CONTRACT_GATING}`);
 
 // ===============================================================
 // MEDIA VERIFICATION HELPER - Verify media exists and is ready in Yodeck
@@ -672,63 +681,40 @@ export async function ensureAdvertiserMediaUploaded(advertiserId: string): Promi
   console.log(`${LOG_PREFIX} Found approved asset: id=${asset.id}, path=${storagePath}`);
   
   try {
-    // Download file from object storage
-    const objectStorage = new ObjectStorageService();
-    const file = await objectStorage.getFileByPath(storagePath);
+    // Get file size from asset or estimate
+    const fileSize = asset.sizeBytes || asset.convertedSizeBytes || 0;
     
-    if (!file) {
-      return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: "File not found in object storage" };
-    }
-    
-    const [fileBuffer] = await file.download();
-    console.log(`${LOG_PREFIX} Downloaded ${fileBuffer.length} bytes`);
-    
-    // Upload to Yodeck using the publish service singleton
+    // Use media name based on advertiser
     const mediaName = advertiser.linkKey 
       ? `${advertiser.linkKey}.mp4`
       : `ADV-${advertiserId.substring(0, 8)}.mp4`;
     
-    const uploadResult = await yodeckPublishService.uploadMediaWithRetry({
-      bytes: fileBuffer,
-      name: mediaName,
-      contentType: 'video/mp4',
-    });
+    console.log(`${LOG_PREFIX} Starting TRANSACTIONAL upload for ${mediaName} (${fileSize} bytes from ${storagePath})`);
     
-    if (!uploadResult.ok || !uploadResult.mediaId) {
-      const lastError = uploadResult.diagnostics?.lastError;
-      const errorMsg = typeof lastError === 'string' 
-        ? lastError 
-        : (lastError?.message || "Upload failed");
-      console.error(`${LOG_PREFIX} Upload failed for advertiser ${advertiserId}: ${errorMsg}`);
-      
-      // DATABASE STATE MUST NEVER LIE - set upload_failed status AND clear invalid canonical ID
-      await db.update(advertisers)
-        .set({
-          assetStatus: "upload_failed",
-          yodeckMediaIdCanonical: null,  // Clear to prevent stale/false ID
-          updatedAt: new Date(),
-        })
-        .where(eq(advertisers.id, advertiserId));
-      console.log(`${LOG_PREFIX} Set advertiser ${advertiserId} assetStatus=upload_failed, cleared yodeckMediaIdCanonical due to: ${errorMsg}`);
-      
-      return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: errorMsg };
+    // USE TRANSACTIONAL UPLOAD SERVICE - the single source of truth for uploads
+    const uploadResult = await uploadVideoToYodeckTransactional(
+      advertiserId,
+      storagePath,
+      mediaName,
+      fileSize
+    );
+    
+    if (!uploadResult.ok || !uploadResult.yodeckMediaId) {
+      console.error(`${LOG_PREFIX} Transactional upload failed for advertiser ${advertiserId}: ${uploadResult.errorCode}`);
+      // transactionalUploadService already clears canonical ID and updates assetStatus on failure
+      return { 
+        ok: false, 
+        advertiserId, 
+        mediaId: null, 
+        wasAlreadyUploaded: false, 
+        error: `${uploadResult.errorCode}: ${JSON.stringify(uploadResult.errorDetails)}` 
+      };
     }
     
-    const yodeckMediaId = uploadResult.mediaId;
-    console.log(`${LOG_PREFIX} Uploaded to Yodeck and VERIFIED: mediaId=${yodeckMediaId}`);
+    const yodeckMediaId = uploadResult.yodeckMediaId;
+    console.log(`${LOG_PREFIX} Transactional upload SUCCESS: mediaId=${yodeckMediaId}, finalState=${uploadResult.finalState}`);
     
-    // DATABASE STATE MUST NEVER LIE - only set live AFTER final verification succeeded
-    // (uploadMediaWithRetry now includes final GET /media/:id verification)
-    await db.update(advertisers)
-      .set({
-        yodeckMediaIdCanonical: yodeckMediaId,
-        yodeckMediaIdCanonicalUpdatedAt: new Date(),
-        assetStatus: "live",
-        updatedAt: new Date(),
-      })
-      .where(eq(advertisers.id, advertiserId));
-    
-    // Update ad asset with Yodeck info
+    // Update ad asset with Yodeck info (advertiser already updated by transactional service)
     await db.update(adAssets)
       .set({
         yodeckMediaId: yodeckMediaId,
@@ -737,11 +723,11 @@ export async function ensureAdvertiserMediaUploaded(advertiserId: string): Promi
       })
       .where(eq(adAssets.id, asset.id));
     
-    console.log(`${LOG_PREFIX} Updated advertiser and asset with yodeckMediaId=${yodeckMediaId}`);
+    console.log(`${LOG_PREFIX} Updated asset ${asset.id} with yodeckMediaId=${yodeckMediaId}`);
     
     return { ok: true, advertiserId, mediaId: yodeckMediaId, wasAlreadyUploaded: false };
   } catch (err: any) {
-    console.error(`${LOG_PREFIX} Error uploading media for advertiser ${advertiserId}:`, err);
+    console.error(`${LOG_PREFIX} Error in transactional upload for advertiser ${advertiserId}:`, err);
     return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: err.message };
   }
 }
@@ -1071,6 +1057,19 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
   actions.push(`Screen location: city="${screenCity}", region="${screenRegion}"`);
   
   const allAdvertisers = await storage.getAdvertisers();
+  
+  // PREFETCH: Load all advertiser IDs with active contracts in one query
+  let advertisersWithActiveContracts: Set<string> = new Set();
+  if (!BYPASS_CONTRACT_GATING) {
+    const activeContractRows = await db.select({ advertiserId: contracts.advertiserId })
+      .from(contracts)
+      .where(eq(contracts.status, "active"));
+    advertisersWithActiveContracts = new Set(activeContractRows.map(r => r.advertiserId));
+    actions.push(`Contract gating ENABLED: ${advertisersWithActiveContracts.size} advertisers with active contracts`);
+  } else {
+    actions.push(`Contract gating BYPASSED (TEST_MODE=${TEST_MODE}, ADS_REQUIRE_CONTRACT=${ADS_REQUIRE_CONTRACT})`);
+  }
+  
   let adCandidates = 0;
   let uploadAttempts = 0;
   let uploadSuccesses = 0;
@@ -1085,6 +1084,13 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
     // Check asset status - must be in approved/ready states
     const assetStatus = advertiser.assetStatus || "";
     if (!["approved", "ready_for_yodeck", "ready_for_publish", "live", "uploaded"].includes(assetStatus)) {
+      continue;
+    }
+    
+    // CONTRACT GATING: Check for active contract unless bypassed (uses prefetched Set)
+    if (!BYPASS_CONTRACT_GATING && !advertisersWithActiveContracts.has(advertiser.id)) {
+      skippedAds.push({ reason: "no_active_contract", advertiserId: advertiser.id });
+      actions.push(`Skipped ${advertiser.companyName}: no active contract`);
       continue;
     }
     
