@@ -20917,6 +20917,297 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // DEBUG: Storage object inspection
+  // ============================================================================
+  
+  /**
+   * GET /api/debug/storage/object?key=<storage-path>
+   * Inspect an object in storage - check existence, content-type, size
+   */
+  app.get("/api/debug/storage/object", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const key = req.query.key as string;
+    
+    if (!key) {
+      return res.status(400).json({ ok: false, error: "Missing 'key' query parameter" });
+    }
+    
+    try {
+      const { ObjectStorageService } = await import("./objectStorage");
+      const storage = new ObjectStorageService();
+      
+      const file = await storage.getFileByPath(key);
+      if (!file) {
+        return res.json({
+          ok: false,
+          exists: false,
+          key,
+          resolvedPath: null,
+          error: "File not found",
+        });
+      }
+      
+      const [metadata] = await file.getMetadata();
+      const signedUrl = await storage.getSignedDownloadUrl(key, 600);
+      const maskedUrl = signedUrl ? signedUrl.split("?")[0] + "?...(signed)" : null;
+      
+      return res.json({
+        ok: true,
+        exists: true,
+        key,
+        contentType: metadata.contentType || "unknown",
+        contentLength: metadata.size || 0,
+        signedUrlGenerated: !!maskedUrl,
+        signedUrlMasked: maskedUrl,
+        created: metadata.timeCreated,
+        updated: metadata.updated,
+      });
+    } catch (error: any) {
+      console.error("[DebugStorage] Error:", error);
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Storage inspection failed",
+        key,
+      });
+    }
+  });
+
+  /**
+   * POST /api/admin/test-e2e-advertiser-upload
+   * Full E2E test: download from storage -> upload to Yodeck -> verify -> rebuild playlist
+   */
+  app.post("/api/admin/test-e2e-advertiser-upload", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const correlationId = `e2e-upload-${Date.now()}`;
+    const { advertiserId, screenId, forceUpload } = req.body;
+    
+    if (!advertiserId) {
+      return res.status(400).json({ ok: false, error: "Missing advertiserId" });
+    }
+    
+    console.log(`[E2E-Upload] ${correlationId}: Starting test for advertiser=${advertiserId}, screen=${screenId || "none"}`);
+    
+    const steps: Array<{ step: string; ok: boolean; data?: any; error?: string }> = [];
+    
+    try {
+      const { ObjectStorageService } = await import("./objectStorage");
+      const objectStorageSvc = new ObjectStorageService();
+      
+      // Step 1: Get advertiser and their latest asset
+      const advertiser = await storage.getAdvertiser(advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ ok: false, error: "Advertiser not found" });
+      }
+      
+      const assets = await storage.getAdAssetsByAdvertiser(advertiserId);
+      const approvedAssets = assets.filter(a => 
+        a.approvalStatus === "APPROVED" && !a.isSuperseded
+      );
+      
+      if (approvedAssets.length === 0) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: "No approved, non-superseded assets found for advertiser" 
+        });
+      }
+      
+      const latestAsset = approvedAssets[0];
+      const storagePath = latestAsset.normalizedStoragePath || latestAsset.storagePath;
+      
+      steps.push({
+        step: "1_ASSET_LOOKUP",
+        ok: true,
+        data: {
+          assetId: latestAsset.id,
+          originalFileName: latestAsset.originalFileName,
+          storagePath,
+          existingYodeckMediaId: latestAsset.yodeckMediaId,
+          canonicalMediaId: advertiser.yodeckMediaIdCanonical,
+        },
+      });
+      
+      // Step 2: Check storage file exists
+      let downloadBuffer: Buffer | null = null;
+      try {
+        const file = await objectStorageSvc.getFileByPath(storagePath!);
+        if (!file) {
+          steps.push({ step: "2_STORAGE_CHECK", ok: false, error: `File not found: ${storagePath}` });
+          return res.status(500).json({ ok: false, steps, failedStep: "2_STORAGE_CHECK" });
+        }
+        
+        const [metadata] = await file.getMetadata();
+        steps.push({
+          step: "2_STORAGE_CHECK",
+          ok: true,
+          data: {
+            contentType: metadata.contentType,
+            size: metadata.size,
+          },
+        });
+        
+        // Step 3: Download file
+        downloadBuffer = await objectStorageSvc.downloadFile(storagePath!);
+        if (!downloadBuffer) {
+          steps.push({ step: "3_DOWNLOAD", ok: false, error: "Download returned null" });
+          return res.status(500).json({ ok: false, steps, failedStep: "3_DOWNLOAD" });
+        }
+        
+        steps.push({
+          step: "3_DOWNLOAD",
+          ok: true,
+          data: { bytes: downloadBuffer.length, contentType: "video/mp4" },
+        });
+      } catch (error: any) {
+        steps.push({ step: "2_STORAGE_CHECK", ok: false, error: error.message });
+        return res.status(500).json({ ok: false, steps, failedStep: "2_STORAGE_CHECK" });
+      }
+      
+      // Step 4: Upload to Yodeck (using transactional upload)
+      const skipUpload = !forceUpload && advertiser.yodeckMediaIdCanonical && advertiser.assetStatus === "live";
+      
+      if (skipUpload) {
+        steps.push({
+          step: "4_YODECK_UPLOAD",
+          ok: true,
+          data: { 
+            skipped: true, 
+            reason: "Canonical media already exists and is live",
+            existingMediaId: advertiser.yodeckMediaIdCanonical,
+          },
+        });
+      } else {
+        // Trigger full pipeline validation which handles upload
+        const { validateAdvertiserMedia } = await import("./services/mediaPipelineService");
+        const pipelineResult = await validateAdvertiserMedia(advertiserId, correlationId);
+        
+        steps.push({
+          step: "4_YODECK_UPLOAD",
+          ok: pipelineResult.completedCount > 0,
+          data: {
+            scannedCount: pipelineResult.scannedCount,
+            completedCount: pipelineResult.completedCount,
+            failedCount: pipelineResult.failedCount,
+            assets: pipelineResult.assets,
+          },
+          error: pipelineResult.failedCount > 0 
+            ? pipelineResult.assets.find(a => a.error)?.error 
+            : undefined,
+        });
+        
+        if (pipelineResult.completedCount === 0) {
+          return res.status(500).json({ ok: false, steps, failedStep: "4_YODECK_UPLOAD" });
+        }
+      }
+      
+      // Step 5: Verify media status in Yodeck
+      const refreshedAdvertiser = await storage.getAdvertiser(advertiserId);
+      const canonicalId = refreshedAdvertiser?.yodeckMediaIdCanonical;
+      
+      if (!canonicalId) {
+        steps.push({ 
+          step: "5_VERIFY_MEDIA", 
+          ok: false, 
+          error: "yodeckMediaIdCanonical not set after upload" 
+        });
+        return res.status(500).json({ ok: false, steps, failedStep: "5_VERIFY_MEDIA" });
+      }
+      
+      // Check media status in Yodeck
+      const token = process.env.YODECK_AUTH_TOKEN?.trim();
+      const mediaResp = await fetch(`https://app.yodeck.com/api/v2/media/${canonicalId}/`, {
+        headers: { Authorization: `Token ${token}` },
+      });
+      
+      if (!mediaResp.ok) {
+        steps.push({
+          step: "5_VERIFY_MEDIA",
+          ok: false,
+          error: `Yodeck GET /media/${canonicalId} returned ${mediaResp.status}`,
+        });
+        return res.status(500).json({ ok: false, steps, failedStep: "5_VERIFY_MEDIA" });
+      }
+      
+      const mediaData = await mediaResp.json();
+      steps.push({
+        step: "5_VERIFY_MEDIA",
+        ok: true,
+        data: {
+          mediaId: canonicalId,
+          name: mediaData.name,
+          status: mediaData.status,
+          filesize: mediaData.filesize || mediaData.file_size,
+          duration: mediaData.duration,
+        },
+      });
+      
+      // Step 6: Rebuild playlist (if screenId provided)
+      if (screenId) {
+        try {
+          const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
+          const rebuildResult = await rebuildScreenPlaylist(screenId, correlationId);
+          
+          steps.push({
+            step: "6_REBUILD_PLAYLIST",
+            ok: rebuildResult.ok,
+            data: {
+              playlistId: rebuildResult.playlistId,
+              itemCount: rebuildResult.itemCount,
+              adsAdded: rebuildResult.adsAdded,
+              verificationPassed: rebuildResult.verificationPassed,
+            },
+            error: rebuildResult.ok ? undefined : rebuildResult.errorCode,
+          });
+          
+          if (!rebuildResult.ok) {
+            return res.status(500).json({ ok: false, steps, failedStep: "6_REBUILD_PLAYLIST" });
+          }
+          
+          // Step 7: Verify now-playing includes the ad
+          const { getScreenPlaybackState } = await import("./services/simplePlaylistModel");
+          const playbackState = await getScreenPlaybackState(screenId);
+          
+          const adMediaIdInPlaylist = playbackState.actual?.mediaIds?.includes(canonicalId);
+          
+          steps.push({
+            step: "7_VERIFY_PLAYBACK",
+            ok: adMediaIdInPlaylist === true,
+            data: {
+              actualSourceType: playbackState.actual?.sourceType,
+              itemCount: playbackState.actual?.itemCount,
+              mediaIds: playbackState.actual?.mediaIds?.slice(0, 10),
+              adMediaIdPresent: adMediaIdInPlaylist,
+              canonicalId,
+            },
+          });
+          
+          if (!adMediaIdInPlaylist) {
+            return res.status(500).json({ ok: false, steps, failedStep: "7_VERIFY_PLAYBACK" });
+          }
+        } catch (error: any) {
+          steps.push({
+            step: "6_REBUILD_PLAYLIST",
+            ok: false,
+            error: error.message,
+          });
+          return res.status(500).json({ ok: false, steps, failedStep: "6_REBUILD_PLAYLIST" });
+        }
+      }
+      
+      console.log(`[E2E-Upload] ${correlationId}: All steps passed!`);
+      return res.json({ ok: true, correlationId, steps });
+      
+    } catch (error: any) {
+      console.error(`[E2E-Upload] ${correlationId}: Fatal error:`, error);
+      return res.status(500).json({
+        ok: false,
+        correlationId,
+        error: error.message,
+        steps,
+      });
+    }
+  });
+
+  // ============================================================================
   // API 404 CATCH-ALL - Must be LAST before Vite/Static middleware
   // ============================================================================
   // This ensures all unknown /api/* routes return JSON 404, never HTML

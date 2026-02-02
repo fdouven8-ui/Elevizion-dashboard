@@ -1,0 +1,133 @@
+Je bent senior backend engineer. Fix het complete E2E pad “video approve → download from storage → upload to Yodeck → add to playlist → push/verify”, zonder afhankelijk te zijn van contracts/placements in TEST_MODE.
+
+De huidige failure zit NIET in Yodeck: de MediaPipeline faalt al bij DOWNLOAD met Download failed: [object Object] (geen echte error details). Daardoor is completed=0 failed=5, yodeckMediaIdCanonical wordt gewist, en AutoPublish wordt SKIPPED reason=no_yodeckMediaId.
+
+Doel:
+
+Storage download werkt 100% betrouwbaar (met echte foutmelding als het faalt).
+
+In TEST_MODE=true: géén contract gating voor upload/rebuild — targeting-based toevoegen aan playlists moet werken.
+
+Pas als download + upload + verify OK is, set yodeckMediaIdCanonical.
+
+Daarna: rebuild-playlist resulteert in playlist itemCount = base(4) + ads(1) = 5, en now-playing verify toont topItems incl. ad video.
+
+UI endpoints blijven JSON, nooit HTML.
+
+A) Fix Storage download (CRITICAL)
+
+Zoek de code waar de pipeline download doet van ad-assets/<advertiserId>/<filename>.mp4. Waarschijnlijk via fetch, axios, of een object storage SDK.
+Probleem: de error wordt gelogd als [object Object], dus er is geen inzicht en mogelijk wordt een niet-public URL gebruikt zonder signing.
+
+Implementeer 3 dingen:
+
+A1) “resolveAssetDownloadUrl()”
+
+Maak helper die voor een storage key (ad-assets/...) altijd een werkende download methode kiest:
+
+Als object storage public is: maak een absolute URL (BASE_STORAGE_PUBLIC_URL + key).
+
+Als private: genereer een signed URL via storage SDK (bijv. S3/R2/MinIO compatible). Gebruik TTL 10 min.
+
+Valideer dat URL een geldig schema heeft (http/https).
+
+A2) Download als stream + checks
+
+Download via streaming, niet in één klap:
+
+Zet Accept: video/mp4, */*
+
+Volg redirects
+
+Max size guard (bv 50MB)
+
+Lees response headers en log: status, content-type, content-length
+
+Als status != 200: throw error met body snippet (max 200 chars)
+
+A3) Echte error logging
+
+Vervang alle Download failed: [object Object] door echte details:
+
+Als error een Response is: log status + headers + snippet
+
+Als error axios/fetch is: log code, message, stack, url
+
+Sla in DB job log op: downloadUrlUsed (zonder querystring token volledig; mask), status, contentType, contentLength
+
+Resultaat: DOWNLOAD stap geeft óf “OK bytes=X ct=video/mp4”, óf een concrete fout (403/404/CORS/etc).
+
+B) Fix dat pipeline niet 5x dezelfde asset probeert (noise)
+
+In jouw logs lijkt hij meerdere assets/attempts te doen. Zorg dat approve flow precies 1 “current active uploaded file” gebruikt:
+
+Pak de nieuwste upload van de advertiser (of de specifieke assetId dat je approve’d).
+
+Verwijder/skip oude assets in dezelfde run.
+
+Pipeline output moet 1 asset proberen, niet 5.
+
+C) Upload naar Yodeck: alleen starten als download OK is
+
+Pas Yodeck upload code aan zodat hij input accepteert als Buffer/Stream + filename.
+
+Als download faalt: stop, set assetStatus terug naar een duidelijke status (bv download_failed) en zet yodeckMediaIdCanonical NIET.
+
+Nooit canonical id wissen van een ander (eerder goed) mediaId tenzij je zeker weet dat die invalid is.
+
+D) Contract gating correct: TEST_MODE bypass (CRITICAL)
+
+Er is nu “Geen actief contract gevonden” waardoor placements/autopublish faalt.
+Maar upload + targeting-based playlist rebuild moet werken zonder contracts als TEST_MODE=true.
+
+Implementeer:
+
+isTestMode = process.env.TEST_MODE === "true"
+
+In approve flow: als TEST_MODE, dan:
+
+sla placement-engine/contract checks over (of markeer als “skipped”)
+
+doe wél: upload media → set canonical → rebuild playlists op basis van targeting
+
+In TEST_MODE=false: contract checks mogen blijven, maar upload/download moet sowieso werken.
+
+E) Rebuild-playlist: voeg ad toe als canonical klaar is
+
+Als yodeckMediaIdCanonical bestaat en media is valid/ready: voeg toe aan playlist
+
+Daarna: force fresh GET /playlists/{id}/ en gebruik dat itemCount als waarheid
+
+Als add call 2xx maar GET blijft 4: markeer PLAYLIST_ADD_FAILED en log request/response van add call.
+
+F) Debug endpoints om direct te testen
+
+Voeg deze endpoints toe (admin only):
+
+GET /api/debug/storage/object?key=<...>
+
+returned: exists, contentType, contentLength, signedUrlGenerated (masked)
+
+POST /api/admin/test-e2e-advertiser-upload?advertiserId=<id>&screenId=<id>
+
+Doet: resolve download → download → upload yodeck → verify media status → rebuild playlist → verify itemCount → return full JSON steps
+
+Geeft 500 met duidelijke code als stap faalt
+
+G) Acceptatiecriteria (must pass)
+
+Approve van video resulteert in:
+
+download OK (status 200)
+
+upload OK (Yodeck media status gaat van initialized naar processing/ready)
+
+yodeckMediaIdCanonical wordt gezet
+
+rebuild-playlist eindigt met itemCount 5
+
+now-playing endpoint toont topItems incl. de ad video
+
+In TEST_MODE=true werkt dit zonder contracten/placements.
+
+Lever implementatie met minimale refactor; alleen aanpassen waar nodig. Voeg logging toe, maar log nooit tokens of volledige signed URLs (mask querystring)

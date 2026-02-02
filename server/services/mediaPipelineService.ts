@@ -2,11 +2,13 @@ import { db } from "../db";
 import { adAssets, advertisers } from "@shared/schema";
 import { eq, and, or, isNull, inArray } from "drizzle-orm";
 import { spawn } from "child_process";
-import { Client } from "@replit/object-storage";
+import { ObjectStorageService } from "../objectStorage";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import crypto from "crypto";
+
+const objectStorage = new ObjectStorageService();
 
 const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
 const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN;
@@ -391,10 +393,17 @@ export async function validateAdvertiserMedia(advertiserId: string, externalCorr
   let completedCount = 0;
   let failedCount = 0;
 
-  const client = new Client();
   const tempDir = os.tmpdir();
 
-  for (const asset of assets) {
+  // IMPORTANT: Only process the FIRST (most recent) non-superseded asset
+  // This prevents noise from processing 5 old/duplicate assets
+  const assetsToProcess = assets.length > 0 ? [assets[0]] : [];
+  
+  if (assets.length > 1) {
+    log(correlationId, "DEDUP", `Found ${assets.length} assets, processing only most recent one: ${assets[0].id}`, logs);
+  }
+
+  for (const asset of assetsToProcess) {
     const oldStatus = asset.yodeckReadinessStatus;
     let newStatus = oldStatus;
     let action = "SKIPPED";
@@ -417,12 +426,19 @@ export async function validateAdvertiserMedia(advertiserId: string, externalCorr
       
       log(correlationId, "DOWNLOAD", `Downloading from ${storagePath}`, logs, asset.id);
       
-      const downloadResult = await client.downloadAsBytes(storagePath);
-      if (!downloadResult.ok) {
-        throw new Error(`Download failed: ${downloadResult.error}`);
+      // Use ObjectStorageService for proper download with error handling
+      const downloadBuffer = await objectStorage.downloadFile(storagePath);
+      if (!downloadBuffer) {
+        // Try to get more details by checking file existence
+        const file = await objectStorage.getFileByPath(storagePath);
+        if (!file) {
+          throw new Error(`Download failed: File not found at path "${storagePath}". Check storage path format.`);
+        }
+        throw new Error(`Download failed: File exists but download returned null`);
       }
       
-      fs.writeFileSync(localPath, Buffer.from(downloadResult.value as unknown as ArrayBuffer));
+      log(correlationId, "DOWNLOAD_OK", `Downloaded ${downloadBuffer.length} bytes`, logs, asset.id);
+      fs.writeFileSync(localPath, downloadBuffer);
 
       // Get forensic diagnostics FIRST
       const forensics = getForensicDiagnostics(localPath);
@@ -536,20 +552,17 @@ export async function validateAdvertiserMedia(advertiserId: string, externalCorr
           throw new Error(`Normalization failed: ${normResult.error}`);
         }
 
-        const normalizedStoragePath = `normalized/${asset.id}/${path.basename(normalizedPath)}`;
+        const normalizedFileName = `normalized/${asset.id}/${path.basename(normalizedPath)}`;
         const normalizedBuffer = fs.readFileSync(normalizedPath);
         
         log(correlationId, "UPLOAD_NORMALIZED", `Uploading normalized file to storage`, logs, asset.id);
         
-        const uploadResult = await client.uploadFromBytes(normalizedStoragePath, normalizedBuffer);
-        if (!uploadResult.ok) {
-          throw new Error(`Failed to upload normalized file: ${uploadResult.error}`);
-        }
+        const storedPath = await objectStorage.uploadFile(normalizedBuffer, normalizedFileName, "video/mp4");
 
         await db.update(adAssets)
           .set({
-            normalizedStoragePath,
-            normalizedStorageUrl: uploadResult.value,
+            normalizedStoragePath: storedPath,
+            normalizedStorageUrl: storedPath,
             normalizationCompletedAt: new Date(),
             normalizationProvider: "ffmpeg",
           })
