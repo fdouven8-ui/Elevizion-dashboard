@@ -2803,6 +2803,10 @@ export const uploadJobs = pgTable("upload_jobs", {
   uploadUrl: text("upload_url"), // Presigned PUT URL
   putStatus: integer("put_status"), // HTTP status from PUT (should be 200/204)
   putEtag: text("put_etag"), // ETag from PUT response
+  // Finalize tracking
+  finalizeAttempted: boolean("finalize_attempted").default(false), // Whether finalize was attempted
+  finalizeStatus: integer("finalize_status"), // HTTP status from finalize call
+  finalizeUrlUsed: text("finalize_url_used"), // Which finalize URL succeeded (if any)
   confirmResponse: jsonb("confirm_response"), // Response from verify GET /media/:id
   pollAttempts: integer("poll_attempts").notNull().default(0), // Number of poll attempts
   // Upload status - now includes transactional states

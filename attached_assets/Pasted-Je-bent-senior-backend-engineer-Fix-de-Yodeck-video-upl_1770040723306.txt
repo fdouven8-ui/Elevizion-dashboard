@@ -1,0 +1,118 @@
+Je bent senior backend engineer. Fix de Yodeck video upload zodat uploads niet blijven hangen op status="initialized". Het probleem: presigned PUT is 200, maar media blijft "initialized" omdat (a) metadata media_origin.source nu "url" is en (b) upload finalize/complete stap ontbreekt of wordt foutief als “OK” genegeerd. Resultaat: ad video verschijnt nooit als playable media en komt niet in playlists.
+
+Doel (must):
+
+Elke upload eindigt met een Yodeck media die binnen redelijke tijd naar status processing/ready gaat (niet initialized).
+
+Alleen na echte “ready/usable” status mag yodeckMediaIdCanonical worden opgeslagen.
+
+Rebuild-playlist voegt de ad pas toe als media ready is (of desnoods “processing” maar dan met duidelijke state), en playlist itemCount wordt correct 5.
+
+Voer onderstaande wijzigingen door zonder het hele project te refactoren.
+
+A) Fix metadata create (CRITICAL)
+
+Zoek de functie waar METADATA_CREATE wordt gedaan (YodeckPublish / transactional upload service). Pas het POST /api/v2/media body aan:
+
+Zet media_origin.source NIET op "url". Gebruik "upload" (of "file") voor binary uploads.
+
+Zet file_extension expliciet op "mp4" (als Yodeck dat accepteert); als Yodeck dit veld niet accepteert, zet het via PATCH direct na create.
+
+Zorg dat de naam eindigt op .mp4 en dat Content-Type video/mp4 is.
+
+Voorbeeld body (pas aan aan jouw bestaande schema):
+{
+"name": "<filename>.mp4",
+"description": "",
+"media_origin": { "type": "video", "source": "upload" },
+"arguments": { ... existing arguments ... }
+}
+
+Als API 400 geeft door velden: log exact welke keys rejected zijn en fallback naar minimal body met alleen name + media_origin.
+
+B) Implementeer verplichte finalize/complete stap (CRITICAL)
+
+Na succesvolle presigned PUT (status 200), mag “No confirm endpoint available” NOOIT als OK worden beschouwd.
+Implementeer een robust finalize sequence die meerdere varianten probeert (stop bij 2xx):
+
+POST https://app.yodeck.com/api/v2/media/{id}/upload/complete
+
+POST https://app.yodeck.com/api/v2/media/{id}/upload/complete/
+
+POST https://app.yodeck.com/api/v2/media/{id}/upload/confirm
+
+POST https://app.yodeck.com/api/v2/media/{id}/upload/confirm/
+
+POST https://app.yodeck.com/api/v2/media/{id}/upload/done
+
+Als alle varianten 404/405 geven, markeer upload als FAILED met reason FINALIZE_ENDPOINT_MISSING en sla GEEN canonical id op.
+
+Log in DB upload job: finalizeAttempted=true, finalizeStatus, finalizeUrlUsed.
+
+C) Polling moet correct en langer (maar alleen na finalize)
+
+Pas polling aan:
+
+Poll maximaal 60–120 seconden (bijv. 30 attempts met 3s interval of exponential backoff).
+
+Status mapping: initialized -> processing/transcoding -> ready (of published). Stop als status ready/ok.
+
+Als na timeout status nog initialized: markeer FAILED_INIT_STUCK.
+
+Als status error/failed: markeer failed.
+
+Belangrijk: log bij elke poll ook last_uploaded, thumbnail_url, duration (als aanwezig) zodat we zien of verwerking start.
+
+D) Hard verify dat upload echt bestaat
+
+Voeg direct na finalize (en tijdens poll) een check toe:
+
+GET /api/v2/media/{id}/
+
+Als 200 maar status blijft initialized en last_uploaded blijft exact gelijk aan create: treat as not-uploaded/failure.
+
+Only set yodeckMediaIdCanonical als status in allowedReadyStatuses is (bijv. ready/ok/active) OF als status processing is maar last_uploaded/thumbnail/duration begint te vullen (dan canonical mag “pending” zijn, maar dan rebuild moet nog niet toevoegen of moet “pending” duidelijk markeren).
+
+E) Rebuild-playlist: ad pas toevoegen als media usable is
+
+In rebuild-playlist flow:
+
+Voor elke advertiser met assetStatus ready_for_yodeck:
+
+Als yodeckMediaIdCanonical ontbreekt: start upload flow.
+
+Als upload nog processing/pending: voeg ad NIET toe aan playlist, maar return in response dat ad pending is (met reason).
+
+Alleen als media ready: add to playlist.
+
+Zo voorkom je “adsAdded” in response terwijl playlist uiteindelijk 4 items blijft.
+
+F) Playlist update moet “saved” zijn en UI moet het zien
+
+Na playlist wijziging:
+
+Forceer een “fresh read” van playlist via GET /playlists/{id}/ (no cache) en gebruik dat itemCount voor verify.
+
+Als add media call 2xx geeft maar GET playlist blijft 4: markeer PLAYLIST_ADD_FAILED en log de response van Yodeck add call.
+
+G) Debug endpoints (klein, maar handig)
+
+Voeg/verify endpoints:
+
+GET /api/debug/yodeck/media/:id (returns status, last_uploaded, duration, thumbnail_url)
+
+POST /api/admin/test-yodeck-upload (upload 1 bestand van storage en returns full step-by-step results)
+
+H) Acceptatiecriteria
+
+Na fix:
+
+Een upload resulteert in status die NIET blijft hangen op initialized.
+
+Media verschijnt in Yodeck UI als playable video.
+
+Rebuild-playlist eindigt met verify.actualPlaylistItemCount = 5 en topItems bevat de ad video.
+
+Geen “No confirm endpoint available (this is OK)” meer: finalize is verplicht.
+
+Implementeer dit nu in de bestaande codebase (TypeScript/Node), met minimale refactor. Voeg duidelijke logging toe maar nooit volledige tokens. Zorg dat alle /api/* JSON blijven

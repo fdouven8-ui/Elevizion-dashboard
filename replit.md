@@ -79,13 +79,15 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/debug/yodeck/media/:id/raw`: Raw proxy for Yodeck media API (media details + status)
   - `POST /api/debug/yodeck/selftest`: Integration self-test (whoami + optional media check + playlists)
 - **Transactional Upload Service** (transactionalUploadService.ts): Ensures uploads are 100% reliable:
-  - **Step 1: CREATE_MEDIA**: POST /api/v2/media returns mediaId and get_upload_url
+  - **Step 1: CREATE_MEDIA**: POST /api/v2/media with `media_origin: { type: "video", source: "upload" }`, name ends with .mp4
   - **Step 2: GET_UPLOAD_URL**: Store presigned PUT URL in job
   - **Step 3: PUT_BINARY**: Presigned PUT with Content-Length/Content-Type headers, requires 200/204
+  - **Step 3.5: FINALIZE**: Tries POST to /upload/complete, /upload/confirm, /upload/done - **HARD FAILS if all 404/405**
   - **Step 4: VERIFY_EXISTS_IMMEDIATELY**: GET /media/:id to confirm media exists, if 404 = FAILED
-  - **Step 5: POLL_STATUS**: Poll until ready/ok or failed/404
+  - **Step 5: POLL_STATUS**: Poll until ready/ok or failed/404, timeout 120s, FAILED_INIT_STUCK if initialized after 20+ polls
   - **Job Tracking**: All steps recorded in `upload_jobs` table with finalState (CREATED, UPLOADED, VERIFIED_EXISTS, ENCODING, READY, FAILED)
-  - **Database Integrity**: assetStatus="live" and yodeckMediaIdCanonical only set after VERIFIED_EXISTS/READY
+  - **Finalize Tracking**: finalizeAttempted, finalizeStatus, finalizeUrlUsed columns in upload_jobs
+  - **Database Integrity**: assetStatus="live" and yodeckMediaIdCanonical only set after READY status
   - **Failure Handling**: Sets assetStatus="ready_for_yodeck", clears yodeckMediaIdCanonical to prevent stale IDs
   - **ensureAdvertiserMediaIsValid()**: Checks if existing mediaId is valid in Yodeck, clears invalid IDs
 - **Upload Worker Service** (DEPRECATED): Legacy upload path - disabled by default

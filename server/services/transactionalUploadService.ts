@@ -106,6 +106,14 @@ export async function uploadVideoToYodeckTransactional(
       return makeFailResult(jobId, advertiserId, putResult.errorCode!, putResult.errorDetails);
     }
 
+    const finalizeResult = await stepFinalizeUpload(jobId, mediaId!, correlationId);
+    console.log(`${LOG_PREFIX} [${correlationId}] Finalize result: ok=${finalizeResult.ok} endpoint=${finalizeResult.endpoint || "none"} status=${finalizeResult.status} error=${finalizeResult.error || "none"}`);
+    
+    if (!finalizeResult.ok) {
+      await clearAdvertiserCanonical(advertiserId, correlationId);
+      return makeFailResult(jobId, advertiserId, "FINALIZE_ENDPOINT_MISSING", { error: finalizeResult.error });
+    }
+
     const verifyResult = await step4VerifyExistsImmediately(jobId, mediaId!, correlationId);
     if (!verifyResult.ok) {
       await clearAdvertiserCanonical(advertiserId, correlationId);
@@ -166,6 +174,81 @@ async function step1CreateMedia(
 ): Promise<{ ok: boolean; mediaId?: number; presignUrl?: string; errorCode?: string; errorDetails?: any }> {
   console.log(`${LOG_PREFIX} [${correlationId}] STEP 1: CREATE_MEDIA`);
   
+  const mediaName = name.endsWith(".mp4") ? name : `${name}.mp4`;
+  
+  try {
+    const response = await fetch(`${YODECK_API_BASE}/media/`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Token ${YODECK_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name: mediaName,
+        media_type: "video",
+        media_origin: {
+          type: "video",
+          source: "upload",
+        },
+      }),
+    });
+
+    const responseText = await response.text();
+    let responseData: any;
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      responseData = { rawText: responseText.substring(0, 500) };
+    }
+
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 response: status=${response.status} body=${JSON.stringify(responseData).substring(0, 300)}`);
+
+    await updateJob(jobId, {
+      createResponse: responseData,
+    });
+
+    if (!response.ok) {
+      if (response.status === 400 && responseData.media_origin) {
+        console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 fallback: media_origin rejected, trying url_type`);
+        return await step1CreateMediaFallback(jobId, mediaName, correlationId);
+      }
+      const errorCode = `CREATE_FAILED_${response.status}`;
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FAILED: ${response.status}`);
+      await markJobFailed(jobId, errorCode, responseData, `Create media failed: ${response.status}`);
+      return { ok: false, errorCode, errorDetails: responseData };
+    }
+
+    const mediaId = responseData.id;
+    const presignUrl = responseData.get_upload_url || responseData.presign_url;
+
+    if (!mediaId) {
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FAILED: No mediaId in response`);
+      await markJobFailed(jobId, "CREATE_NO_MEDIA_ID", responseData, "Create response missing id");
+      return { ok: false, errorCode: "CREATE_NO_MEDIA_ID", errorDetails: responseData };
+    }
+
+    await updateJob(jobId, {
+      yodeckMediaId: mediaId,
+      finalState: UPLOAD_FINAL_STATE.CREATED,
+    });
+
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 SUCCESS: mediaId=${mediaId} presignUrl=${presignUrl ? "present" : "MISSING"}`);
+    return { ok: true, mediaId, presignUrl };
+
+  } catch (error: any) {
+    console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 ERROR:`, error);
+    await markJobFailed(jobId, "CREATE_EXCEPTION", { message: error.message }, error.message);
+    return { ok: false, errorCode: "CREATE_EXCEPTION", errorDetails: { message: error.message } };
+  }
+}
+
+async function step1CreateMediaFallback(
+  jobId: string,
+  name: string,
+  correlationId: string
+): Promise<{ ok: boolean; mediaId?: number; presignUrl?: string; errorCode?: string; errorDetails?: any }> {
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 FALLBACK: CREATE_MEDIA with url_type`);
+  
   try {
     const response = await fetch(`${YODECK_API_BASE}/media/`, {
       method: "POST",
@@ -188,14 +271,12 @@ async function step1CreateMedia(
       responseData = { rawText: responseText.substring(0, 500) };
     }
 
-    await updateJob(jobId, {
-      createResponse: responseData,
-    });
+    await updateJob(jobId, { createResponse: responseData });
 
     if (!response.ok) {
       const errorCode = `CREATE_FAILED_${response.status}`;
-      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FAILED: ${response.status}`);
-      await markJobFailed(jobId, errorCode, responseData, `Create media failed: ${response.status}`);
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FALLBACK FAILED: ${response.status}`);
+      await markJobFailed(jobId, errorCode, responseData, `Create media fallback failed: ${response.status}`);
       return { ok: false, errorCode, errorDetails: responseData };
     }
 
@@ -203,7 +284,6 @@ async function step1CreateMedia(
     const presignUrl = responseData.get_upload_url || responseData.presign_url;
 
     if (!mediaId) {
-      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FAILED: No mediaId in response`);
       await markJobFailed(jobId, "CREATE_NO_MEDIA_ID", responseData, "Create response missing id");
       return { ok: false, errorCode: "CREATE_NO_MEDIA_ID", errorDetails: responseData };
     }
@@ -213,11 +293,11 @@ async function step1CreateMedia(
       finalState: UPLOAD_FINAL_STATE.CREATED,
     });
 
-    console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 SUCCESS: mediaId=${mediaId}`);
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 FALLBACK SUCCESS: mediaId=${mediaId}`);
     return { ok: true, mediaId, presignUrl };
 
   } catch (error: any) {
-    console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 ERROR:`, error);
+    console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FALLBACK ERROR:`, error);
     await markJobFailed(jobId, "CREATE_EXCEPTION", { message: error.message }, error.message);
     return { ok: false, errorCode: "CREATE_EXCEPTION", errorDetails: { message: error.message } };
   }
@@ -283,6 +363,76 @@ async function step3PutBinary(
     await markJobFailed(jobId, "PUT_EXCEPTION", { message: error.message }, error.message);
     return { ok: false, errorCode: "PUT_EXCEPTION", errorDetails: { message: error.message } };
   }
+}
+
+interface FinalizeResult {
+  ok: boolean;
+  endpoint?: string;
+  status?: number;
+  error?: string;
+}
+
+async function stepFinalizeUpload(
+  jobId: string,
+  mediaId: number,
+  correlationId: string
+): Promise<FinalizeResult> {
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 3.5: FINALIZE_UPLOAD for mediaId=${mediaId}`);
+  
+  const finalizeEndpoints = [
+    `${YODECK_API_BASE}/media/${mediaId}/upload/complete`,
+    `${YODECK_API_BASE}/media/${mediaId}/upload/complete/`,
+    `${YODECK_API_BASE}/media/${mediaId}/upload/confirm`,
+    `${YODECK_API_BASE}/media/${mediaId}/upload/confirm/`,
+    `${YODECK_API_BASE}/media/${mediaId}/upload/done`,
+    `${YODECK_API_BASE}/media/${mediaId}/upload/done/`,
+  ];
+  
+  let lastStatus = 0;
+  let successEndpoint: string | null = null;
+  
+  for (const endpoint of finalizeEndpoints) {
+    try {
+      console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE trying: ${endpoint}`);
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Authorization": `Token ${YODECK_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({}),
+      });
+      
+      lastStatus = response.status;
+      console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE ${endpoint} -> ${response.status}`);
+      
+      if (response.ok) {
+        successEndpoint = endpoint;
+        console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE SUCCESS: ${endpoint} -> ${response.status}`);
+        break;
+      }
+      
+      if (response.status !== 404 && response.status !== 405) {
+        console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE unexpected status ${response.status}, continuing...`);
+      }
+    } catch (err: any) {
+      console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE endpoint error: ${err.message}`);
+    }
+  }
+  
+  await updateJob(jobId, {
+    finalizeAttempted: true,
+    finalizeStatus: lastStatus,
+    finalizeUrlUsed: successEndpoint,
+  });
+  
+  if (successEndpoint) {
+    return { ok: true, endpoint: successEndpoint, status: lastStatus };
+  }
+  
+  console.error(`${LOG_PREFIX} [${correlationId}] FINALIZE FAILED: No endpoint succeeded (lastStatus=${lastStatus}). Upload cannot be confirmed.`);
+  await markJobFailed(jobId, "FINALIZE_ENDPOINT_MISSING", { lastStatus, testedEndpoints: finalizeEndpoints.length }, "All finalize endpoints failed (404/405)");
+  return { ok: false, error: "FINALIZE_ENDPOINT_MISSING" };
 }
 
 async function step4VerifyExistsImmediately(
@@ -381,13 +531,22 @@ async function step5PollStatus(
       const data = await response.json();
       const status = (data.status || "").toLowerCase();
       const fileSize = data.filesize || data.file_size || 0;
+      const lastUploaded = data.last_uploaded || data.lastUploaded || null;
+      const thumbnailUrl = data.thumbnail_url || data.thumbnailUrl || null;
+      const duration = data.duration || null;
 
-      console.log(`${LOG_PREFIX} [${correlationId}] Poll ${attempt}: status=${status} fileSize=${fileSize}`);
+      console.log(`${LOG_PREFIX} [${correlationId}] Poll ${attempt}: status=${status} fileSize=${fileSize} lastUploaded=${lastUploaded} thumbnail=${thumbnailUrl ? "present" : "none"} duration=${duration}`);
 
       await updateJob(jobId, {
         yodeckStatus: status,
         yodeckFileSize: fileSize,
       });
+
+      if (status === "initialized" && attempt > 20) {
+        console.error(`${LOG_PREFIX} [${correlationId}] STEP 5 FAILED: Stuck on initialized after ${attempt} polls`);
+        await markJobFailed(jobId, "FAILED_INIT_STUCK", { attempts: attempt, lastStatus: status }, "Media stuck on initialized status");
+        return { ok: false, errorCode: "FAILED_INIT_STUCK", errorDetails: { attempts: attempt } };
+      }
 
       if (READY_STATUSES.includes(status) && fileSize > 0) {
         const finalVerify = await finalVerification(mediaId, correlationId);
