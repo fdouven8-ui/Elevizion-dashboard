@@ -1853,7 +1853,7 @@ export async function getScreenPlaybackState(screenId: string): Promise<ScreenPl
   const screenRegion = ((location as any)?.region || "").toLowerCase().trim();
   
   // Count targeted ads using same logic as rebuildScreenPlaylist
-  const advertisers = await storage.getAllAdvertisers();
+  const advertisers = await storage.getAdvertisers();
   const ALLOWED_STATUSES = ["approved", "ready_for_yodeck", "ready_for_publish", "live", "uploaded"];
   let adsCount = 0;
   
@@ -1876,7 +1876,7 @@ export async function getScreenPlaybackState(screenId: string): Promise<ScreenPl
   
   // Get expected playlist name from DB (not from Yodeck actual state)
   const expectedPlaylistName = screen.playlistId 
-    ? `EVZ | SCREEN | ${screen.playerId || 'unknown'}` 
+    ? `EVZ | SCREEN | ${screen.yodeckPlayerId || 'unknown'}` 
     : null;
   
   // SINGLE SOURCE OF TRUTH: Fetch REAL playlist content from Yodeck
@@ -1914,7 +1914,7 @@ export async function getScreenPlaybackState(screenId: string): Promise<ScreenPl
     mismatchReason = nowPlaying.error || "Failed to fetch Yodeck status";
     recommendedAction = "verify";
     isCorrect = false;
-  } else if (!screen.playerId) {
+  } else if (!screen.yodeckPlayerId) {
     mismatchReason = "Screen has no Yodeck player ID";
     recommendedAction = "investigate";
   } else if (!screen.playlistId) {
@@ -1939,7 +1939,7 @@ export async function getScreenPlaybackState(screenId: string): Promise<ScreenPl
   return {
     screenId: screen.id,
     screenName: screen.name,
-    playerId: screen.playerId,
+    playerId: screen.yodeckPlayerId,
     locationId: screen.locationId,
     expected: {
       playlistId: screen.playlistId,
