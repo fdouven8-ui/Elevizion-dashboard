@@ -20916,5 +20916,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     });
   });
 
+  // ============================================================================
+  // API 404 CATCH-ALL - Must be LAST before Vite/Static middleware
+  // ============================================================================
+  // This ensures all unknown /api/* routes return JSON 404, never HTML
+  app.all("/api/*", (req, res) => {
+    console.error(`[API Guard] 404: No route handler for ${req.method} ${req.originalUrl}`);
+    res.setHeader("Content-Type", "application/json");
+    res.status(404).json({
+      ok: false,
+      error: `No API route: ${req.method} ${req.originalUrl}`,
+      code: "API_NOT_FOUND",
+    });
+  });
+
   return httpServer;
 }

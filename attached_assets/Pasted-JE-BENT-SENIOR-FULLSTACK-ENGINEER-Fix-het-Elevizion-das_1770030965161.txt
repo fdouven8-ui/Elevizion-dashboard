@@ -1,0 +1,84 @@
+JE BENT SENIOR FULLSTACK ENGINEER. Fix het Elevizion dashboard zodat Yodeck uploads en playlist placement E2E betrouwbaar werken.
+
+DOEL (must-have):
+1) Als een adverteerder een video heeft (in onze storage) en assetStatus ready_for_yodeck/live, dan moet het dashboard 100% zeker een echte Yodeck media krijgen (bestaat in Yodeck, niet “false positive”).
+2) Die media moet vervolgens in de juiste SCREEN playlist terechtkomen (EVZ | SCREEN | {playerId}) samen met baseline items.
+3) Daarna moet er een echte push naar het scherm gedaan worden zodat het scherm de playlist afspeelt.
+4) Elke stap moet strikt geverifieerd worden en bij fail moet canonical ID gewist worden (db liegt nooit).
+
+HUIDIGE BUGS (op basis van logs/screens):
+- yodeckMediaIdCanonical=29661498 bestaat niet in Yodeck (All Media toont hem niet). Rebuild logt “Upload SUCCESS” maar media is niet echt.
+- Screen playlist bevat alleen baseline (4 items).
+- /api/yodeck/* endpoints geven HTML terug (SPA), /api/debug/yodeck/* 404. Dus routes missen of staan achter SPA fallback.
+- We moeten Yodeck encoding niet doen; alleen zorgen dat upload echt compleet is.
+
+TAKEN:
+A) API ROUTING HARD FIX (kritiek)
+- Zorg dat ALLE /api/* routes (incl. /api/yodeck/* en /api/debug/*) ALTIJD vóór de SPA fallback geregistreerd staan.
+- Voeg een “API not found -> JSON” handler toe: onbekende /api routes moeten {ok:false,error:"API_ROUTE_NOT_FOUND"} teruggeven, nooit index.html.
+- Verifieer in code dat express static/SPA fallback pas NA app.use("/api", apiRouter) komt.
+
+B) IMPLEMENTEER /api/debug/yodeck MEDIA CHECKS (zodat we waarheid kunnen zien)
+- GET /api/debug/yodeck/media/:id/exists -> vraagt Yodeck API v2 media endpoint op en return JSON:
+  { ok:true, exists:true/false, statusCode, yodeck:{id,name,type,status,processing_state,...}, fetchedAt }
+- GET /api/debug/yodeck/media/:id/status -> zelfde maar met processing/transcoding readiness indien beschikbaar.
+- GET /api/debug/yodeck/upload-jobs -> laatste upload job rows uit DB met correlationId, step states, lastError.
+
+C) MAAK 1 ENKELE “TRANSACTIONAL UPLOAD” DE ENIGE WAARHEID
+Maak een service: yodeckTransactionalUpload(advertiserId, localFilePathOrUrl) met EXACT deze stappen:
+1. CREATE_MEDIA (Yodeck API) -> krijg mediaId
+2. GET_UPLOAD_URL (presigned) -> krijg uploadUrl
+3. PUT_BINARY naar uploadUrl (streaming, juiste content-type, content-length indien vereist)
+4. COMPLETE/CONFIRM upload indien Yodeck dat endpoint heeft (bijv /upload/complete). Alleen als API dit vereist.
+5. VERIFY_EXISTS_IMMEDIATELY: doe direct GET /media/{id}. Als 404 -> FAIL
+6. POLL_STATUS: poll max 90 sec (bv elke 3 sec) tot media “ready/processed/available” is (of in ieder geval niet in error/aborted). Als timeout -> FAIL.
+
+Belangrijk:
+- Logging per stap in DB tabel upload_jobs: correlationId, advertiserId, mediaId, step, ok, httpStatus, responseSnippet, error, timestamps.
+- Pas ALS stap 5/6 ok is: schrijf advertiser.yodeckMediaIdCanonical = mediaId + updatedAt.
+- Als fail: wis advertiser.yodeckMediaIdCanonical en zet assetStatus terug naar ready_for_yodeck (of een duidelijke error status) + log reden.
+
+D) REBUILD FLOW: NOOIT MEER “FAKE SUCCESS”
+Pas ensureAdvertiserMediaIsValid() en rebuild logic aan:
+- Als advertiser.assetStatus in [ready_for_yodeck, live] maar canonical ontbreekt of invalid -> start transactional upload.
+- Als canonical bestaat: check via Yodeck GET /media/{id}. Als 404 -> clear canonical en upload opnieuw.
+- Voeg een harde check toe: na “add media to playlist” moet je playlist opnieuw ophalen en verifiëren dat mediaId echt in items zit. Als niet -> treat as failure (playlist update faalde) en log.
+
+E) PLAYLIST WRITE + PUSH: ECHTE GARANTIE
+- Zorg dat we exact 1 playlist per screen gebruiken: “EVZ | SCREEN | {playerId}”.
+- Bij rebuild:
+  1) haal base playlist “Basis playlist” items op
+  2) ensure screen playlist bestaat (maak als nodig)
+  3) replace playlist items transactioneel: eerst leegmaken of overwriten met base items, daarna ads items toevoegen
+  4) fetch playlist items opnieuw -> verify expectedCount = baseCount + adsCount AND bevat alle ids
+- Assign screen content naar die playlist (source_type=playlist, source_id=playlistId).
+- Push naar screen met Yodeck push endpoint.
+- Verifieer via “now playing”/screen content endpoint dat source_id klopt én playlist item count klopt.
+- Als push/verify faalt: return HTTP 500 op admin test endpoint met recommendedAction.
+
+F) FIX FRONTEND / CONSOLE TESTING CONFUSION
+- Frontend mag NIET fetchen naar /api/yodeck/* als dat niet bestaat. Gebruik bestaande endpoints:
+  - /api/screens/:screenId/now-playing
+  - /api/screens/:screenId/playback-state
+  - /api/debug/yodeck/media/:id/exists (nieuw)
+- Zorg dat deze endpoints altijd JSON + juiste content-type teruggeven.
+
+G) E2E ADMIN TEST ENDPOINT (hard fail bij probleem)
+Maak POST /api/admin/test-yodeck-e2e met body { screenId, advertiserId }:
+- Step1 validate advertiser + local asset file exists
+- Step2 transactional upload (of validate existing)
+- Step3 rebuild screen playlist (base + ad)
+- Step4 assign + push
+- Step5 verify screen content shows playlist + media present
+Return JSON met alle steps + correlationId. Bij fail: HTTP 500 en error details.
+
+ACCEPTANCE CRITERIA (moet je zelf checken):
+1) Als ik 1 advertiser met lokale video heb: na POST /api/admin/test-yodeck-e2e zie ik in Yodeck “All Media” een NIEUWE media (niet de handmatige).
+2) In Yodeck playlist EVZ | SCREEN | 591896 staat die ad media erbij (naast baseline).
+3) Het scherm speelt af.
+4) Als upload faalt, wordt canonical gewist en wordt duidelijk gelogd waarom (404 media / aborted / timeout / uploadUrl invalid).
+
+LEVERING:
+- Wijzig alleen wat nodig is; geen grote refactor buiten dit domein.
+- Voeg code comments + duidelijke logs toe.
+- Update replit.md met nieuwe endpoints en hoe je E2E test runt.
