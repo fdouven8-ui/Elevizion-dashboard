@@ -1,0 +1,116 @@
+Je bent een senior engineer. Fix het Elevizion Dashboard zodat Yodeck uploads altijd slagen en video’s automatisch in de juiste screen-playlist terechtkomen (baseline + toegewezen ads) en gepusht worden.
+
+Context: E2E endpoint /api/admin/test-e2e-advertiser-upload faalt op stap 4_YODECK_UPLOAD met Yodeck API error 400: err_1002 missing_key: media_origin. Dus onze POST https://app.yodeck.com/api/v2/media create-request mist verplicht veld media_origin.
+
+Doel (absoluut):
+
+Upload naar Yodeck moet betrouwbaar werken (CREATE → GET_UPLOAD_URL → PUT presigned → POLL status tot ready).
+
+Na succesvolle upload moet yodeckMediaIdCanonical gezet worden en moet rebuild de ad in EVZ | SCREEN | {playerId} playlist zetten en pushen.
+
+TEST_MODE=true: géén contract/placement gating; alleen targeting-based selectie.
+
+Alle /api/* endpoints moeten JSON teruggeven (geen HTML).
+
+Taken
+
+A) Fix Yodeck create-media payload (root cause)
+
+Zoek de code waar POST /api/v2/media gedaan wordt (bv. yodeckClient.createMedia, uploadMediaTransactional, transactionalUploadService, yodeckPublish, etc.).
+
+Zorg dat de request body altijd minimaal bevat:
+
+name (string, bestandsnaam)
+
+description (string, optioneel)
+
+media_origin (VERPLICHT) met juiste structuur voor video upload. Gebruik exact deze veilige default:
+
+{
+  "media_origin": { "type": "video", "source": "url" }
+}
+
+
+(Dit is bewezenZW: Yodeck accepteert dit en retourneert get_upload_url waarna we presigned URL ophalen.)
+
+Houd arguments erbij als je die al gebruikt (crop_settings/buffering/fps/resolution etc.), maar media_origin moet altijd aanwezig zijn.
+
+Log voor debugging (alleen server logs): de outbound body keys bij create-media, bijv. Object.keys(payload) en expliciet payload.media_origin.
+
+Als create-media faalt: return duidelijke JSON error in steps met httpStatus, yodeckError.code, missing_key, etc.
+
+B) Maak upload flow “strict” en consistent (geen false positives)
+
+Na create-media: haal upload endpoint uit get_upload_url (zoals je al doet).
+
+Call upload endpoint → verwacht JSON met upload_url (presigned S3).
+
+PUT binary naar presigned URL met:
+
+Content-Type: video/mp4
+
+zet Content-Length gelijk aan buffer/file size (voorkomt “interrupted/corrupted” issues)
+
+gebruik geen chunked encoding (als je streamt: zorg dat je content-length correct is of download eerst naar temp file en upload via fs stream met bekende size).
+
+Poll /api/v2/media/{id} tot status niet meer initialized.
+
+Define “ready” statuses (bijv. ready, active, completed — check bestaande mapping in code).
+
+Als na max attempts nog initialized: markeer upload als failed en delete mediaId (zoals je al doet), maar log de polling chain.
+
+Alleen bij “ready” mag yodeckMediaIdCanonical gezet worden.
+
+C) Routeer ALLE paden naar deze fixed flow
+
+Je hebt legacy paths (MediaPipeline, MediaBridge, uploadWorkerService, etc.). Zorg dat goedkeuren/approve van video altijd de fixed transactional upload gebruikt, niet een oude createMedia call zonder media_origin.
+
+Als er flags bestaan zoals LEGACY_UPLOAD_DISABLED: zet defaults zo dat production path altijd transactional is.
+
+D) Fix E2E endpoint zodat het echt de hele keten test
+
+/api/admin/test-e2e-advertiser-upload moet stap voor stap teruggeven:
+
+asset lookup
+
+storage check
+
+download ok (bytes)
+
+yodeck upload (toon create status + mediaId + poll statuses)
+
+verify exists (/media/{id} ok)
+
+rebuild screen playlist (optioneel met screenId)
+
+verify playlist bevat mediaId en screen content source correct
+
+Bij failure: HTTP 500 + volledige steps met error.details.
+
+E) Rebuild/Playlist correctness
+
+Rebuild moet ads toevoegen op basis van targeting.
+
+TEST_MODE=true: skip contract gating volledig.
+
+Voeg ad toe aan playlist als hij nog niet aanwezig is (mediaId compare).
+
+Na push: verify via Yodeck playlist fetch dat mediaId voorkomt in items (en dat screen source playlistId klopt).
+
+F) Database integriteit
+
+Als upload faalt: clear yodeckMediaIdCanonical en zet assetStatus terug naar iets dat UI duidelijk maakt dat hij niet live is.
+
+Als upload slaagt: set assetStatus=live + yodeckMediaIdCanonical + timestamp.
+
+Acceptatiecriteria (moet je zelf uitvoeren en bewijzen in logs)
+
+Run E2E call vanuit browser console en hij moet slagen: ok:true en step 4 heeft mediaId en poll gaat naar ready.
+
+In Yodeck UI → Media → moet de automatisch geüploade video zichtbaar zijn.
+
+In playlist EVZ | SCREEN | 591896 moet de video als item staan naast de baseline items.
+
+/api/screens/:id/now-playing moet itemCount incl. ad tonen, en contains mediaId = true in content summary.
+
+Lever op: code wijzigingen + eventuele migratie/cleanup + verbeterde logs. Geen grote refactor; alleen gerichte fixes.

@@ -264,43 +264,95 @@ async function uploadToYodeck(
   }
 
   try {
+    const payload = {
+      name: name.endsWith(".mp4") ? name : `${name}.mp4`,
+      media_type: "video",
+      media_origin: {
+        type: "video",
+        source: "upload",
+      },
+    };
+    
+    console.log(`[MediaPipeline] CREATE_MEDIA payload keys: ${Object.keys(payload).join(", ")}, media_origin: ${JSON.stringify(payload.media_origin)}`);
+    
     const createResp = await fetch(`${YODECK_API_BASE}/media/`, {
       method: "POST",
       headers: {
         "Authorization": `Token ${YODECK_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        name,
-        media_type: "video",
-        url_type: "upload",
-      }),
+      body: JSON.stringify(payload),
     });
 
+    const createRespText = await createResp.text();
+    let createData: any;
+    try {
+      createData = JSON.parse(createRespText);
+    } catch {
+      createData = { rawText: createRespText.substring(0, 500) };
+    }
+    
+    console.log(`[MediaPipeline] CREATE_MEDIA response: status=${createResp.status}, body=${JSON.stringify(createData).substring(0, 300)}`);
+
     if (!createResp.ok) {
-      const errText = await createResp.text();
-      return { ok: false, error: `Create media failed: ${createResp.status} ${errText}` };
+      return { 
+        ok: false, 
+        error: `Create media failed: ${createResp.status} ${JSON.stringify(createData)}`,
+      };
     }
 
-    const createData = await createResp.json();
     const mediaId = createData.id;
-    const presignUrl = createData.presign_url;
+    const getUploadUrlEndpoint = createData.get_upload_url;
 
+    if (!getUploadUrlEndpoint) {
+      return { ok: false, error: "No get_upload_url in create response" };
+    }
+    
+    // STEP 2: GET the presigned URL from the endpoint
+    console.log(`[MediaPipeline] GET_PRESIGNED_URL: fetching from ${getUploadUrlEndpoint}`);
+    
+    const fullEndpointUrl = getUploadUrlEndpoint.startsWith("http") 
+      ? getUploadUrlEndpoint 
+      : `${YODECK_API_BASE.replace("/api/v2", "")}${getUploadUrlEndpoint}`;
+    
+    const presignResp = await fetch(fullEndpointUrl, {
+      method: "GET",
+      headers: {
+        "Authorization": `Token ${YODECK_TOKEN}`,
+      },
+    });
+    
+    if (!presignResp.ok) {
+      return { ok: false, error: `GET presigned URL failed: ${presignResp.status}` };
+    }
+    
+    const presignData = await presignResp.json();
+    const presignUrl = presignData.upload_url || presignData.presign_url || presignData.url;
+    
+    console.log(`[MediaPipeline] GET_PRESIGNED_URL response: presignUrl=${presignUrl ? "present" : "MISSING"}`);
+    
     if (!presignUrl) {
-      return { ok: false, error: "No presign_url in create response" };
+      return { ok: false, error: `No upload_url in presign response: ${JSON.stringify(presignData).substring(0, 200)}` };
     }
 
+    // STEP 3: PUT binary to presigned URL
     const fileBuffer = fs.readFileSync(filePath);
+    const fileSize = fileBuffer.length;
+    
+    console.log(`[MediaPipeline] PUT_BINARY: uploading ${fileSize} bytes to presigned URL`);
     
     const uploadResp = await fetch(presignUrl, {
       method: "PUT",
       headers: {
         "Content-Type": mimeType,
+        "Content-Length": String(fileSize),
       },
       body: fileBuffer,
     });
 
-    if (!uploadResp.ok) {
+    console.log(`[MediaPipeline] PUT_BINARY response: status=${uploadResp.status}`);
+
+    if (!uploadResp.ok && uploadResp.status !== 204) {
       return { ok: false, error: `Upload to presign URL failed: ${uploadResp.status}` };
     }
 
