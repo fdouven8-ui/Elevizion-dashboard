@@ -264,16 +264,13 @@ async function uploadToYodeck(
   }
 
   try {
+    // CRITICAL: Do NOT send media_origin - Yodeck determines origin automatically for presigned uploads
     const payload = {
       name: name.endsWith(".mp4") ? name : `${name}.mp4`,
-      media_type: "video",
-      media_origin: {
-        type: "video",
-        source: "upload",
-      },
+      description: `Elevizion ad upload ${new Date().toISOString()}`,
     };
     
-    console.log(`[MediaPipeline] CREATE_MEDIA payload keys: ${Object.keys(payload).join(", ")}, media_origin: ${JSON.stringify(payload.media_origin)}`);
+    console.log(`[MediaPipeline] CREATE_MEDIA payload=${JSON.stringify(payload)}`);
     
     const createResp = await fetch(`${YODECK_API_BASE}/media/`, {
       method: "POST",
@@ -356,7 +353,11 @@ async function uploadToYodeck(
       return { ok: false, error: `Upload to presign URL failed: ${uploadResp.status}` };
     }
 
-    for (let i = 0; i < 30; i++) {
+    // Poll until status is NOT "initialized" (any other status = ready for use)
+    const POLL_MAX_SECONDS = 60;
+    const startTime = Date.now();
+    
+    while ((Date.now() - startTime) < POLL_MAX_SECONDS * 1000) {
       await new Promise(r => setTimeout(r, 2000));
       
       const statusResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
@@ -367,8 +368,11 @@ async function uploadToYodeck(
         const statusData = await statusResp.json();
         const fileSize = statusData.filesize || statusData.file_size || 0;
         const status = statusData.status;
+        
+        console.log(`[MediaPipeline] POLL: mediaId=${mediaId} status=${status} fileSize=${fileSize}`);
 
-        if (fileSize > 0 && (status === "active" || status === "ready")) {
+        // Success = any status that is NOT "initialized" + has filesize
+        if (status !== "initialized" && fileSize > 0) {
           // STEP 5: FINAL VERIFICATION - Confirm media exists with one more GET
           console.log(`[MediaPipeline] FINAL VERIFICATION: GET /media/${mediaId} to confirm existence...`);
           const verifyResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {

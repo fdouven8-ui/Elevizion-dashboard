@@ -7,7 +7,7 @@ const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
 const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN?.trim() || "";
 const LOG_PREFIX = "[TransactionalUpload]";
 
-const POLL_TIMEOUT_MS = 120000;
+const POLL_TIMEOUT_MS = 60000; // 60 seconds max polling
 const POLL_INTERVALS_MS = [2000, 3000, 5000, 5000, 5000, 10000, 10000, 10000];
 
 export interface TransactionalUploadResult {
@@ -178,6 +178,14 @@ async function step1CreateMedia(
   
   const mediaName = name.endsWith(".mp4") ? name : `${name}.mp4`;
   
+  // CRITICAL: Do NOT send media_origin - Yodeck determines origin automatically for presigned uploads
+  const payload = {
+    name: mediaName,
+    description: `Elevizion ad upload ${new Date().toISOString()}`,
+  };
+  
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 1: CREATE_MEDIA payload=${JSON.stringify(payload)}`);
+  
   try {
     const response = await fetch(`${YODECK_API_BASE}/media/`, {
       method: "POST",
@@ -185,14 +193,7 @@ async function step1CreateMedia(
         "Authorization": `Token ${YODECK_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        name: mediaName,
-        media_type: "video",
-        media_origin: {
-          type: "video",
-          source: "upload",
-        },
-      }),
+      body: JSON.stringify(payload),
     });
 
     const responseText = await response.text();
@@ -210,12 +211,8 @@ async function step1CreateMedia(
     });
 
     if (!response.ok) {
-      if (response.status === 400 && responseData.media_origin) {
-        console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 fallback: media_origin rejected, trying url_type`);
-        return await step1CreateMediaFallback(jobId, mediaName, correlationId);
-      }
       const errorCode = `CREATE_FAILED_${response.status}`;
-      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FAILED: ${response.status}`);
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FAILED: ${response.status} - ${JSON.stringify(responseData)}`);
       await markJobFailed(jobId, errorCode, responseData, `Create media failed: ${response.status}`);
       return { ok: false, errorCode, errorDetails: responseData };
     }
@@ -244,66 +241,7 @@ async function step1CreateMedia(
   }
 }
 
-async function step1CreateMediaFallback(
-  jobId: string,
-  name: string,
-  correlationId: string
-): Promise<{ ok: boolean; mediaId?: number; presignUrl?: string; errorCode?: string; errorDetails?: any }> {
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 FALLBACK: CREATE_MEDIA with url_type`);
-  
-  try {
-    const response = await fetch(`${YODECK_API_BASE}/media/`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Token ${YODECK_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        name,
-        media_type: "video",
-        url_type: "upload",
-      }),
-    });
-
-    const responseText = await response.text();
-    let responseData: any;
-    try {
-      responseData = JSON.parse(responseText);
-    } catch {
-      responseData = { rawText: responseText.substring(0, 500) };
-    }
-
-    await updateJob(jobId, { createResponse: responseData });
-
-    if (!response.ok) {
-      const errorCode = `CREATE_FAILED_${response.status}`;
-      console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FALLBACK FAILED: ${response.status}`);
-      await markJobFailed(jobId, errorCode, responseData, `Create media fallback failed: ${response.status}`);
-      return { ok: false, errorCode, errorDetails: responseData };
-    }
-
-    const mediaId = responseData.id;
-    const presignUrl = responseData.get_upload_url || responseData.presign_url;
-
-    if (!mediaId) {
-      await markJobFailed(jobId, "CREATE_NO_MEDIA_ID", responseData, "Create response missing id");
-      return { ok: false, errorCode: "CREATE_NO_MEDIA_ID", errorDetails: responseData };
-    }
-
-    await updateJob(jobId, {
-      yodeckMediaId: mediaId,
-      finalState: UPLOAD_FINAL_STATE.CREATED,
-    });
-
-    console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 FALLBACK SUCCESS: mediaId=${mediaId}`);
-    return { ok: true, mediaId, presignUrl };
-
-  } catch (error: any) {
-    console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FALLBACK ERROR:`, error);
-    await markJobFailed(jobId, "CREATE_EXCEPTION", { message: error.message }, error.message);
-    return { ok: false, errorCode: "CREATE_EXCEPTION", errorDetails: { message: error.message } };
-  }
-}
+// DEPRECATED: Fallback function removed - only use clean payload without media_origin/url_type
 
 async function step2GetPresignedUploadUrl(
   jobId: string,
