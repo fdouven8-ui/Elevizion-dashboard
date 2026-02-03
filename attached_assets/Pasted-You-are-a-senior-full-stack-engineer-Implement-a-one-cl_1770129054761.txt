@@ -1,0 +1,106 @@
+You are a senior full-stack engineer. Implement a one-click “FULL AI DUMP” export tool inside our existing Elevizion dashboard.
+
+GOAL
+Provide ChatGPT with complete technical context (code + mappings + runtime state + logs + schema + sample data) in a format that is easy to paste into chat.
+
+HARD REQUIREMENTS
+- Must export “everything needed to debug any issue” across the app:
+  - server routes/controllers
+  - services (Yodeck, Moneybird, email, storage, targeting, capacity, etc.)
+  - workers/cron jobs
+  - DB schema/migrations/prisma/drizzle/SQL (whatever is used)
+  - UI pages/components related to upload/publish/screens/admin
+  - package.json + lockfile
+  - runtime snapshot (version/build, feature flags, worker status)
+  - last N logs (filtered + raw)
+  - key system mappings (screen->playlist, advertiser->contracts->placements->screens)
+- Must be ADMIN-ONLY (use existing auth/role checks)
+- Must sanitize secrets automatically (no API keys, tokens, passwords, auth headers, presigned urls)
+- Must support chunked export so it can be pasted into ChatGPT reliably.
+- Must include deterministic ordering and file paths so changes can be referenced precisely.
+
+IMPLEMENTATION
+1) Add endpoint: POST /api/admin/ai-dump
+   Body:
+   {
+     "mode": "full",
+     "maxFilesKB": 250,        // per chunk target
+     "maxLogLines": 3000,
+     "sampleRowsPerTable": 3
+   }
+
+   Response:
+   {
+     "ok": true,
+     "bundleId": "aidump_...",
+     "chunks": [
+       { "index": 1, "total": 8, "title": "...", "text": "...." },
+       ...
+     ],
+     "summary": { "files": 123, "chunks": 8, "logs": 3000, "schema": true }
+   }
+
+2) Add Admin UI page: /admin/ai-dump (or add to Control Room)
+   - Button: “Generate FULL AI Dump”
+   - Displays list of chunks with:
+     - “Copy chunk” button
+     - shows index/total
+   - Also a “Copy summary” button.
+
+3) Code collection
+   - Recursively read repo files BUT exclude:
+     node_modules, .git, build outputs, caches, large binaries
+   - Include: src/server, src/client, routes, workers, db, migrations, scripts, config, package.json, lockfiles
+   - For each file: include header:
+     ---FILE: <relative path> (bytes=<n>)---
+
+4) Runtime snapshot collector
+   - Include /api/version output (call internal function or build info)
+   - Include feature flags (TEST_MODE etc) as booleans only
+   - Include key counters (screens online/offline, ads totals, queue backlog) using existing services
+   - Include current playlist mappings for all screens (ids + names + counts)
+   - Include last E2E run result if available
+
+5) Logs
+   - Collect last maxLogLines from your current logger/store (or from server log buffer if present)
+   - Include both:
+     - filtered important tags (MediaPipeline, YodeckPublish, AutopilotWorker, CapacityWatcher)
+     - raw tail
+   - Ensure logs are sanitized too.
+
+6) DB schema + sample data (sanitized)
+   - Export schema/migrations files
+   - Additionally, query DB to fetch table list and sampleRowsPerTable rows per core table:
+     screens, locations, advertisers, ad_assets, placement_plans, contracts, playlist_mappings, payouts, invoices, etc.
+   - Redact PII fields (name/email/phone/address) but keep IDs and relationship fields intact.
+
+7) Sanitization rules (must be applied everywhere)
+   - Replace values for keys matching /(key|token|secret|password|authorization|cookie)/i with "***REDACTED***"
+   - Strip Authorization headers
+   - Strip presigned URLs (any URL containing signature params) -> "***REDACTED_URL***"
+   - Mask emails and phone numbers in text and logs
+   - Keep UUIDs and numeric IDs unchanged
+   - Keep Yodeck media IDs and playlist IDs unchanged
+
+8) Chunking
+   - Combine sections into a single long text but then split into chunks ~maxFilesKB each
+   - Chunks must start with:
+     === AI_DUMP CHUNK i/total | bundleId=... | generatedAt=... ===
+     plus a table-of-contents for that chunk.
+   - Ensure stable ordering: snapshot -> flow map -> schema -> code (alphabetical paths) -> logs.
+
+9) Add simple “flow map”
+   - Generate a JSON/markdown section listing all Express routes + handler file path/function name.
+
+10) Testing
+   - Add an integration test or at least a manual verification checklist in code comments:
+     - endpoint returns chunks
+     - no secrets present (search for “Token ”, “Authorization”, known env var names)
+     - chunk copy works in UI
+     - bundle created within reasonable time
+
+After implementation, print:
+- list of files changed
+- how many chunks produced
+- proof that media_origin is not present in yodeck create-media payload anymore (search)
+- a short “How to use” note for the user.

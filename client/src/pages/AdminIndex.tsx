@@ -24,6 +24,7 @@ const adminTools = [
   { title: "Video Beoordelen", description: "Beoordeel ingediende video's", url: "/video-review", icon: PlaySquare },
   { title: "Layouts", description: "Beheer Yodeck layouts", url: "/admin/layouts", icon: LayoutGrid },
   { title: "Yodeck Debug", description: "Yodeck API debugging tools", url: "/admin/yodeck-debug", icon: Bug },
+  { title: "AI Dump", description: "Exporteer alles voor ChatGPT debugging", url: "/admin/ai-dump", icon: FileText },
   { title: "Data Gezondheid", description: "Data integriteitscontroles", url: "/data-health", icon: Database },
   { title: "Email Center", description: "E-mail templates en logs", url: "/email-center", icon: Mail },
   { title: "Entiteiten", description: "Beheer systeem-entiteiten", url: "/entities", icon: Shield },

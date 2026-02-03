@@ -58,6 +58,7 @@ import ClaimPage from "@/pages/ClaimPage";
 import VideoReview from "@/pages/VideoReview";
 import Layouts from "@/pages/Layouts";
 import YodeckDebug from "@/pages/YodeckDebug";
+import AiDump from "@/pages/AiDump";
 import AdminIndex from "@/pages/AdminIndex";
 import NotFound from "@/pages/not-found";
 import Adverteren from "@/pages/marketing/Adverteren";
@@ -117,6 +118,7 @@ function DashboardRouter() {
         <Route path="/admin/layouts" component={Layouts} />
         <Route path="/yodeck-debug" component={YodeckDebug} />
         <Route path="/admin/yodeck-debug" component={YodeckDebug} />
+        <Route path="/admin/ai-dump" component={AiDump} />
         <Route path="/admin" component={AdminIndex} />
         <Route component={NotFound} />
       </Switch>

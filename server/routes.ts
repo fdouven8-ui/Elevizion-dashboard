@@ -21291,6 +21291,37 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // AI DUMP EXPORT ENDPOINT
+  // ============================================================================
+  /**
+   * POST /api/admin/ai-dump
+   * Generate a full AI dump for debugging - exports code, schema, runtime state, and sample data
+   */
+  app.post("/api/admin/ai-dump", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    
+    try {
+      const { generateAiDump } = await import("./services/aiDumpService");
+      
+      const options = {
+        mode: req.body.mode || "full",
+        maxFilesKB: req.body.maxFilesKB || 250,
+        maxLogLines: req.body.maxLogLines || 3000,
+        sampleRowsPerTable: req.body.sampleRowsPerTable || 3
+      };
+      
+      console.log(`[AI-Dump] Admin request with options:`, options);
+      
+      const result = await generateAiDump(options);
+      
+      return res.json(result);
+    } catch (error: any) {
+      console.error(`[AI-Dump] Error:`, error);
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
   // API 404 CATCH-ALL - Must be LAST before Vite/Static middleware
   // ============================================================================
   // This ensures all unknown /api/* routes return JSON 404, never HTML
