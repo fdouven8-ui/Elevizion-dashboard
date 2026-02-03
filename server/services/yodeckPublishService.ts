@@ -16,6 +16,7 @@ import { ObjectStorageService } from "../objectStorage";
 import { dispatchMailEvent } from "./mailEventService";
 import { logAudit } from "./auditService";
 import { guardCanonicalWrite } from "./yodeckCanonicalService";
+import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 import axios from "axios";
 import FormData from "form-data";
 
@@ -1019,13 +1020,10 @@ class YodeckPublishService {
     const apiKey = await this.getApiKey();
     const metadataUrl = `${YODECK_BASE_URL}/media`;
     
-    const payload = {
-      name: name,
-      media_origin: {
-        type: "video",
-        source: "local"
-      }
-    };
+    // Use canonical payload builder - NEVER include forbidden fields
+    const payload = buildYodeckCreateMediaPayload(name);
+    assertNoForbiddenKeys(payload, "yodeckPublish.twoStepUpload");
+    logCreateMediaPayload(payload, corrId);
     
     console.log(`[YodeckPublish][${corrId}] Two-step upload: Creating metadata for "${name}" (${fileSize} bytes)`);
     
@@ -1500,14 +1498,14 @@ class YodeckPublishService {
 
   /**
    * Perform single upload attempt to Yodeck
-   * Supports different media_origin formats for API compatibility
+   * CRITICAL: media_origin is NEVER sent - causes err_1003
    */
   private async attemptYodeckUpload(
     fileBuffer: Buffer,
     normalizedName: string,
     filename: string,
     fileSize: number,
-    mediaOriginFormat: 'none' | 'json' | 'nested' = 'none'
+    _mediaOriginFormat: 'none' | 'json' | 'nested' = 'none'  // DEPRECATED: always uses 'none'
   ): Promise<{ 
     ok: boolean; 
     mediaId?: number; 
@@ -1519,23 +1517,10 @@ class YodeckPublishService {
     yodeckInvalidField?: string;
   }> {
     const formData = new FormData();
-    const uploadFields: string[] = ['name'];
+    const uploadFields: string[] = ['name', 'file'];
     
     formData.append("name", normalizedName);
-    
-    // Add media_origin in the specified format
-    if (mediaOriginFormat === 'json') {
-      // JSON-stringified object format
-      const mediaOriginObj = { source: "local", type: "video" };
-      formData.append("media_origin", JSON.stringify(mediaOriginObj));
-      uploadFields.push('media_origin (JSON object)');
-    } else if (mediaOriginFormat === 'nested') {
-      // Nested multipart fields format
-      formData.append("media_origin[source]", "local");
-      formData.append("media_origin[type]", "video");
-      uploadFields.push('media_origin[source]', 'media_origin[type]');
-    }
-    // 'none' = no media_origin field
+    // CRITICAL: Do NOT add media_origin in ANY format - causes err_1003
     
     formData.append("file", fileBuffer, { 
       filename,

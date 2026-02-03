@@ -1,0 +1,143 @@
+You are a senior backend engineer working on the Elevizion dashboard (Node/Express).
+We have confirmed via logs that the E2E upload fails at step 4_YODECK_UPLOAD with:
+
+CREATE_MEDIA payload keys: name, media_type, media_origin
+
+media_origin: {"type":"video","source":"upload"}
+
+Yodeck response: 400 err_1003 invalid_field: media_origin
+
+This must be fixed permanently and consistently across ALL code paths.
+
+GOAL
+
+For Yodeck two-step uploads (POST /api/v2/media → get_upload_url → PUT binary), the POST /api/v2/media payload must NOT include:
+
+media_origin (in any form, even undefined/null)
+
+media_type (remove this too; we want a minimal payload)
+
+any type, source, mime_type, file_type, or origin fields
+
+Yodeck determines origin automatically when using the presigned upload URL.
+
+TASKS (DO ALL)
+1) Implement a single canonical function for Yodeck create-media payload
+
+Create (or modify) a function (e.g. buildYodeckCreateMediaPayload) used everywhere.
+
+It must return ONLY:
+
+name (string)
+
+description (string, allow empty "")
+
+arguments (object) with:
+
+buffering: true
+
+resolution: "highest"
+
+Example:
+
+function buildYodeckCreateMediaPayload({ name }) {
+  return {
+    name,
+    description: "",
+    arguments: { buffering: true, resolution: "highest" }
+  };
+}
+
+
+IMPORTANT:
+
+Do NOT include media_origin at all.
+
+Do NOT include media_type at all.
+
+Do NOT include keys with undefined/null values.
+
+Do NOT spread other objects into this payload.
+
+2) Replace all current usages that add media_origin/media_type
+
+Search the entire codebase for:
+
+media_origin
+
+media_type
+
+origin
+
+Invalid media origin combination
+
+CREATE_MEDIA payload keys
+
+Any create-media call must use the canonical builder above.
+
+3) Add a hard safety guard before sending request
+
+Right before the fetch/axios call to POST https://app.yodeck.com/api/v2/media, add an assertion:
+
+If payload contains forbidden keys, throw a clear error and fail fast.
+
+Forbidden keys set:
+["media_origin","media_type","origin","type","source","mime_type","file_type","content_type","upload_method"]
+
+Also add a sanitizer utility that deep-removes undefined and null (but remember: forbidden keys must never exist anyway).
+
+4) Upgrade logging so we can prove the fix
+
+Update the log line:
+[MediaPipeline] CREATE_MEDIA payload keys: ...
+to print:
+
+the payload keys
+
+AND the full payload JSON
+
+Example:
+
+console.log("[MediaPipeline] CREATE_MEDIA payload:", JSON.stringify(payload, null, 2));
+console.log("[MediaPipeline] CREATE_MEDIA payload keys:", Object.keys(payload).join(", "));
+
+
+Also log:
+
+response status + full response body (already present, keep it)
+
+5) E2E endpoint behavior must reflect reality
+
+In /api/admin/test-e2e-advertiser-upload:
+
+If CREATE_MEDIA returns non-201, fail step 4_YODECK_UPLOAD immediately (already happening) and return parsed error JSON.
+
+Ensure it never reports success if media wasn’t created.
+
+6) After fix: verify end-to-end happy path
+
+After implementing, run the same E2E test:
+advertiserId: 9a99d555-8676-49d3-9862-f65859bdcfb1
+screenId: 241377ce-a25e-4744-9ea7-cd9359515d07
+
+Expected:
+
+CREATE_MEDIA response status becomes 201
+
+Response includes a media id and get_upload_url (or wherever the code reads it from)
+
+Subsequent PUT binary succeeds
+
+Step 4_YODECK_UPLOAD ok=true
+
+7) Provide a short summary and list files changed
+
+At the end, print:
+
+which files were modified
+
+where create-media payload was centralized
+
+confirmation that media_origin and media_type are no longer sent anywhere
+
+Implement and commit.

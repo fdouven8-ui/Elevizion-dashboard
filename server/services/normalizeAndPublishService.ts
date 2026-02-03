@@ -19,6 +19,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
+import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 
 const execAsync = promisify(exec);
 
@@ -527,13 +528,14 @@ export async function normalizeAndPublish(
     const determinisiticName = `EVZ-AD | ${advertiser.companyName} | ${asset.id.slice(0, 8)} | ${asset.storedFilename || asset.originalFileName}`;
     log(correlationId, "UPLOAD_TO_YODECK", `Creating media: "${determinisiticName}"`, logs);
 
+    // Use canonical payload builder - NEVER include forbidden fields
+    const createPayload = buildYodeckCreateMediaPayload(determinisiticName);
+    assertNoForbiddenKeys(createPayload, "normalizeAndPublish.uploadToYodeck");
+    logCreateMediaPayload(createPayload);
+    
     const createResp = await yodeckRequest<any>("/media/", {
       method: "POST",
-      body: JSON.stringify({
-        name: determinisiticName,
-        type: "video",
-        source_type: "file",
-      }),
+      body: JSON.stringify(createPayload),
     });
 
     if (!createResp.ok || !createResp.data) {

@@ -7,6 +7,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import crypto from "crypto";
+import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 
 const objectStorage = new ObjectStorageService();
 
@@ -264,13 +265,13 @@ async function uploadToYodeck(
   }
 
   try {
-    // CRITICAL: Do NOT send media_origin - Yodeck determines origin automatically for presigned uploads
-    const payload = {
-      name: name.endsWith(".mp4") ? name : `${name}.mp4`,
-      description: `Elevizion ad upload ${new Date().toISOString()}`,
-    };
+    // Use canonical payload builder - NEVER include media_origin/media_type
+    const mediaName = name.endsWith(".mp4") ? name : `${name}.mp4`;
+    const payload = buildYodeckCreateMediaPayload(mediaName);
     
-    console.log(`[MediaPipeline] CREATE_MEDIA payload=${JSON.stringify(payload)}`);
+    // Safety guard: fail fast if forbidden keys somehow sneak in
+    assertNoForbiddenKeys(payload, "uploadToYodeck");
+    logCreateMediaPayload(payload);
     
     const createResp = await fetch(`${YODECK_API_BASE}/media/`, {
       method: "POST",

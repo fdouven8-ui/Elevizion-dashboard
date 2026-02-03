@@ -10,6 +10,7 @@ import { storage } from "../storage";
 import type { UploadJob } from "@shared/schema";
 import { UPLOAD_JOB_STATUS } from "@shared/schema";
 import { checkMediaReadiness } from "./adTargetingService";
+import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 
 const LEGACY_UPLOAD_DISABLED = process.env.LEGACY_UPLOAD_DISABLED === "true";
 
@@ -66,17 +67,18 @@ async function createYodeckMedia(name: string, mimeType: string = "video/mp4"): 
   try {
     console.log(`[UploadWorker] Creating Yodeck media: ${name}`);
     
+    // Use canonical payload builder - NEVER include forbidden fields
+    const payload = buildYodeckCreateMediaPayload(name);
+    assertNoForbiddenKeys(payload, "uploadWorker.createYodeckMedia");
+    logCreateMediaPayload(payload);
+    
     const resp = await fetch(`${YODECK_BASE}/media/`, {
       method: "POST",
       headers: {
         "Authorization": `Token ${YODECK_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        name,
-        type: "video",
-        source_type: "file",
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (!resp.ok) {

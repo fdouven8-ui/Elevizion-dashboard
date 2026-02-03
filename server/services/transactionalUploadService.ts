@@ -2,6 +2,7 @@ import { db } from "../db";
 import { uploadJobs, advertisers, UPLOAD_JOB_STATUS, UPLOAD_FINAL_STATE } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { Client } from "@replit/object-storage";
+import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 
 const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
 const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN?.trim() || "";
@@ -178,13 +179,12 @@ async function step1CreateMedia(
   
   const mediaName = name.endsWith(".mp4") ? name : `${name}.mp4`;
   
-  // CRITICAL: Do NOT send media_origin - Yodeck determines origin automatically for presigned uploads
-  const payload = {
-    name: mediaName,
-    description: `Elevizion ad upload ${new Date().toISOString()}`,
-  };
+  // Use canonical payload builder - NEVER include media_origin/media_type
+  const payload = buildYodeckCreateMediaPayload(mediaName);
   
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 1: CREATE_MEDIA payload=${JSON.stringify(payload)}`);
+  // Safety guard: fail fast if forbidden keys somehow sneak in
+  assertNoForbiddenKeys(payload, "step1CreateMedia");
+  logCreateMediaPayload(payload, correlationId);
   
   try {
     const response = await fetch(`${YODECK_API_BASE}/media/`, {

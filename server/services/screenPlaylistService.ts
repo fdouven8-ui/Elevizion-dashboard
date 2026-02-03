@@ -22,6 +22,7 @@ import { screens, placements, contracts, adAssets, systemSettings, locations } f
 import { eq, and, inArray } from "drizzle-orm";
 import { yodeckRequest } from "./yodeckLayoutService";
 import { getYodeckDeviceStatus, UnifiedDeviceStatus } from "./unifiedDeviceStatusService";
+import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 
 // ============================================================================
 // EXPECTED SOURCE CALCULATION
@@ -2326,16 +2327,12 @@ async function ensureKnownGoodMedia(logs: string[]): Promise<{ ok: boolean; medi
   
   logs.push(`[KnownGood] Test video ready: ${videoResult.filePath}`);
   
-  // Upload to Yodeck using two-step pipeline
+  // Upload to Yodeck using canonical presigned URL flow
   const { readFileSync, statSync } = await import("fs");
   const fileBuffer = readFileSync(videoResult.filePath);
   const fileStats = statSync(videoResult.filePath);
   
-  logs.push(`[KnownGood] Uploading to Yodeck (${fileStats.size} bytes)...`);
-  
-  // Upload using Yodeck API with proper multipart format
-  const axios = (await import("axios")).default;
-  const FormData = (await import("form-data")).default;
+  logs.push(`[KnownGood] Uploading to Yodeck via presigned URL (${fileStats.size} bytes)...`);
   
   const apiKey = process.env.YODECK_AUTH_TOKEN;
   if (!apiKey) {
@@ -2343,59 +2340,79 @@ async function ensureKnownGoodMedia(logs: string[]): Promise<{ ok: boolean; medi
     return { ok: false, error: "YODECK_AUTH_TOKEN not configured" };
   }
   
-  const formData = new FormData();
-  formData.append("name", KNOWN_GOOD_MEDIA_NAME);
-  // Yodeck requires nested media_origin fields
-  formData.append("media_origin[source]", "local");
-  formData.append("media_origin[type]", "video");
-  formData.append("file", fileBuffer, {
-    filename: "evz_known_good_test.mp4",
-    contentType: "video/mp4",
-    knownLength: fileStats.size,
-  });
-  
-  // Calculate content length
-  let contentLength: number;
-  try {
-    contentLength = await new Promise<number>((resolve, reject) => {
-      formData.getLength((err: Error | null, length: number) => {
-        if (err) reject(err);
-        else resolve(length);
-      });
-    });
-  } catch (lengthErr) {
-    logs.push(`[KnownGood] ✗ Could not calculate Content-Length`);
-    return { ok: false, error: "Could not calculate Content-Length" };
-  }
+  const YODECK_BASE = "https://app.yodeck.com/api/v2";
   
   try {
-    const uploadResponse = await axios.post(
-      "https://app.yodeck.com/api/v2/media/",
-      formData,
-      {
-        headers: {
-          Authorization: `Token ${apiKey}`,
-          "Content-Length": String(contentLength),
-          ...formData.getHeaders(),
-        },
-        timeout: 60000,
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
-      }
-    );
+    // STEP 1: Create media using canonical payload (NO media_origin)
+    const createPayload = buildYodeckCreateMediaPayload(KNOWN_GOOD_MEDIA_NAME);
+    assertNoForbiddenKeys(createPayload, "ensureKnownGoodMedia");
+    logCreateMediaPayload(createPayload);
     
-    if (uploadResponse.data?.id) {
-      const mediaId = String(uploadResponse.data.id);
-      logs.push(`[KnownGood] ✓ Uploaded: mediaId=${mediaId}`);
-      return { ok: true, mediaId };
-    } else {
-      logs.push(`[KnownGood] ✗ Upload response missing id: ${JSON.stringify(uploadResponse.data)}`);
-      return { ok: false, error: "Upload response missing id" };
+    const createResp = await fetch(`${YODECK_BASE}/media/`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Token ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(createPayload),
+    });
+    
+    if (!createResp.ok) {
+      const errorText = await createResp.text();
+      logs.push(`[KnownGood] ✗ Create media failed: ${createResp.status} ${errorText}`);
+      return { ok: false, error: `Create media failed: ${createResp.status}` };
     }
+    
+    const createData = await createResp.json();
+    const mediaId = createData.id;
+    const getUploadUrlEndpoint = createData.get_upload_url;
+    
+    if (!getUploadUrlEndpoint) {
+      logs.push(`[KnownGood] ✗ No get_upload_url in response`);
+      return { ok: false, error: "No get_upload_url in create response" };
+    }
+    
+    logs.push(`[KnownGood] Created media ${mediaId}, getting presigned URL...`);
+    
+    // STEP 2: Get the presigned URL
+    const presignResp = await fetch(getUploadUrlEndpoint, {
+      headers: { "Authorization": `Token ${apiKey}` },
+    });
+    
+    if (!presignResp.ok) {
+      logs.push(`[KnownGood] ✗ Get presigned URL failed: ${presignResp.status}`);
+      return { ok: false, error: `Get presigned URL failed: ${presignResp.status}` };
+    }
+    
+    const presignData = await presignResp.json();
+    const presignUrl = presignData.upload_url;
+    
+    if (!presignUrl) {
+      logs.push(`[KnownGood] ✗ No upload_url in presign response`);
+      return { ok: false, error: "No upload_url in presign response" };
+    }
+    
+    // STEP 3: PUT binary to presigned URL
+    logs.push(`[KnownGood] Uploading ${fileBuffer.length} bytes to presigned URL...`);
+    const uploadResp = await fetch(presignUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "video/mp4",
+        "Content-Length": String(fileBuffer.length),
+      },
+      body: fileBuffer,
+    });
+    
+    if (!uploadResp.ok && uploadResp.status !== 204) {
+      logs.push(`[KnownGood] ✗ Upload to presigned URL failed: ${uploadResp.status}`);
+      return { ok: false, error: `Upload failed: ${uploadResp.status}` };
+    }
+    
+    logs.push(`[KnownGood] ✓ Uploaded via presigned URL: mediaId=${mediaId}`);
+    return { ok: true, mediaId: String(mediaId) };
   } catch (error: any) {
-    const errDetail = error.response?.data ? JSON.stringify(error.response.data) : error.message;
-    logs.push(`[KnownGood] ✗ Upload failed: ${errDetail}`);
-    return { ok: false, error: errDetail };
+    logs.push(`[KnownGood] ✗ Upload error: ${error.message}`);
+    return { ok: false, error: error.message };
   }
 }
 
