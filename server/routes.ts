@@ -21207,6 +21207,89 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  /**
+   * GET /api/debug/yodeck/media/:id/exists
+   * Check if a media item exists in Yodeck
+   */
+  app.get("/api/debug/yodeck/media/:id/exists", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const mediaId = req.params.id;
+    const token = process.env.YODECK_AUTH_TOKEN?.trim();
+    
+    try {
+      const response = await fetch(`https://app.yodeck.com/api/v2/media/${mediaId}/`, {
+        headers: { Authorization: `Token ${token}` },
+      });
+      
+      if (response.status === 404) {
+        return res.json({ ok: true, exists: false, mediaId });
+      }
+      
+      if (!response.ok) {
+        return res.json({ 
+          ok: false, 
+          exists: null, 
+          mediaId, 
+          error: `API returned ${response.status}` 
+        });
+      }
+      
+      const data = await response.json();
+      return res.json({
+        ok: true,
+        exists: true,
+        mediaId,
+        name: data.name,
+        status: data.status,
+        filesize: data.filesize || data.file_size,
+        created_at: data.created_at,
+        last_modified: data.last_modified,
+      });
+    } catch (error: any) {
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/debug/yodeck/upload-jobs
+   * List recent upload jobs with status
+   */
+  app.get("/api/debug/yodeck/upload-jobs", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const limit = parseInt(req.query.limit as string) || 20;
+    
+    try {
+      const { uploadJobs } = await import("@shared/schema");
+      const { desc } = await import("drizzle-orm");
+      
+      const jobs = await db.select()
+        .from(uploadJobs)
+        .orderBy(desc(uploadJobs.createdAt))
+        .limit(limit);
+      
+      return res.json({
+        ok: true,
+        count: jobs.length,
+        jobs: jobs.map(j => ({
+          id: j.id,
+          advertiserId: j.advertiserId,
+          correlationId: j.correlationId,
+          status: j.status,
+          finalState: j.finalState,
+          yodeckMediaId: j.yodeckMediaId,
+          errorCode: j.errorCode,
+          putStatus: j.putStatus,
+          pollAttempts: j.pollAttempts,
+          localFileSize: j.localFileSize,
+          createdAt: j.createdAt,
+          completedAt: j.completedAt,
+        })),
+      });
+    } catch (error: any) {
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   // ============================================================================
   // API 404 CATCH-ALL - Must be LAST before Vite/Static middleware
   // ============================================================================

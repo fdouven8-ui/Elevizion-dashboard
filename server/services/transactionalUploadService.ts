@@ -94,14 +94,16 @@ export async function uploadVideoToYodeckTransactional(
     if (!createResult.ok) {
       return makeFailResult(jobId, advertiserId, createResult.errorCode!, createResult.errorDetails);
     }
-    const { mediaId, presignUrl } = createResult;
+    const { mediaId, presignUrl: getUploadUrlEndpoint } = createResult;
 
-    const uploadUrlResult = await step2StoreUploadUrl(jobId, presignUrl!, correlationId);
+    // Step 2: Get the actual presigned URL by calling get_upload_url endpoint
+    const uploadUrlResult = await step2GetPresignedUploadUrl(jobId, getUploadUrlEndpoint!, correlationId);
     if (!uploadUrlResult.ok) {
-      return makeFailResult(jobId, advertiserId, "UPLOAD_URL_MISSING", null);
+      return makeFailResult(jobId, advertiserId, uploadUrlResult.errorCode!, uploadUrlResult.errorDetails);
     }
+    const presignedUrl = uploadUrlResult.presignedUrl!;
 
-    const putResult = await step3PutBinary(jobId, presignUrl!, fileBuffer, correlationId);
+    const putResult = await step3PutBinary(jobId, presignedUrl, fileBuffer, correlationId);
     if (!putResult.ok) {
       return makeFailResult(jobId, advertiserId, putResult.errorCode!, putResult.errorDetails);
     }
@@ -303,22 +305,89 @@ async function step1CreateMediaFallback(
   }
 }
 
-async function step2StoreUploadUrl(
+async function step2GetPresignedUploadUrl(
   jobId: string,
-  presignUrl: string,
+  getUploadUrlEndpoint: string,
   correlationId: string
-): Promise<{ ok: boolean }> {
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 2: STORE_UPLOAD_URL`);
+): Promise<{ ok: boolean; presignedUrl?: string; errorCode?: string; errorDetails?: any }> {
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 2: GET_PRESIGNED_URL`);
   
-  if (!presignUrl) {
-    console.error(`${LOG_PREFIX} [${correlationId}] STEP 2 FAILED: No presign URL`);
-    await markJobFailed(jobId, "NO_PRESIGN_URL", null, "No presign URL in create response");
-    return { ok: false };
+  if (!getUploadUrlEndpoint) {
+    console.error(`${LOG_PREFIX} [${correlationId}] STEP 2 FAILED: No get_upload_url endpoint`);
+    await markJobFailed(jobId, "NO_UPLOAD_URL_ENDPOINT", null, "No get_upload_url in create response");
+    return { ok: false, errorCode: "NO_UPLOAD_URL_ENDPOINT" };
   }
-
-  await updateJob(jobId, { uploadUrl: presignUrl });
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 2 SUCCESS: URL stored`);
-  return { ok: true };
+  
+  // Check if the endpoint already looks like a presigned S3 URL (direct upload case)
+  if (getUploadUrlEndpoint.includes("s3.") || getUploadUrlEndpoint.includes("storage.googleapis.com") || getUploadUrlEndpoint.includes("X-Amz-")) {
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 2: Endpoint looks like direct presigned URL, using as-is`);
+    await updateJob(jobId, { uploadUrl: getUploadUrlEndpoint });
+    return { ok: true, presignedUrl: getUploadUrlEndpoint };
+  }
+  
+  try {
+    // If the endpoint is a relative URL, make it absolute
+    let fullUrl = getUploadUrlEndpoint;
+    if (getUploadUrlEndpoint.startsWith("/")) {
+      fullUrl = `https://app.yodeck.com${getUploadUrlEndpoint}`;
+    } else if (!getUploadUrlEndpoint.startsWith("http")) {
+      fullUrl = `${YODECK_API_BASE}/${getUploadUrlEndpoint}`;
+    }
+    
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 2: Fetching presigned URL from: ${fullUrl}`);
+    
+    const response = await fetch(fullUrl, {
+      method: "GET",
+      headers: {
+        "Authorization": `Token ${YODECK_TOKEN}`,
+        "Accept": "application/json",
+      },
+    });
+    
+    const responseText = await response.text();
+    let responseData: any;
+    try {
+      responseData = JSON.parse(responseText);
+    } catch {
+      responseData = { rawText: responseText.substring(0, 500) };
+    }
+    
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 2 response: status=${response.status} keys=${Object.keys(responseData).join(",")}`);
+    
+    if (!response.ok) {
+      const errorCode = `GET_UPLOAD_URL_FAILED_${response.status}`;
+      await markJobFailed(jobId, errorCode, responseData, `Get upload URL failed: ${response.status}`);
+      return { ok: false, errorCode, errorDetails: responseData };
+    }
+    
+    // The response should contain upload_url (the actual S3 presigned URL)
+    const presignedUrl = responseData.upload_url || responseData.presign_url || responseData.url;
+    
+    if (!presignedUrl) {
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 2 FAILED: No presigned URL in response. Keys: ${Object.keys(responseData).join(", ")}`);
+      await markJobFailed(jobId, "NO_PRESIGNED_URL_IN_RESPONSE", responseData, "Response missing upload_url");
+      return { ok: false, errorCode: "NO_PRESIGNED_URL_IN_RESPONSE", errorDetails: responseData };
+    }
+    
+    // Validate the presigned URL looks like an S3/storage URL
+    if (!presignedUrl.startsWith("http")) {
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 2 FAILED: Invalid presigned URL format`);
+      await markJobFailed(jobId, "INVALID_PRESIGNED_URL", { url: presignedUrl.substring(0, 100) }, "Presigned URL invalid format");
+      return { ok: false, errorCode: "INVALID_PRESIGNED_URL" };
+    }
+    
+    await updateJob(jobId, { uploadUrl: presignedUrl });
+    
+    // Log presigned URL host (masked)
+    const urlHost = new URL(presignedUrl).host;
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 2 SUCCESS: Presigned URL host=${urlHost}`);
+    return { ok: true, presignedUrl };
+    
+  } catch (error: any) {
+    console.error(`${LOG_PREFIX} [${correlationId}] STEP 2 ERROR:`, error);
+    await markJobFailed(jobId, "GET_UPLOAD_URL_EXCEPTION", { message: error.message }, error.message);
+    return { ok: false, errorCode: "GET_UPLOAD_URL_EXCEPTION", errorDetails: { message: error.message } };
+  }
 }
 
 async function step3PutBinary(
@@ -327,20 +396,52 @@ async function step3PutBinary(
   fileBuffer: Buffer,
   correlationId: string
 ): Promise<{ ok: boolean; errorCode?: string; errorDetails?: any }> {
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 3: PUT_BINARY (${fileBuffer.length} bytes)`);
+  const fileSize = fileBuffer.length;
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 3: PUT_BINARY (${fileSize} bytes)`);
+  
+  // Validate file size
+  if (fileSize === 0) {
+    console.error(`${LOG_PREFIX} [${correlationId}] STEP 3 FAILED: File is empty (0 bytes)`);
+    await markJobFailed(jobId, "PUT_EMPTY_FILE", { fileSize: 0 }, "File is empty");
+    return { ok: false, errorCode: "PUT_EMPTY_FILE", errorDetails: { fileSize: 0 } };
+  }
+  
+  // Log presigned URL host for debugging (masked)
+  let urlHost = "unknown";
+  try {
+    urlHost = new URL(presignUrl).host;
+  } catch {}
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 3: PUT to host=${urlHost} size=${fileSize}`);
+  
+  const startTime = Date.now();
   
   try {
     const response = await fetch(presignUrl, {
       method: "PUT",
       headers: {
         "Content-Type": "video/mp4",
-        "Content-Length": fileBuffer.length.toString(),
+        "Content-Length": fileSize.toString(),
       },
       body: fileBuffer,
     });
 
     const putStatus = response.status;
     const putEtag = response.headers.get("etag") || null;
+    const putContentLength = response.headers.get("content-length");
+    const putDurationMs = Date.now() - startTime;
+    
+    // Log response headers for diagnostics
+    const responseHeaders: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      responseHeaders[key] = value;
+    });
+    
+    let responseBody = "";
+    try {
+      responseBody = await response.text();
+    } catch {}
+    
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 3 response: status=${putStatus} etag=${putEtag} duration=${putDurationMs}ms body=${responseBody.substring(0, 200)}`);
 
     await updateJob(jobId, {
       putStatus,
@@ -349,18 +450,31 @@ async function step3PutBinary(
 
     if (putStatus !== 200 && putStatus !== 204) {
       const errorCode = `PUT_FAILED_${putStatus}`;
-      console.error(`${LOG_PREFIX} [${correlationId}] STEP 3 FAILED: status=${putStatus}`);
-      await markJobFailed(jobId, errorCode, { status: putStatus }, `PUT failed with status ${putStatus}`);
-      return { ok: false, errorCode, errorDetails: { status: putStatus } };
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 3 FAILED: status=${putStatus} body=${responseBody.substring(0, 500)}`);
+      await markJobFailed(jobId, errorCode, { 
+        status: putStatus, 
+        host: urlHost,
+        fileSize,
+        durationMs: putDurationMs,
+        responseBody: responseBody.substring(0, 500),
+        headers: responseHeaders,
+      }, `PUT failed with status ${putStatus}`);
+      return { ok: false, errorCode, errorDetails: { status: putStatus, responseBody: responseBody.substring(0, 200) } };
     }
 
     await updateJob(jobId, { finalState: UPLOAD_FINAL_STATE.UPLOADED });
-    console.log(`${LOG_PREFIX} [${correlationId}] STEP 3 SUCCESS: status=${putStatus} etag=${putEtag}`);
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 3 SUCCESS: status=${putStatus} etag=${putEtag} duration=${putDurationMs}ms fileSize=${fileSize}`);
     return { ok: true };
 
   } catch (error: any) {
+    const putDurationMs = Date.now() - startTime;
     console.error(`${LOG_PREFIX} [${correlationId}] STEP 3 ERROR:`, error);
-    await markJobFailed(jobId, "PUT_EXCEPTION", { message: error.message }, error.message);
+    await markJobFailed(jobId, "PUT_EXCEPTION", { 
+      message: error.message, 
+      host: urlHost,
+      fileSize,
+      durationMs: putDurationMs,
+    }, error.message);
     return { ok: false, errorCode: "PUT_EXCEPTION", errorDetails: { message: error.message } };
   }
 }
@@ -430,9 +544,10 @@ async function stepFinalizeUpload(
     return { ok: true, endpoint: successEndpoint, status: lastStatus };
   }
   
-  console.error(`${LOG_PREFIX} [${correlationId}] FINALIZE FAILED: No endpoint succeeded (lastStatus=${lastStatus}). Upload cannot be confirmed.`);
-  await markJobFailed(jobId, "FINALIZE_ENDPOINT_MISSING", { lastStatus, testedEndpoints: finalizeEndpoints.length }, "All finalize endpoints failed (404/405)");
-  return { ok: false, error: "FINALIZE_ENDPOINT_MISSING" };
+  // No finalize endpoint succeeded - this is OK, Yodeck may auto-finalize after PUT
+  // We'll continue to verify/poll and let that determine success/failure
+  console.warn(`${LOG_PREFIX} [${correlationId}] FINALIZE: No endpoint succeeded (lastStatus=${lastStatus}). Continuing - Yodeck may auto-finalize.`);
+  return { ok: true, error: "NO_FINALIZE_ENDPOINT", status: lastStatus };
 }
 
 async function step4VerifyExistsImmediately(

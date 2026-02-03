@@ -1,0 +1,102 @@
+You are a senior backend engineer. Fix the Elevizion → Yodeck upload pipeline end-to-end. Current situation:
+
+- E2E endpoint POST /api/admin/test-e2e-advertiser-upload returns HTTP 500 with:
+  { ok:false, steps:[...], failedStep:"4_YODECK_UPLOAD" }
+- We previously saw Yodeck two-step upload logs: metadata create returns 201 with get_upload_url, presigned PUT returns 200, but media status stays "initialized" and then we delete media as failed.
+- Manual upload in Yodeck UI works fine, so Yodeck itself is OK.
+- Goal: make programmatic upload reliable so the uploaded media becomes visible in Yodeck Media and can be added to screen playlists and pushed.
+
+Root cause hypothesis:
+The presigned PUT succeeds (200) but we are sending incorrect/empty/truncated body OR missing required headers (Content-Length) OR stream handling is wrong, causing Yodeck media to stay "initialized".
+
+Implement the following changes:
+
+========================================================
+A) HARDEN THE PRESIGNED UPLOAD (MOST IMPORTANT)
+========================================================
+1) Locate the Yodeck two-step upload code (likely in YodeckPublish / transactional upload service). Ensure we do:
+   - POST /api/v2/media (metadata create) -> get mediaId and get_upload_url
+   - GET get_upload_url -> returns JSON with upload_url (presigned S3 URL)
+   - PUT binary data to upload_url
+
+2) Replace the presigned PUT implementation with a guaranteed-correct Node implementation:
+   - Download the asset from Object Storage to a local temp file first (or buffer), ensuring we know EXACT byte size.
+   - Verify file size > 0 and log it.
+   - Upload with a streaming PUT that sets Content-Length exactly.
+   - Use Node https or undici/axios carefully, but MUST set:
+       Content-Length: <exact bytes>
+       Content-Type: video/mp4  (or application/octet-stream as fallback)
+     Do NOT use chunked encoding for presigned PUT.
+   - Ensure maxBodyLength/maxContentLength are unlimited if using axios.
+   - Ensure the request body is the actual file stream and the stream is awaited until 'finish'.
+
+3) After PUT returns 200, add an immediate verification step:
+   - GET /api/v2/media/{id}/ and log:
+       status, last_uploaded, last_modified
+   - If status remains "initialized", poll with exponential backoff up to 90 seconds total.
+   - Accept statuses like "processing"/"ready"/"completed" (whatever Yodeck uses), but if it stays "initialized" after timeout => treat as failure.
+
+4) If failure, keep current cleanup (delete media), but log the full diagnostics before deleting:
+   - fileSize
+   - upload_url host
+   - PUT status + response headers
+   - time spent
+   - first 200 chars of any response body (if any)
+
+========================================================
+B) MAKE ERROR MESSAGES ACTIONABLE
+========================================================
+Update E2E endpoint response so when failedStep=4_YODECK_UPLOAD we return:
+- mediaId
+- fileSizeBytes
+- putHttpStatus
+- yodeckStatusAfterPut
+- pollAttempts
+- pollStatuses array
+- correlationId
+And store the same in upload_jobs table.
+
+========================================================
+C) ENSURE THE E2E TEST REALLY EXECUTES THE FULL PATH
+========================================================
+In POST /api/admin/test-e2e-advertiser-upload:
+- Step 1: find latest APPROVED asset for advertiser
+- Step 2: verify storage key exists
+- Step 3: download to temp and verify bytes > 0
+- Step 4: upload to Yodeck (fixed)
+- Step 5: verify media exists (GET /media/{id})
+- Step 6: rebuild playlist for provided screenId (if present)
+- Step 7: verify playback-state includes the new mediaId in screen playlist mediaIds
+
+Return 500 only if a step fails, but ALWAYS return JSON with details.
+
+========================================================
+D) TARGETING/CONTRACT GATING RULE (DO NOT BLOCK TESTS)
+========================================================
+- If TEST_MODE=true: do NOT require active contracts to upload/publish; allow advertiser’s approved asset to upload and be added when targeting matches.
+- If TEST_MODE=false: keep contract gating.
+Ensure the upload itself is not blocked by contract gating in TEST_MODE.
+
+========================================================
+E) QUICK DEV COMMANDS
+========================================================
+Add/ensure these debug endpoints work and return JSON:
+- GET /api/debug/yodeck/media/:id/exists
+- GET /api/debug/yodeck/upload-jobs
+- GET /api/debug/storage/object?key=...
+
+========================================================
+F) TEST PLAN (MUST DO IN CODE + LOGS)
+========================================================
+1) Run the E2E endpoint for advertiserId=9a99d555-8676-49d3-9862-f65859bdcfb1 and screenId=241377ce-a25e-4744-9ea7-cd9359515d07.
+2) Confirm Yodeck Media shows a new item created by the system.
+3) Confirm screen playlist contains that media item.
+4) Confirm screen playback-state includes the mediaId in mediaIds array.
+
+Implement with minimal refactors: keep existing service structure but replace the presigned PUT implementation and add robust verification + diagnostics.
+
+Deliverables:
+- Code changes
+- Updated logs
+- E2E endpoint returns ok:true with full step outputs when successful
+========================================================
