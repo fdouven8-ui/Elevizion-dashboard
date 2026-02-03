@@ -38,13 +38,10 @@ const INCLUDED_PATTERNS = [
   /^migrations\//,
   /^scripts\//,
   /^package\.json$/,
-  /^package-lock\.json$/,
   /^tsconfig.*\.json$/,
   /^vite\.config\./,
   /^drizzle\.config\./,
-  /^tailwind\.config\./,
-  /^replit\.md$/,
-  /^\.env\.example$/
+  /^replit\.md$/
 ];
 
 const PII_FIELDS = [
@@ -53,23 +50,82 @@ const PII_FIELDS = [
   "signerEmail", "signerName", "contactEmail", "contactPhone", "iban"
 ];
 
-const PRIORITY_FILES = [
+// Key files by category for manifest
+const KEY_FILE_MAP = {
+  yodeckCreateMedia: [
+    "server/services/yodeckPayloadBuilder.ts",
+    "server/services/transactionalUploadService.ts"
+  ],
+  mediaPipeline: [
+    "server/services/mediaPipelineService.ts",
+    "server/services/videoTranscodeService.ts"
+  ],
+  e2eUpload: [
+    "server/routes.ts" // Contains test-e2e-advertiser-upload
+  ],
+  screenPlaylist: [
+    "server/services/simplePlaylistModel.ts",
+    "server/services/screenPlaylistService.ts",
+    "server/services/yodeckClient.ts"
+  ],
+  workers: [
+    "server/workers/autopilotWorker.ts",
+    "server/workers/outboxWorker.ts",
+    "server/workers/capacityWorker.ts",
+    "server/workers/reportWorker.ts"
+  ],
+  dbSchema: [
+    "shared/schema.ts",
+    "db/migrations/"
+  ]
+};
+
+// Essentials mode files
+const ESSENTIALS_FILES = [
   "replit.md",
   "shared/schema.ts",
   "server/routes.ts",
-  "server/storage.ts",
+  "server/services/yodeckPayloadBuilder.ts",
   "server/services/transactionalUploadService.ts",
   "server/services/mediaPipelineService.ts",
-  "server/services/yodeckPayloadBuilder.ts",
   "server/services/simplePlaylistModel.ts",
   "server/services/screenPlaylistService.ts",
-  "server/services/yodeckClient.ts",
-  "package.json"
+  "server/services/yodeckClient.ts"
 ];
 
+// Pipeline mode adds these files
+const PIPELINE_FILES = [
+  ...ESSENTIALS_FILES,
+  "server/workers/autopilotWorker.ts",
+  "server/workers/outboxWorker.ts",
+  "server/workers/capacityWorker.ts",
+  "server/services/capacityService.ts",
+  "server/services/targetingService.ts",
+  "server/services/placementService.ts"
+];
+
+// Leak detection patterns - HARD FAIL if found
+const LEAK_PATTERNS = [
+  { name: "Authorization", pattern: /Authorization:\s*[^\s]+/i },
+  { name: "Bearer", pattern: /Bearer\s+[a-zA-Z0-9._-]{20,}/i },
+  { name: "Token", pattern: /Token\s+[a-zA-Z0-9]{20,}/i },
+  { name: "Set-Cookie", pattern: /Set-Cookie[:\s]/i },
+  { name: "X-Amz-Signature", pattern: /X-Amz-Signature/i },
+  { name: "Signature=", pattern: /Signature=[a-zA-Z0-9%]+/i },
+  { name: "sig=", pattern: /sig=[a-zA-Z0-9]+/i },
+  { name: "X-Amz-Credential", pattern: /X-Amz-Credential/i },
+  { name: "YODECK_AUTH_TOKEN", pattern: /YODECK_AUTH_TOKEN\s*=\s*[^\s\n]+/i },
+  { name: "MONEYBIRD_", pattern: /MONEYBIRD_[A-Z_]+\s*=\s*[^\s\n]+/i },
+  { name: "POSTMARK_", pattern: /POSTMARK_[A-Z_]+\s*=\s*[^\s\n]+/i },
+  { name: "RESEND_", pattern: /RESEND_[A-Z_]+\s*=\s*[^\s\n]+/i },
+  { name: "DATABASE_URL", pattern: /DATABASE_URL\s*=\s*[^\s\n]+/i }
+];
+
+export type DumpMode = "essentials" | "pipeline" | "full";
+
 export interface AiDumpOptions {
-  mode: "full" | "minimal" | "priority";
-  maxFilesKB: number;
+  mode: DumpMode;
+  maxKbPerChunk: number;
   maxLogLines: number;
   sampleRowsPerTable: number;
 }
@@ -87,6 +143,7 @@ export interface AiDumpResult {
   ok: boolean;
   bundleId: string;
   chunks: AiDumpChunk[];
+  manifest: ManifestInfo;
   summary: {
     files: number;
     chunks: number;
@@ -95,7 +152,40 @@ export interface AiDumpResult {
     tables: number;
     criticalChunks: number;
     highChunks: number;
+    mediumChunks: number;
+    lowChunks: number;
   };
+}
+
+export interface LeakDetectionError {
+  ok: false;
+  error: "LEAK_DETECTED";
+  details: {
+    pattern: string;
+    chunkIndex: number;
+    chunkTitle: string;
+    locationHint: string;
+  };
+}
+
+interface ManifestInfo {
+  bundleId: string;
+  generatedAt: string;
+  mode: DumpMode;
+  nodeEnv: string;
+  testMode: boolean;
+  contentPipelineMode: string;
+  tokenEncryptionKeyPresent: boolean;
+  baselinePlaylistConfigured: boolean;
+  baselinePlaylistId: string | null;
+  totalChunks: number;
+  chunkList: Array<{ index: number; title: string; priority: string }>;
+  pasteOrder: {
+    essentials: number[];
+    pipeline: number[];
+    full: number[];
+  };
+  keyFileMap: typeof KEY_FILE_MAP;
 }
 
 function sanitizeIban(value: string): string {
@@ -177,13 +267,43 @@ function sanitizeText(text: string): string {
   return result;
 }
 
-function shouldIncludeFile(relativePath: string): boolean {
+function scanForLeaks(text: string, chunkIndex: number, chunkTitle: string): LeakDetectionError | null {
+  for (const { name, pattern } of LEAK_PATTERNS) {
+    const match = text.match(pattern);
+    if (match) {
+      const position = text.indexOf(match[0]);
+      const lineNum = text.substring(0, position).split("\n").length;
+      return {
+        ok: false,
+        error: "LEAK_DETECTED",
+        details: {
+          pattern: name,
+          chunkIndex,
+          chunkTitle,
+          locationHint: `Near line ${lineNum} in chunk`
+        }
+      };
+    }
+  }
+  return null;
+}
+
+function shouldIncludeFile(relativePath: string, mode: DumpMode): boolean {
   for (const dir of EXCLUDED_DIRS) {
     if (relativePath.includes(`/${dir}/`) || relativePath.startsWith(`${dir}/`)) {
       return false;
     }
   }
   
+  // Mode-based filtering
+  if (mode === "essentials") {
+    return ESSENTIALS_FILES.some(f => relativePath.endsWith(f) || relativePath === f);
+  }
+  if (mode === "pipeline") {
+    return PIPELINE_FILES.some(f => relativePath.endsWith(f) || relativePath === f);
+  }
+  
+  // Full mode
   for (const pattern of INCLUDED_PATTERNS) {
     if (pattern.test(relativePath)) {
       return true;
@@ -198,8 +318,19 @@ function shouldIncludeFile(relativePath: string): boolean {
   return false;
 }
 
-function collectFiles(baseDir: string, relativePath = ""): Array<{ path: string; content: string; bytes: number; priority: boolean }> {
-  const files: Array<{ path: string; content: string; bytes: number; priority: boolean }> = [];
+function getFilePriority(relativePath: string): "critical" | "high" | "medium" | "low" {
+  if (relativePath === "replit.md") return "critical";
+  if (relativePath.includes("schema.ts")) return "high";
+  if (relativePath.includes("yodeckPayloadBuilder") || relativePath.includes("transactionalUpload")) return "high";
+  if (relativePath.includes("simplePlaylistModel") || relativePath.includes("screenPlaylist")) return "high";
+  if (relativePath.includes("routes.ts")) return "high";
+  if (relativePath.includes("mediaPipeline")) return "medium";
+  if (relativePath.includes("worker")) return "medium";
+  return "low";
+}
+
+function collectFiles(baseDir: string, mode: DumpMode, relativePath = ""): Array<{ path: string; content: string; bytes: number; priority: "critical" | "high" | "medium" | "low" }> {
+  const files: Array<{ path: string; content: string; bytes: number; priority: "critical" | "high" | "medium" | "low" }> = [];
   const fullPath = path.join(baseDir, relativePath);
   
   try {
@@ -211,18 +342,18 @@ function collectFiles(baseDir: string, relativePath = ""): Array<{ path: string;
       if (EXCLUDED_DIRS.includes(entry.name)) continue;
       
       if (entry.isDirectory()) {
-        files.push(...collectFiles(baseDir, entryRelPath));
+        files.push(...collectFiles(baseDir, mode, entryRelPath));
       } else if (entry.isFile()) {
-        if (shouldIncludeFile(entryRelPath)) {
+        if (shouldIncludeFile(entryRelPath, mode)) {
           try {
             const content = fs.readFileSync(path.join(baseDir, entryRelPath), "utf-8");
             const sanitized = sanitizeText(content);
-            const isPriority = PRIORITY_FILES.some(pf => entryRelPath.endsWith(pf));
+            const priority = getFilePriority(entryRelPath);
             files.push({
               path: entryRelPath,
               content: sanitized,
               bytes: Buffer.byteLength(sanitized, "utf-8"),
-              priority: isPriority
+              priority
             });
           } catch (e) {
           }
@@ -232,9 +363,12 @@ function collectFiles(baseDir: string, relativePath = ""): Array<{ path: string;
   } catch (e) {
   }
   
+  // Sort by priority then path
+  const priorityOrder = ["critical", "high", "medium", "low"];
   return files.sort((a, b) => {
-    if (a.priority && !b.priority) return -1;
-    if (!a.priority && b.priority) return 1;
+    const pa = priorityOrder.indexOf(a.priority);
+    const pb = priorityOrder.indexOf(b.priority);
+    if (pa !== pb) return pa - pb;
     return a.path.localeCompare(b.path);
   });
 }
@@ -246,6 +380,7 @@ async function collectRuntimeSnapshot(): Promise<string> {
     testMode: process.env.TEST_MODE === "TRUE" || process.env.TEST_MODE === "true",
     adsRequireContract: process.env.ADS_REQUIRE_CONTRACT !== "false",
     legacyUploadDisabled: process.env.LEGACY_UPLOAD_DISABLED !== "false",
+    contentPipelineMode: process.env.CONTENT_PIPELINE_MODE || "default",
     yodeckConfigured: !!process.env.YODECK_AUTH_TOKEN,
     moneybirdConfigured: !!process.env.MONEYBIRD_API_TOKEN,
     objectStorageConfigured: !!process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID
@@ -283,13 +418,13 @@ async function collectRuntimeSnapshot(): Promise<string> {
   return JSON.stringify(snapshot, null, 2);
 }
 
-async function collectRecentUploadJobs(): Promise<string> {
+async function collectRecentUploadJobs(limit = 20): Promise<string> {
   let result = "";
   
   try {
     const jobs = await db.select().from(schema.uploadJobs)
       .orderBy(desc(schema.uploadJobs.createdAt))
-      .limit(20);
+      .limit(limit);
     
     if (jobs.length === 0) {
       return "No recent upload jobs\n";
@@ -368,12 +503,12 @@ async function collectFlowMap(): Promise<string> {
     const apiRoutes = routes.filter(r => r.path.startsWith("/api") && !r.path.includes("/admin"));
     
     flowMap += `Admin routes (${adminRoutes.length}):\n`;
-    for (const route of adminRoutes.slice(0, 20)) {
+    for (const route of adminRoutes.slice(0, 25)) {
       flowMap += `  ${route.method.padEnd(6)} ${route.path}\n`;
     }
     
     flowMap += `\nAPI routes (${apiRoutes.length}):\n`;
-    for (const route of apiRoutes.slice(0, 30)) {
+    for (const route of apiRoutes.slice(0, 35)) {
       flowMap += `  ${route.method.padEnd(6)} ${route.path}\n`;
     }
     
@@ -488,16 +623,54 @@ interface Section {
   category: string;
 }
 
-export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResult> {
+function generateManifestContent(manifest: ManifestInfo): string {
+  let content = `=== ELEVIZION AI DEBUG DUMP MANIFEST ===\n\n`;
+  content += `Bundle ID: ${manifest.bundleId}\n`;
+  content += `Generated: ${manifest.generatedAt}\n`;
+  content += `Mode: ${manifest.mode.toUpperCase()}\n\n`;
+  
+  content += `--- ENVIRONMENT ---\n`;
+  content += `NODE_ENV: ${manifest.nodeEnv}\n`;
+  content += `TEST_MODE: ${manifest.testMode}\n`;
+  content += `CONTENT_PIPELINE_MODE: ${manifest.contentPipelineMode}\n`;
+  content += `TOKEN_ENCRYPTION_KEY present: ${manifest.tokenEncryptionKeyPresent}\n`;
+  content += `Baseline Playlist configured: ${manifest.baselinePlaylistConfigured}${manifest.baselinePlaylistId ? ` (ID: ${manifest.baselinePlaylistId})` : ""}\n\n`;
+  
+  content += `--- PASTE ORDER GUIDANCE ---\n`;
+  content += `Total chunks: ${manifest.totalChunks}\n\n`;
+  
+  content += `ESSENTIALS (paste these first):\n`;
+  manifest.chunkList.filter(c => c.priority === "critical" || c.priority === "high")
+    .forEach(c => content += `  ${c.index}. [${c.priority.toUpperCase()}] ${c.title}\n`);
+  
+  content += `\nMEDIUM (add if ChatGPT needs more context):\n`;
+  manifest.chunkList.filter(c => c.priority === "medium")
+    .forEach(c => content += `  ${c.index}. ${c.title}\n`);
+  
+  content += `\nLOW (full code - only if explicitly requested):\n`;
+  manifest.chunkList.filter(c => c.priority === "low")
+    .forEach(c => content += `  ${c.index}. ${c.title}\n`);
+  
+  content += `\n--- KEY FILE MAP ---\n`;
+  for (const [category, files] of Object.entries(manifest.keyFileMap)) {
+    content += `${category}:\n`;
+    files.forEach(f => content += `  - ${f}\n`);
+  }
+  
+  return content;
+}
+
+export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResult | LeakDetectionError> {
   const bundleId = `aidump_${Date.now()}`;
   const generatedAt = new Date().toISOString();
+  const mode = options.mode || "essentials";
   
-  console.log(`[AI-Dump] ${bundleId}: Starting generation...`);
+  console.log(`[AI-Dump] ${bundleId}: Starting generation (mode=${mode})...`);
   
   const sections: Section[] = [];
   let fileCount = 0;
   
-  // CRITICAL: System overview and recent issues
+  // CRITICAL: System overview and recent issues (all modes)
   const snapshot = await collectRuntimeSnapshot();
   sections.push({
     title: "SYSTEM OVERVIEW",
@@ -507,7 +680,7 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
   });
   
   const recentErrors = await collectRecentErrors();
-  const uploadJobs = await collectRecentUploadJobs();
+  const uploadJobs = await collectRecentUploadJobs(mode === "full" ? 30 : 15);
   sections.push({
     title: "RECENT ISSUES & JOBS",
     content: `=== RECENT ISSUES ===\n${recentErrors}\n=== RECENT UPLOAD JOBS ===\n${uploadJobs}`,
@@ -515,7 +688,7 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
     category: "issues"
   });
   
-  // HIGH: Mappings and relationships
+  // HIGH: Mappings and relationships (all modes)
   const screenMappings = await collectScreenMappings();
   const advertiserMappings = await collectAdvertiserMappings();
   sections.push({
@@ -533,57 +706,75 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
     category: "routes"
   });
   
-  // MEDIUM: Schema and sample data
-  const schemaContent = await collectDbSchema();
-  sections.push({
-    title: "DATABASE SCHEMA",
-    content: `=== DATABASE SCHEMA (shared/schema.ts) ===\n${schemaContent}`,
-    priority: "medium",
-    category: "schema"
-  });
+  // MEDIUM: Schema and sample data (all modes except minimal essentials)
+  if (mode === "pipeline" || mode === "full") {
+    const schemaContent = await collectDbSchema();
+    sections.push({
+      title: "DATABASE SCHEMA",
+      content: `=== DATABASE SCHEMA (shared/schema.ts) ===\n${schemaContent}`,
+      priority: "medium",
+      category: "schema"
+    });
+    
+    const sampleData = await collectSampleData(options.sampleRowsPerTable);
+    sections.push({
+      title: "SAMPLE DATA",
+      content: `=== SAMPLE DATA ===\n${sampleData}`,
+      priority: "medium",
+      category: "data"
+    });
+  }
   
-  const sampleData = await collectSampleData(options.sampleRowsPerTable);
-  sections.push({
-    title: "SAMPLE DATA",
-    content: `=== SAMPLE DATA ===\n${sampleData}`,
-    priority: "medium",
-    category: "data"
-  });
-  
-  // LOW: Code files (priority files first, then rest)
-  const files = collectFiles(process.cwd());
+  // Code files based on mode
+  const files = collectFiles(process.cwd(), mode);
   fileCount = files.length;
   
-  const priorityFiles = files.filter(f => f.priority);
-  const regularFiles = files.filter(f => !f.priority);
+  // Group files by priority
+  const criticalFiles = files.filter(f => f.priority === "critical");
+  const highFiles = files.filter(f => f.priority === "high");
+  const mediumFiles = files.filter(f => f.priority === "medium");
+  const lowFiles = files.filter(f => f.priority === "low");
   
-  // Priority code files
-  let priorityCode = "=== PRIORITY CODE FILES ===\n";
-  for (const file of priorityFiles) {
-    priorityCode += `\n---FILE: ${file.path} (${file.bytes} bytes)---\n`;
-    priorityCode += file.content;
-    priorityCode += "\n";
+  // Add critical files
+  if (criticalFiles.length > 0) {
+    let content = "=== CRITICAL CODE FILES ===\n";
+    for (const file of criticalFiles) {
+      content += `\n---FILE: ${file.path} (bytes=${file.bytes})---\n`;
+      content += file.content + "\n";
+    }
+    sections.push({ title: "CRITICAL CODE", content, priority: "critical", category: "code" });
   }
-  sections.push({
-    title: "PRIORITY CODE",
-    content: priorityCode,
-    priority: "high",
-    category: "code"
-  });
   
-  // Regular code files
-  let regularCode = "=== OTHER CODE FILES ===\n";
-  for (const file of regularFiles) {
-    regularCode += `\n---FILE: ${file.path} (${file.bytes} bytes)---\n`;
-    regularCode += file.content;
-    regularCode += "\n";
+  // Add high priority files
+  if (highFiles.length > 0) {
+    let content = "=== HIGH PRIORITY CODE FILES ===\n";
+    for (const file of highFiles) {
+      content += `\n---FILE: ${file.path} (bytes=${file.bytes})---\n`;
+      content += file.content + "\n";
+    }
+    sections.push({ title: "HIGH PRIORITY CODE", content, priority: "high", category: "code" });
   }
-  sections.push({
-    title: "OTHER CODE",
-    content: regularCode,
-    priority: "low",
-    category: "code"
-  });
+  
+  // Add medium/low only for pipeline and full modes
+  if (mode === "pipeline" || mode === "full") {
+    if (mediumFiles.length > 0) {
+      let content = "=== MEDIUM PRIORITY CODE FILES ===\n";
+      for (const file of mediumFiles) {
+        content += `\n---FILE: ${file.path} (bytes=${file.bytes})---\n`;
+        content += file.content + "\n";
+      }
+      sections.push({ title: "MEDIUM CODE", content, priority: "medium", category: "code" });
+    }
+  }
+  
+  if (mode === "full" && lowFiles.length > 0) {
+    let content = "=== OTHER CODE FILES ===\n";
+    for (const file of lowFiles) {
+      content += `\n---FILE: ${file.path} (bytes=${file.bytes})---\n`;
+      content += file.content + "\n";
+    }
+    sections.push({ title: "OTHER CODE", content, priority: "low", category: "code" });
+  }
   
   // Generate chunks with priority ordering
   const priorityOrder = ["critical", "high", "medium", "low"];
@@ -592,18 +783,17 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
   });
   
   const chunks: AiDumpChunk[] = [];
-  let chunkIndex = 1;
+  let chunkIndex = 2; // Start at 2, manifest is 1
   
   for (const section of sortedSections) {
-    const maxBytes = options.maxFilesKB * 1024;
+    const maxBytes = (options.maxKbPerChunk || 250) * 1024;
     const sectionBytes = Buffer.byteLength(section.content, "utf-8");
     
     if (sectionBytes <= maxBytes) {
-      // Section fits in one chunk
       const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} ===\n\n`;
       chunks.push({
         index: chunkIndex,
-        total: 0, // Will be updated
+        total: 0,
         title: section.title,
         text: header + section.content,
         priority: section.priority,
@@ -611,7 +801,7 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
       });
       chunkIndex++;
     } else {
-      // Split large section into multiple chunks
+      // Split large section
       const lines = section.content.split("\n");
       let currentChunk = "";
       let subIndex = 1;
@@ -653,30 +843,81 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
     }
   }
   
-  // Update totals
-  const totalChunks = chunks.length;
+  // Create manifest info
+  const totalChunks = chunks.length + 1; // +1 for manifest
+  const manifest: ManifestInfo = {
+    bundleId,
+    generatedAt,
+    mode,
+    nodeEnv: process.env.NODE_ENV || "development",
+    testMode: process.env.TEST_MODE === "TRUE" || process.env.TEST_MODE === "true",
+    contentPipelineMode: process.env.CONTENT_PIPELINE_MODE || "default",
+    tokenEncryptionKeyPresent: !!process.env.TOKEN_ENCRYPTION_KEY,
+    baselinePlaylistConfigured: !!process.env.BASELINE_PLAYLIST_ID,
+    baselinePlaylistId: process.env.BASELINE_PLAYLIST_ID || null,
+    totalChunks,
+    chunkList: [
+      { index: 1, title: "00_MANIFEST", priority: "critical" },
+      ...chunks.map(c => ({ index: c.index, title: c.title, priority: c.priority }))
+    ],
+    pasteOrder: {
+      essentials: [1, ...chunks.filter(c => c.priority === "critical" || c.priority === "high").map(c => c.index)],
+      pipeline: [1, ...chunks.filter(c => c.priority !== "low").map(c => c.index)],
+      full: [1, ...chunks.map(c => c.index)]
+    },
+    keyFileMap: KEY_FILE_MAP
+  };
+  
+  // Create manifest chunk
+  const manifestContent = generateManifestContent(manifest);
+  const manifestChunk: AiDumpChunk = {
+    index: 1,
+    total: totalChunks,
+    title: "00_MANIFEST",
+    text: manifestContent,
+    priority: "critical",
+    category: "manifest"
+  };
+  
+  // Update totals and prepend manifest
   for (const chunk of chunks) {
     chunk.total = totalChunks;
     chunk.text = chunk.text.replace(/CHUNK \d+\/\?/, `CHUNK ${chunk.index}/${totalChunks}`);
   }
   
-  const criticalChunks = chunks.filter(c => c.priority === "critical").length;
-  const highChunks = chunks.filter(c => c.priority === "high").length;
+  const allChunks = [manifestChunk, ...chunks];
   
-  console.log(`[AI-Dump] ${bundleId}: Generated ${chunks.length} chunks (${criticalChunks} critical, ${highChunks} high), ${fileCount} files`);
+  // LEAK SCANNER - fail hard if any leaks detected
+  for (const chunk of allChunks) {
+    const leak = scanForLeaks(chunk.text, chunk.index, chunk.title);
+    if (leak) {
+      console.error(`[AI-Dump] LEAK DETECTED in chunk ${chunk.index} "${chunk.title}": ${leak.details.pattern}`);
+      return leak;
+    }
+  }
+  
+  const criticalChunks = allChunks.filter(c => c.priority === "critical").length;
+  const highChunks = allChunks.filter(c => c.priority === "high").length;
+  const mediumChunks = allChunks.filter(c => c.priority === "medium").length;
+  const lowChunks = allChunks.filter(c => c.priority === "low").length;
+  
+  console.log(`[AI-Dump] ${bundleId}: Generated ${allChunks.length} chunks (${criticalChunks} critical, ${highChunks} high, ${mediumChunks} medium, ${lowChunks} low), ${fileCount} files, mode=${mode}`);
   
   return {
     ok: true,
     bundleId,
-    chunks,
+    chunks: allChunks,
+    manifest,
     summary: {
       files: fileCount,
-      chunks: chunks.length,
+      chunks: allChunks.length,
       logs: 0,
       schema: true,
       tables: 6,
       criticalChunks,
-      highChunks
+      highChunks,
+      mediumChunks,
+      lowChunks
     }
   };
 }

@@ -8,7 +8,7 @@
  * These cause err_1003 "invalid_field" errors with presigned uploads.
  */
 
-const FORBIDDEN_KEYS = new Set([
+export const FORBIDDEN_KEYS = new Set([
   "media_origin",
   "media_type", 
   "origin",

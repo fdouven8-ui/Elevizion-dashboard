@@ -21304,8 +21304,8 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       const { generateAiDump } = await import("./services/aiDumpService");
       
       const options = {
-        mode: req.body.mode || "full",
-        maxFilesKB: req.body.maxFilesKB || 250,
+        mode: req.body.mode || "essentials",
+        maxKbPerChunk: req.body.maxKbPerChunk || req.body.maxFilesKB || 250,
         maxLogLines: req.body.maxLogLines || 3000,
         sampleRowsPerTable: req.body.sampleRowsPerTable || 3
       };
@@ -21313,6 +21313,11 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       console.log(`[AI-Dump] Admin request with options:`, options);
       
       const result = await generateAiDump(options);
+      
+      // Check for leak detection error
+      if (!result.ok && (result as any).error === "LEAK_DETECTED") {
+        return res.status(400).json(result);
+      }
       
       return res.json(result);
     } catch (error: any) {

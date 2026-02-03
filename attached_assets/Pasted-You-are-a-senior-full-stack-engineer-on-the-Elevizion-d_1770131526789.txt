@@ -1,0 +1,136 @@
+You are a senior full-stack engineer on the Elevizion dashboard (Node/Express + workers + DB).
+We already have an Admin page “AI Debug Dump” that generates chunked exports and now tracks “copied” state persistently.
+
+Now implement the NEXT critical upgrades to (A) make the AI Dump maximally useful for ChatGPT debugging with minimal paste effort, and (B) make the Yodeck upload system permanently bulletproof against the `media_origin` regression.
+
+DO ALL TASKS BELOW. Keep changes minimal and consistent with the existing app structure and coding style.
+
+========================================================
+A) AI DEBUG DUMP v2 (MANIFEST + MODES + LEAK SCANNER + UX)
+========================================================
+
+A1) Add “mode” selector to the AI Debug Dump UI + API
+- Support modes: "essentials" | "pipeline" | "full"
+- Default = "essentials"
+- Wire the existing generate endpoint so the request body includes:
+  { mode, maxKbPerChunk, sampleRowsPerTable, maxLogLines }
+
+A2) Always generate a “MANIFEST” as chunk 1 (for ALL modes)
+Create a chunk with title: "00_MANIFEST"
+It must include (as plain text/markdown):
+- bundleId, generatedAt, buildId/builtAt/appVersion (from /api/version or internal build info)
+- NODE_ENV, TEST_MODE, CONTENT_PIPELINE_MODE
+- TOKEN_ENCRYPTION_KEY present? (boolean only)
+- baselinePlaylistId configured? (boolean + value if safe)
+- totalChunks, list of chunk titles with indices
+- “PASTE ORDER” guidance:
+  - Essentials: chunks 1..N (explicit list)
+  - Pipeline: which extra chunks to paste after essentials
+  - Full: paste only if requested
+- “KEY FILE MAP” section (paths) for:
+  - Yodeck create media + upload
+  - MediaPipeline / validation
+  - E2E upload endpoint
+  - Screen playlist mapping / reconcile / sync
+  - Workers (autopilot/outbox/capacity/report)
+  - DB schema/migrations location
+
+A3) Mode content rules (reduce chunk count dramatically)
+- essentials mode should output ONLY:
+  1) manifest
+  2) runtime snapshot (version/env flags/workers/screens/playlists/status)
+  3) flow map (routes -> handlers)
+  4) key code pack: Yodeck integration files
+  5) key code pack: MediaPipeline/upload files
+  6) key code pack: Screens/playlists/reconcile/sync files
+  7) last E2E run (if available) + important logs (filtered)
+  8) db-shape (schema/migrations + sample rows for core tables, sanitized)
+  Keep this to ~5–12 chunks by adjusting grouping.
+
+- pipeline mode = essentials +:
+  - workers (autopilot/outbox/capacity/monthly)
+  - targeting/capacity logic
+  - placement/publish logic
+  - additional logs (up to maxLogLines)
+  Keep ~12–25 chunks.
+
+- full mode = everything (existing behavior) but still includes manifest first and leak scanner.
+
+A4) Leak scanner (hard fail if secrets leak)
+Before returning chunks, scan ALL chunk text for:
+- "Authorization:" / "Bearer " / "Token "
+- "Set-Cookie" / "cookie"
+- "X-Amz-Signature" / "Signature=" / "sig=" / "X-Amz-Credential"
+- known env var names: YODECK_AUTH_TOKEN, MONEYBIRD_, POSTMARK_, RESEND_, DATABASE_URL
+If found, DO NOT return the dump.
+Return HTTP 400 with:
+{ ok:false, error:"LEAK_DETECTED", details:{ pattern, chunkIndex, chunkTitle, locationHint } }
+
+A5) UX improvements on AI Debug Dump page
+- Show “Paste order” panel using the MANIFEST info
+- Add button: “Copy Next Uncopied Chunk”
+  - Finds lowest-index chunk not copied, copies it, marks copied, scrolls into view
+- Keep current persistent “copied” state behavior
+- On “Generate new dump”: reset copied flags (already done) + auto-focus manifest
+
+A6) Deterministic ordering
+- Ensure stable ordering of files and sections:
+  manifest -> snapshot -> flow map -> db-shape -> key code packs -> logs -> rest
+- In each file dump section, include header:
+  ---FILE: <relative/path> (bytes=<n>)---
+
+========================================================
+B) YODECK UPLOAD BULLETPROOFING (GUARD + TEST + E2E SIGNAL)
+========================================================
+
+B1) Centralize create-media payload and enforce forbidden keys
+- Ensure there is ONE canonical builder used everywhere:
+  buildYodeckCreateMediaPayload({ name }) -> { name, description:"", arguments:{ buffering:true, resolution:"highest" } }
+- It must NOT include:
+  media_origin, media_type, origin, source, mime_type, file_type, content_type, upload_method, type
+- Add a runtime guard right before POST /api/v2/media:
+  - If payload has any forbidden key (even present with undefined/null), throw error:
+    "FORBIDDEN_YODECK_FIELD: <key>"
+  - Log payload keys (safe) and fail fast (do not continue to upload steps).
+
+B2) Add an automated test to prevent regression
+- Add a minimal test (jest/vitest/whatever exists) that:
+  - calls buildYodeckCreateMediaPayload()
+  - asserts required keys exist (name, description, arguments)
+  - asserts forbidden keys do not exist
+- Add a second test that simulates a payload with forbidden keys and ensures guard throws.
+
+B3) Improve E2E endpoint response (more signal, less log diving)
+For POST /api/admin/test-e2e-advertiser-upload response:
+- Always include:
+  - createMediaPayloadKeys (array)
+  - uploadUrlFoundAt (string path used to extract presigned URL)
+  - yodeckCreateStatus (number)
+  - yodeckCreateBody (sanitized JSON)
+  - yodeckMediaId (if created)
+  - binaryUploadStatus (if attempted)
+  - pollHistory (array of status transitions if polled)
+- Ensure step 4 fails immediately if create-media is non-201.
+
+B4) Idempotency (avoid duplicate Yodeck media spam)
+- If an asset already has yodeckMediaIdCanonical AND it is ready, skip create/upload and return “alreadyUploaded” in E2E step.
+- If create-media fails, do not set canonical id and do not continue.
+
+B5) Add a clear “mode mismatch” warning (optional but recommended)
+If CONTENT_PIPELINE_MODE=SCREEN_PLAYLIST_ONLY and AutopilotWorker disabled:
+- show a small warning on relevant admin pages:
+  “Autopilot is disabled in SCREEN_PLAYLIST_ONLY mode. Approved ads will only appear after screen-playlist push runs.”
+- Add a “Run push now for this screen” admin action if a similar endpoint already exists; otherwise just the warning.
+
+========================================================
+DELIVERABLES
+========================================================
+1) Implement all changes cleanly.
+2) Output a short summary:
+   - files changed
+   - example of MANIFEST chunk content
+   - how many chunks in essentials mode on current repo
+   - confirmation that leak scanner is active
+   - confirmation that forbidden Yodeck fields are blocked + tests added
+
+Make sure everything compiles and the dashboard still runs.
