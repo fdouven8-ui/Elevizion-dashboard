@@ -3,12 +3,13 @@ import * as path from "path";
 import { storage } from "../storage";
 import { db } from "../db";
 import * as schema from "@shared/schema";
-import { desc, sql } from "drizzle-orm";
+import { desc } from "drizzle-orm";
 
 const REDACTED = "***REDACTED***";
 const REDACTED_URL = "***REDACTED_URL***";
-const REDACTED_EMAIL = "***EMAIL***";
-const REDACTED_PHONE = "***PHONE***";
+const REDACTED_EMAIL = "[EMAIL]";
+const REDACTED_PHONE = "[PHONE]";
+const REDACTED_IBAN = "[IBAN]";
 
 const SECRET_PATTERNS = [
   /key/i, /token/i, /secret/i, /password/i, /authorization/i, 
@@ -26,7 +27,7 @@ const EXCLUDED_EXTENSIONS = [
   ".woff", ".woff2", ".ttf", ".eot", ".otf",
   ".zip", ".tar", ".gz", ".rar",
   ".pdf", ".doc", ".docx", ".xls", ".xlsx",
-  ".db", ".sqlite", ".lock"
+  ".db", ".sqlite"
 ];
 
 const INCLUDED_PATTERNS = [
@@ -49,16 +50,25 @@ const INCLUDED_PATTERNS = [
 const PII_FIELDS = [
   "email", "phone", "address", "street", "postal", "postcode", "zipcode",
   "firstName", "lastName", "fullName", "contactName", "ownerName",
-  "signerEmail", "signerName", "contactEmail", "contactPhone"
+  "signerEmail", "signerName", "contactEmail", "contactPhone", "iban"
 ];
 
-const CORE_TABLES = [
-  "screens", "locations", "advertisers", "ad_assets", "placement_plans",
-  "contracts", "invoices", "leads", "users", "upload_jobs"
+const PRIORITY_FILES = [
+  "replit.md",
+  "shared/schema.ts",
+  "server/routes.ts",
+  "server/storage.ts",
+  "server/services/transactionalUploadService.ts",
+  "server/services/mediaPipelineService.ts",
+  "server/services/yodeckPayloadBuilder.ts",
+  "server/services/simplePlaylistModel.ts",
+  "server/services/screenPlaylistService.ts",
+  "server/services/yodeckClient.ts",
+  "package.json"
 ];
 
 export interface AiDumpOptions {
-  mode: "full" | "minimal";
+  mode: "full" | "minimal" | "priority";
   maxFilesKB: number;
   maxLogLines: number;
   sampleRowsPerTable: number;
@@ -69,6 +79,8 @@ export interface AiDumpChunk {
   total: number;
   title: string;
   text: string;
+  priority: "critical" | "high" | "medium" | "low";
+  category: string;
 }
 
 export interface AiDumpResult {
@@ -81,7 +93,13 @@ export interface AiDumpResult {
     logs: number;
     schema: boolean;
     tables: number;
+    criticalChunks: number;
+    highChunks: number;
   };
+}
+
+function sanitizeIban(value: string): string {
+  return value.replace(/[A-Z]{2}\d{2}[A-Z0-9]{4,30}/gi, REDACTED_IBAN);
 }
 
 function sanitizeValue(key: string, value: any): any {
@@ -105,6 +123,7 @@ function sanitizeValue(key: string, value: any): any {
       if (match.length >= 10) return REDACTED_PHONE;
       return match;
     });
+    value = sanitizeIban(value);
   }
   
   return value;
@@ -144,6 +163,8 @@ function sanitizeText(text: string): string {
   
   result = result.replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, REDACTED_EMAIL);
   
+  result = sanitizeIban(result);
+  
   const envVars = [
     "YODECK_AUTH_TOKEN", "MONEYBIRD_API_TOKEN", "SIGNREQUEST_API_TOKEN",
     "ADMIN_PASSWORD", "DATABASE_URL", "SESSION_SECRET", "PGPASSWORD"
@@ -163,7 +184,6 @@ function shouldIncludeFile(relativePath: string): boolean {
     }
   }
   
-  // Check explicit includes FIRST (allows package-lock.json despite .lock exclusion)
   for (const pattern of INCLUDED_PATTERNS) {
     if (pattern.test(relativePath)) {
       return true;
@@ -178,8 +198,8 @@ function shouldIncludeFile(relativePath: string): boolean {
   return false;
 }
 
-function collectFiles(baseDir: string, relativePath = ""): Array<{ path: string; content: string; bytes: number }> {
-  const files: Array<{ path: string; content: string; bytes: number }> = [];
+function collectFiles(baseDir: string, relativePath = ""): Array<{ path: string; content: string; bytes: number; priority: boolean }> {
+  const files: Array<{ path: string; content: string; bytes: number; priority: boolean }> = [];
   const fullPath = path.join(baseDir, relativePath);
   
   try {
@@ -197,10 +217,12 @@ function collectFiles(baseDir: string, relativePath = ""): Array<{ path: string;
           try {
             const content = fs.readFileSync(path.join(baseDir, entryRelPath), "utf-8");
             const sanitized = sanitizeText(content);
+            const isPriority = PRIORITY_FILES.some(pf => entryRelPath.endsWith(pf));
             files.push({
               path: entryRelPath,
               content: sanitized,
-              bytes: Buffer.byteLength(sanitized, "utf-8")
+              bytes: Buffer.byteLength(sanitized, "utf-8"),
+              priority: isPriority
             });
           } catch (e) {
           }
@@ -210,7 +232,11 @@ function collectFiles(baseDir: string, relativePath = ""): Array<{ path: string;
   } catch (e) {
   }
   
-  return files.sort((a, b) => a.path.localeCompare(b.path));
+  return files.sort((a, b) => {
+    if (a.priority && !b.priority) return -1;
+    if (!a.priority && b.priority) return 1;
+    return a.path.localeCompare(b.path);
+  });
 }
 
 async function collectRuntimeSnapshot(): Promise<string> {
@@ -227,11 +253,15 @@ async function collectRuntimeSnapshot(): Promise<string> {
   
   try {
     const screens = await storage.getScreens();
-    const onlineCount = screens.filter((s: any) => s.onlineStatus === "online").length;
+    const locations = await storage.getLocations();
+    const onlineLocations = locations.filter((l: any) => l.status === "active").length;
     snapshot.screens = {
       total: screens.length,
-      online: onlineCount,
-      offline: screens.length - onlineCount
+      withYodeckId: screens.filter((s: any) => s.yodeckPlayerId).length
+    };
+    snapshot.locations = {
+      total: locations.length,
+      active: onlineLocations
     };
   } catch (e) {
     snapshot.screens = { error: "Could not fetch" };
@@ -240,31 +270,78 @@ async function collectRuntimeSnapshot(): Promise<string> {
   try {
     const advertisers = await storage.getAdvertisers();
     const activeCount = advertisers.filter((a: any) => a.status === "active").length;
+    const withMedia = advertisers.filter((a: any) => a.yodeckMediaIdCanonical).length;
     snapshot.advertisers = {
       total: advertisers.length,
-      active: activeCount
+      active: activeCount,
+      withCanonicalMedia: withMedia
     };
   } catch (e) {
     snapshot.advertisers = { error: "Could not fetch" };
   }
   
+  return JSON.stringify(snapshot, null, 2);
+}
+
+async function collectRecentUploadJobs(): Promise<string> {
+  let result = "";
+  
   try {
-    const locations = await storage.getLocations();
-    const activeCount = locations.filter((l: any) => l.status === "active").length;
-    snapshot.locations = {
-      total: locations.length,
-      active: activeCount
-    };
-  } catch (e) {
-    snapshot.locations = { error: "Could not fetch" };
+    const jobs = await db.select().from(schema.uploadJobs)
+      .orderBy(desc(schema.uploadJobs.createdAt))
+      .limit(20);
+    
+    if (jobs.length === 0) {
+      return "No recent upload jobs\n";
+    }
+    
+    result += `Recent ${jobs.length} upload jobs:\n`;
+    for (const job of jobs) {
+      const status = job.finalState || "unknown";
+      const error = job.errorCode ? ` ERROR: ${job.errorCode}` : "";
+      result += `  [${job.createdAt?.toISOString().slice(0, 16)}] ${job.correlationId?.slice(0, 20) || job.id} -> ${status}${error}\n`;
+    }
+  } catch (e: any) {
+    result = `Could not fetch upload jobs: ${e.message}\n`;
   }
   
-  return `=== RUNTIME SNAPSHOT ===\n${JSON.stringify(snapshot, null, 2)}\n`;
+  return result;
+}
+
+async function collectRecentErrors(): Promise<string> {
+  let result = "";
+  
+  try {
+    const allRecentJobs = await db.select().from(schema.uploadJobs)
+      .orderBy(desc(schema.uploadJobs.createdAt))
+      .limit(50);
+    
+    const errors = allRecentJobs.filter(j => 
+      j.finalState === "FAILED" || 
+      j.finalState === "FAILED_CREATE" || 
+      j.finalState === "FAILED_UPLOAD" ||
+      j.finalState === "FAILED_INIT_STUCK" ||
+      j.errorCode
+    ).slice(0, 10);
+    
+    if (errors.length === 0) {
+      return "No recent errors in upload jobs\n";
+    }
+    
+    result += `Recent errors (${errors.length}):\n`;
+    for (const job of errors) {
+      result += `  [${job.createdAt?.toISOString().slice(0, 16)}] ${job.id.slice(0, 8)}: ${job.finalState} - ${job.errorCode || "no code"}\n`;
+    }
+  } catch (e: any) {
+    result = `Could not fetch errors: ${e.message}\n`;
+  }
+  
+  return result;
 }
 
 async function collectFlowMap(): Promise<string> {
   const routesPath = path.join(process.cwd(), "server/routes.ts");
-  let flowMap = "=== EXPRESS ROUTES FLOW MAP ===\n";
+  let flowMap = "";
   
   try {
     const content = fs.readFileSync(routesPath, "utf-8");
@@ -287,48 +364,50 @@ async function collectFlowMap(): Promise<string> {
     
     routes.sort((a, b) => a.path.localeCompare(b.path));
     
-    flowMap += "| Method | Path |\n";
-    flowMap += "|--------|------|\n";
-    for (const route of routes) {
-      flowMap += `| ${route.method.padEnd(6)} | ${route.path} |\n`;
+    const adminRoutes = routes.filter(r => r.path.includes("/admin"));
+    const apiRoutes = routes.filter(r => r.path.startsWith("/api") && !r.path.includes("/admin"));
+    
+    flowMap += `Admin routes (${adminRoutes.length}):\n`;
+    for (const route of adminRoutes.slice(0, 20)) {
+      flowMap += `  ${route.method.padEnd(6)} ${route.path}\n`;
     }
+    
+    flowMap += `\nAPI routes (${apiRoutes.length}):\n`;
+    for (const route of apiRoutes.slice(0, 30)) {
+      flowMap += `  ${route.method.padEnd(6)} ${route.path}\n`;
+    }
+    
     flowMap += `\nTotal routes: ${routes.length}\n`;
   } catch (e) {
     flowMap += "Could not parse routes\n";
   }
   
-  return flowMap + "\n";
+  return flowMap;
 }
 
 async function collectDbSchema(): Promise<string> {
-  let schema = "=== DATABASE SCHEMA ===\n";
+  let schemaContent = "";
   
   const schemaPath = path.join(process.cwd(), "shared/schema.ts");
   try {
     const content = fs.readFileSync(schemaPath, "utf-8");
-    schema += "--- File: shared/schema.ts ---\n";
-    schema += sanitizeText(content);
-    schema += "\n\n";
+    schemaContent = sanitizeText(content);
   } catch (e) {
-    schema += "Could not read schema.ts\n";
+    schemaContent = "Could not read schema.ts\n";
   }
   
-  return schema;
+  return schemaContent;
 }
 
 async function collectSampleData(sampleRows: number): Promise<string> {
-  let data = "=== SAMPLE DATA (SANITIZED) ===\n";
+  let data = "";
   
   const tableMap: Record<string, any> = {
     screens: schema.screens,
     locations: schema.locations,
     advertisers: schema.advertisers,
     ad_assets: schema.adAssets,
-    placement_plans: schema.placementPlans,
     contracts: schema.contracts,
-    invoices: schema.invoices,
-    leads: schema.leads,
-    users: schema.users,
     upload_jobs: schema.uploadJobs
   };
   
@@ -339,12 +418,12 @@ async function collectSampleData(sampleRows: number): Promise<string> {
       
       if (result && result.length > 0) {
         const sanitized = sanitizeObject(result);
-        data += `\n--- Table: ${tableName} (${result.length} rows) ---\n`;
+        data += `\n--- ${tableName} (${result.length} rows) ---\n`;
         data += JSON.stringify(sanitized, null, 2);
         data += "\n";
       }
     } catch (e: any) {
-      data += `\n--- Table: ${tableName} ---\nError: ${e.message}\n`;
+      data += `\n--- ${tableName} ---\nError: ${e.message}\n`;
     }
   }
   
@@ -352,21 +431,20 @@ async function collectSampleData(sampleRows: number): Promise<string> {
 }
 
 async function collectScreenMappings(): Promise<string> {
-  let mappings = "=== SCREEN -> PLAYLIST MAPPINGS ===\n";
+  let mappings = "";
   
   try {
     const screens = await storage.getScreens();
     const locations = await storage.getLocations();
     const locationMap = new Map(locations.map(l => [l.id, l]));
     
-    mappings += "| Screen ID | Yodeck Player ID | Location Playlist ID | Location Status |\n";
-    mappings += "|-----------|------------------|---------------------|----------------|\n";
+    mappings += "Screen -> Location -> Playlist mappings:\n";
     
     for (const screen of screens) {
       const location = screen.locationId ? locationMap.get(screen.locationId) : null;
       const playlistId = location?.yodeckPlaylistId || "-";
       const status = location?.status || "unknown";
-      mappings += `| ${screen.id} | ${screen.yodeckPlayerId || "-"} | ${playlistId} | ${status} |\n`;
+      mappings += `  Screen ${screen.id} | Player: ${screen.yodeckPlayerId || "-"} | Location: ${location?.name?.substring(0, 25) || "-"} | Playlist: ${playlistId} | Status: ${status}\n`;
     }
     
     mappings += `\nTotal: ${screens.length} screens\n`;
@@ -374,68 +452,40 @@ async function collectScreenMappings(): Promise<string> {
     mappings += "Could not fetch screen mappings\n";
   }
   
-  return mappings + "\n";
+  return mappings;
 }
 
 async function collectAdvertiserMappings(): Promise<string> {
-  let mappings = "=== ADVERTISER -> CONTRACTS -> PLACEMENTS ===\n";
+  let mappings = "";
   
   try {
     const advertisers = await storage.getAdvertisers();
     const contracts = await storage.getContracts();
     const placements = await storage.getPlacements();
     
-    for (const adv of advertisers.slice(0, 10)) {
-      mappings += `\n## Advertiser: ${adv.id} | Status: ${adv.status} | MediaID: ${adv.yodeckMediaIdCanonical || "-"}\n`;
-      
+    const activeAdvertisers = advertisers.filter(a => a.status === "active");
+    
+    mappings += `Active advertisers (${activeAdvertisers.length}/${advertisers.length}):\n`;
+    
+    for (const adv of activeAdvertisers.slice(0, 15)) {
       const advContracts = contracts.filter(c => c.advertiserId === adv.id);
-      if (advContracts.length > 0) {
-        mappings += `  Contracts: ${advContracts.length}\n`;
-        for (const contract of advContracts.slice(0, 3)) {
-          mappings += `    - Contract ${contract.id}: ${contract.status}\n`;
-        }
-      }
-      
       const advContractIds = new Set(advContracts.map(c => c.id));
       const advPlacements = placements.filter(p => p.contractId && advContractIds.has(p.contractId));
-      if (advPlacements.length > 0) {
-        mappings += `  Placements: ${advPlacements.length}\n`;
-        for (const p of advPlacements.slice(0, 3)) {
-          mappings += `    - Placement ${p.id}: screen=${p.screenId}, active=${p.isActive}\n`;
-        }
-      }
+      
+      mappings += `  Advertiser ${adv.id} | Media: ${adv.yodeckMediaIdCanonical || "NONE"} | Asset: ${adv.assetStatus || "-"} | Contracts: ${advContracts.length} | Placements: ${advPlacements.length}\n`;
     }
   } catch (e) {
     mappings += "Could not fetch advertiser mappings\n";
   }
   
-  return mappings + "\n";
+  return mappings;
 }
 
-function chunkText(text: string, maxKB: number): string[] {
-  const maxBytes = maxKB * 1024;
-  const chunks: string[] = [];
-  
-  let currentChunk = "";
-  const lines = text.split("\n");
-  
-  for (const line of lines) {
-    const lineBytes = Buffer.byteLength(line + "\n", "utf-8");
-    const currentBytes = Buffer.byteLength(currentChunk, "utf-8");
-    
-    if (currentBytes + lineBytes > maxBytes && currentChunk.length > 0) {
-      chunks.push(currentChunk);
-      currentChunk = line + "\n";
-    } else {
-      currentChunk += line + "\n";
-    }
-  }
-  
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-  }
-  
-  return chunks;
+interface Section {
+  title: string;
+  content: string;
+  priority: "critical" | "high" | "medium" | "low";
+  category: string;
 }
 
 export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResult> {
@@ -444,55 +494,176 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
   
   console.log(`[AI-Dump] ${bundleId}: Starting generation...`);
   
-  let fullText = "";
+  const sections: Section[] = [];
   let fileCount = 0;
-  let tableCount = 0;
   
+  // CRITICAL: System overview and recent issues
   const snapshot = await collectRuntimeSnapshot();
-  fullText += snapshot;
+  sections.push({
+    title: "SYSTEM OVERVIEW",
+    content: `=== SYSTEM OVERVIEW ===\n${snapshot}`,
+    priority: "critical",
+    category: "overview"
+  });
+  
+  const recentErrors = await collectRecentErrors();
+  const uploadJobs = await collectRecentUploadJobs();
+  sections.push({
+    title: "RECENT ISSUES & JOBS",
+    content: `=== RECENT ISSUES ===\n${recentErrors}\n=== RECENT UPLOAD JOBS ===\n${uploadJobs}`,
+    priority: "critical",
+    category: "issues"
+  });
+  
+  // HIGH: Mappings and relationships
+  const screenMappings = await collectScreenMappings();
+  const advertiserMappings = await collectAdvertiserMappings();
+  sections.push({
+    title: "SYSTEM MAPPINGS",
+    content: `=== SCREEN MAPPINGS ===\n${screenMappings}\n=== ADVERTISER MAPPINGS ===\n${advertiserMappings}`,
+    priority: "high",
+    category: "mappings"
+  });
   
   const flowMap = await collectFlowMap();
-  fullText += flowMap;
+  sections.push({
+    title: "API ROUTES",
+    content: `=== API ROUTES ===\n${flowMap}`,
+    priority: "high",
+    category: "routes"
+  });
   
-  const screenMappings = await collectScreenMappings();
-  fullText += screenMappings;
-  
-  const advertiserMappings = await collectAdvertiserMappings();
-  fullText += advertiserMappings;
-  
-  const schema = await collectDbSchema();
-  fullText += schema;
+  // MEDIUM: Schema and sample data
+  const schemaContent = await collectDbSchema();
+  sections.push({
+    title: "DATABASE SCHEMA",
+    content: `=== DATABASE SCHEMA (shared/schema.ts) ===\n${schemaContent}`,
+    priority: "medium",
+    category: "schema"
+  });
   
   const sampleData = await collectSampleData(options.sampleRowsPerTable);
-  fullText += sampleData;
-  tableCount = CORE_TABLES.length;
+  sections.push({
+    title: "SAMPLE DATA",
+    content: `=== SAMPLE DATA ===\n${sampleData}`,
+    priority: "medium",
+    category: "data"
+  });
   
-  fullText += "=== CODE FILES ===\n";
+  // LOW: Code files (priority files first, then rest)
   const files = collectFiles(process.cwd());
   fileCount = files.length;
   
-  for (const file of files) {
-    fullText += `\n---FILE: ${file.path} (bytes=${file.bytes})---\n`;
-    fullText += file.content;
-    fullText += "\n";
-  }
+  const priorityFiles = files.filter(f => f.priority);
+  const regularFiles = files.filter(f => !f.priority);
   
-  const rawChunks = chunkText(fullText, options.maxFilesKB);
-  const chunks: AiDumpChunk[] = rawChunks.map((text, i) => {
-    const lines = text.split("\n").slice(0, 5);
-    const title = lines.find(l => l.startsWith("===") || l.startsWith("---FILE:")) || `Chunk ${i + 1}`;
-    
-    const header = `=== AI_DUMP CHUNK ${i + 1}/${rawChunks.length} | bundleId=${bundleId} | generatedAt=${generatedAt} ===\n\n`;
-    
-    return {
-      index: i + 1,
-      total: rawChunks.length,
-      title: title.replace(/[=\-]/g, "").trim().substring(0, 60),
-      text: header + text
-    };
+  // Priority code files
+  let priorityCode = "=== PRIORITY CODE FILES ===\n";
+  for (const file of priorityFiles) {
+    priorityCode += `\n---FILE: ${file.path} (${file.bytes} bytes)---\n`;
+    priorityCode += file.content;
+    priorityCode += "\n";
+  }
+  sections.push({
+    title: "PRIORITY CODE",
+    content: priorityCode,
+    priority: "high",
+    category: "code"
   });
   
-  console.log(`[AI-Dump] ${bundleId}: Generated ${chunks.length} chunks, ${fileCount} files`);
+  // Regular code files
+  let regularCode = "=== OTHER CODE FILES ===\n";
+  for (const file of regularFiles) {
+    regularCode += `\n---FILE: ${file.path} (${file.bytes} bytes)---\n`;
+    regularCode += file.content;
+    regularCode += "\n";
+  }
+  sections.push({
+    title: "OTHER CODE",
+    content: regularCode,
+    priority: "low",
+    category: "code"
+  });
+  
+  // Generate chunks with priority ordering
+  const priorityOrder = ["critical", "high", "medium", "low"];
+  const sortedSections = sections.sort((a, b) => {
+    return priorityOrder.indexOf(a.priority) - priorityOrder.indexOf(b.priority);
+  });
+  
+  const chunks: AiDumpChunk[] = [];
+  let chunkIndex = 1;
+  
+  for (const section of sortedSections) {
+    const maxBytes = options.maxFilesKB * 1024;
+    const sectionBytes = Buffer.byteLength(section.content, "utf-8");
+    
+    if (sectionBytes <= maxBytes) {
+      // Section fits in one chunk
+      const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} ===\n\n`;
+      chunks.push({
+        index: chunkIndex,
+        total: 0, // Will be updated
+        title: section.title,
+        text: header + section.content,
+        priority: section.priority,
+        category: section.category
+      });
+      chunkIndex++;
+    } else {
+      // Split large section into multiple chunks
+      const lines = section.content.split("\n");
+      let currentChunk = "";
+      let subIndex = 1;
+      
+      for (const line of lines) {
+        const lineBytes = Buffer.byteLength(line + "\n", "utf-8");
+        const currentBytes = Buffer.byteLength(currentChunk, "utf-8");
+        
+        if (currentBytes + lineBytes > maxBytes && currentChunk.length > 0) {
+          const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} (part ${subIndex}) ===\n\n`;
+          chunks.push({
+            index: chunkIndex,
+            total: 0,
+            title: `${section.title} (${subIndex})`,
+            text: header + currentChunk,
+            priority: section.priority,
+            category: section.category
+          });
+          chunkIndex++;
+          subIndex++;
+          currentChunk = line + "\n";
+        } else {
+          currentChunk += line + "\n";
+        }
+      }
+      
+      if (currentChunk.length > 0) {
+        const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} (part ${subIndex}) ===\n\n`;
+        chunks.push({
+          index: chunkIndex,
+          total: 0,
+          title: `${section.title} (${subIndex})`,
+          text: header + currentChunk,
+          priority: section.priority,
+          category: section.category
+        });
+        chunkIndex++;
+      }
+    }
+  }
+  
+  // Update totals
+  const totalChunks = chunks.length;
+  for (const chunk of chunks) {
+    chunk.total = totalChunks;
+    chunk.text = chunk.text.replace(/CHUNK \d+\/\?/, `CHUNK ${chunk.index}/${totalChunks}`);
+  }
+  
+  const criticalChunks = chunks.filter(c => c.priority === "critical").length;
+  const highChunks = chunks.filter(c => c.priority === "high").length;
+  
+  console.log(`[AI-Dump] ${bundleId}: Generated ${chunks.length} chunks (${criticalChunks} critical, ${highChunks} high), ${fileCount} files`);
   
   return {
     ok: true,
@@ -503,7 +674,9 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
       chunks: chunks.length,
       logs: 0,
       schema: true,
-      tables: tableCount
+      tables: 6,
+      criticalChunks,
+      highChunks
     }
   };
 }
