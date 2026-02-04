@@ -467,20 +467,37 @@ export async function ensureScreenPlaylist(
   if (existingScreen?.playlistId) {
     const playlistId = parseInt(existingScreen.playlistId, 10);
     
-    // Verify it still exists in Yodeck
-    const verifyResult = await yodeckRequest<{ id: number; name: string }>(`/playlists/${playlistId}/`);
+    // GUARD: Check if this playlistId is shared with another screen (NEVER allowed)
+    const allScreens = await db.select({ id: screens.id, playlistId: screens.playlistId })
+      .from(screens)
+      .where(eq(screens.playlistId, existingScreen.playlistId));
     
-    if (verifyResult.ok && verifyResult.data) {
-      console.log(`${LOG_PREFIX} Screen ${screen.id} already has valid playlistId=${playlistId}`);
-      return { 
-        ok: true, 
-        screenPlaylistId: playlistId, 
-        screenPlaylistName: verifyResult.data.name,
-        wasCreated: false 
-      };
+    const otherScreensWithSamePlaylist = allScreens.filter(s => s.id !== screen.id);
+    if (otherScreensWithSamePlaylist.length > 0) {
+      console.warn(`${LOG_PREFIX} [PlaylistEnsure] SHARED_PLAYLIST_DETECTED: screen ${screen.id} shares playlistId ${playlistId} with ${otherScreensWithSamePlaylist.map(s => s.id).join(", ")}. Creating new playlist.`);
+      // Clear DB and fall through to create new playlist
+      await db.update(screens).set({ playlistId: null }).where(eq(screens.id, screen.id));
+    } else {
+      // Verify it still exists in Yodeck
+      const verifyResult = await yodeckRequest<{ id: number; name: string }>(`/playlists/${playlistId}/`);
+      
+      if (verifyResult.ok && verifyResult.data) {
+        // Also verify the playlist name matches our convention
+        if (verifyResult.data.name === canonicalName) {
+          console.log(`${LOG_PREFIX} [PlaylistEnsure] Screen ${screen.id} already has valid playlistId=${playlistId}`);
+          return { 
+            ok: true, 
+            screenPlaylistId: playlistId, 
+            screenPlaylistName: verifyResult.data.name,
+            wasCreated: false 
+          };
+        } else {
+          console.warn(`${LOG_PREFIX} [PlaylistEnsure] Screen ${screen.id} playlistId=${playlistId} has wrong name "${verifyResult.data.name}" (expected "${canonicalName}"). Creating correct playlist.`);
+        }
+      } else {
+        console.warn(`${LOG_PREFIX} [PlaylistEnsure] Screen ${screen.id} playlistId=${playlistId} no longer exists in Yodeck, recreating...`);
+      }
     }
-    
-    console.warn(`${LOG_PREFIX} Screen ${screen.id} playlistId=${playlistId} no longer exists in Yodeck, recreating...`);
   }
 
   // 2. Search Yodeck for existing playlist with canonical name

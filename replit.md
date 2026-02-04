@@ -61,12 +61,22 @@ Authentication uses username/password with bcrypt hashing and session data store
     - Only `rebuild-playlist` endpoint may create/modify playlists
     - No COMBINED/ADS/BASELINE playlists per screen - only 1 screen playlist
     - Layout mode is forbidden; screens must be in playlist mode
+- **Shared Playlist Guard** (in `ensureScreenPlaylist`):
+  - Detects if playlistId is shared with another screen (NEVER allowed)
+  - Automatically clears and creates new playlist if shared detected
+  - Logs `SHARED_PLAYLIST_DETECTED: screen X shares playlistId Y with Z`
+  - Validates playlist name matches `EVZ | SCREEN | {playerId}` convention
 - **Admin Endpoints**:
   - `POST /api/admin/screens/:screenId/rebuild-playlist`: The ONLY endpoint that creates/modifies playlists
   - `POST /api/admin/screens/:screenId/rebuild-playlist?dryRun=true`: Simulate rebuild without mutations
   - `GET /api/admin/yodeck/base-playlist`: Read-only base playlist info
   - `GET /api/admin/yodeck/auth-status`: Validate Yodeck authentication
   - `GET /api/admin/yodeck/media/:id/inspect`: Debug endpoint for media validation (returns status, duration, isValid)
+- **System Health & Self-Heal Endpoints**:
+  - `GET /api/admin/system/config-health`: Returns config status (nodeEnv, testMode, yodeckConfigured, baselinePlaylist, warnings, errors)
+  - `POST /api/admin/screens/self-heal`: 1-click fix for all screens (dryRun support) - ensures unique playlists, rebuilds, reports
+  - `POST /api/admin/screens/fix-shared-playlists`: Detect and fix screens sharing same playlistId
+  - `GET /api/admin/screens/smoke-check`: Verify invariants (unique playlists, base exists, naming convention)
 - **Screen Status Endpoints**:
   - `GET /api/screens/:screenId/playback-state`: Single source of truth for UI - returns expected (DB), actual (Yodeck), sync status
   - `GET /api/screens/:screenId/now-playing`: READ-ONLY status check

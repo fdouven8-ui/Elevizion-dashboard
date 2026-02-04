@@ -12007,6 +12007,335 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // SYSTEM CONFIG HEALTH & SELF-HEAL ENDPOINTS
+  // ============================================================================
+
+  /**
+   * GET /api/admin/system/config-health
+   * Returns system configuration health status
+   */
+  app.get("/api/admin/system/config-health", requireAdminAccess, async (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const { getConfigHealth } = await import("./config");
+      const { getBasePlaylistId } = await import("./services/simplePlaylistModel");
+      
+      const configHealth = getConfigHealth();
+      const baseResult = await getBasePlaylistId();
+      
+      res.json({
+        ok: configHealth.errors.length === 0,
+        ...configHealth,
+        baselinePlaylist: {
+          found: baseResult.ok && !!baseResult.basePlaylistId,
+          id: baseResult.basePlaylistId,
+          name: baseResult.basePlaylistName,
+          itemCount: baseResult.itemCount,
+        },
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/self-heal
+   * 1-click fix for all screens: ensure unique playlists, sync from base, rebuild
+   */
+  app.post("/api/admin/screens/self-heal", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const { dryRun = false, screenIds } = req.body || {};
+    const correlationId = `selfheal-${Date.now()}`;
+    
+    console.log(`[SelfHeal] ${correlationId}: Starting (dryRun=${dryRun})`);
+    
+    try {
+      const { getBasePlaylistId, ensureScreenPlaylist, rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
+      
+      const baseResult = await getBasePlaylistId();
+      if (!baseResult.ok || !baseResult.basePlaylistId) {
+        return res.status(400).json({
+          ok: false,
+          error: "BASE_PLAYLIST_NOT_FOUND",
+          message: "Maak in Yodeck een playlist met exact de naam 'Basis playlist'.",
+          base: { found: false },
+        });
+      }
+      
+      let allScreens = await db.select().from(screens);
+      if (screenIds && Array.isArray(screenIds) && screenIds.length > 0) {
+        allScreens = allScreens.filter(s => screenIds.includes(s.id));
+      }
+      
+      const playlistOwnership = new Map<string, string>();
+      const results: any[] = [];
+      let fixedSharedPlaylists = 0;
+      let rebuilt = 0;
+      let failed = 0;
+      
+      for (const screen of allScreens) {
+        if (!screen.yodeckPlayerId) {
+          results.push({
+            screenId: screen.id,
+            playerId: null,
+            error: "NO_YODECK_PLAYER_ID",
+            skipped: true,
+          });
+          continue;
+        }
+        
+        const beforePlaylistId = screen.playlistId;
+        let sharedPlaylistFixed = false;
+        
+        if (beforePlaylistId && playlistOwnership.has(beforePlaylistId)) {
+          console.log(`[SelfHeal] SHARED_PLAYLIST_DETECTED: screen ${screen.id} shares playlistId ${beforePlaylistId} with ${playlistOwnership.get(beforePlaylistId)}`);
+          sharedPlaylistFixed = true;
+          fixedSharedPlaylists++;
+          
+          if (!dryRun) {
+            await db.update(screens).set({ playlistId: null }).where(eq(screens.id, screen.id));
+          }
+        }
+        
+        if (!dryRun) {
+          const ensureResult = await ensureScreenPlaylist({
+            id: screen.id,
+            yodeckPlayerId: screen.yodeckPlayerId,
+            playlistId: sharedPlaylistFixed ? null : screen.playlistId,
+          });
+          
+          if (!ensureResult.ok) {
+            results.push({
+              screenId: screen.id,
+              playerId: screen.yodeckPlayerId,
+              before: { playlistId: beforePlaylistId },
+              error: ensureResult.error,
+              sharedPlaylistFixed,
+            });
+            failed++;
+            continue;
+          }
+          
+          if (ensureResult.screenPlaylistId) {
+            playlistOwnership.set(String(ensureResult.screenPlaylistId), screen.id);
+          }
+          
+          const rebuildResult = await rebuildScreenPlaylist(screen.id);
+          
+          results.push({
+            screenId: screen.id,
+            playerId: screen.yodeckPlayerId,
+            before: { playlistId: beforePlaylistId },
+            after: { 
+              playlistId: ensureResult.screenPlaylistId, 
+              playlistName: ensureResult.screenPlaylistName,
+            },
+            sharedPlaylistFixed,
+            rebuild: {
+              ok: rebuildResult.ok,
+              copyCount: rebuildResult.copy?.copiedCount,
+              adsIncluded: rebuildResult.ads?.included,
+              adsAdded: rebuildResult.ads?.adsAdded,
+              verifyOk: rebuildResult.verify?.ok,
+              error: rebuildResult.error,
+            },
+          });
+          
+          if (rebuildResult.ok) {
+            rebuilt++;
+          } else {
+            failed++;
+          }
+        } else {
+          if (beforePlaylistId) {
+            playlistOwnership.set(beforePlaylistId, screen.id);
+          }
+          results.push({
+            screenId: screen.id,
+            playerId: screen.yodeckPlayerId,
+            before: { playlistId: beforePlaylistId },
+            dryRun: true,
+            wouldFixSharedPlaylist: sharedPlaylistFixed,
+          });
+        }
+      }
+      
+      console.log(`[SelfHeal] ${correlationId}: Complete - ${rebuilt} rebuilt, ${fixedSharedPlaylists} shared fixed, ${failed} failed`);
+      
+      res.json({
+        ok: failed === 0,
+        dryRun,
+        base: {
+          found: true,
+          id: baseResult.basePlaylistId,
+          itemCount: baseResult.itemCount,
+        },
+        summary: {
+          screensTotal: allScreens.length,
+          fixedSharedPlaylists,
+          rebuilt,
+          failed,
+        },
+        results,
+      });
+    } catch (error: any) {
+      console.error(`[SelfHeal] ${correlationId}: Error:`, error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/screens/fix-shared-playlists
+   * Detect and fix screens that share the same playlistId
+   */
+  app.post("/api/admin/screens/fix-shared-playlists", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const { dryRun = false } = req.body || {};
+    
+    console.log(`[FixSharedPlaylists] Starting (dryRun=${dryRun})`);
+    
+    try {
+      const { ensureScreenPlaylist } = await import("./services/simplePlaylistModel");
+      
+      const allScreens = await db.select().from(screens);
+      const playlistToScreens = new Map<string, string[]>();
+      
+      for (const screen of allScreens) {
+        if (screen.playlistId) {
+          const existing = playlistToScreens.get(screen.playlistId) || [];
+          existing.push(screen.id);
+          playlistToScreens.set(screen.playlistId, existing);
+        }
+      }
+      
+      const duplicates: Array<{ playlistId: string; screenIds: string[] }> = [];
+      for (const [playlistId, screenIdList] of Array.from(playlistToScreens.entries())) {
+        if (screenIdList.length > 1) {
+          duplicates.push({ playlistId, screenIds: screenIdList });
+        }
+      }
+      
+      if (duplicates.length === 0) {
+        return res.json({
+          ok: true,
+          message: "No shared playlists detected",
+          duplicatesFound: 0,
+          fixed: 0,
+        });
+      }
+      
+      const fixes: any[] = [];
+      let fixed = 0;
+      
+      for (const dup of duplicates) {
+        const screensToFix = dup.screenIds.slice(1);
+        
+        for (const screenId of screensToFix) {
+          const screen = allScreens.find(s => s.id === screenId);
+          if (!screen?.yodeckPlayerId) continue;
+          
+          if (!dryRun) {
+            await db.update(screens).set({ playlistId: null }).where(eq(screens.id, screenId));
+            
+            const ensureResult = await ensureScreenPlaylist({
+              id: screenId,
+              yodeckPlayerId: screen.yodeckPlayerId,
+              playlistId: null,
+            });
+            
+            fixes.push({
+              screenId,
+              oldPlaylistId: dup.playlistId,
+              newPlaylistId: ensureResult.screenPlaylistId,
+              newPlaylistName: ensureResult.screenPlaylistName,
+              ok: ensureResult.ok,
+            });
+            
+            if (ensureResult.ok) fixed++;
+          } else {
+            fixes.push({
+              screenId,
+              oldPlaylistId: dup.playlistId,
+              wouldFix: true,
+              dryRun: true,
+            });
+            fixed++;
+          }
+        }
+      }
+      
+      console.log(`[FixSharedPlaylists] Complete: ${fixed} fixed, ${duplicates.length} duplicate groups found`);
+      
+      res.json({
+        ok: true,
+        dryRun,
+        duplicatesFound: duplicates.length,
+        duplicates,
+        fixed,
+        fixes,
+      });
+    } catch (error: any) {
+      console.error("[FixSharedPlaylists] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/screens/smoke-check
+   * Verify system invariants: unique playlists, base exists, naming convention
+   */
+  app.get("/api/admin/screens/smoke-check", requireAdminAccess, async (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    
+    try {
+      const { getBasePlaylistId } = await import("./services/simplePlaylistModel");
+      
+      const allScreens = await db.select().from(screens);
+      const playlistToScreens = new Map<string, string[]>();
+      const issues: string[] = [];
+      
+      const baseResult = await getBasePlaylistId();
+      if (!baseResult.ok || !baseResult.basePlaylistId) {
+        issues.push("BASE_PLAYLIST_NOT_FOUND: Create a playlist named 'Basis playlist' in Yodeck");
+      }
+      
+      for (const screen of allScreens) {
+        if (screen.playlistId) {
+          const existing = playlistToScreens.get(screen.playlistId) || [];
+          existing.push(screen.id);
+          playlistToScreens.set(screen.playlistId, existing);
+        }
+      }
+      
+      for (const [playlistId, screenIdList] of Array.from(playlistToScreens.entries())) {
+        if (screenIdList.length > 1) {
+          issues.push(`SHARED_PLAYLIST: playlistId=${playlistId} shared by screens: ${screenIdList.join(", ")}`);
+        }
+      }
+      
+      const screensWithoutPlayer = allScreens.filter(s => !s.yodeckPlayerId);
+      if (screensWithoutPlayer.length > 0) {
+        issues.push(`SCREENS_WITHOUT_PLAYER: ${screensWithoutPlayer.length} screens have no yodeckPlayerId`);
+      }
+      
+      res.json({
+        ok: issues.length === 0,
+        screensTotal: allScreens.length,
+        screensWithPlaylist: allScreens.filter(s => s.playlistId).length,
+        screensWithPlayer: allScreens.filter(s => s.yodeckPlayerId).length,
+        basePlaylist: {
+          found: baseResult.ok && !!baseResult.basePlaylistId,
+          id: baseResult.basePlaylistId,
+          name: baseResult.basePlaylistName,
+        },
+        issues,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  // ============================================================================
   // SYSTEM SETTINGS (Admin configurable values)
   // ============================================================================
 

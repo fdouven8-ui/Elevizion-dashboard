@@ -1,0 +1,155 @@
+JE BENT EEN SENIOR TYPESCRIPT/EXPRESS ENGINEER EN JE MOET DEZE REPO ECHT FIXEN (Elevizion Dashboard). 
+DOEL: maak het systeem deterministisch en uniform: 1 globale "Basis playlist" + 1 unieke playlist per screen, en uploads moeten altijd jobs loggen en canonical media zetten. Voeg daarnaast 1-click self-heal endpoints toe.
+
+=== FEITEN UIT AI DUMP (chunks 1-6) ===
+- NODE_ENV=production, TEST_MODE=true
+- TOKEN_ENCRYPTION_KEY present: false
+- Baseline Playlist configured: false
+- contentPipelineMode="default"
+- 2 screens hebben yodeck player ids: 591895 en 591896
+- ER IS EEN KRITIEKE BUG: beide screens wijzen naar dezelfde playlistId 30461663 (mag nooit)
+- advertisers(2): Media NONE, contracts 0, placements 0; withCanonicalMedia=0
+- "No recent upload jobs" en "No recent errors in upload jobs" -> pipeline draait niet of logt niet
+- Simple Playlist Model (CURRENT) in replit.md:
+  - 1 globale "Basis playlist" (case-sensitive) in Yodeck, cached
+  - per screen EXACT 1 playlist: "EVZ | SCREEN | {playerId}"
+  - rebuild: sync base -> add ads -> apply player source/push -> hard verify
+- TransactionalUploadService hoort upload_jobs te vullen, en pas bij READY canonical ID te zetten (yodeckMediaIdCanonical)
+
+=== TOP PRIORITY BUGFIXES ===
+A) Shared playlist bug fix (per screen unieke playlist, nooit delen)
+B) Baseline playlist is hard-required: fail fast + duidelijke error + admin status endpoint
+C) Upload jobs/canonical media: altijd jobs schrijven óf hard falen met duidelijke reason (geen “stil niks”)
+D) Prod sanity: TEST_MODE in prod mag niet stil afwijkend gedrag veroorzaken; TOKEN_ENCRYPTION_KEY moet verplicht worden voor token opslag, of veilige fallback met waarschuwing + migratiepad
+E) 1-click self-heal: fix shared playlists + fix baseline mismatch + validate/clear invalid media + rebuild playlists + return rapport
+
+=== CONCRETE CHANGES (VERPLICHT) ===
+
+1) ENV & STARTUP SANITY (server bootstrap / config)
+- Voeg een centrale config validator toe (bijv. server/config.ts of server/env.ts):
+  - Detecteer NODE_ENV=production + TEST_MODE=true -> log een GROTE WARNING + expose in /api/admin/system/config-health
+  - Detecteer ontbrekende TOKEN_ENCRYPTION_KEY -> log ERROR-level warning en zet status flag encryptionKeyMissing=true
+  - Zorg dat routes/services deze config via 1 plek lezen.
+- Maak ADS_REQUIRE_CONTRACT bypass door TEST_MODE expliciet en zichtbaar: log "CONTRACT_GATING_BYPASSED_TEST_MODE" als het gebeurt.
+- Voeg endpoint toe:
+  GET /api/admin/system/config-health
+  -> JSON met: nodeEnv, testMode, adsRequireContract, legacyUploadDisabled, tokenEncryptionKeyPresent, yodeckConfigured, moneybirdConfigured, objectStorageConfigured
+
+2) BASELINE PLAYLIST HARD REQUIRE + STATUS
+- In simplePlaylistModel.ts:
+  - getBasePlaylistId() moet:
+    - playlists ophalen via Yodeck (eventueel cache), exact name match "Basis playlist"
+    - als niet gevonden: return null
+  - rebuildScreenPlaylist() moet HARD failen als base playlist ontbreekt:
+    - return { ok:false, error:"BASE_PLAYLIST_NOT_FOUND", message:"Maak in Yodeck een playlist met exact de naam 'Basis playlist'." }
+- Voeg endpoint toe (bestaat al genoemd, maar zorg dat hij betrouwbaar is):
+  GET /api/admin/yodeck/base-playlist
+  -> { found:boolean, id?:string|number, name?:string, itemCount?:number, hint?:string }
+- Voeg autopilot baseline status endpoint indien al bestaat: /api/admin/autopilot/baseline-status
+  -> laat hem intern getBasePlaylistId() gebruiken en dezelfde output geven (geen 2 verschillende definities)
+
+3) PER SCREEN UNIEKE PLAYLIST - NOOIT DELEN (KRITIEK)
+- In simplePlaylistModel.ts (of screenPlaylistService.ts):
+  - ensureScreenPlaylist(screen):
+    - requiredName = `EVZ | SCREEN | ${playerId}`
+    - Zoek Yodeck playlists exact op requiredName
+    - Als gevonden -> use playlistId
+    - Als niet -> maak playlist aan met requiredName -> use new id
+    - Update DB: screens.playlistId = playlistId (per screen)
+    - BELANGRIJK: voeg een DB guard toe:
+      - Als deze playlistId al gekoppeld is aan een ANDER screenId (shared), dan:
+        - maak een nieuwe playlist aan met requiredName (en indien nodig suffix met screenId of "-2" zodat name uniek blijft)
+        - update dit screen naar nieuwe playlistId
+        - log: SHARED_PLAYLIST_DETECTED_AND_FIXED {screenId, oldPlaylistId, newPlaylistId}
+- Voeg ook een consistency check toe:
+  - als DB playlistId niet overeenkomt met Yodeck playlist name pattern -> herstel naar required playlist
+- Zorg dat rebuild altijd werkt met de ensureScreenPlaylist result, niet blind met bestaande DB waarde.
+
+4) SELF-HEAL ADMIN ENDPOINTS (1 KLIK FIX)
+Voeg een nieuw admin endpoint toe:
+POST /api/admin/screens/self-heal
+Body: { dryRun?: boolean, screenIds?: string[] } (optioneel)
+Doet (idempotent) per screen:
+  - ensure base playlist exists (anders return BASE_PLAYLIST_NOT_FOUND)
+  - ensureScreenPlaylist() (fix shared playlist)
+  - syncScreenPlaylistFromBase()
+  - select ads (zoals huidige targeting logic)
+  - addAdsToScreenPlaylist() met existing hard verification
+  - applyPlayerSourceAndPush()
+Return JSON rapport:
+{
+  ok: boolean,
+  base: { found, id, itemCount },
+  summary: { screensTotal, fixedSharedPlaylists, rebuilt, failed },
+  results: [
+    { screenId, playerId, before:{playlistId?}, after:{playlistId, playlistName}, rebuild:{ok, missingMediaIds?, recommendedAction?} }
+  ]
+}
+- dryRun=true mag niets muteren; geef wel wat er zou gebeuren.
+
+Voeg een specifiek endpoint toe voor alleen shared playlists:
+POST /api/admin/screens/fix-shared-playlists
+-> loopt alle screens af, detecteert duplicate playlistId, en forceert ensureScreenPlaylist() voor de duplicates (alles behalve de eerste).
+
+5) UPLOAD PIPELINE: JOBS + CANONICAL MEDIA MOETEN WEER ECHT WERKEN
+- In transactionalUploadService.ts:
+  - Zorg dat ELKE upload poging een upload_jobs record creëert (CREATED) en elke stap updatet.
+  - Als route/service vroegtijdig returned: schrijf finalState=FAILED met reason (VALIDATION_FAILED / CONTRACT_REQUIRED / STORAGE_MISSING / YODECK_CONFIG_MISSING).
+  - Bij READY status:
+    - update ad asset in DB: assetStatus="live" (of de juiste bestaande status) EN zet yodeckMediaIdCanonical (of yodeckMediaIdCanonical kolom) op de mediaId.
+  - Als media later invalid blijkt: ensureAdvertiserMediaIsValid() moet invalid ids clearen en loggen.
+- Zorg dat advertisers met "Media: NONE" kunnen herstellen via admin endpoints:
+  POST /api/admin/advertisers/:id/validate-media-now (bestaat) -> zorg dat die:
+    - checkt canonical media in Yodeck
+    - als ontbreekt/invalid -> zet canonical null, status terug naar "ready_for_yodeck" (zoals doc)
+- Maak een admin endpoint (of repareer bestaande) die 1 advertiser end-to-end kan fixen:
+  POST /api/admin/advertisers/:id/normalize-and-publish
+  -> normalize DB, upload indien nodig, validate media, en dan trigger playlist rebuild voor alle relevante screens.
+  Zorg dat dit endpoint NIET stil faalt: altijd JSON result met stappen.
+
+6) ROUTES: ZORG DAT RELEVANTE ENDPOINTS DUIDELIJKE JSON GEVEN
+- Controleer in server/routes.ts dat deze routes bestaan en correct naar services wijzen:
+  - POST /api/admin/screens/:screenId/rebuild-playlist (+ dryRun support)
+  - GET /api/screens/:screenId/playback-state (read-only)
+  - GET /api/screens/:screenId/now-playing (read-only)
+  - GET /api/admin/yodeck/base-playlist
+  - GET /api/debug/yodeck/upload-jobs
+  - POST /api/admin/test-e2e-advertiser-upload (7-step test) -> zorg dat hij echt jobs aanmaakt en canonical zet
+- Voeg overal consistente error schema’s toe:
+  { ok:false, error:"CODE", message:"human readable", details?:{} }
+
+7) UI/OPS (MINIMAAL, maar nuttig)
+- Voeg in admin area een simpele pagina of kaart (als het al bestaat: system-health):
+  - "Config Health" (testMode, encryption key, baseline found)
+  - "Self Heal" knop -> call /api/admin/screens/self-heal
+  - Toon results per screen (playlist fixed, rebuild ok, missingMediaIds)
+(Niet teveel UI bouwen; focus op backend correctheid.)
+
+8) TESTS / SMOKE SCRIPTS (ESSENTIEEL)
+- Voeg een eenvoudige scriptmatige check toe (kan een admin endpoint of node script):
+  - verifieer dat geen twee screens dezelfde playlistId hebben
+  - verifieer dat base playlist bestaat
+  - verifieer dat rebuild-playlist per screen een playlistName "EVZ | SCREEN | {playerId}" oplevert
+- Voeg logging tags toe zodat Frank makkelijk ziet wat er gebeurt:
+  [PlaylistEnsure], [Baseline], [Rebuild], [UploadJobs], [CanonicalMedia], [SelfHeal]
+
+=== ACCEPTANCE CRITERIA (MOETEN HAALBAAR ZIJN NA IMPLEMENTATIE) ===
+1) Twee screens mogen NOOIT dezelfde playlistId hebben. Self-heal fixt dit automatisch.
+2) Als "Basis playlist" ontbreekt: rebuild/self-heal faalt met BASE_PLAYLIST_NOT_FOUND + duidelijke instructie.
+3) Een E2E upload test creëert upload_jobs records en eindigt in READY (of faalt met duidelijke reason).
+4) Zodra READY: canonical media id wordt in DB gezet (yodeckMediaIdCanonical) en advertisers mapping toont Media != NONE.
+5) Rebuild-playlist zet player source naar playlist mode, en hard verify geeft ok:true of missingMediaIds.
+6) Alle relevante endpoints returnen JSON (no HTML), met ok/error schema.
+
+=== IMPLEMENTATION NOTES ===
+- Respecteer bestaande architectuur: routes thin, business in services/storage.
+- Gebruik bestaande debug endpoints waar mogelijk, fix ze waar ze stuk zijn.
+- Maak wijzigingen zo idempotent mogelijk.
+- Voeg geen enorme refactor toe buiten deze scope.
+
+BEGIN NU MET:
+(1) config-health + baseline hard require
+(2) ensureScreenPlaylist guard tegen shared playlists
+(3) self-heal endpoints
+(4) upload_jobs/canonical media guarantees
+(5) smoke checks
