@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { adAssets, advertisers, portalTokens } from '@shared/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, or, isNull } from 'drizzle-orm';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -568,10 +568,26 @@ export interface ReviewQueueItem {
 }
 
 export async function getPendingReviewAssets(): Promise<ReviewQueueItem[]> {
+  // Include:
+  // 1. New uploads pending review (approvalStatus='UPLOADED', validationStatus='valid')
+  // 2. Approved but not yet published (approvalStatus='APPROVED', publishStatus != 'PUBLISHED')
+  // 3. Failed publishes (publishStatus='PUBLISH_FAILED') - these need retry
   const pendingAssets = await db.query.adAssets.findMany({
     where: and(
       eq(adAssets.validationStatus, 'valid'),
-      eq(adAssets.approvalStatus, 'UPLOADED')
+      or(
+        // New uploads waiting for admin approval
+        eq(adAssets.approvalStatus, 'UPLOADED'),
+        // Approved but failed to publish - keep visible for retry
+        and(
+          eq(adAssets.approvalStatus, 'APPROVED'),
+          or(
+            eq(adAssets.publishStatus, 'PENDING'),
+            eq(adAssets.publishStatus, 'PUBLISH_FAILED'),
+            isNull(adAssets.publishStatus)
+          )
+        )
+      )
     ),
     orderBy: (adAssets, { desc }) => [desc(adAssets.uploadedAt)],
   });
@@ -644,7 +660,7 @@ export async function approveAsset(
       return { success: false, message: `Asset heeft status ${asset.approvalStatus}, kan niet goedkeuren` };
     }
     
-    // Update asset status to APPROVED
+    // Update asset status to APPROVED with publish attempt tracking
     await db.update(adAssets)
       .set({
         approvalStatus: 'APPROVED',
@@ -653,6 +669,11 @@ export async function approveAsset(
         reviewedByAdminAt: new Date(),
         reviewedByAdminId: adminId,
         adminNotes: notes,
+        // Start publish tracking - PENDING until success/failure
+        publishStatus: 'PENDING',
+        publishAttempts: (asset.publishAttempts || 0) + 1,
+        lastPublishAttemptAt: new Date(),
+        publishError: null, // Clear previous error
       })
       .where(eq(adAssets.id, assetId));
     
@@ -795,6 +816,25 @@ export async function approveAsset(
       console.error('[AdminReview] Failed to send approval email:', emailError);
     }
     
+    // Update publishStatus based on outcome
+    const publishSuccess = effectiveYodeckMediaId && (canonicalPublishResult?.success || autoPlacementResult?.success);
+    const publishError = !effectiveYodeckMediaId 
+      ? 'Geen Yodeck media ID verkregen'
+      : (!canonicalPublishResult?.success && !autoPlacementResult?.success)
+        ? 'Publicatie naar schermen mislukt'
+        : null;
+    
+    await db.update(adAssets)
+      .set({
+        publishStatus: publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED',
+        publishError: publishError,
+        yodeckMediaId: effectiveYodeckMediaId || asset.yodeckMediaId,
+        yodeckUploadedAt: effectiveYodeckMediaId ? new Date() : asset.yodeckUploadedAt,
+      })
+      .where(eq(adAssets.id, assetId));
+    
+    console.log(`[VideoReviewApprove] ${approveCorrelationId} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
+    
     // Build success message with auto-placement and canonical publish info
     let message = 'Video goedgekeurd';
     if (canonicalPublishResult?.success && canonicalPublishResult.locationsUpdated > 0) {
@@ -803,10 +843,12 @@ export async function approveAsset(
       message += ` en automatisch geplaatst op ${autoPlacementResult.placementsCreated} scherm(en)`;
     } else if (autoPlacementResult?.success && autoPlacementResult.screensPublished > 0) {
       message += ` en ${autoPlacementResult.screensPublished} scherm(en) gesynchroniseerd`;
+    } else if (!publishSuccess) {
+      message += ` maar publicatie mislukt: ${publishError}. Klik op "Opnieuw proberen" om te herproberen.`;
     }
     
     return { 
-      success: true, 
+      success: true, // Asset approved successfully, even if publish failed
       message,
       correlationId: approveCorrelationId,
       placementPlanId: planId,
@@ -817,6 +859,17 @@ export async function approveAsset(
     };
   } catch (error: any) {
     console.error('[AdminReview] Error approving asset:', error);
+    
+    // Mark as PUBLISH_FAILED on exception so it stays visible for retry
+    try {
+      await db.update(adAssets)
+        .set({
+          publishStatus: 'PUBLISH_FAILED',
+          publishError: error.message,
+        })
+        .where(eq(adAssets.id, assetId));
+    } catch {}
+    
     return { success: false, message: 'Fout bij goedkeuren: ' + error.message };
   }
 }

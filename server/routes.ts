@@ -2605,6 +2605,70 @@ Sitemap: ${SITE_URL}/sitemap.xml
     res.json(REJECTION_REASONS);
   });
 
+  // Retry publish for failed assets (ADMIN ONLY)
+  // Re-triggers publish without requiring re-upload
+  app.post("/api/admin/video-review/:id/retry-publish", requireAdminAccess, async (req: any, res) => {
+    try {
+      const assetId = req.params.id;
+      const user = req.currentUser as any;
+      
+      // Get the asset
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const asset = await getAdAssetById(assetId);
+      
+      if (!asset) {
+        return res.status(404).json({ ok: false, message: "Asset niet gevonden" });
+      }
+      
+      // Only allow retry for approved but failed publishes
+      if (asset.approvalStatus !== 'APPROVED') {
+        return res.status(400).json({ 
+          ok: false, 
+          message: `Asset heeft status ${asset.approvalStatus}, moet APPROVED zijn voor retry` 
+        });
+      }
+      
+      if (asset.publishStatus === 'PUBLISHED') {
+        return res.status(400).json({ 
+          ok: false, 
+          message: "Asset is al gepubliceerd" 
+        });
+      }
+      
+      console.log(`[VideoReview] Retry publish for asset ${assetId} by admin ${user?.id || 'admin'}`);
+      
+      // Update publish tracking
+      await db.update(adAssets)
+        .set({
+          publishStatus: 'PENDING',
+          publishAttempts: (asset.publishAttempts || 0) + 1,
+          lastPublishAttemptAt: new Date(),
+          publishError: null,
+        })
+        .where(eq(adAssets.id, assetId));
+      
+      // Re-approve to trigger the publish pipeline
+      const { approveAsset } = await import("./services/adAssetUploadService");
+      
+      // Temporarily set status back to allow re-approval
+      await db.update(adAssets)
+        .set({ approvalStatus: 'IN_REVIEW' })
+        .where(eq(adAssets.id, assetId));
+      
+      const result = await approveAsset(assetId, user?.id || 'admin', 'Retry publish');
+      
+      res.json({
+        ok: result.success,
+        message: result.message,
+        yodeckMediaId: result.yodeckMediaId,
+        canonicalPublish: result.canonicalPublish,
+      });
+    } catch (error: any) {
+      console.error('[VideoReview] Retry publish error:', error);
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
   // Get proposal/preview of screens before approval (dry-run, no DB changes)
   // Includes auto-provisioning: if screens lack playlists, attempts to create them and re-simulates
   app.get("/api/admin/assets/:assetId/proposal", requireAdminAccess, async (req: any, res) => {
