@@ -95,7 +95,7 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/debug/storage/object?key=<path>`: Inspect storage object (exists, contentType, contentLength, signedUrl)
   - `POST /api/admin/test-e2e-advertiser-upload`: Full 7-step E2E test (asset lookup → storage check → download → upload → verify media → rebuild → verify playback)
 - **Transactional Upload Service** (transactionalUploadService.ts): Ensures uploads are 100% reliable:
-  - **Step 1: CREATE_MEDIA**: POST /api/v2/media with `media_origin: { type: "video", source: "upload" }`, name ends with .mp4. Returns mediaId and get_upload_url (API endpoint, NOT presigned URL)
+  - **Step 1: CREATE_MEDIA**: POST /api/v2/media with `media_origin: { type: "video", source: "local", format: null }`, name ends with .mp4. Returns mediaId and get_upload_url (API endpoint, NOT presigned URL)
   - **Step 2: GET_PRESIGNED_URL**: **CRITICAL** - GET get_upload_url endpoint to retrieve actual S3 presigned URL. Response JSON contains `upload_url` field with the real PUT target
   - **Step 3: PUT_BINARY**: Presigned PUT to S3 URL with explicit Content-Length and Content-Type headers, requires 200/204. Logs timing diagnostics and response headers
   - **Step 3.5: FINALIZE (soft)**: Tries POST to /upload/complete, /upload/confirm, /upload/done - **SOFT WARNING if 404/405** (Yodeck may auto-finalize after PUT)
