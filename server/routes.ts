@@ -2606,21 +2606,22 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // Retry publish for failed assets (ADMIN ONLY)
-  // Re-triggers publish without requiring re-upload
+  // Re-triggers publish without requiring re-upload - uses idempotent approve flow
   app.post("/api/admin/video-review/:id/retry-publish", requireAdminAccess, async (req: any, res) => {
     try {
       const assetId = req.params.id;
       const user = req.currentUser as any;
+      const correlationId = `retry-publish-${assetId}-${Date.now()}`;
       
       // Get the asset
-      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const { getAdAssetById, approveAsset } = await import("./services/adAssetUploadService");
       const asset = await getAdAssetById(assetId);
       
       if (!asset) {
         return res.status(404).json({ ok: false, message: "Asset niet gevonden" });
       }
       
-      // Only allow retry for approved but failed publishes
+      // Only allow retry for approved assets
       if (asset.approvalStatus !== 'APPROVED') {
         return res.status(400).json({ 
           ok: false, 
@@ -2628,34 +2629,26 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
       
-      if (asset.publishStatus === 'PUBLISHED') {
+      // Block retry if publish is already in progress (PENDING)
+      if (asset.publishStatus === 'PENDING') {
         return res.status(400).json({ 
           ok: false, 
-          message: "Asset is al gepubliceerd" 
+          message: "Publicatie is al bezig. Wacht tot deze klaar is." 
         });
       }
       
-      console.log(`[VideoReview] Retry publish for asset ${assetId} by admin ${user?.id || 'admin'}`);
+      // Block if already PUBLISHED (use rebuild-playlist for re-sync)
+      if (asset.publishStatus === 'PUBLISHED') {
+        return res.status(400).json({ 
+          ok: false, 
+          message: "Asset is al succesvol gepubliceerd." 
+        });
+      }
       
-      // Update publish tracking
-      await db.update(adAssets)
-        .set({
-          publishStatus: 'PENDING',
-          publishAttempts: (asset.publishAttempts || 0) + 1,
-          lastPublishAttemptAt: new Date(),
-          publishError: null,
-        })
-        .where(eq(adAssets.id, assetId));
+      console.log(`[VideoReview] RETRY_PUBLISH_START assetId=${assetId} correlationId=${correlationId} currentPublishStatus=${asset.publishStatus}`);
       
-      // Re-approve to trigger the publish pipeline
-      const { approveAsset } = await import("./services/adAssetUploadService");
-      
-      // Temporarily set status back to allow re-approval
-      await db.update(adAssets)
-        .set({ approvalStatus: 'IN_REVIEW' })
-        .where(eq(adAssets.id, assetId));
-      
-      const result = await approveAsset(assetId, user?.id || 'admin', 'Retry publish');
+      // Use idempotent approve flow which handles already-approved assets
+      const result = await approveAsset(assetId, user?.id || 'admin', 'Retry publish', true);
       
       res.json({
         ok: result.success,

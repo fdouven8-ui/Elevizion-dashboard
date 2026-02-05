@@ -641,7 +641,8 @@ export interface ApproveResult {
 export async function approveAsset(
   assetId: string, 
   adminId: string, 
-  notes?: string
+  notes?: string,
+  isRetry: boolean = false
 ): Promise<ApproveResult> {
   try {
     const asset = await db.query.adAssets.findFirst({
@@ -656,25 +657,34 @@ export async function approveAsset(
       return { success: false, message: 'Asset heeft technische validatiefouten' };
     }
     
-    if (asset.approvalStatus !== 'UPLOADED' && asset.approvalStatus !== 'IN_REVIEW') {
+    // IDEMPOTENT: If already APPROVED, trigger retry publish instead of failing
+    const isAlreadyApproved = asset.approvalStatus === 'APPROVED';
+    if (isAlreadyApproved) {
+      console.log(`[VideoReview] APPROVE_IDEMPOTENT assetId=${assetId} -> triggers retry publish`);
+      // Fall through to publish logic - no status change needed
+    } else if (asset.approvalStatus !== 'UPLOADED' && asset.approvalStatus !== 'IN_REVIEW') {
       return { success: false, message: `Asset heeft status ${asset.approvalStatus}, kan niet goedkeuren` };
     }
     
-    // Update asset status to APPROVED with publish attempt tracking
+    // Update asset status - either new approval or retry publish
+    const updatePayload: any = {
+      publishStatus: 'PENDING',
+      publishAttempts: (asset.publishAttempts || 0) + 1,
+      lastPublishAttemptAt: new Date(),
+      publishError: null, // Clear previous error
+    };
+    
+    if (!isAlreadyApproved) {
+      updatePayload.approvalStatus = 'APPROVED';
+      updatePayload.approvedAt = new Date();
+      updatePayload.approvedBy = adminId;
+      updatePayload.reviewedByAdminAt = new Date();
+      updatePayload.reviewedByAdminId = adminId;
+      updatePayload.adminNotes = notes;
+    }
+    
     await db.update(adAssets)
-      .set({
-        approvalStatus: 'APPROVED',
-        approvedAt: new Date(),
-        approvedBy: adminId,
-        reviewedByAdminAt: new Date(),
-        reviewedByAdminId: adminId,
-        adminNotes: notes,
-        // Start publish tracking - PENDING until success/failure
-        publishStatus: 'PENDING',
-        publishAttempts: (asset.publishAttempts || 0) + 1,
-        lastPublishAttemptAt: new Date(),
-        publishError: null, // Clear previous error
-      })
+      .set(updatePayload)
       .where(eq(adAssets.id, assetId));
     
     // Update advertiser status
@@ -836,7 +846,7 @@ export async function approveAsset(
     console.log(`[VideoReviewApprove] ${approveCorrelationId} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
     
     // Build success message with auto-placement and canonical publish info
-    let message = 'Video goedgekeurd';
+    let message = isAlreadyApproved ? 'Asset was al goedgekeurd; publicatie opnieuw gestart' : 'Video goedgekeurd';
     if (canonicalPublishResult?.success && canonicalPublishResult.locationsUpdated > 0) {
       message += ` en gepubliceerd naar ${canonicalPublishResult.locationsUpdated} locatie(s)`;
     } else if (autoPlacementResult?.success && autoPlacementResult.placementsCreated > 0) {

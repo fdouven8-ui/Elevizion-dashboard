@@ -115,6 +115,10 @@ interface ReviewQueueItem {
     sizeBytes: number;
     conversionStatus: string | null;
     conversionError: string | null;
+    approvalStatus: string | null;
+    publishStatus: string | null;
+    publishError: string | null;
+    publishAttempts: number | null;
   };
   advertiser: {
     id: string;
@@ -294,6 +298,32 @@ export default function VideoReview() {
     },
   });
 
+  const retryPublishMutation = useMutation({
+    mutationFn: async ({ assetId }: { assetId: string }) => {
+      const res = await fetch(`/api/admin/video-review/${assetId}/retry-publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Fout bij opnieuw publiceren");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      toast({ 
+        title: "Publicatie herstart", 
+        description: data.message || "Publicatie opnieuw gestart",
+        duration: 6000,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/video-review"] });
+      setPreviewAsset(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
   const formatBytes = (bytes: number) => {
     if (bytes < 1024) return bytes + " B";
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
@@ -301,8 +331,21 @@ export default function VideoReview() {
   };
 
   const handleApprove = (item: ReviewQueueItem) => {
-    approveMutation.mutate({ assetId: item.asset.id, companyName: item.advertiser.companyName });
+    // If approved and failed/null publish, use retry-publish endpoint
+    const isApprovedWithFailedPublish = item.asset.approvalStatus === 'APPROVED' && 
+      (item.asset.publishStatus === 'PUBLISH_FAILED' || item.asset.publishStatus === null);
+    
+    if (isApprovedWithFailedPublish) {
+      retryPublishMutation.mutate({ assetId: item.asset.id });
+    } else {
+      approveMutation.mutate({ assetId: item.asset.id, companyName: item.advertiser.companyName });
+    }
   };
+  
+  const isAlreadyApproved = (item: ReviewQueueItem) => item.asset.approvalStatus === 'APPROVED';
+  const isPublishFailed = (item: ReviewQueueItem) => item.asset.publishStatus === 'PUBLISH_FAILED';
+  const isPublishPending = (item: ReviewQueueItem) => item.asset.publishStatus === 'PENDING';
+  const canRetryPublish = (item: ReviewQueueItem) => isAlreadyApproved(item) && (isPublishFailed(item) || item.asset.publishStatus === null);
 
   const handlePublish = () => {
     if (!approvedPlan) return;
@@ -414,7 +457,7 @@ export default function VideoReview() {
                     </div>
                   </div>
                   
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-center">
                     <Button
                       size="sm"
                       variant="outline"
@@ -424,26 +467,58 @@ export default function VideoReview() {
                       <Eye className="h-4 w-4 mr-1" />
                       Bekijk
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="default"
-                      className="bg-green-600 hover:bg-green-700"
-                      onClick={() => handleApprove(item)}
-                      disabled={approveMutation.isPending}
-                      data-testid={`approve-btn-${item.asset.id}`}
-                    >
-                      <CheckCircle className="h-4 w-4 mr-1" />
-                      Goedkeuren
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      onClick={() => setRejectAsset(item)}
-                      data-testid={`reject-btn-${item.asset.id}`}
-                    >
-                      <XCircle className="h-4 w-4 mr-1" />
-                      Afkeuren
-                    </Button>
+                    {canRetryPublish(item) ? (
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="bg-blue-600 hover:bg-blue-700"
+                        onClick={() => handleApprove(item)}
+                        disabled={retryPublishMutation.isPending}
+                        data-testid={`retry-publish-btn-${item.asset.id}`}
+                      >
+                        <RefreshCw className={`h-4 w-4 mr-1 ${retryPublishMutation.isPending ? 'animate-spin' : ''}`} />
+                        Opnieuw publiceren
+                      </Button>
+                    ) : isPublishPending(item) ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled
+                        data-testid={`publish-pending-btn-${item.asset.id}`}
+                      >
+                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                        Bezig met publiceren...
+                      </Button>
+                    ) : !isAlreadyApproved(item) ? (
+                      <Button
+                        size="sm"
+                        variant="default"
+                        className="bg-green-600 hover:bg-green-700"
+                        onClick={() => handleApprove(item)}
+                        disabled={approveMutation.isPending}
+                        data-testid={`approve-btn-${item.asset.id}`}
+                      >
+                        <CheckCircle className="h-4 w-4 mr-1" />
+                        Goedkeuren
+                      </Button>
+                    ) : null}
+                    {!isAlreadyApproved(item) && (
+                      <Button
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => setRejectAsset(item)}
+                        data-testid={`reject-btn-${item.asset.id}`}
+                      >
+                        <XCircle className="h-4 w-4 mr-1" />
+                        Afkeuren
+                      </Button>
+                    )}
+                    {isPublishFailed(item) && (
+                      <Badge variant="destructive" className="ml-2" data-testid={`publish-failed-badge-${item.asset.id}`}>
+                        <AlertTriangle className="h-3 w-3 mr-1" />
+                        Publicatie mislukt
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </CardContent>
