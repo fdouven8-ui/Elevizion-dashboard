@@ -29,21 +29,33 @@ export interface YodeckCreateMediaPayload {
   };
 }
 
+export interface YodeckCreateMediaPayloadMinimal {
+  name: string;
+  description: string;
+  media_type: string;
+  arguments: {
+    buffering: boolean;
+    resolution: string;
+  };
+}
+
 /**
- * Build a clean payload for POST /api/v2/media (presigned upload flow)
- * REQUIRED: media_origin="my_device" and media_type="video" for Yodeck v2 API
+ * Build a MINIMAL payload for POST /api/v2/media (presigned upload flow)
+ * TESTING: Temporarily removed media_origin to discover actual required fields
  */
-export function buildYodeckCreateMediaPayload(name: string): YodeckCreateMediaPayload {
-  return {
+export function buildYodeckCreateMediaPayload(name: string): YodeckCreateMediaPayloadMinimal {
+  const payload = {
     name,
     description: "",
-    media_origin: "my_device",
     media_type: "video",
     arguments: {
       buffering: true,
       resolution: "highest"
     }
   };
+  
+  console.log("[YodeckPayload] CREATE_MEDIA payload (media_origin REMOVED for testing):", JSON.stringify(payload));
+  return payload;
 }
 
 /**

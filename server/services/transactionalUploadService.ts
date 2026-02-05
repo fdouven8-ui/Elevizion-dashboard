@@ -213,6 +213,18 @@ async function step1CreateMedia(
     if (!response.ok) {
       const errorCode = `CREATE_FAILED_${response.status}`;
       console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 FAILED: ${response.status} - ${JSON.stringify(responseData)}`);
+      
+      // Log missing_key if present in response (helps debug required fields)
+      if (responseData?.missing_key) {
+        console.error(`${LOG_PREFIX} [${correlationId}] YODECK API REPORTS MISSING KEY: "${responseData.missing_key}"`);
+      }
+      if (responseData?.error_code) {
+        console.error(`${LOG_PREFIX} [${correlationId}] YODECK ERROR CODE: "${responseData.error_code}"`);
+      }
+      if (responseData?.detail) {
+        console.error(`${LOG_PREFIX} [${correlationId}] YODECK DETAIL: "${responseData.detail}"`);
+      }
+      
       await markJobFailed(jobId, errorCode, responseData, `Create media failed: ${response.status}`);
       return { ok: false, errorCode, errorDetails: responseData };
     }

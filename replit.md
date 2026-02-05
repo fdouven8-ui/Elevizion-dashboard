@@ -87,6 +87,8 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/debug/yodeck/media/:id/status`: Media status (uploadOk, encodingStatus, playable)
   - `GET /api/debug/yodeck/media/:id/exists`: Check if media exists in Yodeck (name, status, filesize, created_at)
   - `GET /api/debug/yodeck/whoami`: Identify Yodeck workspace/account (tokenHashHint, sampleScreen, workspace info)
+  - `GET /api/debug/yodeck/me`: Test multiple Yodeck account endpoints (/me, /account, /users/me)
+  - `GET /api/debug/yodeck/media-fields`: OPTIONS + GET on /api/v2/media to discover schema/allowed values
   - `GET /api/debug/yodeck/media/:id/raw`: Raw proxy for Yodeck media API (media details + status)
   - `POST /api/debug/yodeck/selftest`: Integration self-test (whoami + optional media check + playlists)
   - `GET /api/debug/yodeck/upload-jobs`: List recent upload jobs with status

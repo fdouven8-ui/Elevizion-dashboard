@@ -13723,6 +13723,150 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * GET /api/debug/yodeck/me
+   * Calls Yodeck /api/v2/me or /api/v2/account to inspect account info.
+   * Returns status + body (token redacted).
+   */
+  app.get("/api/debug/yodeck/me", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const correlationId = `yodeck-me-${Date.now()}`;
+    
+    try {
+      const crypto = await import("crypto");
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const tokenHashHint = token 
+        ? crypto.createHash("sha256").update(token).digest("hex").substring(0, 8)
+        : null;
+      
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+      const endpoints = ["/me", "/me/", "/account", "/account/", "/users/me", "/users/me/"];
+      
+      const results: Record<string, any> = {};
+      
+      for (const endpoint of endpoints) {
+        try {
+          const response = await fetch(`${yodeckBaseUrl}${endpoint}`, {
+            headers: { Authorization: `Token ${token}` },
+          });
+          
+          let body: any = null;
+          const text = await response.text();
+          try {
+            body = JSON.parse(text);
+          } catch {
+            body = text.substring(0, 500);
+          }
+          
+          results[endpoint] = {
+            status: response.status,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries()),
+            body,
+          };
+        } catch (err: any) {
+          results[endpoint] = { error: err.message };
+        }
+      }
+      
+      console.log(`[YodeckMe] ${correlationId}: Tested ${endpoints.length} endpoints`);
+      
+      return res.json({
+        ok: true,
+        correlationId,
+        tokenHashHint,
+        results,
+      });
+    } catch (error: any) {
+      console.error(`[YodeckMe] ${correlationId}: Error:`, error);
+      return res.status(500).json({ ok: false, error: error.message, correlationId });
+    }
+  });
+
+  /**
+   * GET /api/debug/yodeck/media-fields
+   * Attempts OPTIONS on /api/v2/media, or falls back to GET ?limit=1.
+   * Goal: discover required fields / allowed values for media_origin / upload flow.
+   */
+  app.get("/api/debug/yodeck/media-fields", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const correlationId = `media-fields-${Date.now()}`;
+    
+    try {
+      const crypto = await import("crypto");
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const tokenHashHint = token 
+        ? crypto.createHash("sha256").update(token).digest("hex").substring(0, 8)
+        : null;
+      
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+      
+      // Try OPTIONS first
+      let optionsResult: any = null;
+      try {
+        const optionsResp = await fetch(`${yodeckBaseUrl}/media`, {
+          method: "OPTIONS",
+          headers: { Authorization: `Token ${token}` },
+        });
+        
+        const text = await optionsResp.text();
+        let body: any;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = text.substring(0, 2000);
+        }
+        
+        optionsResult = {
+          status: optionsResp.status,
+          statusText: optionsResp.statusText,
+          headers: Object.fromEntries(optionsResp.headers.entries()),
+          body,
+        };
+      } catch (err: any) {
+        optionsResult = { error: err.message };
+      }
+      
+      // GET ?limit=1 to see schema
+      let getResult: any = null;
+      try {
+        const getResp = await fetch(`${yodeckBaseUrl}/media?limit=1`, {
+          headers: { Authorization: `Token ${token}` },
+        });
+        
+        const text = await getResp.text();
+        let body: any;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          body = text.substring(0, 2000);
+        }
+        
+        getResult = {
+          status: getResp.status,
+          statusText: getResp.statusText,
+          headers: Object.fromEntries(getResp.headers.entries()),
+          body,
+        };
+      } catch (err: any) {
+        getResult = { error: err.message };
+      }
+      
+      console.log(`[YodeckMediaFields] ${correlationId}: OPTIONS status=${optionsResult?.status}, GET status=${getResult?.status}`);
+      
+      return res.json({
+        ok: true,
+        correlationId,
+        tokenHashHint,
+        optionsResult,
+        getResult,
+      });
+    } catch (error: any) {
+      console.error(`[YodeckMediaFields] ${correlationId}: Error:`, error);
+      return res.status(500).json({ ok: false, error: error.message, correlationId });
+    }
+  });
+
+  /**
    * GET /api/debug/yodeck/media/:id/raw
    * Raw proxy for Yodeck media API - fetches both media details and status.
    * Used to diagnose token/workspace mismatch when media exists in UI but not in API.
