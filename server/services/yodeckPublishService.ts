@@ -1692,16 +1692,16 @@ class YodeckPublishService {
       .where(eq(integrationOutbox.id, upsertResult.job.id));
 
     try {
-      // Get file from Object Storage
+      // Get file from R2 Object Storage as buffer
       const objectStorage = new ObjectStorageService();
-      const file = await objectStorage.getFileByPath(storagePath);
+      const r2Result = await objectStorage.getObjectBuffer(storagePath);
       
-      if (!file) {
-        throw new Error("Could not get file from Object Storage");
+      if (!r2Result) {
+        throw new Error("Could not get file from R2 Object Storage");
       }
       
-      // Download file to buffer (required for potential retry)
-      const [fileBuffer] = await file.download();
+      // Buffer already downloaded via getObjectBuffer
+      const fileBuffer = r2Result.buffer;
       const fileSize = fileBuffer.length;
       
       if (fileSize > BUFFER_FALLBACK_MAX_BYTES) {

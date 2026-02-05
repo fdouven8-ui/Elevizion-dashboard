@@ -679,6 +679,50 @@ export class ObjectStorageService {
   }
 
   /**
+   * Get object from R2 as Buffer with metadata.
+   * Used for Yodeck uploads and other services that need raw bytes.
+   * @param storagePath - The storage path or key
+   * @returns Object with buffer, contentType, and key or null if not found
+   */
+  async getObjectBuffer(storagePath: string): Promise<{ buffer: Buffer; contentType: string; key: string } | null> {
+    try {
+      const file = await this.getFileByPath(storagePath);
+      if (!file) {
+        console.error("[ObjectStorage] getObjectBuffer - File not found:", storagePath);
+        return null;
+      }
+      
+      const result = await s3Client.send(new GetObjectCommand({
+        Bucket: file.bucket,
+        Key: file.key,
+      }));
+      
+      if (!result.Body) {
+        console.error("[ObjectStorage] getObjectBuffer - No body in response");
+        return null;
+      }
+      
+      const chunks: Uint8Array[] = [];
+      const stream = result.Body as Readable;
+      for await (const chunk of stream) {
+        chunks.push(chunk);
+      }
+      const buffer = Buffer.concat(chunks);
+      
+      console.log(`[YodeckPublish] R2_DOWNLOAD_OK bytes=${buffer.length} key=${file.key}`);
+      
+      return {
+        buffer,
+        contentType: result.ContentType || "video/mp4",
+        key: file.key,
+      };
+    } catch (error: any) {
+      console.error("[ObjectStorage] getObjectBuffer error:", error.message);
+      return null;
+    }
+  }
+
+  /**
    * Upload a file to object storage (private, no public ACL)
    * Returns the storage path for later access via signed URLs
    */
