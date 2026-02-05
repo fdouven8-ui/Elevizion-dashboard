@@ -417,11 +417,13 @@ app.use((req, res, next) => {
         }
       })();
       
-      // R2 Object Storage smoke test at startup
+      // R2 Object Storage config logging and smoke test at startup
       (async () => {
         try {
-          const { r2SmokeTest, R2_BUCKET_NAME } = await import("./objectStorage");
-          console.log(`[BOOT][R2] Bucket name from env: ${R2_BUCKET_NAME || "(NOT SET)"}`);
+          const { r2SmokeTest, logR2ConfigAtStartup } = await import("./objectStorage");
+          // Log R2 config (never logs secrets)
+          logR2ConfigAtStartup();
+          // Run smoke test
           const result = await r2SmokeTest();
           if (result.ok) {
             console.log(`[BOOT][R2] Client initialized successfully for bucket: ${result.bucket}`);

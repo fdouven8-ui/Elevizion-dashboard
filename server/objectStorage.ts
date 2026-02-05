@@ -12,22 +12,82 @@ import {
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 
 // ============================================================
-// CENTRAL R2 CONFIG - Single source of truth for bucket name
+// CENTRAL R2 CONFIG - Single source of truth for bucket/endpoint
+// Canonical env vars: R2_BUCKET, R2_ENDPOINT, R2_ACCOUNT_ID
+// Also supports Replit Object Storage bucket from PUBLIC_OBJECT_SEARCH_PATHS
 // ============================================================
-export const R2_BUCKET_NAME = process.env.R2_BUCKET;
+
+// Extract Replit bucket name from PUBLIC_OBJECT_SEARCH_PATHS if available
+// Format: /replit-objstore-<uuid>/public → bucket = replit-objstore-<uuid>
+function getReplitBucketName(): string | undefined {
+  const paths = process.env.PUBLIC_OBJECT_SEARCH_PATHS;
+  if (!paths) return undefined;
+  const match = paths.match(/^\/(replit-objstore-[a-f0-9-]+)/);
+  return match ? match[1] : undefined;
+}
+
+export const REPLIT_BUCKET_NAME = getReplitBucketName();
+export const R2_BUCKET_NAME = process.env.R2_BUCKET || process.env.CLOUDFLARE_R2_BUCKET;
+export const EFFECTIVE_BUCKET_NAME = REPLIT_BUCKET_NAME || R2_BUCKET_NAME;
+export const R2_ENDPOINT = process.env.R2_ENDPOINT;
+export const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || process.env.CLOUDFLARE_ACCOUNT_ID;
 
 /**
- * Validates that R2_BUCKET is configured. Call at startup.
- * Throws if R2_BUCKET is not set.
+ * Get R2 configuration for debug endpoints (no secrets exposed).
+ */
+export function getR2Config(): {
+  ok: boolean;
+  bucket: string | null;
+  replitBucket: string | null;
+  r2Bucket: string | null;
+  effectiveBucket: string | null;
+  endpointHost: string | null;
+  accountId: string | null;
+  usingEnvKeys: string[];
+} {
+  const usingEnvKeys: string[] = [];
+  
+  if (process.env.R2_BUCKET) usingEnvKeys.push("R2_BUCKET");
+  if (process.env.CLOUDFLARE_R2_BUCKET) usingEnvKeys.push("CLOUDFLARE_R2_BUCKET");
+  if (process.env.R2_ENDPOINT) usingEnvKeys.push("R2_ENDPOINT");
+  if (process.env.R2_ACCOUNT_ID) usingEnvKeys.push("R2_ACCOUNT_ID");
+  if (process.env.CLOUDFLARE_ACCOUNT_ID) usingEnvKeys.push("CLOUDFLARE_ACCOUNT_ID");
+  if (process.env.PUBLIC_OBJECT_SEARCH_PATHS) usingEnvKeys.push("PUBLIC_OBJECT_SEARCH_PATHS");
+  
+  const endpointHost = R2_ENDPOINT ? R2_ENDPOINT.replace(/https?:\/\//, "") : null;
+  
+  return {
+    ok: !!EFFECTIVE_BUCKET_NAME,
+    bucket: EFFECTIVE_BUCKET_NAME || null,
+    replitBucket: REPLIT_BUCKET_NAME || null,
+    r2Bucket: R2_BUCKET_NAME || null,
+    effectiveBucket: EFFECTIVE_BUCKET_NAME || null,
+    endpointHost,
+    accountId: R2_ACCOUNT_ID || null,
+    usingEnvKeys,
+  };
+}
+
+/**
+ * Log R2 configuration at startup (never logs secrets).
+ */
+export function logR2ConfigAtStartup(): void {
+  const config = getR2Config();
+  console.log(`[R2_CONFIG] effectiveBucket=${config.effectiveBucket || "(NOT SET)"} replitBucket=${config.replitBucket || "(NOT SET)"} r2Bucket=${config.r2Bucket || "(NOT SET)"} endpointHost=${config.endpointHost || "(NOT SET)"} accountId=${config.accountId ? "(SET)" : "(NOT SET)"} envKeys=[${config.usingEnvKeys.join(",")}]`);
+}
+
+/**
+ * Validates that storage bucket is configured. Call at startup.
+ * Throws if no bucket is available (neither Replit nor R2).
  */
 export function validateR2Config(): void {
-  if (!R2_BUCKET_NAME) {
+  if (!EFFECTIVE_BUCKET_NAME) {
     throw new Error(
-      "[R2] FATAL: R2_BUCKET environment variable is not set. " +
-      "Please configure R2_BUCKET with your Cloudflare R2 bucket name."
+      "[STORAGE] FATAL: No storage bucket configured. " +
+      "Set R2_BUCKET or ensure PUBLIC_OBJECT_SEARCH_PATHS is configured for Replit Object Storage."
     );
   }
-  console.log(`[R2] Bucket configured: ${R2_BUCKET_NAME}`);
+  console.log(`[STORAGE] Bucket configured: ${EFFECTIVE_BUCKET_NAME}`);
 }
 
 /**
@@ -73,27 +133,30 @@ export function resolveR2ObjectKey(inputKey: string): string {
 }
 
 /**
- * Smoke test for R2 client initialization.
+ * Smoke test for storage client initialization.
+ * Uses EFFECTIVE_BUCKET_NAME (prioritizes Replit bucket over R2).
  * Logs bucket name and client status.
  */
 export async function r2SmokeTest(): Promise<{ ok: boolean; bucket: string | undefined; error?: string }> {
-  console.log("[R2 SMOKE TEST] Starting...");
-  console.log("[R2 SMOKE TEST] R2_BUCKET_NAME =", R2_BUCKET_NAME || "(NOT SET)");
+  console.log("[STORAGE SMOKE TEST] Starting...");
+  console.log("[STORAGE SMOKE TEST] EFFECTIVE_BUCKET =", EFFECTIVE_BUCKET_NAME || "(NOT SET)");
+  console.log("[STORAGE SMOKE TEST] REPLIT_BUCKET =", REPLIT_BUCKET_NAME || "(NOT SET)");
+  console.log("[STORAGE SMOKE TEST] R2_BUCKET =", R2_BUCKET_NAME || "(NOT SET)");
   
-  if (!R2_BUCKET_NAME) {
-    console.log("[R2 SMOKE TEST] FAILED - R2_BUCKET not configured");
-    return { ok: false, bucket: undefined, error: "R2_BUCKET not configured" };
+  if (!EFFECTIVE_BUCKET_NAME) {
+    console.log("[STORAGE SMOKE TEST] FAILED - No bucket configured");
+    return { ok: false, bucket: undefined, error: "No bucket configured (R2_BUCKET or REPLIT bucket)" };
   }
 
   try {
     // Test that the storage client can be initialized
-    const bucket = objectStorageClient.bucket(R2_BUCKET_NAME);
-    console.log("[R2 SMOKE TEST] Client initialized for bucket:", R2_BUCKET_NAME);
-    console.log("[R2 SMOKE TEST] SUCCESS");
-    return { ok: true, bucket: R2_BUCKET_NAME };
+    const bucket = objectStorageClient.bucket(EFFECTIVE_BUCKET_NAME);
+    console.log("[STORAGE SMOKE TEST] Client initialized for bucket:", EFFECTIVE_BUCKET_NAME);
+    console.log("[STORAGE SMOKE TEST] SUCCESS");
+    return { ok: true, bucket: EFFECTIVE_BUCKET_NAME };
   } catch (error: any) {
-    console.error("[R2 SMOKE TEST] FAILED:", error.message);
-    return { ok: false, bucket: R2_BUCKET_NAME, error: error.message };
+    console.error("[STORAGE SMOKE TEST] FAILED:", error.message);
+    return { ok: false, bucket: EFFECTIVE_BUCKET_NAME, error: error.message };
   }
 }
 
@@ -399,7 +462,7 @@ export class ObjectStorageService {
     resolvedKey: string;
     error?: string;
   }> {
-    const bucket = R2_BUCKET_NAME || "(NOT SET)";
+    const bucket = EFFECTIVE_BUCKET_NAME || "(NOT SET)";
     const resolvedKey = resolveR2ObjectKey(inputKey);
     
     console.log("[R2 DEBUG]", {
@@ -408,14 +471,14 @@ export class ObjectStorageService {
       resolvedKey,
     });
     
-    if (!R2_BUCKET_NAME) {
+    if (!EFFECTIVE_BUCKET_NAME) {
       return {
         file: null,
         exists: false,
         bucket,
         inputKey,
         resolvedKey,
-        error: "R2_BUCKET not configured",
+        error: "No bucket configured (R2_BUCKET or REPLIT bucket)",
       };
     }
     
@@ -431,7 +494,7 @@ export class ObjectStorageService {
     }
 
     try {
-      const bucketObj = objectStorageClient.bucket(R2_BUCKET_NAME);
+      const bucketObj = objectStorageClient.bucket(EFFECTIVE_BUCKET_NAME);
       const file = bucketObj.file(resolvedKey);
       const [exists] = await file.exists();
       
@@ -461,6 +524,67 @@ export class ObjectStorageService {
         bucket,
         inputKey,
         resolvedKey,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * List objects in R2 bucket with optional prefix.
+   * Uses central R2 config. Returns max 50 objects.
+   */
+  async listR2Objects(prefix: string = "", maxResults: number = 50): Promise<{
+    ok: boolean;
+    bucket: string;
+    prefix: string;
+    count: number;
+    keys: Array<{ key: string; size: number; lastModified: string | null }>;
+    error?: string;
+  }> {
+    const bucket = EFFECTIVE_BUCKET_NAME || "(NOT SET)";
+    const resolvedPrefix = resolveR2ObjectKey(prefix);
+    
+    console.log("[R2 LIST]", { bucket, prefix, resolvedPrefix, maxResults });
+    
+    if (!EFFECTIVE_BUCKET_NAME) {
+      return {
+        ok: false,
+        bucket,
+        prefix: resolvedPrefix,
+        count: 0,
+        keys: [],
+        error: "No bucket configured (R2_BUCKET or REPLIT bucket)",
+      };
+    }
+
+    try {
+      const bucketObj = objectStorageClient.bucket(EFFECTIVE_BUCKET_NAME);
+      const [files] = await bucketObj.getFiles({
+        prefix: resolvedPrefix,
+        maxResults: Math.min(maxResults, 50),
+      });
+      
+      const keys = files.map((file) => ({
+        key: file.name,
+        size: parseInt(String(file.metadata?.size || 0), 10),
+        lastModified: file.metadata?.updated || file.metadata?.timeCreated || null,
+      }));
+      
+      return {
+        ok: true,
+        bucket,
+        prefix: resolvedPrefix,
+        count: keys.length,
+        keys,
+      };
+    } catch (error: any) {
+      console.error("[R2] Error listing objects:", error.message);
+      return {
+        ok: false,
+        bucket,
+        prefix: resolvedPrefix,
+        count: 0,
+        keys: [],
         error: error.message,
       };
     }

@@ -21246,9 +21246,52 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
-  // DEBUG: Storage object inspection
+  // DEBUG: Storage / R2 endpoints
   // ============================================================================
   
+  /**
+   * GET /api/debug/storage/config
+   * Return R2 configuration (no secrets exposed)
+   */
+  app.get("/api/debug/storage/config", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const { getR2Config } = await import("./objectStorage");
+      const config = getR2Config();
+      return res.json(config);
+    } catch (error: any) {
+      return res.status(500).json({
+        ok: false,
+        error: error.message || "Failed to get R2 config",
+      });
+    }
+  });
+
+  /**
+   * GET /api/debug/storage/list?prefix=...
+   * List objects in R2 bucket (max 50)
+   */
+  app.get("/api/debug/storage/list", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const prefix = (req.query.prefix as string) || "";
+    
+    try {
+      const { ObjectStorageService } = await import("./objectStorage");
+      const storage = new ObjectStorageService();
+      const result = await storage.listR2Objects(prefix, 50);
+      return res.json(result);
+    } catch (error: any) {
+      return res.status(500).json({
+        ok: false,
+        bucket: null,
+        prefix,
+        count: 0,
+        keys: [],
+        error: error.message || "Failed to list R2 objects",
+      });
+    }
+  });
+
   /**
    * GET /api/debug/storage/object?key=<storage-path>
    * Inspect an object in R2 storage - uses central resolveR2ObjectKey() resolver
