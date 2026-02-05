@@ -11,6 +11,92 @@ import {
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 
+// ============================================================
+// CENTRAL R2 CONFIG - Single source of truth for bucket name
+// ============================================================
+export const R2_BUCKET_NAME = process.env.R2_BUCKET;
+
+/**
+ * Validates that R2_BUCKET is configured. Call at startup.
+ * Throws if R2_BUCKET is not set.
+ */
+export function validateR2Config(): void {
+  if (!R2_BUCKET_NAME) {
+    throw new Error(
+      "[R2] FATAL: R2_BUCKET environment variable is not set. " +
+      "Please configure R2_BUCKET with your Cloudflare R2 bucket name."
+    );
+  }
+  console.log(`[R2] Bucket configured: ${R2_BUCKET_NAME}`);
+}
+
+/**
+ * Central helper to resolve R2 object keys.
+ * - Removes leading slashes
+ * - Strips bucket name prefixes (e.g., "elevizion-assets/")
+ * - Normalizes double slashes
+ * - Always returns a relative key (no leading slash)
+ * 
+ * @param inputKey - The raw key (may contain bucket prefix, leading slash, etc.)
+ * @returns Normalized relative key for R2 operations
+ */
+export function resolveR2ObjectKey(inputKey: string): string {
+  if (!inputKey) {
+    return "";
+  }
+
+  let key = inputKey;
+
+  // Step 1: Remove leading slashes
+  key = key.replace(/^\/+/, "");
+
+  // Step 2: Strip known bucket name prefixes
+  // Handle both "elevizion-assets/" and the dynamic R2_BUCKET_NAME
+  const bucketPrefixes = [
+    "elevizion-assets/",
+    `${R2_BUCKET_NAME}/`,
+  ].filter(Boolean);
+
+  for (const prefix of bucketPrefixes) {
+    if (key.startsWith(prefix)) {
+      key = key.slice(prefix.length);
+    }
+  }
+
+  // Step 3: Normalize double slashes to single slashes
+  key = key.replace(/\/+/g, "/");
+
+  // Step 4: Remove any remaining leading slashes (after normalization)
+  key = key.replace(/^\/+/, "");
+
+  return key;
+}
+
+/**
+ * Smoke test for R2 client initialization.
+ * Logs bucket name and client status.
+ */
+export async function r2SmokeTest(): Promise<{ ok: boolean; bucket: string | undefined; error?: string }> {
+  console.log("[R2 SMOKE TEST] Starting...");
+  console.log("[R2 SMOKE TEST] R2_BUCKET_NAME =", R2_BUCKET_NAME || "(NOT SET)");
+  
+  if (!R2_BUCKET_NAME) {
+    console.log("[R2 SMOKE TEST] FAILED - R2_BUCKET not configured");
+    return { ok: false, bucket: undefined, error: "R2_BUCKET not configured" };
+  }
+
+  try {
+    // Test that the storage client can be initialized
+    const bucket = objectStorageClient.bucket(R2_BUCKET_NAME);
+    console.log("[R2 SMOKE TEST] Client initialized for bucket:", R2_BUCKET_NAME);
+    console.log("[R2 SMOKE TEST] SUCCESS");
+    return { ok: true, bucket: R2_BUCKET_NAME };
+  } catch (error: any) {
+    console.error("[R2 SMOKE TEST] FAILED:", error.message);
+    return { ok: false, bucket: R2_BUCKET_NAME, error: error.message };
+  }
+}
+
 export const objectStorageClient = new Storage({
   credentials: {
     audience: "replit",
@@ -295,6 +381,88 @@ export class ObjectStorageService {
     } catch (error) {
       console.error("[ObjectStorage] Error getting file by path:", error);
       return null;
+    }
+  }
+
+  /**
+   * Get a file using the central R2 resolver.
+   * This is the preferred method for R2 operations - uses resolveR2ObjectKey().
+   * 
+   * @param inputKey - Raw key (may contain bucket prefix, leading slash, etc.)
+   * @returns Object with file (or null), resolvedKey, and bucket info
+   */
+  async getR2File(inputKey: string): Promise<{
+    file: File | null;
+    exists: boolean;
+    bucket: string;
+    inputKey: string;
+    resolvedKey: string;
+    error?: string;
+  }> {
+    const bucket = R2_BUCKET_NAME || "(NOT SET)";
+    const resolvedKey = resolveR2ObjectKey(inputKey);
+    
+    console.log("[R2 DEBUG]", {
+      bucket,
+      inputKey,
+      resolvedKey,
+    });
+    
+    if (!R2_BUCKET_NAME) {
+      return {
+        file: null,
+        exists: false,
+        bucket,
+        inputKey,
+        resolvedKey,
+        error: "R2_BUCKET not configured",
+      };
+    }
+    
+    if (!resolvedKey) {
+      return {
+        file: null,
+        exists: false,
+        bucket,
+        inputKey,
+        resolvedKey,
+        error: "Empty key after resolution",
+      };
+    }
+
+    try {
+      const bucketObj = objectStorageClient.bucket(R2_BUCKET_NAME);
+      const file = bucketObj.file(resolvedKey);
+      const [exists] = await file.exists();
+      
+      if (!exists) {
+        console.log(`[R2] File not found: bucket=${bucket} key=${resolvedKey}`);
+        return {
+          file: null,
+          exists: false,
+          bucket,
+          inputKey,
+          resolvedKey,
+        };
+      }
+      
+      return {
+        file,
+        exists: true,
+        bucket,
+        inputKey,
+        resolvedKey,
+      };
+    } catch (error: any) {
+      console.error("[R2] Error getting file:", error.message);
+      return {
+        file: null,
+        exists: false,
+        bucket,
+        inputKey,
+        resolvedKey,
+        error: error.message,
+      };
     }
   }
 

@@ -21251,43 +21251,66 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   
   /**
    * GET /api/debug/storage/object?key=<storage-path>
-   * Inspect an object in storage - check existence, content-type, size
+   * Inspect an object in R2 storage - uses central resolveR2ObjectKey() resolver
+   * 
+   * Returns:
+   * - ok: boolean
+   * - bucket: string (R2 bucket name)
+   * - inputKey: string (original key from query)
+   * - resolvedKey: string (normalized key after resolution)
+   * - exists: boolean
    */
   app.get("/api/debug/storage/object", requireAdminAccess, async (req, res) => {
     res.setHeader("Content-Type", "application/json");
-    const key = req.query.key as string;
+    const inputKey = req.query.key as string;
     
-    if (!key) {
-      return res.status(400).json({ ok: false, error: "Missing 'key' query parameter" });
+    if (!inputKey) {
+      return res.status(400).json({ 
+        ok: false, 
+        error: "Missing 'key' query parameter",
+        bucket: null,
+        inputKey: null,
+        resolvedKey: null,
+        exists: false,
+      });
     }
     
     try {
-      const { ObjectStorageService } = await import("./objectStorage");
+      const { ObjectStorageService, R2_BUCKET_NAME, resolveR2ObjectKey } = await import("./objectStorage");
       const storage = new ObjectStorageService();
       
-      const file = await storage.getFileByPath(key);
-      if (!file) {
+      // Use the central R2 resolver
+      const result = await storage.getR2File(inputKey);
+      
+      // Log for debugging
+      console.log("[R2 DEBUG]", {
+        bucket: R2_BUCKET_NAME || "(NOT SET)",
+        inputKey,
+        resolvedKey: result.resolvedKey,
+      });
+      
+      if (!result.exists || !result.file) {
         return res.json({
           ok: false,
+          bucket: result.bucket,
+          inputKey: result.inputKey,
+          resolvedKey: result.resolvedKey,
           exists: false,
-          key,
-          resolvedPath: null,
-          error: "File not found",
+          error: result.error || "File not found in R2",
         });
       }
       
-      const [metadata] = await file.getMetadata();
-      const signedUrl = await storage.getSignedDownloadUrl(key, 600);
-      const maskedUrl = signedUrl ? signedUrl.split("?")[0] + "?...(signed)" : null;
+      // Get metadata for the found file
+      const [metadata] = await result.file.getMetadata();
       
       return res.json({
         ok: true,
+        bucket: result.bucket,
+        inputKey: result.inputKey,
+        resolvedKey: result.resolvedKey,
         exists: true,
-        key,
         contentType: metadata.contentType || "unknown",
         contentLength: metadata.size || 0,
-        signedUrlGenerated: !!maskedUrl,
-        signedUrlMasked: maskedUrl,
         created: metadata.timeCreated,
         updated: metadata.updated,
       });
@@ -21295,8 +21318,11 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       console.error("[DebugStorage] Error:", error);
       return res.status(500).json({
         ok: false,
+        bucket: null,
+        inputKey,
+        resolvedKey: null,
+        exists: false,
         error: error.message || "Storage inspection failed",
-        key,
       });
     }
   });

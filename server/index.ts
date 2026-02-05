@@ -417,6 +417,22 @@ app.use((req, res, next) => {
         }
       })();
       
+      // R2 Object Storage smoke test at startup
+      (async () => {
+        try {
+          const { r2SmokeTest, R2_BUCKET_NAME } = await import("./objectStorage");
+          console.log(`[BOOT][R2] Bucket name from env: ${R2_BUCKET_NAME || "(NOT SET)"}`);
+          const result = await r2SmokeTest();
+          if (result.ok) {
+            console.log(`[BOOT][R2] Client initialized successfully for bucket: ${result.bucket}`);
+          } else {
+            console.log(`[BOOT][R2] WARNING: ${result.error || "Initialization failed"}`);
+          }
+        } catch (err: any) {
+          console.log(`[BOOT][R2] Smoke test error: ${err.message}`);
+        }
+      })();
+      
       // Start scheduled Yodeck sync (15 minute interval)
       // Run first sync after 30 seconds to allow server to stabilize
       setTimeout(() => {
