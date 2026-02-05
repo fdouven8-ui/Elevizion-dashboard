@@ -14,35 +14,33 @@ const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 // ============================================================
 // CENTRAL R2 CONFIG - Single source of truth for bucket/endpoint
 // Canonical env vars: R2_BUCKET, R2_ENDPOINT, R2_ACCOUNT_ID
-// Also supports Replit Object Storage bucket from PUBLIC_OBJECT_SEARCH_PATHS
+// PRIORITY: Cloudflare R2 ALWAYS takes precedence over Replit Object Storage
 // ============================================================
 
-// Extract Replit bucket name from PUBLIC_OBJECT_SEARCH_PATHS if available
-// Format: /replit-objstore-<uuid>/public → bucket = replit-objstore-<uuid>
-function getReplitBucketName(): string | undefined {
-  const paths = process.env.PUBLIC_OBJECT_SEARCH_PATHS;
-  if (!paths) return undefined;
-  const match = paths.match(/^\/(replit-objstore-[a-f0-9-]+)/);
-  return match ? match[1] : undefined;
-}
-
-export const REPLIT_BUCKET_NAME = getReplitBucketName();
 export const R2_BUCKET_NAME = process.env.R2_BUCKET || process.env.CLOUDFLARE_R2_BUCKET;
-export const EFFECTIVE_BUCKET_NAME = REPLIT_BUCKET_NAME || R2_BUCKET_NAME;
 export const R2_ENDPOINT = process.env.R2_ENDPOINT;
 export const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || process.env.CLOUDFLARE_ACCOUNT_ID;
+
+// R2 is considered configured when BOTH bucket AND endpoint are set
+export const R2_IS_CONFIGURED = !!(R2_BUCKET_NAME && R2_ENDPOINT);
+
+// EFFECTIVE_BUCKET_NAME = R2_BUCKET if R2 is configured, otherwise null
+// Replit Object Storage is NOT used as fallback
+export const EFFECTIVE_BUCKET_NAME = R2_IS_CONFIGURED ? R2_BUCKET_NAME : undefined;
+
+// Storage provider identifier for logging
+export const STORAGE_PROVIDER = R2_IS_CONFIGURED ? "R2" : "NONE";
 
 /**
  * Get R2 configuration for debug endpoints (no secrets exposed).
  */
 export function getR2Config(): {
   ok: boolean;
+  provider: string;
   bucket: string | null;
-  replitBucket: string | null;
-  r2Bucket: string | null;
-  effectiveBucket: string | null;
   endpointHost: string | null;
   accountId: string | null;
+  r2Configured: boolean;
   usingEnvKeys: string[];
 } {
   const usingEnvKeys: string[] = [];
@@ -52,42 +50,41 @@ export function getR2Config(): {
   if (process.env.R2_ENDPOINT) usingEnvKeys.push("R2_ENDPOINT");
   if (process.env.R2_ACCOUNT_ID) usingEnvKeys.push("R2_ACCOUNT_ID");
   if (process.env.CLOUDFLARE_ACCOUNT_ID) usingEnvKeys.push("CLOUDFLARE_ACCOUNT_ID");
-  if (process.env.PUBLIC_OBJECT_SEARCH_PATHS) usingEnvKeys.push("PUBLIC_OBJECT_SEARCH_PATHS");
   
   const endpointHost = R2_ENDPOINT ? R2_ENDPOINT.replace(/https?:\/\//, "") : null;
   
   return {
-    ok: !!EFFECTIVE_BUCKET_NAME,
+    ok: R2_IS_CONFIGURED,
+    provider: STORAGE_PROVIDER,
     bucket: EFFECTIVE_BUCKET_NAME || null,
-    replitBucket: REPLIT_BUCKET_NAME || null,
-    r2Bucket: R2_BUCKET_NAME || null,
-    effectiveBucket: EFFECTIVE_BUCKET_NAME || null,
     endpointHost,
     accountId: R2_ACCOUNT_ID || null,
+    r2Configured: R2_IS_CONFIGURED,
     usingEnvKeys,
   };
 }
 
 /**
- * Log R2 configuration at startup (never logs secrets).
+ * Log storage configuration at startup (never logs secrets).
+ * Format: STORAGE_PROVIDER=R2 bucket=<bucket> endpoint=<endpointHost>
  */
 export function logR2ConfigAtStartup(): void {
   const config = getR2Config();
-  console.log(`[R2_CONFIG] effectiveBucket=${config.effectiveBucket || "(NOT SET)"} replitBucket=${config.replitBucket || "(NOT SET)"} r2Bucket=${config.r2Bucket || "(NOT SET)"} endpointHost=${config.endpointHost || "(NOT SET)"} accountId=${config.accountId ? "(SET)" : "(NOT SET)"} envKeys=[${config.usingEnvKeys.join(",")}]`);
+  console.log(`STORAGE_PROVIDER=${config.provider} bucket=${config.bucket || "(NOT SET)"} endpoint=${config.endpointHost || "(NOT SET)"}`);
 }
 
 /**
- * Validates that storage bucket is configured. Call at startup.
- * Throws if no bucket is available (neither Replit nor R2).
+ * Validates that R2 storage is configured. Call at startup.
+ * Throws if R2_BUCKET or R2_ENDPOINT are not set.
  */
 export function validateR2Config(): void {
-  if (!EFFECTIVE_BUCKET_NAME) {
+  if (!R2_IS_CONFIGURED) {
     throw new Error(
-      "[STORAGE] FATAL: No storage bucket configured. " +
-      "Set R2_BUCKET or ensure PUBLIC_OBJECT_SEARCH_PATHS is configured for Replit Object Storage."
+      "[STORAGE] FATAL: Cloudflare R2 not configured. " +
+      "Both R2_BUCKET and R2_ENDPOINT must be set."
     );
   }
-  console.log(`[STORAGE] Bucket configured: ${EFFECTIVE_BUCKET_NAME}`);
+  console.log(`[STORAGE] R2 configured: bucket=${EFFECTIVE_BUCKET_NAME}`);
 }
 
 /**
@@ -133,29 +130,28 @@ export function resolveR2ObjectKey(inputKey: string): string {
 }
 
 /**
- * Smoke test for storage client initialization.
- * Uses EFFECTIVE_BUCKET_NAME (prioritizes Replit bucket over R2).
- * Logs bucket name and client status.
+ * Smoke test for R2 storage client initialization.
+ * Verifies R2 is configured and client can connect.
  */
 export async function r2SmokeTest(): Promise<{ ok: boolean; bucket: string | undefined; error?: string }> {
-  console.log("[STORAGE SMOKE TEST] Starting...");
-  console.log("[STORAGE SMOKE TEST] EFFECTIVE_BUCKET =", EFFECTIVE_BUCKET_NAME || "(NOT SET)");
-  console.log("[STORAGE SMOKE TEST] REPLIT_BUCKET =", REPLIT_BUCKET_NAME || "(NOT SET)");
-  console.log("[STORAGE SMOKE TEST] R2_BUCKET =", R2_BUCKET_NAME || "(NOT SET)");
+  console.log("[R2 SMOKE TEST] Starting...");
+  console.log("[R2 SMOKE TEST] R2_BUCKET =", R2_BUCKET_NAME || "(NOT SET)");
+  console.log("[R2 SMOKE TEST] R2_ENDPOINT =", R2_ENDPOINT || "(NOT SET)");
+  console.log("[R2 SMOKE TEST] R2_IS_CONFIGURED =", R2_IS_CONFIGURED);
   
-  if (!EFFECTIVE_BUCKET_NAME) {
-    console.log("[STORAGE SMOKE TEST] FAILED - No bucket configured");
-    return { ok: false, bucket: undefined, error: "No bucket configured (R2_BUCKET or REPLIT bucket)" };
+  if (!R2_IS_CONFIGURED) {
+    console.log("[R2 SMOKE TEST] FAILED - R2 not configured (need both R2_BUCKET and R2_ENDPOINT)");
+    return { ok: false, bucket: undefined, error: "R2 not configured (need both R2_BUCKET and R2_ENDPOINT)" };
   }
 
   try {
     // Test that the storage client can be initialized
-    const bucket = objectStorageClient.bucket(EFFECTIVE_BUCKET_NAME);
-    console.log("[STORAGE SMOKE TEST] Client initialized for bucket:", EFFECTIVE_BUCKET_NAME);
-    console.log("[STORAGE SMOKE TEST] SUCCESS");
+    const bucket = objectStorageClient.bucket(EFFECTIVE_BUCKET_NAME!);
+    console.log("[R2 SMOKE TEST] Client initialized for bucket:", EFFECTIVE_BUCKET_NAME);
+    console.log("[R2 SMOKE TEST] SUCCESS");
     return { ok: true, bucket: EFFECTIVE_BUCKET_NAME };
   } catch (error: any) {
-    console.error("[STORAGE SMOKE TEST] FAILED:", error.message);
+    console.error("[R2 SMOKE TEST] FAILED:", error.message);
     return { ok: false, bucket: EFFECTIVE_BUCKET_NAME, error: error.message };
   }
 }
