@@ -20939,6 +20939,76 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/advertisers/:id/retry-publish
+   * Retry publishing for a failed upload - re-uses existing asset, no re-upload needed.
+   * Only works for advertisers with assetStatus="publish_failed".
+   */
+  app.post("/api/admin/advertisers/:id/retry-publish", requireAdminAccess, async (req, res) => {
+    try {
+      const { id: advertiserId } = req.params;
+      
+      console.log(`[RetryPublish] Starting retry for advertiser ${advertiserId}`);
+      
+      // Check advertiser exists and has publish_failed status
+      const advertiser = await db.query.advertisers.findFirst({
+        where: eq(advertisers.id, advertiserId),
+      });
+      
+      if (!advertiser) {
+        return res.status(404).json({ ok: false, error: "Advertiser niet gevonden" });
+      }
+      
+      if (advertiser.assetStatus !== "publish_failed" && advertiser.assetStatus !== "ready_for_yodeck") {
+        return res.status(400).json({ 
+          ok: false, 
+          error: `Kan niet opnieuw publiceren - huidige status: ${advertiser.assetStatus}`,
+          hint: "Alleen assets met status 'publish_failed' of 'ready_for_yodeck' kunnen opnieuw gepubliceerd worden",
+        });
+      }
+      
+      // Check we have an asset path to publish
+      const storagePath = advertiser.storagePath || advertiser.originalStoragePath;
+      if (!storagePath) {
+        return res.status(400).json({ 
+          ok: false, 
+          error: "Geen video gevonden om te publiceren",
+          hint: "Upload eerst een video voordat je kunt publiceren",
+        });
+      }
+      
+      // Use canonical publish service
+      const { publishApprovedAdvertiser } = await import("./services/publishService");
+      
+      const result = await publishApprovedAdvertiser(advertiserId);
+      
+      if (!result.ok) {
+        return res.status(422).json({
+          ...result,
+          previousError: {
+            code: advertiser.publishErrorCode,
+            message: advertiser.publishErrorMessage,
+            failedAt: advertiser.publishFailedAt,
+            retryCount: advertiser.publishRetryCount,
+          },
+        });
+      }
+      
+      res.json({
+        ...result,
+        retrySuccessful: true,
+        previousRetryCount: advertiser.publishRetryCount,
+      });
+    } catch (error: any) {
+      console.error("[RetryPublish] Error:", error);
+      res.status(500).json({ 
+        ok: false, 
+        error: error.message,
+        correlationId: `err-${Date.now()}`,
+      });
+    }
+  });
+
+  /**
    * GET /api/admin/advertisers/:id/publish-dry-run
    * Dry run publish flow - no mutations, returns trace of what WOULD happen
    */
