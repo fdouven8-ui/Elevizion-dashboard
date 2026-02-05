@@ -2492,8 +2492,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(404).json({ message: "Bestand niet gevonden" });
       }
       
-      const [metadata] = await file.getMetadata();
-      console.log(`[AssetStream] Streaming: size=${metadata.size} type=${metadata.contentType}`);
+      console.log(`[AssetStream] Streaming: bucket=${file.bucket} key=${file.key}`);
       
       await objectStorage.streamVideoWithRange(file, req, res);
     } catch (error: any) {
@@ -2524,15 +2523,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(404).json({ message: "Bestand niet gevonden" });
       }
       
-      const [metadata] = await file.getMetadata();
-      res.set({
-        "Content-Disposition": `attachment; filename="${asset.originalFileName}"`,
-        "Content-Type": metadata.contentType || "video/mp4",
-        "Content-Length": String(metadata.size),
-      });
-      
-      const stream = file.createReadStream();
-      stream.pipe(res);
+      // Use S3 download via ObjectStorageService
+      await objectStorage.downloadObject(file, res);
     } catch (error: any) {
       console.error("[AdAsset] Download error:", error);
       res.status(500).json({ message: error.message });
@@ -21343,8 +21335,8 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         });
       }
       
-      // Get metadata for the found file
-      const [metadata] = await result.file.getMetadata();
+      // Metadata is already available from HeadObjectCommand in result.file.metadata
+      const metadata = result.file.metadata;
       
       return res.json({
         ok: true,
@@ -21352,10 +21344,10 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         inputKey: result.inputKey,
         resolvedKey: result.resolvedKey,
         exists: true,
-        contentType: metadata.contentType || "unknown",
-        contentLength: metadata.size || 0,
-        created: metadata.timeCreated,
-        updated: metadata.updated,
+        contentType: metadata?.ContentType || "unknown",
+        contentLength: metadata?.ContentLength || 0,
+        created: metadata?.LastModified?.toISOString() || null,
+        updated: metadata?.LastModified?.toISOString() || null,
       });
     } catch (error: any) {
       console.error("[DebugStorage] Error:", error);
@@ -21433,13 +21425,13 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           return res.status(500).json({ ok: false, steps, failedStep: "2_STORAGE_CHECK" });
         }
         
-        const [metadata] = await file.getMetadata();
+        // File found - bucket and key available
         steps.push({
           step: "2_STORAGE_CHECK",
           ok: true,
           data: {
-            contentType: metadata.contentType,
-            size: metadata.size,
+            bucket: file.bucket,
+            key: file.key,
           },
         });
         
