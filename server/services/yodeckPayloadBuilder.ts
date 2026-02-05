@@ -2,15 +2,13 @@
  * Canonical Yodeck Payload Builder
  * 
  * This module provides a single source of truth for building Yodeck create-media payloads.
- * For presigned uploads, Yodeck API v2 REQUIRES:
- *   - media_origin: { type: "video", source: "upload" }
+ * For "My Device" uploads, Yodeck API v2 REQUIRES:
+ *   - media_origin: "my_device" (string enum, NOT object)
+ *   - media_type: "video"
  *   - name ending with .mp4
- * 
- * Missing media_origin causes err_1002 "missing_key" error.
  */
 
 export const FORBIDDEN_KEYS = new Set([
-  "media_type",  // Not needed - use media_origin.type instead
   "origin",
   "source",
   "mime_type",
@@ -23,10 +21,8 @@ export const FORBIDDEN_KEYS = new Set([
 export interface YodeckCreateMediaPayload {
   name: string;
   description: string;
-  media_origin: {
-    type: "video";
-    source: "upload";
-  };
+  media_origin: string;
+  media_type: string;
   arguments: {
     buffering: boolean;
     resolution: string;
@@ -35,16 +31,14 @@ export interface YodeckCreateMediaPayload {
 
 /**
  * Build a clean payload for POST /api/v2/media (presigned upload flow)
- * REQUIRED: media_origin with type and source for Yodeck v2 API
+ * REQUIRED: media_origin="my_device" and media_type="video" for Yodeck v2 API
  */
 export function buildYodeckCreateMediaPayload(name: string): YodeckCreateMediaPayload {
   return {
     name,
     description: "",
-    media_origin: {
-      type: "video",
-      source: "upload"
-    },
+    media_origin: "my_device",
+    media_type: "video",
     arguments: {
       buffering: true,
       resolution: "highest"
@@ -106,5 +100,5 @@ export function logCreateMediaPayload(payload: YodeckCreateMediaPayload, correla
   const prefix = correlationId ? `[${correlationId}]` : "";
   console.log(`[YodeckPayload]${prefix} CREATE_MEDIA payload:`, JSON.stringify(payload, null, 2));
   console.log(`[YodeckPayload]${prefix} CREATE_MEDIA payload keys:`, Object.keys(payload).join(", "));
-  console.log(`[YodeckPayload]${prefix} CREATE_MEDIA media_origin:`, JSON.stringify(payload.media_origin));
+  console.log(`[YodeckPayload]${prefix} CREATE_MEDIA media_origin="${payload.media_origin}" media_type="${payload.media_type}"`);
 }
