@@ -20976,6 +20976,17 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         });
       }
       
+      // Reset assetStatus to ready_for_yodeck so publish service will process it
+      // Keep failure metadata until publish succeeds
+      await db.update(advertisers)
+        .set({
+          assetStatus: "ready_for_yodeck",
+          updatedAt: new Date(),
+        })
+        .where(eq(advertisers.id, advertiserId));
+      
+      console.log(`[RetryPublish] Reset assetStatus to ready_for_yodeck for advertiser ${advertiserId}`);
+      
       // Use canonical publish service
       const { publishApprovedAdvertiser } = await import("./services/publishService");
       

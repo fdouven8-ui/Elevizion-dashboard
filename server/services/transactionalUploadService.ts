@@ -63,9 +63,6 @@ export async function uploadVideoToYodeckTransactional(
 ): Promise<TransactionalUploadResult> {
   const correlationId = generateCorrelationId();
   console.log(`${LOG_PREFIX} [${correlationId}] Starting transactional upload for advertiser=${advertiserId}`);
-  
-  // Clear any previous publish failure state before retrying
-  await clearPublishFailure(advertiserId, correlationId);
 
   const [job] = await db.insert(uploadJobs)
     .values({
@@ -678,11 +675,15 @@ async function updateAdvertiserSuccess(
 ): Promise<void> {
   console.log(`${LOG_PREFIX} [${correlationId}] Updating advertiser ${advertiserId}: assetStatus=live, yodeckMediaIdCanonical=${mediaId}`);
   
+  // Clear any previous failure metadata on successful publish
   await db.update(advertisers)
     .set({
       assetStatus: "live",
       yodeckMediaIdCanonical: mediaId,
       yodeckMediaIdCanonicalUpdatedAt: new Date(),
+      publishErrorCode: null,
+      publishErrorMessage: null,
+      publishFailedAt: null,
       updatedAt: new Date(),
     })
     .where(eq(advertisers.id, advertiserId));

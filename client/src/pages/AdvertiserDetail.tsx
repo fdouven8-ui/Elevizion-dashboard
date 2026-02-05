@@ -955,6 +955,11 @@ export default function AdvertiserDetail() {
                     <Play className="h-3 w-3 mr-1" />
                     Live op schermen
                   </Badge>
+                ) : advertiser.assetStatus === "publish_failed" ? (
+                  <Badge className="bg-red-100 text-red-800">
+                    <AlertTriangle className="h-3 w-3 mr-1" />
+                    Publicatie mislukt
+                  </Badge>
                 ) : advertiser.assetStatus === "ready_for_yodeck" ? (
                   <Badge className="bg-blue-100 text-blue-800">
                     <CheckCircle2 className="h-3 w-3 mr-1" />
@@ -1036,6 +1041,45 @@ export default function AdvertiserDetail() {
                     <ExternalLink className="h-4 w-4 mr-1" />
                     Open Upload Portal
                   </Button>
+                )}
+                {advertiser.assetStatus === "publish_failed" && (
+                  <div className="w-full">
+                    <div className="bg-red-50 border border-red-200 rounded-md p-3 mb-2">
+                      <p className="text-sm text-red-700 font-medium">Publicatie mislukt</p>
+                      {(advertiser as any).publishErrorMessage && (
+                        <p className="text-xs text-red-600 mt-1">{(advertiser as any).publishErrorMessage}</p>
+                      )}
+                      {(advertiser as any).publishRetryCount > 0 && (
+                        <p className="text-xs text-red-500 mt-1">Pogingen: {(advertiser as any).publishRetryCount}</p>
+                      )}
+                    </div>
+                    <Button 
+                      size="sm" 
+                      variant="default"
+                      className="bg-orange-500 hover:bg-orange-600"
+                      data-testid="button-retry-publish"
+                      onClick={async () => {
+                        try {
+                          toast({ title: "Publicatie wordt opnieuw gestart..." });
+                          const res = await fetch(`/api/admin/advertisers/${advertiser.id}/retry-publish`, { method: "POST" });
+                          const data = await res.json();
+                          if (!res.ok) {
+                            throw new Error(data.error || "Publicatie mislukt");
+                          }
+                          toast({ 
+                            title: "Publicatie gelukt!", 
+                            description: "Video wordt nu afgespeeld op schermen"
+                          });
+                          queryClient.invalidateQueries({ queryKey: ["/api/advertisers", id] });
+                        } catch (e: any) {
+                          toast({ title: e.message || "Fout bij publiceren", variant: "destructive" });
+                        }
+                      }}
+                    >
+                      <RefreshCw className="h-4 w-4 mr-1" />
+                      Opnieuw Publiceren
+                    </Button>
+                  </div>
                 )}
                 {(advertiser.assetStatus === "uploaded_valid" || advertiser.assetStatus === "ready_for_yodeck") && (
                   <Button 
