@@ -2,17 +2,16 @@
  * Canonical Yodeck Payload Builder
  * 
  * This module provides a single source of truth for building Yodeck create-media payloads.
- * For presigned uploads, Yodeck determines the media origin automatically.
+ * For presigned uploads, Yodeck API v2 REQUIRES:
+ *   - media_origin: { type: "video", source: "upload" }
+ *   - name ending with .mp4
  * 
- * CRITICAL: Do NOT add media_origin, media_type, or any origin-related fields.
- * These cause err_1003 "invalid_field" errors with presigned uploads.
+ * Missing media_origin causes err_1002 "missing_key" error.
  */
 
 export const FORBIDDEN_KEYS = new Set([
-  "media_origin",
-  "media_type", 
+  "media_type",  // Not needed - use media_origin.type instead
   "origin",
-  "type",
   "source",
   "mime_type",
   "file_type",
@@ -24,6 +23,10 @@ export const FORBIDDEN_KEYS = new Set([
 export interface YodeckCreateMediaPayload {
   name: string;
   description: string;
+  media_origin: {
+    type: "video";
+    source: "upload";
+  };
   arguments: {
     buffering: boolean;
     resolution: string;
@@ -32,12 +35,16 @@ export interface YodeckCreateMediaPayload {
 
 /**
  * Build a clean payload for POST /api/v2/media (presigned upload flow)
- * Returns ONLY the fields Yodeck accepts for this flow.
+ * REQUIRED: media_origin with type and source for Yodeck v2 API
  */
 export function buildYodeckCreateMediaPayload(name: string): YodeckCreateMediaPayload {
   return {
     name,
     description: "",
+    media_origin: {
+      type: "video",
+      source: "upload"
+    },
     arguments: {
       buffering: true,
       resolution: "highest"
@@ -99,4 +106,5 @@ export function logCreateMediaPayload(payload: YodeckCreateMediaPayload, correla
   const prefix = correlationId ? `[${correlationId}]` : "";
   console.log(`[YodeckPayload]${prefix} CREATE_MEDIA payload:`, JSON.stringify(payload, null, 2));
   console.log(`[YodeckPayload]${prefix} CREATE_MEDIA payload keys:`, Object.keys(payload).join(", "));
+  console.log(`[YodeckPayload]${prefix} CREATE_MEDIA media_origin:`, JSON.stringify(payload.media_origin));
 }
