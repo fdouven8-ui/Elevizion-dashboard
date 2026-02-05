@@ -20,9 +20,11 @@ const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 export const R2_BUCKET_NAME = process.env.R2_BUCKET || process.env.CLOUDFLARE_R2_BUCKET;
 export const R2_ENDPOINT = process.env.R2_ENDPOINT;
 export const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || process.env.CLOUDFLARE_ACCOUNT_ID;
+export const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
+export const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
 
-// R2 is considered configured when BOTH bucket AND endpoint are set
-export const R2_IS_CONFIGURED = !!(R2_BUCKET_NAME && R2_ENDPOINT);
+// R2 is considered configured when bucket, endpoint, AND credentials are set
+export const R2_IS_CONFIGURED = !!(R2_BUCKET_NAME && R2_ENDPOINT && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY);
 
 // EFFECTIVE_BUCKET_NAME = R2_BUCKET if R2 is configured, otherwise null
 // Replit Object Storage is NOT used as fallback
@@ -41,6 +43,8 @@ export function getR2Config(): {
   endpointHost: string | null;
   accountId: string | null;
   r2Configured: boolean;
+  hasAccessKey: boolean;
+  hasSecretKey: boolean;
   usingEnvKeys: string[];
 } {
   const usingEnvKeys: string[] = [];
@@ -50,6 +54,8 @@ export function getR2Config(): {
   if (process.env.R2_ENDPOINT) usingEnvKeys.push("R2_ENDPOINT");
   if (process.env.R2_ACCOUNT_ID) usingEnvKeys.push("R2_ACCOUNT_ID");
   if (process.env.CLOUDFLARE_ACCOUNT_ID) usingEnvKeys.push("CLOUDFLARE_ACCOUNT_ID");
+  if (process.env.R2_ACCESS_KEY_ID) usingEnvKeys.push("R2_ACCESS_KEY_ID");
+  if (process.env.R2_SECRET_ACCESS_KEY) usingEnvKeys.push("R2_SECRET_ACCESS_KEY");
   
   const endpointHost = R2_ENDPOINT ? R2_ENDPOINT.replace(/https?:\/\//, "") : null;
   
@@ -60,6 +66,8 @@ export function getR2Config(): {
     endpointHost,
     accountId: R2_ACCOUNT_ID || null,
     r2Configured: R2_IS_CONFIGURED,
+    hasAccessKey: !!R2_ACCESS_KEY_ID,
+    hasSecretKey: !!R2_SECRET_ACCESS_KEY,
     usingEnvKeys,
   };
 }
@@ -137,11 +145,13 @@ export async function r2SmokeTest(): Promise<{ ok: boolean; bucket: string | und
   console.log("[R2 SMOKE TEST] Starting...");
   console.log("[R2 SMOKE TEST] R2_BUCKET =", R2_BUCKET_NAME || "(NOT SET)");
   console.log("[R2 SMOKE TEST] R2_ENDPOINT =", R2_ENDPOINT || "(NOT SET)");
+  console.log("[R2 SMOKE TEST] R2_ACCESS_KEY_ID =", R2_ACCESS_KEY_ID ? "(SET)" : "(NOT SET)");
+  console.log("[R2 SMOKE TEST] R2_SECRET_ACCESS_KEY =", R2_SECRET_ACCESS_KEY ? "(SET)" : "(NOT SET)");
   console.log("[R2 SMOKE TEST] R2_IS_CONFIGURED =", R2_IS_CONFIGURED);
   
   if (!R2_IS_CONFIGURED) {
-    console.log("[R2 SMOKE TEST] FAILED - R2 not configured (need both R2_BUCKET and R2_ENDPOINT)");
-    return { ok: false, bucket: undefined, error: "R2 not configured (need both R2_BUCKET and R2_ENDPOINT)" };
+    console.log("[R2 SMOKE TEST] FAILED - R2 not configured (need R2_BUCKET, R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)");
+    return { ok: false, bucket: undefined, error: "R2 not configured (need R2_BUCKET, R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY)" };
   }
 
   try {
