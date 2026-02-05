@@ -113,19 +113,19 @@ export async function uploadVideoToYodeckTransactional(
     console.log(`${LOG_PREFIX} [${correlationId}] Finalize result: ok=${finalizeResult.ok} endpoint=${finalizeResult.endpoint || "none"} status=${finalizeResult.status} error=${finalizeResult.error || "none"}`);
     
     if (!finalizeResult.ok) {
-      await clearAdvertiserCanonical(advertiserId, correlationId);
+      await markAdvertiserPublishFailed(advertiserId, "FINALIZE_ENDPOINT_MISSING", finalizeResult.error || "Finalize failed", correlationId);
       return makeFailResult(jobId, advertiserId, "FINALIZE_ENDPOINT_MISSING", { error: finalizeResult.error });
     }
 
     const verifyResult = await step4VerifyExistsImmediately(jobId, mediaId!, correlationId);
     if (!verifyResult.ok) {
-      await clearAdvertiserCanonical(advertiserId, correlationId);
+      await markAdvertiserPublishFailed(advertiserId, verifyResult.errorCode!, JSON.stringify(verifyResult.errorDetails), correlationId);
       return makeFailResult(jobId, advertiserId, verifyResult.errorCode!, verifyResult.errorDetails);
     }
 
     const pollResult = await step5PollStatus(jobId, mediaId!, correlationId);
     if (!pollResult.ok) {
-      await clearAdvertiserCanonical(advertiserId, correlationId);
+      await markAdvertiserPublishFailed(advertiserId, pollResult.errorCode!, JSON.stringify(pollResult.errorDetails), correlationId);
       return makeFailResult(jobId, advertiserId, pollResult.errorCode!, pollResult.errorDetails);
     }
 
@@ -150,7 +150,7 @@ export async function uploadVideoToYodeckTransactional(
   } catch (error: any) {
     console.error(`${LOG_PREFIX} [${correlationId}] Unexpected error:`, error);
     await markJobFailed(jobId, "UNEXPECTED_ERROR", { message: error.message }, error.message);
-    await clearAdvertiserCanonical(advertiserId, correlationId);
+    await markAdvertiserPublishFailed(advertiserId, "UNEXPECTED_ERROR", error.message, correlationId);
     return makeFailResult(jobId, advertiserId, "UNEXPECTED_ERROR", { message: error.message });
   }
 }
@@ -685,16 +685,52 @@ async function updateAdvertiserSuccess(
     .where(eq(advertisers.id, advertiserId));
 }
 
-async function clearAdvertiserCanonical(
+/**
+ * Mark advertiser as publish_failed (NON-DESTRUCTIVE).
+ * Asset blijft zichtbaar in UI en kan opnieuw gepubliceerd worden.
+ * We clearen NIET de yodeckMediaIdCanonical tenzij expliciet nodig.
+ */
+async function markAdvertiserPublishFailed(
   advertiserId: string,
+  errorCode: string,
+  errorMessage: string,
   correlationId: string
 ): Promise<void> {
-  console.log(`${LOG_PREFIX} [${correlationId}] Clearing advertiser ${advertiserId}: assetStatus=ready_for_yodeck, yodeckMediaIdCanonical=NULL`);
+  console.log(`${LOG_PREFIX} [${correlationId}] Marking advertiser ${advertiserId} as publish_failed: ${errorCode}`);
+  
+  // Get current retry count
+  const current = await db.query.advertisers.findFirst({
+    where: eq(advertisers.id, advertiserId),
+    columns: { publishRetryCount: true },
+  });
   
   await db.update(advertisers)
     .set({
-      assetStatus: "ready_for_yodeck",
-      yodeckMediaIdCanonical: null,
+      assetStatus: "publish_failed",
+      publishErrorCode: errorCode,
+      publishErrorMessage: errorMessage,
+      publishFailedAt: new Date(),
+      publishRetryCount: (current?.publishRetryCount || 0) + 1,
+      updatedAt: new Date(),
+    })
+    .where(eq(advertisers.id, advertiserId));
+}
+
+/**
+ * Clear publish failure state when retrying.
+ * Called at start of retry to reset error fields.
+ */
+async function clearPublishFailure(
+  advertiserId: string,
+  correlationId: string
+): Promise<void> {
+  console.log(`${LOG_PREFIX} [${correlationId}] Clearing publish failure for advertiser ${advertiserId}`);
+  
+  await db.update(advertisers)
+    .set({
+      publishErrorCode: null,
+      publishErrorMessage: null,
+      publishFailedAt: null,
       updatedAt: new Date(),
     })
     .where(eq(advertisers.id, advertiserId));

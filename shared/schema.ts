@@ -94,7 +94,12 @@ export const advertisers = pgTable("advertisers", {
   packagePrice: decimal("package_price", { precision: 10, scale: 2 }), // Maandelijkse prijs
   packageNotes: text("package_notes"), // Toelichting bij CUSTOM pakket
   // Asset/video status
-  assetStatus: text("asset_status").default("none"), // none | uploaded_invalid | uploaded_valid | ready_for_yodeck | live
+  assetStatus: text("asset_status").default("none"), // none | uploaded_invalid | uploaded_valid | ready_for_yodeck | publish_failed | live
+  // Publish failure tracking (non-destructive - asset blijft zichtbaar bij failures)
+  publishErrorCode: text("publish_error_code"), // Error code from failed Yodeck upload
+  publishErrorMessage: text("publish_error_message"), // Human-readable error message
+  publishFailedAt: timestamp("publish_failed_at"), // When publish last failed
+  publishRetryCount: integer("publish_retry_count").default(0), // Number of retry attempts
   // Upload portal state - enables repeated access after onboarding reaches upload step
   uploadEnabled: boolean("upload_enabled").default(false), // true when advertiser can access upload portal
   lastUploadTokenGeneratedAt: timestamp("last_upload_token_generated_at"), // When last upload token was created
