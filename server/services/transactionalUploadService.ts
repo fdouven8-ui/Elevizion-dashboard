@@ -109,21 +109,20 @@ export async function uploadVideoToYodeckTransactional(
       return makeFailResult(jobId, advertiserId, putResult.errorCode!, putResult.errorDetails);
     }
 
-    const finalizeResult = await stepFinalizeUpload(jobId, mediaId!, correlationId);
-    console.log(`${LOG_PREFIX} [${correlationId}] Finalize result: ok=${finalizeResult.ok} endpoint=${finalizeResult.endpoint || "none"} status=${finalizeResult.status} error=${finalizeResult.error || "none"}`);
+    // STEP 4: Complete upload via PUT /api/v2/media/{id}/upload/complete
+    const completeResult = await stepCompleteUpload(jobId, mediaId!, correlationId);
+    console.log(`${LOG_PREFIX} [${correlationId}] Complete result: ok=${completeResult.ok} endpoint=${completeResult.endpoint || "none"} status=${completeResult.status} error=${completeResult.error || "none"}`);
     
-    if (!finalizeResult.ok) {
-      await markAdvertiserPublishFailed(advertiserId, "FINALIZE_ENDPOINT_MISSING", finalizeResult.error || "Finalize failed", correlationId);
-      return makeFailResult(jobId, advertiserId, "FINALIZE_ENDPOINT_MISSING", { error: finalizeResult.error });
-    }
+    // Note: We don't fail on complete - some Yodeck versions auto-finalize after PUT
+    // The poll step will determine actual success/failure
 
-    const verifyResult = await step4VerifyExistsImmediately(jobId, mediaId!, correlationId);
+    const verifyResult = await step5VerifyExistsImmediately(jobId, mediaId!, correlationId);
     if (!verifyResult.ok) {
       await markAdvertiserPublishFailed(advertiserId, verifyResult.errorCode!, JSON.stringify(verifyResult.errorDetails), correlationId);
       return makeFailResult(jobId, advertiserId, verifyResult.errorCode!, verifyResult.errorDetails);
     }
 
-    const pollResult = await step5PollStatus(jobId, mediaId!, correlationId);
+    const pollResult = await step6PollStatus(jobId, mediaId!, correlationId);
     if (!pollResult.ok) {
       await markAdvertiserPublishFailed(advertiserId, pollResult.errorCode!, JSON.stringify(pollResult.errorDetails), correlationId);
       return makeFailResult(jobId, advertiserId, pollResult.errorCode!, pollResult.errorDetails);
@@ -436,76 +435,100 @@ interface FinalizeResult {
   error?: string;
 }
 
-async function stepFinalizeUpload(
+async function stepCompleteUpload(
   jobId: string,
   mediaId: number,
   correlationId: string
 ): Promise<FinalizeResult> {
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 3.5: FINALIZE_UPLOAD for mediaId=${mediaId}`);
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 4: COMPLETE_UPLOAD for mediaId=${mediaId}`);
   
-  const finalizeEndpoints = [
-    `${YODECK_API_BASE}/media/${mediaId}/upload/complete`,
-    `${YODECK_API_BASE}/media/${mediaId}/upload/complete/`,
-    `${YODECK_API_BASE}/media/${mediaId}/upload/confirm`,
-    `${YODECK_API_BASE}/media/${mediaId}/upload/confirm/`,
-    `${YODECK_API_BASE}/media/${mediaId}/upload/done`,
-    `${YODECK_API_BASE}/media/${mediaId}/upload/done/`,
-  ];
+  // According to Yodeck API, use PUT on /api/v2/media/{id}/upload/complete
+  const completeEndpoint = `${YODECK_API_BASE}/media/${mediaId}/upload/complete/`;
   
-  let lastStatus = 0;
-  let successEndpoint: string | null = null;
-  
-  for (const endpoint of finalizeEndpoints) {
+  try {
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD PUT ${completeEndpoint}`);
+    
+    const response = await fetch(completeEndpoint, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Token ${YODECK_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    
+    const status = response.status;
+    let responseBody: any;
     try {
-      console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE trying: ${endpoint}`);
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Authorization": `Token ${YODECK_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-      });
-      
-      lastStatus = response.status;
-      console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE ${endpoint} -> ${response.status}`);
-      
-      if (response.ok) {
-        successEndpoint = endpoint;
-        console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE SUCCESS: ${endpoint} -> ${response.status}`);
-        break;
-      }
-      
-      if (response.status !== 404 && response.status !== 405) {
-        console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE unexpected status ${response.status}, continuing...`);
-      }
-    } catch (err: any) {
-      console.log(`${LOG_PREFIX} [${correlationId}] FINALIZE endpoint error: ${err.message}`);
+      const text = await response.text();
+      responseBody = text ? JSON.parse(text) : {};
+    } catch {
+      responseBody = {};
     }
+    
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD response: status=${status} body=${JSON.stringify(responseBody).substring(0, 500)}`);
+    
+    await updateJob(jobId, {
+      finalizeAttempted: true,
+      finalizeStatus: status,
+      finalizeUrlUsed: completeEndpoint,
+    });
+    
+    if (response.ok) {
+      console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD SUCCESS: ${status}`);
+      return { ok: true, endpoint: completeEndpoint, status };
+    }
+    
+    // If PUT didn't work, try POST as fallback
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD PUT failed (${status}), trying POST fallback...`);
+    
+    const postResponse = await fetch(completeEndpoint, {
+      method: "POST",
+      headers: {
+        "Authorization": `Token ${YODECK_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+    });
+    
+    const postStatus = postResponse.status;
+    let postBody: any;
+    try {
+      const text = await postResponse.text();
+      postBody = text ? JSON.parse(text) : {};
+    } catch {
+      postBody = {};
+    }
+    
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD POST fallback: status=${postStatus} body=${JSON.stringify(postBody).substring(0, 300)}`);
+    
+    if (postResponse.ok) {
+      await updateJob(jobId, { finalizeStatus: postStatus });
+      console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD POST SUCCESS: ${postStatus}`);
+      return { ok: true, endpoint: completeEndpoint, status: postStatus };
+    }
+    
+    // Neither worked - continue anyway, Yodeck may auto-finalize
+    console.warn(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD: Neither PUT (${status}) nor POST (${postStatus}) succeeded. Continuing - will poll for status.`);
+    return { ok: true, error: "COMPLETE_NOT_REQUIRED", status };
+    
+  } catch (err: any) {
+    console.error(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD ERROR: ${err.message}`);
+    await updateJob(jobId, {
+      finalizeAttempted: true,
+      finalizeStatus: 0,
+    });
+    // Continue anyway - the poll step will determine if upload succeeded
+    return { ok: true, error: err.message };
   }
-  
-  await updateJob(jobId, {
-    finalizeAttempted: true,
-    finalizeStatus: lastStatus,
-    finalizeUrlUsed: successEndpoint,
-  });
-  
-  if (successEndpoint) {
-    return { ok: true, endpoint: successEndpoint, status: lastStatus };
-  }
-  
-  // No finalize endpoint succeeded - this is OK, Yodeck may auto-finalize after PUT
-  // We'll continue to verify/poll and let that determine success/failure
-  console.warn(`${LOG_PREFIX} [${correlationId}] FINALIZE: No endpoint succeeded (lastStatus=${lastStatus}). Continuing - Yodeck may auto-finalize.`);
-  return { ok: true, error: "NO_FINALIZE_ENDPOINT", status: lastStatus };
 }
 
-async function step4VerifyExistsImmediately(
+async function step5VerifyExistsImmediately(
   jobId: string,
   mediaId: number,
   correlationId: string
 ): Promise<{ ok: boolean; errorCode?: string; errorDetails?: any }> {
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 4: VERIFY_EXISTS_IMMEDIATELY for mediaId=${mediaId}`);
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 5: VERIFY_EXISTS_IMMEDIATELY for mediaId=${mediaId}`);
   
   await new Promise(r => setTimeout(r, 1000));
 
@@ -555,12 +578,12 @@ async function step4VerifyExistsImmediately(
   }
 }
 
-async function step5PollStatus(
+async function step6PollStatus(
   jobId: string,
   mediaId: number,
   correlationId: string
 ): Promise<{ ok: boolean; errorCode?: string; errorDetails?: any }> {
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 5: POLL_STATUS for mediaId=${mediaId}`);
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 6: POLL_STATUS for mediaId=${mediaId}`);
   
   await updateJob(jobId, { status: UPLOAD_JOB_STATUS.POLLING });
 
