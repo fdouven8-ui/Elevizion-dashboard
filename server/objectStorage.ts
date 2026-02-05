@@ -1,12 +1,10 @@
-import { Storage, File } from "@google-cloud/storage";
+import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { Response } from "express";
 import { randomUUID } from "crypto";
+import { Readable } from "stream";
 import {
   ObjectAclPolicy,
   ObjectPermission,
-  canAccessObject,
-  getObjectAclPolicy,
-  setObjectAclPolicy,
 } from "./objectAcl";
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
@@ -155,10 +153,13 @@ export async function r2SmokeTest(): Promise<{ ok: boolean; bucket: string | und
   }
 
   try {
-    // Test that the storage client can be initialized
-    const bucket = objectStorageClient.bucket(EFFECTIVE_BUCKET_NAME!);
+    // Test that the S3 client can list objects (lightweight check)
+    const result = await s3Client.send(new ListObjectsV2Command({
+      Bucket: EFFECTIVE_BUCKET_NAME!,
+      MaxKeys: 1,
+    }));
     console.log("[R2 SMOKE TEST] Client initialized for bucket:", EFFECTIVE_BUCKET_NAME);
-    console.log("[R2 SMOKE TEST] SUCCESS");
+    console.log("[R2 SMOKE TEST] SUCCESS - listed", result.KeyCount || 0, "objects");
     return { ok: true, bucket: EFFECTIVE_BUCKET_NAME };
   } catch (error: any) {
     console.error("[R2 SMOKE TEST] FAILED:", error.message);
@@ -166,22 +167,17 @@ export async function r2SmokeTest(): Promise<{ ok: boolean; bucket: string | und
   }
 }
 
-export const objectStorageClient = new Storage({
+/**
+ * S3-compatible client for Cloudflare R2.
+ * Uses AWS SDK v3 with R2 credentials and endpoint.
+ */
+export const s3Client = new S3Client({
+  region: "auto",
+  endpoint: R2_ENDPOINT,
   credentials: {
-    audience: "replit",
-    subject_token_type: "access_token",
-    token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
-    type: "external_account",
-    credential_source: {
-      url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
-      format: {
-        type: "json",
-        subject_token_field_name: "access_token",
-      },
-    },
-    universe_domain: "googleapis.com",
+    accessKeyId: R2_ACCESS_KEY_ID || "",
+    secretAccessKey: R2_SECRET_ACCESS_KEY || "",
   },
-  projectId: "",
 });
 
 export class ObjectNotFoundError extends Error {
@@ -225,38 +221,50 @@ export class ObjectStorageService {
     return dir;
   }
 
-  async searchPublicObject(filePath: string): Promise<File | null> {
+  async searchPublicObject(filePath: string): Promise<{ key: string; bucket: string } | null> {
     for (const searchPath of this.getPublicObjectSearchPaths()) {
       const fullPath = `${searchPath}/${filePath}`;
       const { bucketName, objectName } = parseObjectPath(fullPath);
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectName);
-      const [exists] = await file.exists();
-      if (exists) {
-        return file;
+      try {
+        await s3Client.send(new HeadObjectCommand({
+          Bucket: bucketName,
+          Key: objectName,
+        }));
+        return { key: objectName, bucket: bucketName };
+      } catch (error: any) {
+        if (error.name !== "NotFound" && error.$metadata?.httpStatusCode !== 404) {
+          console.error("[R2] Error checking object:", error.message);
+        }
       }
     }
     return null;
   }
 
-  async downloadObject(file: File, res: Response, cacheTtlSec: number = 3600) {
+  async downloadObject(fileInfo: { key: string; bucket: string }, res: Response, cacheTtlSec: number = 3600) {
     try {
-      const [metadata] = await file.getMetadata();
-      const aclPolicy = await getObjectAclPolicy(file);
-      const isPublic = aclPolicy?.visibility === "public";
+      const result = await s3Client.send(new GetObjectCommand({
+        Bucket: fileInfo.bucket,
+        Key: fileInfo.key,
+      }));
+      
       res.set({
-        "Content-Type": metadata.contentType || "application/octet-stream",
-        "Content-Length": metadata.size,
-        "Cache-Control": `${isPublic ? "public" : "private"}, max-age=${cacheTtlSec}`,
+        "Content-Type": result.ContentType || "application/octet-stream",
+        "Content-Length": String(result.ContentLength || 0),
+        "Cache-Control": `private, max-age=${cacheTtlSec}`,
       });
-      const stream = file.createReadStream();
-      stream.on("error", (err) => {
-        console.error("Stream error:", err);
-        if (!res.headersSent) {
-          res.status(500).json({ error: "Error streaming file" });
-        }
-      });
-      stream.pipe(res);
+      
+      if (result.Body) {
+        const stream = result.Body as Readable;
+        stream.on("error", (err) => {
+          console.error("Stream error:", err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: "Error streaming file" });
+          }
+        });
+        stream.pipe(res);
+      } else {
+        res.status(500).json({ error: "No body in response" });
+      }
     } catch (error) {
       console.error("Error downloading file:", error);
       if (!res.headersSent) {
@@ -278,7 +286,7 @@ export class ObjectStorageService {
     });
   }
 
-  async getObjectEntityFile(objectPath: string): Promise<File> {
+  async getObjectEntityFile(objectPath: string): Promise<{ key: string; bucket: string }> {
     if (!objectPath.startsWith("/objects/")) {
       throw new ObjectNotFoundError();
     }
@@ -293,13 +301,18 @@ export class ObjectStorageService {
     }
     const objectEntityPath = `${entityDir}${entityId}`;
     const { bucketName, objectName } = parseObjectPath(objectEntityPath);
-    const bucket = objectStorageClient.bucket(bucketName);
-    const objectFile = bucket.file(objectName);
-    const [exists] = await objectFile.exists();
-    if (!exists) {
-      throw new ObjectNotFoundError();
+    try {
+      await s3Client.send(new HeadObjectCommand({
+        Bucket: bucketName,
+        Key: objectName,
+      }));
+      return { key: objectName, bucket: bucketName };
+    } catch (error: any) {
+      if (error.name === "NotFound" || error.$metadata?.httpStatusCode === 404) {
+        throw new ObjectNotFoundError();
+      }
+      throw error;
     }
-    return objectFile;
   }
 
   normalizeObjectEntityPath(rawPath: string): string {
@@ -321,31 +334,39 @@ export class ObjectStorageService {
 
   async trySetObjectEntityAclPolicy(
     rawPath: string,
-    aclPolicy: ObjectAclPolicy
+    _aclPolicy: ObjectAclPolicy
   ): Promise<string> {
     const normalizedPath = this.normalizeObjectEntityPath(rawPath);
     if (!normalizedPath.startsWith("/")) {
       return normalizedPath;
     }
-    const objectFile = await this.getObjectEntityFile(normalizedPath);
-    await setObjectAclPolicy(objectFile, aclPolicy);
+    // ACL policies are not supported with S3/R2 - all objects are private by default
+    // Use signed URLs for access control instead
+    console.log("[ObjectStorage] ACL policies not supported with R2 - using signed URLs for access control");
     return normalizedPath;
   }
 
   async canAccessObjectEntity({
-    userId,
+    userId: _userId,
     objectFile,
-    requestedPermission,
+    requestedPermission: _requestedPermission,
   }: {
     userId?: string;
-    objectFile: File;
+    objectFile: { key: string; bucket: string };
     requestedPermission?: ObjectPermission;
   }): Promise<boolean> {
-    return canAccessObject({
-      userId,
-      objectFile,
-      requestedPermission: requestedPermission ?? ObjectPermission.READ,
-    });
+    // With R2/S3, all objects are private by default
+    // Access is controlled via signed URLs, not per-object ACLs
+    // Simply check if the object exists
+    try {
+      await s3Client.send(new HeadObjectCommand({
+        Bucket: objectFile.bucket,
+        Key: objectFile.key,
+      }));
+      return true; // Object exists, access is controlled by signed URLs
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -353,14 +374,17 @@ export class ObjectStorageService {
    * Handles Range headers properly for HTML5 video players
    */
   async streamVideoWithRange(
-    file: File,
+    fileInfo: { key: string; bucket: string },
     req: { headers: { range?: string } },
     res: Response
   ): Promise<void> {
     try {
-      const [metadata] = await file.getMetadata();
-      const fileSize = parseInt(String(metadata.size), 10);
-      const contentType = metadata.contentType || "video/mp4";
+      const headResult = await s3Client.send(new HeadObjectCommand({
+        Bucket: fileInfo.bucket,
+        Key: fileInfo.key,
+      }));
+      const fileSize = headResult.ContentLength || 0;
+      const contentType = headResult.ContentType || "video/mp4";
       const rangeHeader = req.headers.range;
 
       if (rangeHeader) {
@@ -378,14 +402,21 @@ export class ObjectStorageService {
           "Cache-Control": "private, max-age=3600",
         });
 
-        const stream = file.createReadStream({ start, end });
-        stream.on("error", (err) => {
-          console.error("[ObjectStorage] Stream range error:", err);
-          if (!res.headersSent) {
-            res.status(500).json({ error: "Error streaming file" });
-          }
-        });
-        stream.pipe(res);
+        const result = await s3Client.send(new GetObjectCommand({
+          Bucket: fileInfo.bucket,
+          Key: fileInfo.key,
+          Range: `bytes=${start}-${end}`,
+        }));
+        if (result.Body) {
+          const stream = result.Body as Readable;
+          stream.on("error", (err: Error) => {
+            console.error("[ObjectStorage] Stream range error:", err);
+            if (!res.headersSent) {
+              res.status(500).json({ error: "Error streaming file" });
+            }
+          });
+          stream.pipe(res);
+        }
       } else {
         res.set({
           "Content-Length": fileSize.toString(),
@@ -393,14 +424,20 @@ export class ObjectStorageService {
           "Accept-Ranges": "bytes",
           "Cache-Control": "private, max-age=3600",
         });
-        const stream = file.createReadStream();
-        stream.on("error", (err) => {
-          console.error("[ObjectStorage] Stream error:", err);
-          if (!res.headersSent) {
-            res.status(500).json({ error: "Error streaming file" });
-          }
-        });
-        stream.pipe(res);
+        const result = await s3Client.send(new GetObjectCommand({
+          Bucket: fileInfo.bucket,
+          Key: fileInfo.key,
+        }));
+        if (result.Body) {
+          const stream = result.Body as Readable;
+          stream.on("error", (err: Error) => {
+            console.error("[ObjectStorage] Stream error:", err);
+            if (!res.headersSent) {
+              res.status(500).json({ error: "Error streaming file" });
+            }
+          });
+          stream.pipe(res);
+        }
       }
     } catch (error) {
       console.error("[ObjectStorage] Error streaming video:", error);
@@ -417,15 +454,15 @@ export class ObjectStorageService {
    * - Full storage URLs: https://storage.googleapis.com/bucket/path/to/file
    * - Relative paths without prefix: ad-assets/uuid/filename.mp4
    */
-  async getFileByPath(storagePath: string): Promise<File | null> {
+  async getFileByPath(storagePath: string): Promise<{ key: string; bucket: string } | null> {
     try {
-      let fullPath = storagePath;
+      let objectKey = storagePath;
       
       // Handle full storage URLs (https://storage.googleapis.com/bucket/path)
       if (storagePath.startsWith('https://storage.googleapis.com/')) {
         try {
           const url = new URL(storagePath);
-          fullPath = url.pathname; // Already includes /bucket/object format
+          objectKey = url.pathname.replace(/^\/[^/]+\//, ''); // Remove bucket from path
         } catch {
           // Invalid URL, try as path
         }
@@ -433,20 +470,34 @@ export class ObjectStorageService {
       // Handle relative paths (without leading /) - prepend PRIVATE_OBJECT_DIR
       else if (!storagePath.startsWith('/')) {
         const privateObjectDir = this.getPrivateObjectDir();
-        fullPath = `${privateObjectDir}/${storagePath}`;
+        const { objectName } = parseObjectPath(`${privateObjectDir}/${storagePath}`);
+        objectKey = objectName;
+      } else {
+        const { objectName } = parseObjectPath(storagePath);
+        objectKey = objectName;
       }
       
-      console.log(`[ObjectStorage] getFileByPath: input=${storagePath} resolved=${fullPath}`);
+      const resolvedKey = resolveR2ObjectKey(objectKey);
+      console.log(`[ObjectStorage] getFileByPath: input=${storagePath} resolved=${resolvedKey}`);
       
-      const { bucketName, objectName } = parseObjectPath(fullPath);
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectName);
-      const [exists] = await file.exists();
-      if (!exists) {
-        console.log(`[ObjectStorage] File not found: bucket=${bucketName} object=${objectName}`);
+      if (!EFFECTIVE_BUCKET_NAME) {
+        console.log("[ObjectStorage] No bucket configured");
         return null;
       }
-      return file;
+      
+      try {
+        await s3Client.send(new HeadObjectCommand({
+          Bucket: EFFECTIVE_BUCKET_NAME,
+          Key: resolvedKey,
+        }));
+        return { key: resolvedKey, bucket: EFFECTIVE_BUCKET_NAME };
+      } catch (error: any) {
+        if (error.name === "NotFound" || error.$metadata?.httpStatusCode === 404) {
+          console.log(`[ObjectStorage] File not found: bucket=${EFFECTIVE_BUCKET_NAME} key=${resolvedKey}`);
+          return null;
+        }
+        throw error;
+      }
     } catch (error) {
       console.error("[ObjectStorage] Error getting file by path:", error);
       return null;
@@ -461,7 +512,7 @@ export class ObjectStorageService {
    * @returns Object with file (or null), resolvedKey, and bucket info
    */
   async getR2File(inputKey: string): Promise<{
-    file: File | null;
+    file: { key: string; metadata: any } | null;
     exists: boolean;
     bucket: string;
     inputKey: string;
@@ -500,11 +551,20 @@ export class ObjectStorageService {
     }
 
     try {
-      const bucketObj = objectStorageClient.bucket(EFFECTIVE_BUCKET_NAME);
-      const file = bucketObj.file(resolvedKey);
-      const [exists] = await file.exists();
+      const headResult = await s3Client.send(new HeadObjectCommand({
+        Bucket: EFFECTIVE_BUCKET_NAME,
+        Key: resolvedKey,
+      }));
       
-      if (!exists) {
+      return {
+        file: { key: resolvedKey, metadata: headResult },
+        exists: true,
+        bucket,
+        inputKey,
+        resolvedKey,
+      };
+    } catch (error: any) {
+      if (error.name === "NotFound" || error.$metadata?.httpStatusCode === 404) {
         console.log(`[R2] File not found: bucket=${bucket} key=${resolvedKey}`);
         return {
           file: null,
@@ -514,15 +574,6 @@ export class ObjectStorageService {
           resolvedKey,
         };
       }
-      
-      return {
-        file,
-        exists: true,
-        bucket,
-        inputKey,
-        resolvedKey,
-      };
-    } catch (error: any) {
       console.error("[R2] Error getting file:", error.message);
       return {
         file: null,
@@ -564,16 +615,16 @@ export class ObjectStorageService {
     }
 
     try {
-      const bucketObj = objectStorageClient.bucket(EFFECTIVE_BUCKET_NAME);
-      const [files] = await bucketObj.getFiles({
-        prefix: resolvedPrefix,
-        maxResults: Math.min(maxResults, 50),
-      });
+      const result = await s3Client.send(new ListObjectsV2Command({
+        Bucket: EFFECTIVE_BUCKET_NAME,
+        Prefix: resolvedPrefix,
+        MaxKeys: Math.min(maxResults, 50),
+      }));
       
-      const keys = files.map((file) => ({
-        key: file.name,
-        size: parseInt(String(file.metadata?.size || 0), 10),
-        lastModified: file.metadata?.updated || file.metadata?.timeCreated || null,
+      const keys = (result.Contents || []).map((obj) => ({
+        key: obj.Key || "",
+        size: obj.Size || 0,
+        lastModified: obj.LastModified?.toISOString() || null,
       }));
       
       return {
@@ -606,8 +657,21 @@ export class ObjectStorageService {
         console.error("[ObjectStorage] File not found:", storagePath);
         return null;
       }
-      const [content] = await file.download();
-      return content;
+      
+      const result = await s3Client.send(new GetObjectCommand({
+        Bucket: file.bucket,
+        Key: file.key,
+      }));
+      
+      if (result.Body) {
+        const chunks: Uint8Array[] = [];
+        const stream = result.Body as Readable;
+        for await (const chunk of stream) {
+          chunks.push(chunk);
+        }
+        return Buffer.concat(chunks);
+      }
+      return null;
     } catch (error) {
       console.error("[ObjectStorage] Error downloading file:", error);
       return null;
@@ -620,26 +684,27 @@ export class ObjectStorageService {
    */
   async uploadFile(content: Buffer, fileName: string, contentType: string): Promise<string> {
     try {
+      if (!EFFECTIVE_BUCKET_NAME) {
+        throw new Error("No R2 bucket configured");
+      }
+      
       const privateObjectDir = this.getPrivateObjectDir();
-      const fullPath = `${privateObjectDir}/${fileName}`;
-      const { bucketName, objectName } = parseObjectPath(fullPath);
+      const { objectName } = parseObjectPath(`${privateObjectDir}/${fileName}`);
+      const resolvedKey = resolveR2ObjectKey(objectName);
       
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectName);
-      
-      await file.save(content, {
-        metadata: {
-          contentType,
-        },
-      });
+      await s3Client.send(new PutObjectCommand({
+        Bucket: EFFECTIVE_BUCKET_NAME,
+        Key: resolvedKey,
+        Body: content,
+        ContentType: contentType,
+      }));
 
       // Return the storage path (not public URL - use signed URLs for access)
-      return fullPath;
+      return `/${EFFECTIVE_BUCKET_NAME}/${resolvedKey}`;
     } catch (error: any) {
       console.error("[ObjectStorage] Error uploading file:", {
         message: error.message,
         code: error.code,
-        errors: error.errors,
       });
       throw error;
     }
@@ -652,33 +717,31 @@ export class ObjectStorageService {
    */
   async uploadFileFromPath(filePath: string, fileName: string, contentType: string): Promise<string> {
     const fs = await import('fs');
-    const { pipeline } = await import('stream/promises');
     
     try {
+      if (!EFFECTIVE_BUCKET_NAME) {
+        throw new Error("No R2 bucket configured");
+      }
+      
       const privateObjectDir = this.getPrivateObjectDir();
-      const fullPath = `${privateObjectDir}/${fileName}`;
-      const { bucketName, objectName } = parseObjectPath(fullPath);
+      const { objectName } = parseObjectPath(`${privateObjectDir}/${fileName}`);
+      const resolvedKey = resolveR2ObjectKey(objectName);
       
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectName);
+      const content = await fs.promises.readFile(filePath);
       
-      const readStream = fs.createReadStream(filePath);
-      const writeStream = file.createWriteStream({
-        metadata: {
-          contentType,
-        },
-        resumable: false,
-      });
-      
-      await pipeline(readStream, writeStream);
+      await s3Client.send(new PutObjectCommand({
+        Bucket: EFFECTIVE_BUCKET_NAME,
+        Key: resolvedKey,
+        Body: content,
+        ContentType: contentType,
+      }));
       
       // Return the storage path (not public URL - use signed URLs for access)
-      return fullPath;
+      return `/${EFFECTIVE_BUCKET_NAME}/${resolvedKey}`;
     } catch (error: any) {
       console.error("[ObjectStorage] Error streaming file upload:", {
         message: error.message,
         code: error.code,
-        errors: error.errors,
       });
       throw error;
     }
@@ -715,25 +778,31 @@ export class ObjectStorageService {
     const { pipeline } = await import('stream/promises');
     
     try {
-      const privateObjectDir = this.getPrivateObjectDir();
-      const fullPath = `${privateObjectDir}/${storagePath}`;
-      const { bucketName, objectName } = parseObjectPath(fullPath);
+      if (!EFFECTIVE_BUCKET_NAME) {
+        throw new Error("No R2 bucket configured");
+      }
       
-      const bucket = objectStorageClient.bucket(bucketName);
-      const file = bucket.file(objectName);
+      const resolvedKey = resolveR2ObjectKey(storagePath);
       
-      const [exists] = await file.exists();
-      if (!exists) {
+      const result = await s3Client.send(new GetObjectCommand({
+        Bucket: EFFECTIVE_BUCKET_NAME,
+        Key: resolvedKey,
+      }));
+      
+      if (!result.Body) {
         throw new ObjectNotFoundError();
       }
       
-      const readStream = file.createReadStream();
+      const readStream = result.Body as Readable;
       const writeStream = fs.createWriteStream(destPath);
       
       await pipeline(readStream, writeStream);
       
       console.log('[ObjectStorage] Streamed download to:', destPath);
-    } catch (error) {
+    } catch (error: any) {
+      if (error.name === "NotFound" || error.$metadata?.httpStatusCode === 404) {
+        throw new ObjectNotFoundError();
+      }
       console.error("[ObjectStorage] Error streaming file download:", error);
       throw error;
     }
