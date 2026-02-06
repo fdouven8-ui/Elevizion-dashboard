@@ -12152,6 +12152,95 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/screens/refresh-screenshot
+   * Force Yodeck to take a fresh screenshot of screens.
+   * Body: { yodeckPlayerIds: [591895], force: true }
+   */
+  app.post("/api/admin/screens/refresh-screenshot", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const { yodeckPlayerIds, force } = req.body || {};
+      if (!Array.isArray(yodeckPlayerIds) || yodeckPlayerIds.length === 0) {
+        return res.status(400).json({ ok: false, error: "yodeckPlayerIds (number[]) is required" });
+      }
+
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      if (!token) {
+        return res.status(500).json({ ok: false, error: "YODECK_AUTH_TOKEN not configured" });
+      }
+
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+      const refreshed: { screenId: number; status: string; httpStatus?: number }[] = [];
+      const failed: { screenId: number; status: string; httpStatus?: number; error?: string }[] = [];
+
+      for (const playerId of yodeckPlayerIds) {
+        const screenId = typeof playerId === "number" ? playerId : parseInt(playerId);
+        try {
+          const body = force ? JSON.stringify({ force: true }) : JSON.stringify({});
+          const resp = await fetch(`${yodeckBaseUrl}/screens/${screenId}/refresh-screenshot/`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Token ${token}`,
+              "Content-Type": "application/json",
+            },
+            body,
+          });
+
+          console.log(`[RefreshScreenshot] screen=${screenId} http=${resp.status} ok=${resp.ok}`);
+
+          if (resp.ok) {
+            refreshed.push({ screenId, status: "success", httpStatus: resp.status });
+          } else {
+            const errText = await resp.text();
+            console.error(`[RefreshScreenshot] screen=${screenId} error body: ${errText.substring(0, 300)}`);
+            failed.push({ screenId, status: "failed", httpStatus: resp.status, error: errText.substring(0, 300) });
+          }
+        } catch (err: any) {
+          console.error(`[RefreshScreenshot] screen=${screenId} exception: ${err.message}`);
+          failed.push({ screenId, status: "failed", error: err.message });
+        }
+      }
+
+      return res.json({ ok: true, refreshed, failed });
+    } catch (error: any) {
+      console.error(`[RefreshScreenshot] Error:`, error);
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/debug/yodeck/screens/:id/refresh-screenshot
+   * Debug: trigger screenshot refresh for a single screen.
+   */
+  app.get("/api/debug/yodeck/screens/:id/refresh-screenshot", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const screenId = parseInt(req.params.id);
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+
+      const resp = await fetch(`${yodeckBaseUrl}/screens/${screenId}/refresh-screenshot/`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Token ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ force: true }),
+      });
+
+      const httpStatus = resp.status;
+      let body: any = null;
+      try { body = await resp.text(); } catch {}
+
+      console.log(`[RefreshScreenshot] debug screen=${screenId} http=${httpStatus} ok=${resp.ok}`);
+
+      return res.json({ ok: resp.ok, screenId, httpStatus, body: body?.substring(0, 500) });
+    } catch (error: any) {
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/screens/push
    * Push content to Yodeck screens so updated playlists become visible immediately.
    * Body: { yodeckPlayerIds: [591895, 591896] }

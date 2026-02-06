@@ -1,0 +1,59 @@
+DOEL: Voeg een admin endpoint toe om screenshots te forceren in Yodeck, zodat we kunnen verifiëren dat content echt gepusht is.
+
+PROBLEEM:
+POST /api/admin/screens/refresh-screenshot geeft 404 (API_NOT_FOUND).
+We hebben al POST /api/admin/screens/push (werkt, geeft ok:true), maar zonder screenshot refresh kunnen we niet bevestigen dat de player echt updated is.
+
+WAT MOET JE BOUWEN:
+1) Nieuwe route:
+   POST /api/admin/screens/refresh-screenshot
+   Body (JSON):
+   {
+     "yodeckPlayerIds": [591895, ...],
+     "force": true
+   }
+
+2) Implementatie:
+   - Gebruik dezelfde auth/role-guard als andere /api/admin routes.
+   - Voor elke id in yodeckPlayerIds:
+     - Call Yodeck API: POST /api/v2/screens/{id}/refresh-screenshot
+     - Payload leeg OF { "force": true } (als Yodeck dit accepteert; anders payload weglaten).
+   - Verzamel per screen een resultaat:
+     { screenId, status: "success"|"failed", httpStatus?, error? }
+
+3) Response van onze API:
+   - 200 OK met:
+   {
+     "ok": true,
+     "refreshed": [{screenId, status, httpStatus}],
+     "failed": [{screenId, status, httpStatus, error}]
+   }
+
+4) Yodeck client:
+   - Als er al een YodeckApi/YodeckClient service bestaat, voeg daar een methode toe:
+     refreshScreenshot(screenId: number, force?: boolean)
+   - Zorg dat baseURL consistent is (app.yodeck.com/api/v2)
+   - Gebruik dezelfde API key header als de rest van de Yodeck calls.
+
+5) Logging (belangrijk):
+   - Log 1 regel per screen:
+     [RefreshScreenshot] screen=<id> http=<status> ok=<true/false>
+   - Bij error log response body (kort) + correlationId als je die pattern hebt.
+
+6) Tests / smoke:
+   - Voeg een debug endpoint toe (alleen admin) om snel te checken:
+     GET /api/debug/yodeck/screens/:id/refresh-screenshot
+     -> die roept dezelfde service aan en returnt het resultaat.
+   - Zorg dat build compileert en server start zonder errors.
+
+LEVER OP:
+- Alle code wijzigingen in routes + service.
+- Geen breaking changes.
+- Daarna: republish.
+
+NA IMPLEMENTATIE WIL IK DIT KUNNEN DRAAIEN IN BROWSER CONSOLE:
+fetch("/api/admin/screens/refresh-screenshot", {
+  method:"POST",
+  headers:{ "Content-Type":"application/json" },
+  body: JSON.stringify({ yodeckPlayerIds:[591895], force:true })
+}).then(r=>r.json()).then(console.log).catch(console.error);
