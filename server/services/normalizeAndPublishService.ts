@@ -42,8 +42,8 @@ async function getBaselineMediaIds(): Promise<number[]> {
       const playlistResp = await yodeckRequest<any>(`/playlists/${baselinePlaylistId}/`);
       if (playlistResp.ok && playlistResp.data?.items) {
         const playlistMediaIds = playlistResp.data.items
-          .map((item: any) => item.media?.id || item.media_id)
-          .filter((id: number) => typeof id === "number");
+          .filter((item: any) => typeof item?.id === "number")
+          .map((item: any) => item.id);
         ids.push(...playlistMediaIds);
       }
     }
@@ -761,7 +761,9 @@ export async function normalizeAndPublish(
       }
 
       const existingItems: any[] = playlistResp.data.items || [];
-      const existingMediaIds = existingItems.map((item: any) => item.media?.id || item.media_id).filter(Boolean);
+      const existingMediaIds = existingItems
+        .filter((item: any) => typeof item?.id === "number")
+        .map((item: any) => item.id);
 
       log(correlationId, "UPDATE_PLAYLIST", `Playlist ${playlistId} has ${existingItems.length} items, mediaIds: ${existingMediaIds.join(",")}`, logs);
 
@@ -769,13 +771,13 @@ export async function normalizeAndPublish(
         log(correlationId, "UPDATE_PLAYLIST", `Media ${newYodeckMediaId} already in playlist, skipping insert`, logs);
       } else {
         const uniqueItems = existingItems.filter((item: any, index: number, arr: any[]) => {
-          const mediaId = item.media?.id || item.media_id;
-          return arr.findIndex((i: any) => (i.media?.id || i.media_id) === mediaId) === index;
+          const mediaId = item.id;
+          return typeof mediaId === "number" && arr.findIndex((i: any) => i.id === mediaId) === index;
         });
 
         const newItems = [
           ...uniqueItems.map((item: any) => ({
-            media: item.media?.id || item.media_id,
+            media: item.id,
             duration: item.duration || 10,
           })),
           {
@@ -784,10 +786,16 @@ export async function normalizeAndPublish(
           },
         ];
 
+        const validItems = newItems.filter(i => typeof i.media === "number" && i.media > 0);
+        if (validItems.length === 0) {
+          throw new Error(`EMPTY_PLAYLIST_GUARD: playlist ${playlistId} would be updated with 0 valid media items. Aborting to prevent playlist corruption.`);
+        }
+        log(correlationId, "UPDATE_PLAYLIST", `Sending ${validItems.length} valid items (filtered from ${newItems.length})`, logs);
+
         const updateResp = await yodeckRequest<any>(`/playlists/${playlistId}/`, {
           method: "PATCH",
           body: JSON.stringify({
-            items: newItems,
+            items: validItems,
           }),
         });
 
@@ -795,7 +803,7 @@ export async function normalizeAndPublish(
           throw new Error(`Failed to update playlist: ${updateResp.error}`);
         }
 
-        log(correlationId, "UPDATE_PLAYLIST", `Playlist ${playlistId} updated: ${existingItems.length} → ${newItems.length} items`, logs);
+        log(correlationId, "UPDATE_PLAYLIST", `Playlist ${playlistId} updated: ${existingItems.length} → ${validItems.length} items`, logs);
         playlistsUpdated++;
       }
 
@@ -822,12 +830,13 @@ export async function normalizeAndPublish(
         const verifyResp = await yodeckRequest<any>(`/playlists/${playlistId}/`);
         if (verifyResp.ok && verifyResp.data) {
           const verifyItems = verifyResp.data.items || [];
-          const verifyMediaIds = verifyItems.map((item: any) => item.media?.id || item.media_id);
+          const verifyMediaIds = verifyItems
+            .filter((item: any) => typeof item?.id === "number")
+            .map((item: any) => item.id);
           
           const newMediaPresent = verifyMediaIds.includes(newYodeckMediaId);
           const adsCount = verifyItems.filter((item: any) => {
-            const mediaId = item.media?.id || item.media_id;
-            return !baselineMediaIds.includes(mediaId);
+            return typeof item?.id === "number" && !baselineMediaIds.includes(item.id);
           }).length;
           
           if (newMediaPresent && adsCount > 0) {
