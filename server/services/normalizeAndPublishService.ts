@@ -170,7 +170,7 @@ async function yodeckRequest<T>(endpoint: string, options?: RequestInit): Promis
 
     if (!resp.ok) {
       const text = await resp.text();
-      console.error(`[YodeckRequest] ${method} ${endpoint} status=${resp.status} body='${text.slice(0, 200)}'`);
+      console.error(`[YodeckRequest] ${method} ${endpoint} status=${resp.status} body='${text.slice(0, 2000)}'`);
       return { ok: false, error: `HTTP ${resp.status}: ${text}` };
     }
 
@@ -547,14 +547,17 @@ export async function normalizeAndPublish(
   let newYodeckMediaId: number | null = null;
 
   try {
-    const determinisiticName = `EVZ-AD | ${advertiser.companyName} | ${asset.id.slice(0, 8)} | ${asset.storedFilename || asset.originalFileName}`;
-    log(correlationId, "UPLOAD_TO_YODECK", `Creating media: "${determinisiticName}"`, logs);
+    const safeName = `EVZ-AD-${asset.id.slice(0, 8)}.mp4`;
+    log(correlationId, "UPLOAD_TO_YODECK", `Creating media: "${safeName}"`, logs);
 
-    // Use canonical payload builder - NEVER include forbidden fields
-    const createPayload = buildYodeckCreateMediaPayload(determinisiticName);
-    assertNoForbiddenKeys(createPayload, "normalizeAndPublish.uploadToYodeck");
-    logCreateMediaPayload(createPayload as any);
-    
+    const createPayload = {
+      name: safeName,
+      media_origin: { type: "video", source: "local", format: null },
+      file_extension: "mp4",
+    };
+
+    console.log(`[YodeckCreateMedia] payload=${JSON.stringify(createPayload)}`);
+
     const createResp = await yodeckRequest<any>("/media/", {
       method: "POST",
       body: JSON.stringify(createPayload),
@@ -565,12 +568,24 @@ export async function normalizeAndPublish(
     }
 
     newYodeckMediaId = createResp.data.id;
-    const presignUrl = createResp.data.presign_url;
+    const getUploadUrl = createResp.data.get_upload_url || createResp.data.presign_url;
 
-    log(correlationId, "UPLOAD_TO_YODECK", `Created media ID=${newYodeckMediaId}, presign_url=${presignUrl ? "present" : "missing"}`, logs);
+    log(correlationId, "UPLOAD_TO_YODECK", `Created media ID=${newYodeckMediaId}, get_upload_url=${getUploadUrl ? "present" : "missing"}`, logs);
 
-    if (!presignUrl) {
-      throw new Error("No presign_url returned from Yodeck");
+    if (!getUploadUrl) {
+      console.error(`[YodeckCreateMedia] No upload URL in response. Keys: ${Object.keys(createResp.data).join(", ")}`);
+      throw new Error("No get_upload_url returned from Yodeck");
+    }
+
+    let presignUrl = getUploadUrl;
+    if (getUploadUrl.startsWith("/") || getUploadUrl.includes("/api/v2/")) {
+      const uploadUrlResp = await yodeckRequest<any>(getUploadUrl.replace(YODECK_BASE || "", ""));
+      if (uploadUrlResp.ok && uploadUrlResp.data?.upload_url) {
+        presignUrl = uploadUrlResp.data.upload_url;
+        log(correlationId, "UPLOAD_TO_YODECK", `Resolved presigned URL from get_upload_url`, logs);
+      } else {
+        throw new Error(`Failed to resolve presigned URL from get_upload_url: ${uploadUrlResp.error}`);
+      }
     }
 
     const normalizedBuffer = await fs.promises.readFile(normalizedLocalPath!);
@@ -606,8 +621,8 @@ export async function normalizeAndPublish(
         log(correlationId, "UPLOAD_TO_YODECK", `Poll ${poll + 1}: status=${status}, fileSize=${fileSize}`, logs);
         
         if (fileSize > 0 && (status === "Live" || status === "ready" || status === "converted")) {
-          if (!mediaName.includes(advertiser.companyName) && !mediaName.includes(asset.id.slice(0, 8))) {
-            throw new Error(`Media name mismatch: expected to contain "${advertiser.companyName}" but got "${mediaName}"`);
+          if (!mediaName.includes(asset.id.slice(0, 8))) {
+            throw new Error(`Media name mismatch: expected to contain "${asset.id.slice(0, 8)}" but got "${mediaName}"`);
           }
           finalFileSize = fileSize;
           mediaReady = true;
@@ -640,7 +655,7 @@ export async function normalizeAndPublish(
       duration_ms: Date.now() - uploadStart,
       details: {
         mediaId: newYodeckMediaId,
-        mediaName: determinisiticName,
+        mediaName: safeName,
         fileSize: finalFileSize,
       },
     });
