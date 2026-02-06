@@ -12152,6 +12152,62 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/screens/push
+   * Push content to Yodeck screens so updated playlists become visible immediately.
+   * Body: { yodeckPlayerIds: [591895, 591896] }
+   */
+  app.post("/api/admin/screens/push", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const { yodeckPlayerIds } = req.body || {};
+      if (!Array.isArray(yodeckPlayerIds) || yodeckPlayerIds.length === 0) {
+        return res.status(400).json({ ok: false, error: "yodeckPlayerIds (number[]) is required" });
+      }
+
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      if (!token) {
+        return res.status(500).json({ ok: false, error: "YODECK_AUTH_TOKEN not configured" });
+      }
+
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+      const pushed: { screenId: number; status: string; error?: string }[] = [];
+
+      for (const playerId of yodeckPlayerIds) {
+        const screenId = typeof playerId === "number" ? playerId : parseInt(playerId);
+        console.log(`[PUSH_TO_SCREEN] Pushing to screen ${screenId}...`);
+
+        try {
+          const pushResp = await fetch(`${yodeckBaseUrl}/screens/${screenId}/push/`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Token ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ use_download_timeslots: true }),
+          });
+
+          if (pushResp.ok) {
+            console.log(`[PUSH_TO_SCREEN] Screen ${screenId}: push SUCCESS (${pushResp.status})`);
+            pushed.push({ screenId, status: "success" });
+          } else {
+            const errText = await pushResp.text();
+            console.error(`[PUSH_TO_SCREEN] Screen ${screenId}: push FAILED (${pushResp.status}) ${errText.substring(0, 300)}`);
+            pushed.push({ screenId, status: "failed", error: `HTTP ${pushResp.status}: ${errText.substring(0, 300)}` });
+          }
+        } catch (err: any) {
+          console.error(`[PUSH_TO_SCREEN] Screen ${screenId}: exception ${err.message}`);
+          pushed.push({ screenId, status: "failed", error: err.message });
+        }
+      }
+
+      return res.json({ ok: true, pushed });
+    } catch (error: any) {
+      console.error(`[PUSH_TO_SCREEN] Error:`, error);
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/screens/self-heal
    * 1-click fix for all screens: ensure unique playlists, sync from base, rebuild
    */
