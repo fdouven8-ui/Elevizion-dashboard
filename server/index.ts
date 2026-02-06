@@ -257,6 +257,10 @@ declare module "http" {
   }
 }
 
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 app.use(
   express.json({
     verify: (req, _res, buf) => {
