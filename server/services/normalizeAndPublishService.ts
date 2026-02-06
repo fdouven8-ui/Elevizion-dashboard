@@ -664,7 +664,7 @@ export async function normalizeAndPublish(
         if (status === "initialized" && fileSize === 0) {
           initStuckCount++;
           if (initStuckCount >= 10) {
-            throw new Error(`FAILED_INIT_STUCK: media ${newYodeckMediaId} stuck at initialized/fileSize=0 after ${initStuckCount} polls. putStatus=${putStatus} uploadUrlHost=${uploadUrlHost} usedGetUploadUrl=true`);
+            throw new Error(`FAILED_INIT_STUCK: media ${newYodeckMediaId} stuck at initialized/fileSize=0 after ${initStuckCount} polls. putStatus=${putStatus} uploadUrlHost=${uploadUrlHost}`);
           }
         }
         
@@ -677,7 +677,7 @@ export async function normalizeAndPublish(
     }
 
     if (!mediaReady || !newYodeckMediaId) {
-      throw new Error(`Media not ready after polling. lastStatus=${lastPollStatus} putStatus=${putStatus} uploadUrlHost=${uploadUrlHost} usedGetUploadUrl=true`);
+      throw new Error(`Media not ready after polling. lastStatus=${lastPollStatus} putStatus=${putStatus} uploadUrlHost=${uploadUrlHost}`);
     }
 
     if (baselineMediaIds.includes(newYodeckMediaId!)) {
