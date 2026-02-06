@@ -556,7 +556,7 @@ async function step6PollStatus(
   const startTime = Date.now();
   let attempt = 0;
 
-  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed"];
+  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished", "processing", "encoding", "live"];
   const FAILED_STATUSES = ["failed", "error", "aborted", "rejected"];
 
   while (Date.now() - startTime < POLL_TIMEOUT_MS) {
@@ -602,7 +602,7 @@ async function step6PollStatus(
         return { ok: false, errorCode: "FAILED_INIT_STUCK", errorDetails: { attempts: attempt } };
       }
 
-      if (READY_STATUSES.includes(status) && fileSize > 0) {
+      if (READY_STATUSES.includes(status)) {
         const finalVerify = await finalVerification(mediaId, correlationId);
         if (!finalVerify.ok) {
           await markJobFailed(jobId, finalVerify.errorCode!, finalVerify.errorDetails, "Final verification failed");
@@ -772,7 +772,7 @@ export async function ensureAdvertiserMediaIsValid(
   advertiserId: string
 ): Promise<{ ok: boolean; mediaId: number | null; reason?: string; status?: string; isReady?: boolean }> {
   const LOG = "[EnsureMediaValid]";
-  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed"];
+  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished", "processing", "encoding", "live"];
   
   const advertiser = await db.query.advertisers.findFirst({
     where: eq(advertisers.id, advertiserId),

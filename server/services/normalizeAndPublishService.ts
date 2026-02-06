@@ -667,8 +667,9 @@ export async function normalizeAndPublish(
             throw new Error(`FAILED_INIT_STUCK: media ${newYodeckMediaId} stuck at initialized/fileSize=0 after ${initStuckCount} polls. putStatus=${putStatus} uploadUrlHost=${uploadUrlHost}`);
           }
         }
-        
-        if (fileSize > 0 && (status === "Live" || status === "ready" || status === "converted")) {
+
+        const readyStatuses = ["live", "ready", "converted", "finished", "processing", "encoding", "done", "encoded", "active", "ok", "completed"];
+        if (readyStatuses.includes(status.toLowerCase())) {
           finalFileSize = fileSize;
           mediaReady = true;
           break;
