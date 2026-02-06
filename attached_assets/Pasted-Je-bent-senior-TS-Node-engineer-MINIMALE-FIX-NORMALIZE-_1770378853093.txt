@@ -1,0 +1,55 @@
+Je bent senior TS/Node engineer. MINIMALE FIX: NORMALIZE faalt met "Object storage download failed" terwijl het object wél bestaat in R2.
+
+FEITEN:
+- key bestaat (via /api/debug/storage/object):
+  bucket=elevizion-assets
+  key=ad-assets/9a99d555-8676-49d3-9862-f65859bdcfb1/ADV-BOUWSERVICEDOUVEN-ADV-BOUW-202602051247.mp4
+  contentLength=1954184, contentType=video/mp4, exists=true
+- /api/admin/advertisers/:id/normalize-and-publish -> steps:
+  RESOLVE_ASSET success met storagePath
+  NORMALIZE failed met error "Failed to download asset: Object storage download failed"
+- Conclusie: normalizer gebruikt fout download pad of slikt echte error.
+
+DOEL:
+- NORMALIZE moet betrouwbaar kunnen downloaden uit dezelfde R2 config als /api/debug/storage/object.
+- Geen refactor van playlist/publish systeem. Alleen fix in download/normalize codepad + betere logging.
+
+TAKEN:
+1) Zoek de code voor NORMALIZE in normalize-and-publish flow.
+   Waarschijnlijk in:
+   - server/services/videoTranscodeService.ts
+   - server/services/mediaPipelineService.ts
+   - server/services/transactionalUploadService.ts (normalize deel)
+2) Vervang de asset download in NORMALIZE door de centrale ObjectStorageService die ook door /api/debug/storage/object gebruikt wordt.
+   - Als ObjectStorageService nog geen download-to-file heeft: voeg toe:
+     downloadToFile(key: string, destPath: string): Promise<{ bytes: number; contentType?: string }>
+     Implementatie: gebruik dezelfde R2/S3 client/config als object inspect; stream GetObject naar filesystem (Node stream pipeline).
+3) Update NORMALIZE flow:
+   - Neem storagePath/originalPath uit asset record (exact die string).
+   - Download naar /tmp/normalize_<assetId>.mp4 via ObjectStorageService.downloadToFile.
+   - Log:
+     NORMALIZE_DOWNLOAD_START key=...
+     NORMALIZE_DOWNLOAD_OK bytes=...
+   - Als download faalt: log de echte error details:
+     key, bucket, err.name, err.message, (err.$metadata?.httpStatusCode), (err.Code) indien aanwezig.
+     STOP met generieke "download failed" zonder details.
+4) Voeg een snelle bypass toe (minimaal, veilig) zodat we verder kunnen testen:
+   - Als asset.mimeType === "video/mp4" en asset.codec === "h264" en normalizationStatus === "NONE":
+     sta toe om NORMALIZE als success te markeren ZONDER ffmpeg:
+       normalizationStatus="DONE"
+       normalizationCompletedAt=now
+       normalizedStoragePath=storagePath (of kopieer naar normalized/ prefix als je dat standaard wil)
+   - Log: NORMALIZE_NOOP_USED reason="already_mp4_h264"
+   (Dit is alleen om publish te unblocken; laat het netjes binnen dezelfde flow.)
+5) Zorg dat normalize-and-publish daarna door kan naar publish, of tenminste dat yodeckReadiness niet meer "pending" blijft door normalization.
+
+ACCEPTANCE:
+- normalize-and-publish faalt niet meer op download; of geeft minimaal een volledige, concrete storage foutmelding.
+- Bij mp4+h264 assets kan NORMALIZE NOOP slagen en zet normalizedStoragePath/normalizationCompletedAt.
+- Daarna kan publish-now / normalize-and-publish de Yodeck upload starten.
+
+OUTPUT:
+- Toon exact welke files zijn aangepast.
+- Geef een korte test-instructie:
+  1) call normalize-and-publish met targetYodeckPlayerIds [591895,591896]
+  2) call rebuild-playlist

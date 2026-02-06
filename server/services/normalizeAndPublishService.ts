@@ -20,17 +20,10 @@ import { promisify } from "util";
 import * as fs from "fs";
 import * as path from "path";
 import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
+import { ObjectStorageService } from "../objectStorage";
 
 const execAsync = promisify(exec);
-
-function getObjectStorageClient() {
-  try {
-    const { Client } = require("@replit/object-storage");
-    return new Client();
-  } catch (e) {
-    return null;
-  }
-}
+const r2Storage = new ObjectStorageService();
 
 const YODECK_BASE = "https://app.yodeck.com/api/v2";
 const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN;
@@ -352,7 +345,7 @@ export async function normalizeAndPublish(
       return trace;
     }
 
-    log(correlationId, "NORMALIZE", `Downloading from storage: ${storagePath}`, logs);
+    log(correlationId, "NORMALIZE", `NORMALIZE_DOWNLOAD_START key=${storagePath}`, logs);
 
     const tmpDir = `/tmp/normalize-${correlationId}`;
     await fs.promises.mkdir(tmpDir, { recursive: true });
@@ -360,31 +353,9 @@ export async function normalizeAndPublish(
     const originalLocalPath = path.join(tmpDir, "original.mp4");
     normalizedLocalPath = path.join(tmpDir, "normalized-yodeck.mp4");
 
-    let downloadedBuffer: Buffer;
-    const objectStorage = getObjectStorageClient();
-    try {
-      if (objectStorage) {
-        const result = await objectStorage.downloadAsBytes(storagePath);
-        if (!result.ok || !result.value) {
-          throw new Error("Object storage download failed");
-        }
-        downloadedBuffer = Buffer.from(result.value);
-      } else {
-        throw new Error("Object storage not available");
-      }
-    } catch (dlError: any) {
-      const urlDownload = asset.storageUrl || storagePath;
-      if (urlDownload && urlDownload.startsWith("http")) {
-        const resp = await fetch(urlDownload);
-        if (!resp.ok) throw new Error(`Download failed: HTTP ${resp.status}`);
-        downloadedBuffer = Buffer.from(await resp.arrayBuffer());
-      } else {
-        throw new Error(`Failed to download asset: ${dlError.message}`);
-      }
-    }
-
-    await fs.promises.writeFile(originalLocalPath, downloadedBuffer);
-    log(correlationId, "NORMALIZE", `Downloaded ${downloadedBuffer.length} bytes to ${originalLocalPath}`, logs);
+    // Download via central R2 ObjectStorageService (same client as /api/debug/storage/object)
+    const dlResult = await r2Storage.downloadToFile(storagePath, originalLocalPath);
+    log(correlationId, "NORMALIZE", `NORMALIZE_DOWNLOAD_OK bytes=${dlResult.bytes} contentType=${dlResult.contentType}`, logs);
 
     try {
       const { stdout: probeOut } = await execAsync(
@@ -405,107 +376,150 @@ export async function normalizeAndPublish(
       log(correlationId, "NORMALIZE", `ffprobe original failed: ${probeErr.message}`, logs);
     }
 
-    log(correlationId, "NORMALIZE", `Running ffmpeg normalization...`, logs);
+    // NOOP BYPASS: If asset is already mp4/h264/yuv420p with moov@start, skip ffmpeg
+    if (originalFfprobe?.codec === "h264" && originalFfprobe?.pixelFormat === "yuv420p") {
+      const moovOk = await checkMoovAtStart(originalLocalPath);
+      const resOk = (originalFfprobe.width || 0) <= 1920 && (originalFfprobe.height || 0) <= 1080;
 
-    const ffmpegCmd = `ffmpeg -y -i "${originalLocalPath}" \
-      -c:v libx264 -preset medium -crf 23 \
-      -pix_fmt yuv420p \
-      -vf "scale=min(1920\\,iw):min(1080\\,ih):force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" \
-      -movflags +faststart \
-      -c:a aac -b:a 128k \
-      -t 15 \
-      "${normalizedLocalPath}" 2>&1`;
+      if (moovOk && resOk) {
+        log(correlationId, "NORMALIZE", `NORMALIZE_NOOP_USED reason="already_mp4_h264_yuv420p_moov@start" codec=${originalFfprobe.codec} pix=${originalFfprobe.pixelFormat} res=${originalFfprobe.width}x${originalFfprobe.height}`, logs);
 
-    const { stdout, stderr } = await execAsync(ffmpegCmd, { maxBuffer: 50 * 1024 * 1024 });
-    
-    const normalizedExists = await fs.promises.access(normalizedLocalPath).then(() => true).catch(() => false);
-    if (!normalizedExists) {
-      throw new Error(`FFmpeg did not produce output file. stderr: ${stderr || stdout}`);
+        // Use the original file as-is (copy to normalized path)
+        await fs.promises.copyFile(originalLocalPath, normalizedLocalPath);
+        normalizedFfprobe = { ...originalFfprobe, moovAtStart: true };
+        trace.summary.ffprobeSummary.normalized = normalizedFfprobe;
+
+        const normalizedStoragePath = `ads/${advertiser.linkKey}/${asset.id}-yodeck.mp4`;
+        const normalizedBuffer = await fs.promises.readFile(normalizedLocalPath);
+        await r2Storage.uploadBufferToKey(normalizedBuffer, normalizedStoragePath, "video/mp4");
+
+        trace.summary.normalizedPath = normalizedStoragePath;
+
+        await db
+          .update(adAssets)
+          .set({
+            normalizedStoragePath,
+            normalizedStorageUrl: normalizedStoragePath,
+            yodeckReadinessStatus: "READY_FOR_YODECK",
+            normalizationCompletedAt: new Date(),
+            normalizationProvider: "noop",
+            yodeckMetadataJson: normalizedFfprobe as any,
+          })
+          .where(eq(adAssets.id, asset.id));
+
+        steps.push({
+          step: "NORMALIZE",
+          status: "success",
+          duration_ms: Date.now() - normalizeStart,
+          details: {
+            noop: true,
+            reason: "already_mp4_h264_yuv420p_moov@start",
+            originalSize: dlResult.bytes,
+            normalizedSize: normalizedBuffer.length,
+            normalizedStoragePath,
+          },
+        });
+
+        log(correlationId, "NORMALIZE", `NOOP complete, stored at ${normalizedStoragePath}`, logs);
+      }
     }
 
-    const normalizedStats = await fs.promises.stat(normalizedLocalPath);
-    log(correlationId, "NORMALIZE", `Normalized file: ${normalizedStats.size} bytes`, logs);
+    // Only run ffmpeg if NOOP bypass was not used
+    if (steps.filter(s => s.step === "NORMALIZE").length === 0) {
+      log(correlationId, "NORMALIZE", `Running ffmpeg normalization...`, logs);
 
-    try {
-      const { stdout: probeNorm } = await execAsync(
-        `ffprobe -v quiet -print_format json -show_format -show_streams "${normalizedLocalPath}"`
-      );
-      const probeNormData = JSON.parse(probeNorm);
-      const normVideoStream = probeNormData.streams?.find((s: any) => s.codec_type === "video");
-      const moovAtStart = await checkMoovAtStart(normalizedLocalPath);
+      const ffmpegCmd = `ffmpeg -y -i "${originalLocalPath}" \
+        -c:v libx264 -preset medium -crf 23 \
+        -pix_fmt yuv420p \
+        -vf "scale=min(1920\\,iw):min(1080\\,ih):force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" \
+        -movflags +faststart \
+        -c:a aac -b:a 128k \
+        -t 15 \
+        "${normalizedLocalPath}" 2>&1`;
+
+      const { stdout, stderr } = await execAsync(ffmpegCmd, { maxBuffer: 50 * 1024 * 1024 });
       
-      normalizedFfprobe = {
-        codec: normVideoStream?.codec_name,
-        pixelFormat: normVideoStream?.pix_fmt,
-        width: normVideoStream?.width,
-        height: normVideoStream?.height,
-        duration: parseFloat(probeNormData.format?.duration || "0"),
-        moovAtStart,
-      };
-      trace.summary.ffprobeSummary.normalized = normalizedFfprobe;
-      log(correlationId, "NORMALIZE", `Normalized: ${normalizedFfprobe.codec} ${normalizedFfprobe.width}x${normalizedFfprobe.height} ${normalizedFfprobe.pixelFormat} moov=${moovAtStart}`, logs);
+      const normalizedExists = await fs.promises.access(normalizedLocalPath).then(() => true).catch(() => false);
+      if (!normalizedExists) {
+        throw new Error(`FFmpeg did not produce output file. stderr: ${stderr || stdout}`);
+      }
 
-      if (normalizedFfprobe.codec !== "h264") {
-        throw new Error(`VALIDATION_FAILED: Normalized codec is ${normalizedFfprobe.codec}, expected h264`);
+      const normalizedStats = await fs.promises.stat(normalizedLocalPath);
+      log(correlationId, "NORMALIZE", `Normalized file: ${normalizedStats.size} bytes`, logs);
+
+      try {
+        const { stdout: probeNorm } = await execAsync(
+          `ffprobe -v quiet -print_format json -show_format -show_streams "${normalizedLocalPath}"`
+        );
+        const probeNormData = JSON.parse(probeNorm);
+        const normVideoStream = probeNormData.streams?.find((s: any) => s.codec_type === "video");
+        const moovAtStart = await checkMoovAtStart(normalizedLocalPath);
+        
+        normalizedFfprobe = {
+          codec: normVideoStream?.codec_name,
+          pixelFormat: normVideoStream?.pix_fmt,
+          width: normVideoStream?.width,
+          height: normVideoStream?.height,
+          duration: parseFloat(probeNormData.format?.duration || "0"),
+          moovAtStart,
+        };
+        trace.summary.ffprobeSummary.normalized = normalizedFfprobe;
+        log(correlationId, "NORMALIZE", `Normalized: ${normalizedFfprobe.codec} ${normalizedFfprobe.width}x${normalizedFfprobe.height} ${normalizedFfprobe.pixelFormat} moov=${moovAtStart}`, logs);
+
+        if (normalizedFfprobe.codec !== "h264") {
+          throw new Error(`VALIDATION_FAILED: Normalized codec is ${normalizedFfprobe.codec}, expected h264`);
+        }
+        if (normalizedFfprobe.pixelFormat !== "yuv420p") {
+          throw new Error(`VALIDATION_FAILED: Normalized pixel format is ${normalizedFfprobe.pixelFormat}, expected yuv420p`);
+        }
+        if ((normalizedFfprobe.width || 0) > 1920 || (normalizedFfprobe.height || 0) > 1080) {
+          throw new Error(`VALIDATION_FAILED: Normalized resolution ${normalizedFfprobe.width}x${normalizedFfprobe.height} exceeds 1920x1080`);
+        }
+        if (!moovAtStart) {
+          throw new Error(`VALIDATION_FAILED: moov atom not at start of file (faststart failed)`);
+        }
+        log(correlationId, "NORMALIZE", `HARD_GATE: Validation passed (h264, yuv420p, <=1920x1080, moov@start)`, logs);
+      } catch (probeErr: any) {
+        if (probeErr.message.includes("VALIDATION_FAILED")) {
+          throw probeErr;
+        }
+        log(correlationId, "NORMALIZE", `ffprobe normalized failed: ${probeErr.message}`, logs);
       }
-      if (normalizedFfprobe.pixelFormat !== "yuv420p") {
-        throw new Error(`VALIDATION_FAILED: Normalized pixel format is ${normalizedFfprobe.pixelFormat}, expected yuv420p`);
-      }
-      if ((normalizedFfprobe.width || 0) > 1920 || (normalizedFfprobe.height || 0) > 1080) {
-        throw new Error(`VALIDATION_FAILED: Normalized resolution ${normalizedFfprobe.width}x${normalizedFfprobe.height} exceeds 1920x1080`);
-      }
-      if (!moovAtStart) {
-        throw new Error(`VALIDATION_FAILED: moov atom not at start of file (faststart failed)`);
-      }
-      log(correlationId, "NORMALIZE", `HARD_GATE: Validation passed (h264, yuv420p, <=1920x1080, moov@start)`, logs);
-    } catch (probeErr: any) {
-      if (probeErr.message.includes("VALIDATION_FAILED")) {
-        throw probeErr;
-      }
-      log(correlationId, "NORMALIZE", `ffprobe normalized failed: ${probeErr.message}`, logs);
+
+      const normalizedStoragePath = `ads/${advertiser.linkKey}/${asset.id}-yodeck.mp4`;
+      const normalizedBuffer = await fs.promises.readFile(normalizedLocalPath);
+      
+      await r2Storage.uploadBufferToKey(normalizedBuffer, normalizedStoragePath, "video/mp4");
+
+      trace.summary.normalizedPath = normalizedStoragePath;
+
+      await db
+        .update(adAssets)
+        .set({
+          normalizedStoragePath,
+          normalizedStorageUrl: normalizedStoragePath,
+          yodeckReadinessStatus: "READY_FOR_YODECK",
+          normalizationCompletedAt: new Date(),
+          normalizationProvider: "ffmpeg",
+          yodeckMetadataJson: normalizedFfprobe as any,
+        })
+        .where(eq(adAssets.id, asset.id));
+
+      steps.push({
+        step: "NORMALIZE",
+        status: "success",
+        duration_ms: Date.now() - normalizeStart,
+        details: {
+          originalSize: dlResult.bytes,
+          normalizedSize: normalizedStats.size,
+          originalCodec: originalFfprobe?.codec,
+          normalizedCodec: normalizedFfprobe?.codec,
+          normalizedStoragePath,
+        },
+      });
+
+      log(correlationId, "NORMALIZE", `Normalization complete, stored at ${normalizedStoragePath}`, logs);
     }
-
-    const normalizedStoragePath = `ads/${advertiser.linkKey}/${asset.id}-yodeck.mp4`;
-    const normalizedBuffer = await fs.promises.readFile(normalizedLocalPath);
-    
-    const storageClient = getObjectStorageClient();
-    if (storageClient) {
-      const uploadResult = await storageClient.uploadFromBytes(normalizedStoragePath, normalizedBuffer);
-      if (!uploadResult.ok) {
-        throw new Error(`Failed to upload normalized file to storage`);
-      }
-    } else {
-      log(correlationId, "NORMALIZE", `Object storage not available, skipping upload`, logs);
-    }
-
-    trace.summary.normalizedPath = normalizedStoragePath;
-
-    await db
-      .update(adAssets)
-      .set({
-        normalizedStoragePath,
-        normalizedStorageUrl: normalizedStoragePath,
-        yodeckReadinessStatus: "READY_FOR_YODECK",
-        normalizationCompletedAt: new Date(),
-        normalizationProvider: "ffmpeg",
-        yodeckMetadataJson: normalizedFfprobe as any,
-      })
-      .where(eq(adAssets.id, asset.id));
-
-    steps.push({
-      step: "NORMALIZE",
-      status: "success",
-      duration_ms: Date.now() - normalizeStart,
-      details: {
-        originalSize: downloadedBuffer.length,
-        normalizedSize: normalizedStats.size,
-        originalCodec: originalFfprobe?.codec,
-        normalizedCodec: normalizedFfprobe?.codec,
-        normalizedStoragePath,
-      },
-    });
-
-    log(correlationId, "NORMALIZE", `Normalization complete, stored at ${normalizedStoragePath}`, logs);
 
   } catch (error: any) {
     steps.push({
@@ -531,7 +545,7 @@ export async function normalizeAndPublish(
     // Use canonical payload builder - NEVER include forbidden fields
     const createPayload = buildYodeckCreateMediaPayload(determinisiticName);
     assertNoForbiddenKeys(createPayload, "normalizeAndPublish.uploadToYodeck");
-    logCreateMediaPayload(createPayload);
+    logCreateMediaPayload(createPayload as any);
     
     const createResp = await yodeckRequest<any>("/media/", {
       method: "POST",

@@ -723,6 +723,95 @@ export class ObjectStorageService {
   }
 
   /**
+   * Download an R2 object directly to a local file (streaming).
+   * Uses the same R2 S3 client as all other operations.
+   * @param storagePath - The storage key/path (will be resolved via resolveR2ObjectKey)
+   * @param destPath - Local filesystem path to write to
+   * @returns { bytes, contentType } on success
+   */
+  async downloadToFile(storagePath: string, destPath: string): Promise<{ bytes: number; contentType?: string }> {
+    const resolvedKey = resolveR2ObjectKey(storagePath);
+    const bucket = EFFECTIVE_BUCKET_NAME;
+
+    console.log(`[ObjectStorage] DOWNLOAD_TO_FILE_START key=${resolvedKey} bucket=${bucket} dest=${destPath}`);
+
+    if (!bucket) {
+      throw Object.assign(new Error("R2 bucket not configured"), { code: "NO_BUCKET" });
+    }
+    if (!resolvedKey) {
+      throw Object.assign(new Error(`Empty key after resolution (input=${storagePath})`), { code: "EMPTY_KEY" });
+    }
+
+    try {
+      const result = await s3Client.send(new GetObjectCommand({
+        Bucket: bucket,
+        Key: resolvedKey,
+      }));
+
+      if (!result.Body) {
+        throw new Error("GetObject returned no Body");
+      }
+
+      const { pipeline } = await import("stream/promises");
+      const { createWriteStream } = await import("fs");
+
+      const writeStream = createWriteStream(destPath);
+      await pipeline(result.Body as Readable, writeStream);
+
+      const { statSync } = await import("fs");
+      const stats = statSync(destPath);
+
+      console.log(`[ObjectStorage] DOWNLOAD_TO_FILE_OK key=${resolvedKey} bytes=${stats.size} contentType=${result.ContentType}`);
+
+      return {
+        bytes: stats.size,
+        contentType: result.ContentType || undefined,
+      };
+    } catch (error: any) {
+      const detail = {
+        key: resolvedKey,
+        bucket,
+        inputPath: storagePath,
+        errName: error.name,
+        errMessage: error.message,
+        httpStatus: error.$metadata?.httpStatusCode,
+        code: error.Code || error.code,
+      };
+      console.error(`[ObjectStorage] DOWNLOAD_TO_FILE_FAILED`, JSON.stringify(detail));
+      throw Object.assign(
+        new Error(`R2 download failed: ${error.message} (key=${resolvedKey}, bucket=${bucket}, httpStatus=${detail.httpStatus})`),
+        { detail }
+      );
+    }
+  }
+
+  /**
+   * Upload a Buffer to R2 at a specific key (relative path).
+   * Uses resolveR2ObjectKey for normalization.
+   * @returns The resolved key used for storage
+   */
+  async uploadBufferToKey(buffer: Buffer, key: string, contentType: string = "video/mp4"): Promise<string> {
+    const resolvedKey = resolveR2ObjectKey(key);
+    const bucket = EFFECTIVE_BUCKET_NAME;
+
+    if (!bucket) {
+      throw new Error("R2 bucket not configured");
+    }
+
+    console.log(`[ObjectStorage] UPLOAD_TO_KEY_START key=${resolvedKey} bucket=${bucket} size=${buffer.length} contentType=${contentType}`);
+
+    await s3Client.send(new PutObjectCommand({
+      Bucket: bucket,
+      Key: resolvedKey,
+      Body: buffer,
+      ContentType: contentType,
+    }));
+
+    console.log(`[ObjectStorage] UPLOAD_TO_KEY_OK key=${resolvedKey} bytes=${buffer.length}`);
+    return resolvedKey;
+  }
+
+  /**
    * Upload a file to object storage (private, no public ACL)
    * Returns the storage path for later access via signed URLs
    */
