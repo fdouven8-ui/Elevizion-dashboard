@@ -1,0 +1,49 @@
+Fix retry-publish so it publishes ONLY the requested assetId (no advertiser scan/dedup).
+
+Observed logs:
+- POST /api/admin/video-review/3941.../retry-publish triggers MediaPipeline
+- MediaPipeline does SCAN: 12 assets needing validation
+- DEDUP selects asset 53bbe... (older) and fails download (file not found)
+=> Wrong asset selected, retry should publish the assetId the admin clicked.
+
+Implement:
+
+1) Create a dedicated function to publish a single asset:
+MediaPipeline.publishSingleAsset({ assetId, correlationId, actor: "admin_retry" })
+
+Behavior:
+- Load asset by id from DB
+- Assert approvalStatus === "APPROVED"
+- Assert asset.storagePath is present
+- Before any Yodeck call: check ObjectStorage.exists(asset.storagePath)
+  - If not exists: set publishStatus="PUBLISH_FAILED", publishError="Storage file missing for this assetId", return failure for THIS asset.
+- Then run ONLY the Yodeck upload/create + readiness polling for THIS asset
+- Store yodeckMediaId as soon as Yodeck returns it (even before ready polling finishes)
+- On success: publishStatus="PUBLISHED", publishError=null, yodeckUploadedAt=now
+
+2) Update endpoints:
+POST /api/admin/video-review/:assetId/retry-publish
+- Must call publishSingleAsset(assetId) directly
+- Must NOT call any "scan advertiser assets" or "dedup newest asset"
+
+3) Update approve-idempotent path:
+If approvalStatus already APPROVED and yodeckMediaId null -> call publishSingleAsset(assetId)
+(no scan/dedup)
+
+4) Guardrail:
+Any code path that currently does:
+SCAN advertiser assets -> DEDUP -> process newest
+should NOT be used for admin retry/approve flows.
+That scan/dedup pipeline may remain for background reconciliation, but not for user-triggered retry.
+
+5) Fix the DEDUP "most recent" bug anyway:
+In the scan/dedup pipeline, ensure sorting is DESC by uploadedAt/createdAt (newest first).
+Current log says newest is 53bbe... but actual newest is 3941... (2026-02-05), so sorting is wrong.
+
+6) Add logs:
+[RetryPublish] correlationId=... assetId=... storagePath=... exists=true/false
+[RetryPublish] YODECK_CREATE_OK mediaId=...
+[RetryPublish] YODECK_READY_OK mediaId=...
+
+Rebuild and deploy.
+After deploy, clicking "Opnieuw publiceren" on 3941... must attempt upload for 3941... only.

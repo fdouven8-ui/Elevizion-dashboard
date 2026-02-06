@@ -720,7 +720,7 @@ export async function approveAsset(
       console.error('[AdminReview] Auto-placement error:', autoPlacementError.message);
     }
     
-    // MEDIA PIPELINE: Trigger validation and Yodeck upload if no yodeckMediaId
+    // MEDIA PIPELINE: Publish this specific asset to Yodeck (no scan/dedup)
     const approveCorrelationId = `approve-${assetId}-${Date.now()}`;
     let pipelineResult: { correlationId?: string; completedCount?: number; yodeckMediaId?: number; status?: string } | null = null;
     let effectiveYodeckMediaId = asset.yodeckMediaId;
@@ -728,41 +728,30 @@ export async function approveAsset(
     console.log(`[VideoReviewApprove] correlationId=${approveCorrelationId} advertiserId=${asset.advertiserId} assetId=${assetId} storedFile=${asset.storedFilename}`);
     
     if (!asset.yodeckMediaId) {
-      console.log(`[VideoReviewApprove] ${approveCorrelationId} Asset has no yodeckMediaId, triggering media pipeline`);
+      console.log(`[VideoReviewApprove] ${approveCorrelationId} Asset has no yodeckMediaId, publishing single asset directly`);
       try {
-        const { validateAdvertiserMedia } = await import('./mediaPipelineService');
-        // Pass correlationId through to pipeline for end-to-end tracing
-        const result = await validateAdvertiserMedia(asset.advertiserId, approveCorrelationId);
+        const { publishSingleAsset } = await import('./mediaPipelineService');
+        const result = await publishSingleAsset({
+          assetId,
+          correlationId: approveCorrelationId,
+          actor: isAlreadyApproved ? 'approve_idempotent' : 'approve_new',
+        });
         
         pipelineResult = {
-          correlationId: result.correlationId,
-          completedCount: result.completedCount,
+          correlationId: approveCorrelationId,
+          completedCount: result.ok ? 1 : 0,
+          yodeckMediaId: result.yodeckMediaId,
+          status: result.ok ? 'READY' : 'FAILED',
         };
         
-        console.log(`[MediaBridge] ${approveCorrelationId} Pipeline returned: completed=${result.completedCount} failed=${result.failedCount} assets=${result.assets.length}`);
-        
-        if (result.completedCount > 0 && result.assets.length > 0) {
-          const processedAsset = result.assets.find(a => a.id === assetId);
-          if (processedAsset?.yodeckMediaId) {
-            effectiveYodeckMediaId = processedAsset.yodeckMediaId;
-            pipelineResult.yodeckMediaId = processedAsset.yodeckMediaId;
-            pipelineResult.status = processedAsset.newStatus;
-            console.log(`[MediaBridge] ${approveCorrelationId} createdAssetId=${assetId} status=${processedAsset.newStatus} yodeckMediaId=${effectiveYodeckMediaId}`);
-          } else {
-            console.warn(`[MediaBridge] ${approveCorrelationId} Asset ${assetId} not found in pipeline results, assets: ${result.assets.map(a => a.id).join(', ')}`);
-          }
-        }
-        
-        if (result.failedCount > 0) {
-          console.warn(`[MediaBridge] ${approveCorrelationId} Pipeline had ${result.failedCount} failures`);
-          for (const assetResult of result.assets) {
-            if (assetResult.newStatus === 'REJECTED' || assetResult.error) {
-              console.warn(`[MediaBridge] ${approveCorrelationId} Asset ${assetResult.id} failed: ${assetResult.error || 'unknown'}`);
-            }
-          }
+        if (result.ok && result.yodeckMediaId) {
+          effectiveYodeckMediaId = result.yodeckMediaId;
+          console.log(`[VideoReviewApprove] ${approveCorrelationId} publishSingleAsset OK: yodeckMediaId=${effectiveYodeckMediaId}`);
+        } else {
+          console.warn(`[VideoReviewApprove] ${approveCorrelationId} publishSingleAsset FAILED: ${result.error}`);
         }
       } catch (pipelineError: any) {
-        console.error(`[MediaBridge] ${approveCorrelationId} Pipeline error: ${pipelineError.message}`);
+        console.error(`[VideoReviewApprove] ${approveCorrelationId} publishSingleAsset error: ${pipelineError.message}`);
       }
     } else {
       console.log(`[VideoReviewApprove] ${approveCorrelationId} Asset already has yodeckMediaId=${asset.yodeckMediaId}`);

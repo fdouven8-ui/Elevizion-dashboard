@@ -442,6 +442,7 @@ export async function validateAdvertiserMedia(advertiserId: string, externalCorr
         )
       )
     ),
+    orderBy: (adAssets, { desc }) => [desc(adAssets.uploadedAt)],
   });
 
   log(correlationId, "SCAN", `Found ${assets.length} assets needing validation`, logs);
@@ -452,12 +453,12 @@ export async function validateAdvertiserMedia(advertiserId: string, externalCorr
 
   const tempDir = os.tmpdir();
 
-  // IMPORTANT: Only process the FIRST (most recent) non-superseded asset
-  // This prevents noise from processing 5 old/duplicate assets
+  // IMPORTANT: Only process the FIRST (most recent by uploadedAt DESC) non-superseded asset
+  // This prevents noise from processing old/duplicate assets
   const assetsToProcess = assets.length > 0 ? [assets[0]] : [];
   
   if (assets.length > 1) {
-    log(correlationId, "DEDUP", `Found ${assets.length} assets, processing only most recent one: ${assets[0].id}`, logs);
+    log(correlationId, "DEDUP", `Found ${assets.length} assets, processing newest (uploadedAt DESC): ${assets[0].id} (uploaded ${assets[0].uploadedAt})`, logs);
   }
 
   for (const asset of assetsToProcess) {
@@ -748,4 +749,289 @@ export async function backfillPendingAssets(): Promise<{ processed: number; erro
   }
 
   return { processed, errors };
+}
+
+// ============================================================================
+// PUBLISH SINGLE ASSET - Direct publish for admin retry, NO scan/dedup
+// ============================================================================
+
+export interface PublishSingleAssetResult {
+  ok: boolean;
+  assetId: string;
+  correlationId: string;
+  yodeckMediaId?: number;
+  error?: string;
+}
+
+export async function publishSingleAsset(opts: {
+  assetId: string;
+  correlationId: string;
+  actor: string;
+}): Promise<PublishSingleAssetResult> {
+  const { assetId, correlationId, actor } = opts;
+  const LOG = "[RetryPublish]";
+
+  console.log(`${LOG} correlationId=${correlationId} assetId=${assetId} actor=${actor}`);
+
+  // 1. Load asset by ID
+  const asset = await db.query.adAssets.findFirst({
+    where: eq(adAssets.id, assetId),
+  });
+
+  if (!asset) {
+    console.error(`${LOG} correlationId=${correlationId} ASSET_NOT_FOUND assetId=${assetId}`);
+    return { ok: false, assetId, correlationId, error: "Asset niet gevonden" };
+  }
+
+  // 2. Assert approvalStatus === APPROVED
+  if (asset.approvalStatus !== "APPROVED") {
+    console.error(`${LOG} correlationId=${correlationId} WRONG_STATUS assetId=${assetId} approvalStatus=${asset.approvalStatus}`);
+    return { ok: false, assetId, correlationId, error: `Asset heeft status ${asset.approvalStatus}, moet APPROVED zijn` };
+  }
+
+  // 3. Determine storage path
+  const storagePath = asset.normalizedStoragePath || asset.storagePath;
+  if (!storagePath) {
+    console.error(`${LOG} correlationId=${correlationId} NO_STORAGE_PATH assetId=${assetId}`);
+    await db.update(adAssets).set({
+      publishStatus: "PUBLISH_FAILED",
+      publishError: "Geen storage pad gevonden voor dit asset",
+    }).where(eq(adAssets.id, assetId));
+    return { ok: false, assetId, correlationId, error: "Geen storage pad gevonden" };
+  }
+
+  console.log(`${LOG} correlationId=${correlationId} assetId=${assetId} storagePath=${storagePath}`);
+
+  // 4. Check file exists in object storage
+  const fileInfo = await objectStorage.getFileByPath(storagePath);
+  const fileExists = !!fileInfo;
+  console.log(`${LOG} correlationId=${correlationId} assetId=${assetId} storagePath=${storagePath} exists=${fileExists}`);
+
+  if (!fileExists) {
+    console.error(`${LOG} correlationId=${correlationId} STORAGE_FILE_MISSING assetId=${assetId} storagePath=${storagePath}`);
+    await db.update(adAssets).set({
+      publishStatus: "PUBLISH_FAILED",
+      publishError: `Storage file missing: ${storagePath}`,
+    }).where(eq(adAssets.id, assetId));
+    return { ok: false, assetId, correlationId, error: `Storage bestand niet gevonden: ${storagePath}` };
+  }
+
+  // 5. Download file
+  const tempDir = os.tmpdir();
+  const localPath = path.join(tempDir, `retry-publish-${assetId}-${Date.now()}.mp4`);
+
+  try {
+    const downloadBuffer = await objectStorage.downloadFile(storagePath);
+    if (!downloadBuffer || downloadBuffer.length === 0) {
+      throw new Error("Download returned empty buffer");
+    }
+    fs.writeFileSync(localPath, downloadBuffer);
+    console.log(`${LOG} correlationId=${correlationId} DOWNLOAD_OK assetId=${assetId} bytes=${downloadBuffer.length}`);
+  } catch (dlErr: any) {
+    console.error(`${LOG} correlationId=${correlationId} DOWNLOAD_FAILED assetId=${assetId} error=${dlErr.message}`);
+    await db.update(adAssets).set({
+      publishStatus: "PUBLISH_FAILED",
+      publishError: `Download mislukt: ${dlErr.message}`,
+    }).where(eq(adAssets.id, assetId));
+    try { fs.unlinkSync(localPath); } catch {}
+    return { ok: false, assetId, correlationId, error: `Download mislukt: ${dlErr.message}` };
+  }
+
+  // 6. Yodeck upload - step by step with EARLY ID persistence
+  const filename = asset.storedFilename || asset.originalFileName || `asset-${assetId}.mp4`;
+  const mediaName = filename.endsWith(".mp4") ? filename : `${filename}.mp4`;
+  let yodeckMediaId: number | null = asset.yodeckMediaId || null;
+  let getUploadUrlEndpoint: string | null = null;
+
+  try {
+    if (!YODECK_TOKEN) {
+      throw new Error("YODECK_AUTH_TOKEN not configured");
+    }
+
+    // If asset already has yodeckMediaId (from failed retry), check if it's usable
+    if (yodeckMediaId) {
+      console.log(`${LOG} correlationId=${correlationId} EXISTING_MEDIA_ID assetId=${assetId} mediaId=${yodeckMediaId} - checking if valid`);
+      try {
+        const checkResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
+          headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+        });
+        if (checkResp.ok) {
+          const checkData = await checkResp.json();
+          const fileSize = checkData.filesize || checkData.file_size || 0;
+          const status = checkData.status;
+          if (status !== "initialized" && fileSize > 0) {
+            console.log(`${LOG} correlationId=${correlationId} EXISTING_MEDIA_ALREADY_READY assetId=${assetId} mediaId=${yodeckMediaId} status=${status} fileSize=${fileSize}`);
+            await db.update(adAssets).set({
+              yodeckUploadedAt: new Date(),
+              yodeckReadinessStatus: "READY",
+              publishStatus: "PUBLISHED",
+              publishError: null,
+            }).where(eq(adAssets.id, assetId));
+            await db.update(advertisers).set({
+              assetStatus: "live",
+              updatedAt: new Date(),
+            }).where(eq(advertisers.id, asset.advertiserId));
+            try { fs.unlinkSync(localPath); } catch {}
+            return { ok: true, assetId, correlationId, yodeckMediaId };
+          }
+          console.log(`${LOG} correlationId=${correlationId} EXISTING_MEDIA_NOT_READY assetId=${assetId} mediaId=${yodeckMediaId} status=${status} fileSize=${fileSize} - creating new`);
+        } else {
+          console.log(`${LOG} correlationId=${correlationId} EXISTING_MEDIA_GONE assetId=${assetId} mediaId=${yodeckMediaId} status=${checkResp.status} - creating new`);
+        }
+      } catch (checkErr: any) {
+        console.warn(`${LOG} correlationId=${correlationId} EXISTING_MEDIA_CHECK_ERROR: ${checkErr.message} - creating new`);
+      }
+      yodeckMediaId = null;
+    }
+
+    // STEP 1: CREATE MEDIA in Yodeck
+    const payload = buildYodeckCreateMediaPayload(mediaName);
+    assertNoForbiddenKeys(payload, "publishSingleAsset");
+    logCreateMediaPayload(payload);
+
+    const createResp = await fetch(`${YODECK_API_BASE}/media/`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Token ${YODECK_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    let createData: any;
+    try {
+      createData = JSON.parse(await createResp.text());
+    } catch {
+      createData = {};
+    }
+
+    if (!createResp.ok) {
+      throw new Error(`CREATE_MEDIA failed: ${createResp.status} ${JSON.stringify(createData).substring(0, 300)}`);
+    }
+
+    yodeckMediaId = createData.id;
+    getUploadUrlEndpoint = createData.get_upload_url;
+
+    if (!yodeckMediaId || !getUploadUrlEndpoint) {
+      throw new Error(`CREATE_MEDIA missing id or get_upload_url`);
+    }
+
+    console.log(`${LOG} correlationId=${correlationId} YODECK_CREATE_OK assetId=${assetId} mediaId=${yodeckMediaId}`);
+
+    // EARLY PERSIST: Store yodeckMediaId immediately after CREATE to prevent duplicates on retry
+    await db.update(adAssets).set({
+      yodeckMediaId: yodeckMediaId,
+    }).where(eq(adAssets.id, assetId));
+
+    await db.update(advertisers).set({
+      yodeckMediaIdCanonical: yodeckMediaId,
+      yodeckMediaIdCanonicalUpdatedAt: new Date(),
+      updatedAt: new Date(),
+    }).where(eq(advertisers.id, asset.advertiserId));
+
+    console.log(`${LOG} correlationId=${correlationId} EARLY_ID_SAVED assetId=${assetId} mediaId=${yodeckMediaId}`);
+
+    // STEP 2: GET presigned upload URL
+    const fullEndpointUrl = getUploadUrlEndpoint!.startsWith("http")
+      ? getUploadUrlEndpoint!
+      : `${YODECK_API_BASE.replace("/api/v2", "")}${getUploadUrlEndpoint!}`;
+
+    const presignResp = await fetch(fullEndpointUrl, {
+      method: "GET",
+      headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+    });
+
+    if (!presignResp.ok) {
+      throw new Error(`GET presigned URL failed: ${presignResp.status}`);
+    }
+
+    const presignData = await presignResp.json();
+    const presignUrl = presignData.upload_url || presignData.presign_url || presignData.url;
+
+    if (!presignUrl) {
+      throw new Error(`No upload_url in presign response`);
+    }
+
+    // STEP 3: PUT binary to presigned URL
+    const fileBuffer = fs.readFileSync(localPath);
+    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY assetId=${assetId} bytes=${fileBuffer.length}`);
+
+    const uploadResp = await fetch(presignUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "video/mp4",
+        "Content-Length": String(fileBuffer.length),
+      },
+      body: fileBuffer,
+    });
+
+    if (!uploadResp.ok && uploadResp.status !== 204) {
+      throw new Error(`PUT binary failed: ${uploadResp.status}`);
+    }
+
+    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_OK assetId=${assetId} status=${uploadResp.status}`);
+
+    // STEP 4: Poll until ready
+    const POLL_MAX_MS = 120000; // 2 minutes
+    const startTime = Date.now();
+    let pollCount = 0;
+
+    while (Date.now() - startTime < POLL_MAX_MS) {
+      await new Promise(r => setTimeout(r, 3000));
+      pollCount++;
+
+      const statusResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
+        headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+      });
+
+      if (statusResp.ok) {
+        const statusData = await statusResp.json();
+        const fileSize = statusData.filesize || statusData.file_size || 0;
+        const status = statusData.status;
+
+        console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${fileSize}`);
+
+        if (status !== "initialized" && fileSize > 0) {
+          // Final verification
+          const verifyResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
+            headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+          });
+
+          if (verifyResp.status === 404) {
+            throw new Error(`FINAL_VERIFY_404: Media ${yodeckMediaId} returns 404`);
+          }
+
+          console.log(`${LOG} correlationId=${correlationId} YODECK_READY_OK assetId=${assetId} mediaId=${yodeckMediaId}`);
+
+          // Mark PUBLISHED
+          await db.update(adAssets).set({
+            yodeckUploadedAt: new Date(),
+            yodeckReadinessStatus: "READY",
+            publishStatus: "PUBLISHED",
+            publishError: null,
+          }).where(eq(adAssets.id, assetId));
+
+          await db.update(advertisers).set({
+            assetStatus: "live",
+            updatedAt: new Date(),
+          }).where(eq(advertisers.id, asset.advertiserId));
+
+          try { fs.unlinkSync(localPath); } catch {}
+          return { ok: true, assetId, correlationId, yodeckMediaId };
+        }
+      }
+    }
+
+    // Timeout - mark failed but keep yodeckMediaId (already persisted)
+    throw new Error(`Timeout waiting for media ${yodeckMediaId} to become ready after ${pollCount} polls`);
+  } catch (uploadErr: any) {
+    console.error(`${LOG} correlationId=${correlationId} UPLOAD_ERROR assetId=${assetId} mediaId=${yodeckMediaId} error=${uploadErr.message}`);
+    // Preserve yodeckMediaId if already set - never clear it
+    await db.update(adAssets).set({
+      publishStatus: "PUBLISH_FAILED",
+      publishError: uploadErr.message,
+    }).where(eq(adAssets.id, assetId));
+    try { fs.unlinkSync(localPath); } catch {}
+    return { ok: false, assetId, correlationId, yodeckMediaId: yodeckMediaId || undefined, error: uploadErr.message };
+  }
 }

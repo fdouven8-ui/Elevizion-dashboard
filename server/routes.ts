@@ -2606,22 +2606,20 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // Retry publish for failed assets (ADMIN ONLY)
-  // Re-triggers publish without requiring re-upload - uses idempotent approve flow
+  // Publishes ONLY the specific assetId - NO scan/dedup pipeline
   app.post("/api/admin/video-review/:id/retry-publish", requireAdminAccess, async (req: any, res) => {
     try {
       const assetId = req.params.id;
       const user = req.currentUser as any;
-      const correlationId = `retry-publish-${assetId}-${Date.now()}`;
+      const correlationId = `retry-${assetId}-${Date.now()}`;
       
-      // Get the asset
-      const { getAdAssetById, approveAsset } = await import("./services/adAssetUploadService");
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
       const asset = await getAdAssetById(assetId);
       
       if (!asset) {
         return res.status(404).json({ ok: false, message: "Asset niet gevonden" });
       }
       
-      // Only allow retry for approved assets
       if (asset.approvalStatus !== 'APPROVED') {
         return res.status(400).json({ 
           ok: false, 
@@ -2629,7 +2627,6 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
       
-      // Block retry if publish is already in progress (PENDING)
       if (asset.publishStatus === 'PENDING') {
         return res.status(400).json({ 
           ok: false, 
@@ -2637,7 +2634,6 @@ Sitemap: ${SITE_URL}/sitemap.xml
         });
       }
       
-      // Block if already PUBLISHED (use rebuild-playlist for re-sync)
       if (asset.publishStatus === 'PUBLISHED') {
         return res.status(400).json({ 
           ok: false, 
@@ -2647,14 +2643,45 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       console.log(`[VideoReview] RETRY_PUBLISH_START assetId=${assetId} correlationId=${correlationId} currentPublishStatus=${asset.publishStatus}`);
       
-      // Use idempotent approve flow which handles already-approved assets
-      const result = await approveAsset(assetId, user?.id || 'admin', 'Retry publish', true);
+      // Mark as PENDING before starting
+      await db.update(adAssets).set({
+        publishStatus: 'PENDING',
+        publishAttempts: (asset.publishAttempts || 0) + 1,
+        lastPublishAttemptAt: new Date(),
+        publishError: null,
+      }).where(eq(adAssets.id, assetId));
+      
+      // DIRECT single-asset publish - NO scan/dedup
+      const { publishSingleAsset } = await import("./services/mediaPipelineService");
+      const result = await publishSingleAsset({
+        assetId,
+        correlationId,
+        actor: `admin_retry:${user?.id || 'admin'}`,
+      });
+      
+      // If publish succeeded, also push to playlists
+      let canonicalPublish = null;
+      if (result.ok && result.yodeckMediaId) {
+        try {
+          const { publishApprovedAdToAllLocations } = await import("./services/yodeckAutopilotService");
+          const autopilotResult = await publishApprovedAdToAllLocations(assetId);
+          canonicalPublish = {
+            success: autopilotResult.ok,
+            locationsUpdated: autopilotResult.locationsSuccess,
+          };
+        } catch (e: any) {
+          console.warn(`[VideoReview] Canonical publish after retry failed: ${e.message}`);
+        }
+      }
       
       res.json({
-        ok: result.success,
-        message: result.message,
+        ok: result.ok,
+        message: result.ok 
+          ? `Publicatie gelukt${canonicalPublish?.locationsUpdated ? ` en gepubliceerd naar ${canonicalPublish.locationsUpdated} locatie(s)` : ''}`
+          : `Publicatie mislukt: ${result.error}`,
         yodeckMediaId: result.yodeckMediaId,
-        canonicalPublish: result.canonicalPublish,
+        correlationId,
+        canonicalPublish,
       });
     } catch (error: any) {
       console.error('[VideoReview] Retry publish error:', error);
