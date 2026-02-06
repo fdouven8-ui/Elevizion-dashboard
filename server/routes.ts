@@ -12248,7 +12248,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   app.post("/api/admin/screens/push", requireAdminAccess, async (req, res) => {
     res.setHeader("Content-Type", "application/json");
     try {
-      const { yodeckPlayerIds } = req.body || {};
+      const { yodeckPlayerIds, use_download_timeslots = true } = req.body || {};
       if (!Array.isArray(yodeckPlayerIds) || yodeckPlayerIds.length === 0) {
         return res.status(400).json({ ok: false, error: "yodeckPlayerIds (number[]) is required" });
       }
@@ -12259,12 +12259,11 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       }
 
       const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
-      const pushed: { screenId: number; status: string; error?: string }[] = [];
+      const pushed: { screenId: number; status: string; httpStatus?: number }[] = [];
+      const failed: { screenId: number; status: string; httpStatus?: number; error?: string }[] = [];
 
       for (const playerId of yodeckPlayerIds) {
         const screenId = typeof playerId === "number" ? playerId : parseInt(playerId);
-        console.log(`[PUSH_TO_SCREEN] Pushing to screen ${screenId}...`);
-
         try {
           const pushResp = await fetch(`${yodeckBaseUrl}/screens/${screenId}/push/`, {
             method: "POST",
@@ -12272,26 +12271,60 @@ KvK: 90982541 | BTW: NL004857473B37</p>
               "Authorization": `Token ${token}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ use_download_timeslots: true }),
+            body: JSON.stringify({ use_download_timeslots: !!use_download_timeslots }),
           });
 
+          const httpStatus = pushResp.status;
+          console.log(`[PushScreen] screen=${screenId} http=${httpStatus} ok=${pushResp.ok}`);
+
           if (pushResp.ok) {
-            console.log(`[PUSH_TO_SCREEN] Screen ${screenId}: push SUCCESS (${pushResp.status})`);
-            pushed.push({ screenId, status: "success" });
+            pushed.push({ screenId, status: "success", httpStatus });
           } else {
             const errText = await pushResp.text();
-            console.error(`[PUSH_TO_SCREEN] Screen ${screenId}: push FAILED (${pushResp.status}) ${errText.substring(0, 300)}`);
-            pushed.push({ screenId, status: "failed", error: `HTTP ${pushResp.status}: ${errText.substring(0, 300)}` });
+            console.error(`[PushScreen] screen=${screenId} error body: ${errText.substring(0, 300)}`);
+            failed.push({ screenId, status: "failed", httpStatus, error: errText.substring(0, 300) });
           }
         } catch (err: any) {
-          console.error(`[PUSH_TO_SCREEN] Screen ${screenId}: exception ${err.message}`);
-          pushed.push({ screenId, status: "failed", error: err.message });
+          console.error(`[PushScreen] screen=${screenId} exception: ${err.message}`);
+          failed.push({ screenId, status: "failed", error: err.message });
         }
       }
 
-      return res.json({ ok: true, pushed });
+      return res.json({ ok: true, pushed, failed });
     } catch (error: any) {
-      console.error(`[PUSH_TO_SCREEN] Error:`, error);
+      console.error(`[PushScreen] Error:`, error);
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/debug/yodeck/screens/:id/push
+   * Debug: push content to a single Yodeck screen.
+   */
+  app.get("/api/debug/yodeck/screens/:id/push", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const screenId = parseInt(req.params.id);
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+
+      const resp = await fetch(`${yodeckBaseUrl}/screens/${screenId}/push/`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Token ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ use_download_timeslots: true }),
+      });
+
+      const httpStatus = resp.status;
+      let body: any = null;
+      try { body = await resp.text(); } catch {}
+
+      console.log(`[PushScreen] debug screen=${screenId} http=${httpStatus} ok=${resp.ok}`);
+
+      return res.json({ ok: resp.ok, screenId, httpStatus, body: body?.substring(0, 500) });
+    } catch (error: any) {
       return res.status(500).json({ ok: false, error: error.message });
     }
   });

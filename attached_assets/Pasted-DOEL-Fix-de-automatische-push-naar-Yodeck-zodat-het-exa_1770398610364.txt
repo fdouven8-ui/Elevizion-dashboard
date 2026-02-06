@@ -1,0 +1,58 @@
+DOEL
+Fix de automatische push naar Yodeck zodat het exact werkt zoals de Yodeck UI-knop “Save & Push to this Screen”.
+Onze huidige POST /api/admin/screens/push geeft “success” maar triggert niet de echte screen push.
+
+WAT MOET JE DOEN
+1) Gebruik het JUISTE Yodeck endpoint per screen:
+   POST https://app.yodeck.com/api/v2/screens/{id}/push
+   Body (JSON): { "use_download_timeslots": true }
+   (Als body niet vereist blijkt, stuur hem toch zoals docs tonen.)
+
+2) Update /api/admin/screens/push (admin-only) zodat deze:
+   - Body accepteert:
+     {
+       "yodeckPlayerIds": [591896, ...],
+       "use_download_timeslots": true
+     }
+   - Voor elke id:
+     - Call YodeckClient.pushScreen(id, use_download_timeslots)
+   - Verzamel resultaten:
+     pushed: [{ screenId, status:"success", httpStatus }]
+     failed: [{ screenId, status:"failed", httpStatus, error }]
+   - Response 200:
+     { ok:true, pushed:[...], failed:[...] }
+
+3) Update/maak Yodeck client methode:
+   - Base URL moet consistent zijn: https://app.yodeck.com/api/v2
+   - Zelfde API key header als andere calls (exact hetzelfde mechanisme als in je bestaande code)
+   - Voeg toe:
+     pushScreen(screenId: number, useDownloadTimeslots?: boolean)
+     -> POST /screens/${screenId}/push met body { use_download_timeslots: true/false }
+
+4) Logging (belangrijk):
+   - 1 regel per screen:
+     [PushScreen] screen=<id> http=<status> ok=<true/false>
+   - Bij error: log korte response body + correlationId/reqId als jullie dat hebben.
+
+5) Smoke test endpoints (admin-only):
+   - Voeg debug endpoint toe:
+     GET /api/debug/yodeck/screens/:id/push
+     -> roept dezelfde yodeck.pushScreen(id,true) aan
+     -> returnt { ok, screenId, httpStatus, body }
+
+6) Zorg dat:
+   - Geen breaking changes.
+   - Build compileert.
+   - Server start zonder errors.
+   - Daarna: republish.
+
+NA IMPLEMENTATIE WIL IK DIT KUNNEN DRAAIEN IN BROWSER CONSOLE
+fetch("/api/admin/screens/push", {
+  method:"POST",
+  headers:{ "Content-Type":"application/json" },
+  body: JSON.stringify({ yodeckPlayerIds:[591896], use_download_timeslots:true })
+}).then(r=>r.json()).then(console.log).catch(console.error);
+
+EN DIT VOOR SNEL TESTEN
+fetch("/api/debug/yodeck/screens/591896/push")
+  .then(r=>r.json()).then(console.log).catch(console.error);
