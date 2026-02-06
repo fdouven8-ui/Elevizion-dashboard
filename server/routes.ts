@@ -12259,8 +12259,8 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       }
 
       const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
-      const pushed: { screenId: number; status: string; httpStatus?: number }[] = [];
-      const failed: { screenId: number; status: string; httpStatus?: number; error?: string }[] = [];
+      const pushed: { screenId: number; httpStatus: number; yodeckStatus: string }[] = [];
+      const failed: { screenId: number; httpStatus?: number; error: string }[] = [];
 
       for (const playerId of yodeckPlayerIds) {
         const screenId = typeof playerId === "number" ? playerId : parseInt(playerId);
@@ -12275,18 +12275,28 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           });
 
           const httpStatus = pushResp.status;
-          console.log(`[PushScreen] screen=${screenId} http=${httpStatus} ok=${pushResp.ok}`);
+          let respText = "";
+          try { respText = await pushResp.text(); } catch {}
+
+          let yodeckStatus = "unknown";
+          try {
+            const parsed = JSON.parse(respText);
+            yodeckStatus = parsed.status || parsed.screen?.status || (pushResp.ok ? "completed" : "failed");
+          } catch {
+            yodeckStatus = pushResp.ok ? "completed" : "failed";
+          }
+
+          console.log(`[PushScreen] screen=${screenId} http=${httpStatus} yodeck=${yodeckStatus} ok=${pushResp.ok}`);
 
           if (pushResp.ok) {
-            pushed.push({ screenId, status: "success", httpStatus });
+            pushed.push({ screenId, httpStatus, yodeckStatus });
           } else {
-            const errText = await pushResp.text();
-            console.error(`[PushScreen] screen=${screenId} error body: ${errText.substring(0, 300)}`);
-            failed.push({ screenId, status: "failed", httpStatus, error: errText.substring(0, 300) });
+            console.error(`[PushScreen] screen=${screenId} error body: ${respText.substring(0, 300)}`);
+            failed.push({ screenId, httpStatus, error: respText.substring(0, 300) });
           }
         } catch (err: any) {
           console.error(`[PushScreen] screen=${screenId} exception: ${err.message}`);
-          failed.push({ screenId, status: "failed", error: err.message });
+          failed.push({ screenId, error: err.message });
         }
       }
 
@@ -12318,12 +12328,20 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       });
 
       const httpStatus = resp.status;
-      let body: any = null;
-      try { body = await resp.text(); } catch {}
+      let respText = "";
+      try { respText = await resp.text(); } catch {}
 
-      console.log(`[PushScreen] debug screen=${screenId} http=${httpStatus} ok=${resp.ok}`);
+      let yodeckStatus = "unknown";
+      try {
+        const parsed = JSON.parse(respText);
+        yodeckStatus = parsed.status || parsed.screen?.status || (resp.ok ? "completed" : "failed");
+      } catch {
+        yodeckStatus = resp.ok ? "completed" : "failed";
+      }
 
-      return res.json({ ok: resp.ok, screenId, httpStatus, body: body?.substring(0, 500) });
+      console.log(`[PushScreen] debug screen=${screenId} http=${httpStatus} yodeck=${yodeckStatus} ok=${resp.ok}`);
+
+      return res.json({ ok: resp.ok, screenId, httpStatus, yodeckStatus, body: respText.substring(0, 500) });
     } catch (error: any) {
       return res.status(500).json({ ok: false, error: error.message });
     }
