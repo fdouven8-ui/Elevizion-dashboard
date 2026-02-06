@@ -424,11 +424,15 @@ async function stepCompleteUpload(
   uploadUrl: string,
   correlationId: string
 ): Promise<FinalizeResult> {
-  const endpoint = `${YODECK_API_BASE}/media/${mediaId}/upload/complete`;
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 4: PUT ${endpoint}`);
+  const endpointPath = `/media/${mediaId}/upload/complete`;
+  const fullUrl = `${YODECK_API_BASE}${endpointPath}`;
+  const hasQuery = uploadUrl.includes("?");
+
+  console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_CALL url=${endpointPath}`);
+  console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_BODY hasQuery=${hasQuery}`);
 
   try {
-    const response = await fetch(endpoint, {
+    const response = await fetch(fullUrl, {
       method: "PUT",
       headers: {
         "Authorization": `Token ${YODECK_TOKEN}`,
@@ -437,30 +441,48 @@ async function stepCompleteUpload(
       body: JSON.stringify({ upload_url: uploadUrl }),
     });
 
-    const lastStatus = response.status;
-    let responseBody: any;
-    try {
-      const text = await response.text();
-      responseBody = text ? JSON.parse(text) : {};
-    } catch {
-      responseBody = { parseError: true };
-    }
+    const completeStatus = response.status;
+    const contentType = response.headers.get("content-type") || "unknown";
+    let respText = "";
+    try { respText = await response.text(); } catch {}
 
-    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD: status=${lastStatus} body=${JSON.stringify(responseBody).substring(0, 500)}`);
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_STATUS=${completeStatus}`);
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_RESP_CT=${contentType}`);
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_RESP_BODY_SNIP=${respText.substring(0, 200)}`);
 
     await updateJob(jobId, {
       finalizeAttempted: true,
-      finalizeStatus: lastStatus,
-      finalizeUrlUsed: endpoint,
+      finalizeStatus: completeStatus,
+      finalizeUrlUsed: fullUrl,
     });
 
-    if (!response.ok) {
-      console.error(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD FAILED: status=${lastStatus} contentType=${response.headers.get("content-type")} body=${JSON.stringify(responseBody).substring(0, 500)}`);
-      return { ok: false, error: `COMPLETE_FAILED_${lastStatus}`, status: lastStatus, endpoint };
+    if (completeStatus !== 200) {
+      console.error(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD FAILED: status=${completeStatus} ct=${contentType} body=${respText.substring(0, 500)}`);
+      return { ok: false, error: `COMPLETE_FAILED_${completeStatus}`, status: completeStatus, endpoint: fullUrl };
     }
 
-    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD SUCCESS`);
-    return { ok: true, endpoint, status: lastStatus };
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD SUCCESS (200)`);
+
+    // Immediately GET /media/{id} to check status after complete
+    await new Promise(r => setTimeout(r, 1500));
+    try {
+      const checkResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+        headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+      });
+      if (checkResp.ok) {
+        const checkData = await checkResp.json();
+        const mStatus = checkData.status || "unknown";
+        const mFileSize = checkData.filesize || checkData.file_size || 0;
+        const mLastUploaded = checkData.last_uploaded || checkData.updated_at || "unknown";
+        console.log(`${LOG_PREFIX} [${correlationId}] AFTER_COMPLETE_MEDIA status=${mStatus} fileSize=${mFileSize} last_uploaded=${mLastUploaded}`);
+      } else {
+        console.warn(`${LOG_PREFIX} [${correlationId}] AFTER_COMPLETE_MEDIA check failed: ${checkResp.status}`);
+      }
+    } catch (err: any) {
+      console.warn(`${LOG_PREFIX} [${correlationId}] AFTER_COMPLETE_MEDIA check error: ${err.message}`);
+    }
+
+    return { ok: true, endpoint: fullUrl, status: completeStatus };
   } catch (err: any) {
     console.error(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD ERROR: ${err.message}`);
     return { ok: false, error: err.message, status: 0 };
