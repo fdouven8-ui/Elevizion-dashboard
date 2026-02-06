@@ -568,36 +568,23 @@ export async function normalizeAndPublish(
     }
 
     newYodeckMediaId = createResp.data.id;
-    const getUploadUrlRaw = createResp.data.get_upload_url || createResp.data.presign_url;
-
-    log(correlationId, "UPLOAD_TO_YODECK", `Created media ID=${newYodeckMediaId}, get_upload_url=${getUploadUrlRaw ? "present" : "missing"}`, logs);
+    log(correlationId, "UPLOAD_TO_YODECK", `Created media ID=${newYodeckMediaId}`, logs);
     console.log(`[YodeckUpload] create response keys: ${Object.keys(createResp.data).join(", ")}`);
 
-    if (!getUploadUrlRaw) {
-      console.error(`[YodeckUpload] No upload URL. Full response: ${JSON.stringify(createResp.data).slice(0, 1000)}`);
-      throw new Error("No get_upload_url returned from Yodeck");
+    // Step B: GET /media/{id}/upload to retrieve presigned upload_url
+    const uploadMetaEndpoint = `/media/${newYodeckMediaId}/upload/`;
+    log(correlationId, "UPLOAD_TO_YODECK", `GET ${uploadMetaEndpoint}`, logs);
+
+    const uploadMetaResp = await yodeckRequest<any>(uploadMetaEndpoint);
+    if (!uploadMetaResp.ok || !uploadMetaResp.data) {
+      console.error(`[YodeckUpload] GET ${uploadMetaEndpoint} failed: ${uploadMetaResp.error}`);
+      throw new Error(`GET /media/{id}/upload failed: ${uploadMetaResp.error}`);
     }
 
-    // Step B: GET get_upload_url to resolve the real presigned upload_url
-    let getUploadEndpoint = getUploadUrlRaw;
-    if (getUploadEndpoint.startsWith("http")) {
-      try {
-        const parsed = new URL(getUploadEndpoint);
-        getUploadEndpoint = parsed.pathname;
-      } catch {}
-    }
-    log(correlationId, "UPLOAD_TO_YODECK", `GET get_upload_url endpoint: ${getUploadEndpoint}`, logs);
-
-    const uploadUrlResp = await yodeckRequest<any>(getUploadEndpoint);
-    if (!uploadUrlResp.ok || !uploadUrlResp.data) {
-      console.error(`[YodeckUpload] GET get_upload_url failed: ${uploadUrlResp.error}`);
-      throw new Error(`GET get_upload_url failed: ${uploadUrlResp.error}`);
-    }
-
-    const presignUrl = uploadUrlResp.data.upload_url;
+    const presignUrl = uploadMetaResp.data.upload_url;
     if (!presignUrl) {
-      console.error(`[YodeckUpload] No upload_url in GET response. Body: ${JSON.stringify(uploadUrlResp.data).slice(0, 1000)}`);
-      throw new Error(`GET get_upload_url response missing upload_url field. Keys: ${Object.keys(uploadUrlResp.data).join(", ")}`);
+      console.error(`[YodeckUpload] No upload_url in /media/{id}/upload response. Keys: ${Object.keys(uploadMetaResp.data).join(", ")} Body: ${JSON.stringify(uploadMetaResp.data).slice(0, 1000)}`);
+      throw new Error(`GET /media/{id}/upload response missing upload_url. Keys: ${Object.keys(uploadMetaResp.data).join(", ")}`);
     }
 
     let uploadUrlHost = "unknown";
@@ -631,15 +618,31 @@ export async function normalizeAndPublish(
       throw new Error(`PUT to presigned URL failed: HTTP ${putStatus}`);
     }
 
-    log(correlationId, "UPLOAD_TO_YODECK", `PUT complete, verifying immediately...`, logs);
+    // Step D: Call "Complete Media upload" endpoint to finalize
+    const completeEndpoint = `/media/${newYodeckMediaId}/upload/complete/`;
+    log(correlationId, "UPLOAD_TO_YODECK", `POST ${completeEndpoint} (finalize)`, logs);
 
-    // Step D: Immediate verification before polling
+    const completeResp = await yodeckRequest<any>(completeEndpoint, {
+      method: "POST",
+      body: JSON.stringify({ upload_url: presignUrl }),
+    });
+
+    let completeOk = false;
+    if (completeResp.ok) {
+      completeOk = true;
+      log(correlationId, "UPLOAD_TO_YODECK", `Complete upload succeeded`, logs);
+    } else {
+      log(correlationId, "UPLOAD_TO_YODECK", `Complete upload response: ${completeResp.error} (will check if media progresses)`, logs);
+    }
+
+    // Step E: Immediate verification after PUT+complete
+    log(correlationId, "UPLOAD_TO_YODECK", `Verifying immediately after upload...`, logs);
     await new Promise((r) => setTimeout(r, 2000));
     const immediateCheck = await yodeckRequest<any>(`/media/${newYodeckMediaId}/`);
     if (immediateCheck.ok && immediateCheck.data) {
       const imStatus = immediateCheck.data.status;
       const imFileSize = immediateCheck.data.filesize || immediateCheck.data.file_size || 0;
-      log(correlationId, "UPLOAD_TO_YODECK", `Immediate check: status=${imStatus} fileSize=${imFileSize}`, logs);
+      log(correlationId, "UPLOAD_TO_YODECK", `Immediate check: status=${imStatus} fileSize=${imFileSize} completeOk=${completeOk}`, logs);
     } else {
       log(correlationId, "UPLOAD_TO_YODECK", `Immediate check failed: ${immediateCheck.error}`, logs);
     }
