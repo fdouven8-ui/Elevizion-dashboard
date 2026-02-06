@@ -149,14 +149,20 @@ async function yodeckRequest<T>(endpoint: string, options?: RequestInit): Promis
   error?: string;
 }> {
   if (!YODECK_TOKEN) {
-    return { ok: false, error: "YODECK_AUTH_TOKEN not configured" };
+    throw new Error("YODECK_API_KEY missing: YODECK_AUTH_TOKEN env var is not set");
   }
 
+  const method = (options?.method || "GET").toUpperCase();
+  const url = `${YODECK_BASE}${endpoint}`;
+  const authHeader = `Token ${YODECK_TOKEN}`;
+
+  console.log(`[YodeckRequest] ${method} ${endpoint} authHeaderPresent=${!!authHeader}`);
+
   try {
-    const resp = await fetch(`${YODECK_BASE}${endpoint}`, {
+    const resp = await fetch(url, {
       ...options,
       headers: {
-        "Authorization": `api-key ${YODECK_TOKEN}`,
+        "Authorization": authHeader,
         "Content-Type": "application/json",
         ...options?.headers,
       },
@@ -164,12 +170,14 @@ async function yodeckRequest<T>(endpoint: string, options?: RequestInit): Promis
 
     if (!resp.ok) {
       const text = await resp.text();
+      console.error(`[YodeckRequest] ${method} ${endpoint} status=${resp.status} body='${text.slice(0, 200)}'`);
       return { ok: false, error: `HTTP ${resp.status}: ${text}` };
     }
 
     const data = await resp.json();
     return { ok: true, data };
   } catch (error: any) {
+    console.error(`[YodeckRequest] ${method} ${endpoint} error=${error.message}`);
     return { ok: false, error: error.message };
   }
 }
