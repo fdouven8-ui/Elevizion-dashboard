@@ -14185,6 +14185,50 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/debug/yodeck/playlists/:id/add-media
+   * Debug: add a single media item to a playlist using the full PUT flow.
+   * body: { mediaId: number, duration?: number }
+   */
+  app.post("/api/debug/yodeck/playlists/:id/add-media", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    try {
+      const playlistId = parseInt(req.params.id);
+      const { mediaId, duration } = req.body || {};
+      if (!mediaId || typeof mediaId !== "number") {
+        return res.status(400).json({ ok: false, error: "mediaId (number) is required in body" });
+      }
+
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+
+      const getResp = await fetch(`${yodeckBaseUrl}/playlists/${playlistId}/`, {
+        headers: { "Authorization": `Token ${token}`, "Content-Type": "application/json" },
+      });
+      if (!getResp.ok) {
+        const errText = await getResp.text();
+        return res.status(getResp.status).json({ ok: false, error: `GET playlist failed: ${getResp.status}`, body: errText.substring(0, 500) });
+      }
+      const currentPlaylist = await getResp.json();
+
+      const { updateYodeckPlaylist } = await import("./services/normalizeAndPublishService");
+      const result = await updateYodeckPlaylist(playlistId, currentPlaylist, mediaId, duration || 15, `debug-${Date.now()}`);
+
+      return res.json({
+        ok: result.ok,
+        playlistId,
+        mediaId,
+        beforeIds: result.beforeIds,
+        afterIds: result.afterIds,
+        itemCountAfter: result.itemCountAfter,
+        error: result.error,
+      });
+    } catch (error: any) {
+      console.error(`[Debug] Error adding media to playlist:`, error);
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/debug/yodeck/media/:id/exists
    * Simple check if media exists in Yodeck - returns JSON only.
    */

@@ -1,0 +1,58 @@
+JE BENT EEN SENIOR TYPESCRIPT/NODE ENGINEER. Pas de Yodeck playlist-update flow aan zodat playlist updaten NOOIT meer faalt met HTTP 400 missing_key_generic.
+
+CONTEXT
+- Normalize + upload naar Yodeck werkt (media wordt aangemaakt en upload complete succeed).
+- Daarna probeert de app playlists te updaten voor screen playlists (ids 30590872 en 30590180) via PUT /playlists/{id}.
+- Yodeck geeft: HTTP 400 {"error":{"code":"missing_key_generic","message":"Invalid request input","details":{"missing_key":...}}}
+- Dat betekent dat onze PUT-body niet alle verplichte velden bevat.
+
+DOEL
+- Update playlist items betrouwbaar door eerst de bestaande playlist volledig op te halen, dan een volledige PUT-body te sturen met alle verplichte velden.
+- Zonder grote refactor, alleen gericht fixen.
+
+TAKEN
+1) Zoek waar playlists worden geüpdatet in de “normalize-and-publish” flow (stap “UPDATE_PLAYLIST”, “PUT playlist”, of vergelijkbaar).
+2) Implementeer een helper in de Yodeck client/service:
+   - getPlaylist(id): GET /playlists/{id} (bestaand)
+   - updatePlaylist(id, patch): doe NIET blind PUT met alleen items.
+     a) Haal eerst de huidige playlist op: const current = await getPlaylist(id)
+     b) Bouw een volledige payload voor PUT met minimaal:
+        - name: current.name (string)
+        - description: current.description ?? ""
+        - workspace: current.workspace ?? null (exact zoals API teruggeeft; als object, stuur object; als null, stuur null)
+        - items: NIEUWE items-array (zie hieronder)
+        - transition_options: current.transition_options ?? undefined (alleen meesturen als aanwezig)
+        - playback_options: current.playback_options ?? undefined (alleen meesturen als aanwezig)
+     c) Stuur PUT /playlists/{id} met Content-Type application/json en payload hierboven.
+     d) Als PUT faalt, log de response body (status + body) en geef een nette fout terug.
+3) Items opbouw:
+   - Neem current.items (zoals Yodeck teruggeeft) en maak een nieuwe items array waarin de baseline media IDs blijven bestaan + onze nieuwe mediaId wordt toegevoegd.
+   - Gebruik exact de item-shape die Yodeck accepteert. (We zagen eerder dat playlist items uit GET zo terugkomen: { id:<mediaId>, type:"media", duration:<sec>, priority:<n> } )
+   - Zorg dat priority netjes oploopt vanaf 1.
+   - Zet duration voor nieuwe advertentie op asset.durationSeconds (of 15 default).
+   - Deduplicate op mediaId zodat dezelfde media niet dubbel komt.
+4) Fix ook het misleidende “playlist_update undefined” in response:
+   - Zorg dat normalize-and-publish response een step bevat “UPDATE_PLAYLIST” per target, met status success/failed + playlistId + addedMediaId + itemCountBefore/After.
+5) Voeg een debug endpoint toe (admin-only):
+   - POST /api/debug/yodeck/playlists/:id/add-media
+     body: { mediaId:number, duration?:number }
+     -> haalt playlist op, voegt media toe, doet updatePlaylist, return: {ok, playlistId, beforeIds, afterIds}
+   - Dit is om los te testen zonder hele pipeline.
+6) Tests / manual checks (minimaal):
+   - Run normalize-and-publish opnieuw voor advertiser 9a99d555-8676-49d3-9862-f65859bdcfb1 met target players [591895,591896]
+   - Verwacht: UPDATE_PLAYLIST steps success en playlists bevatten oude baseline IDs + nieuwe mediaId.
+   - Check via bestaande endpoint /api/yodeck/playlists/:id dat items nu de nieuwe mediaId bevatten.
+
+BELANGRIJK
+- Verander NIET de rest van de pipeline.
+- Behoud bestaande endpoints en response vorm, voeg alleen velden toe.
+- Log duidelijk:
+  - “PUT_PLAYLIST payload keys: …”
+  - “PUT_PLAYLIST response status/body on error”
+- Gebruik bestaande auth header code voor Yodeck (Token scheme).
+- Zorg dat de PUT payload altijd 'name' bevat, en items, anders faalt Yodeck.
+
+LEVER OP
+- Concrete code wijzigingen in de juiste service/controller files
+- Eventuele nieuwe helper functies + debug endpoint
+- Korte instructie hoe ik de debug endpoint aanroep in browser console.

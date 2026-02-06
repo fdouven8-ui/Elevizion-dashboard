@@ -182,6 +182,85 @@ async function yodeckRequest<T>(endpoint: string, options?: RequestInit): Promis
   }
 }
 
+export async function updateYodeckPlaylist(
+  playlistId: number,
+  currentPlaylist: any,
+  newMediaId: number,
+  duration: number = 15,
+  correlationId: string = "manual"
+): Promise<{ ok: boolean; error?: string; itemCountAfter?: number; beforeIds?: number[]; afterIds?: number[] }> {
+  const existingItems: any[] = currentPlaylist.items || [];
+
+  const seenIds = new Set<number>();
+  const deduped: any[] = [];
+  for (const item of existingItems) {
+    if (typeof item?.id === "number" && !seenIds.has(item.id)) {
+      seenIds.add(item.id);
+      deduped.push(item);
+    }
+  }
+
+  const beforeIds = deduped.map((i: any) => i.id);
+
+  if (seenIds.has(newMediaId)) {
+    console.log(`[UpdatePlaylist] [${correlationId}] Media ${newMediaId} already in playlist ${playlistId}`);
+    return { ok: true, itemCountAfter: deduped.length, beforeIds, afterIds: beforeIds };
+  }
+
+  const newItems = [
+    ...deduped.map((item: any, idx: number) => ({
+      type: "media",
+      id: item.id,
+      duration: Math.max(item.duration || 15, 15),
+      priority: idx + 1,
+    })),
+    {
+      type: "media",
+      id: newMediaId,
+      duration: Math.max(duration, 15),
+      priority: deduped.length + 1,
+    },
+  ];
+
+  const validItems = newItems.filter(i => typeof i.id === "number" && i.id > 0);
+  if (validItems.length === 0) {
+    return { ok: false, error: `EMPTY_PLAYLIST_GUARD: 0 valid items for playlist ${playlistId}` };
+  }
+
+  const putPayload: any = {
+    name: currentPlaylist.name || `Playlist ${playlistId}`,
+    description: currentPlaylist.description ?? "",
+    items: validItems,
+  };
+
+  if (currentPlaylist.workspace !== undefined) {
+    putPayload.workspace = currentPlaylist.workspace;
+  }
+  if (currentPlaylist.transition_options !== undefined) {
+    putPayload.transition_options = currentPlaylist.transition_options;
+  }
+  if (currentPlaylist.playback_options !== undefined) {
+    putPayload.playback_options = currentPlaylist.playback_options;
+  }
+
+  const payloadKeys = Object.keys(putPayload);
+  console.log(`[UpdatePlaylist] [${correlationId}] PUT_PLAYLIST payload keys: ${payloadKeys.join(", ")}, items: ${validItems.length}`);
+
+  const updateResp = await yodeckRequest<any>(`/playlists/${playlistId}/`, {
+    method: "PUT",
+    body: JSON.stringify(putPayload),
+  });
+
+  if (!updateResp.ok) {
+    console.error(`[UpdatePlaylist] [${correlationId}] PUT_PLAYLIST response error: ${updateResp.error}`);
+    return { ok: false, error: updateResp.error };
+  }
+
+  const afterIds = validItems.map(i => i.id);
+  console.log(`[UpdatePlaylist] [${correlationId}] PUT_PLAYLIST SUCCESS playlist=${playlistId} before=${beforeIds.length} after=${afterIds.length}`);
+  return { ok: true, itemCountAfter: validItems.length, beforeIds, afterIds };
+}
+
 export async function normalizeAndPublish(
   advertiserId: string,
   request: NormalizeAndPublishRequest
@@ -760,60 +839,38 @@ export async function normalizeAndPublish(
         throw new Error(`Failed to fetch playlist: ${playlistResp.error}`);
       }
 
-      const existingItems: any[] = playlistResp.data.items || [];
+      const currentPlaylist = playlistResp.data;
+      const existingItems: any[] = currentPlaylist.items || [];
       const existingMediaIds = existingItems
         .filter((item: any) => typeof item?.id === "number")
         .map((item: any) => item.id);
 
-      log(correlationId, "UPDATE_PLAYLIST", `Playlist ${playlistId} has ${existingItems.length} items, mediaIds: ${existingMediaIds.join(",")}`, logs);
+      const itemCountBefore = existingItems.length;
+      log(correlationId, "UPDATE_PLAYLIST", `Playlist ${playlistId} has ${itemCountBefore} items, mediaIds: ${existingMediaIds.join(",")}`, logs);
 
       if (existingMediaIds.includes(newYodeckMediaId)) {
         log(correlationId, "UPDATE_PLAYLIST", `Media ${newYodeckMediaId} already in playlist, skipping insert`, logs);
         playlistsUpdated++;
-      } else {
-        const seenIds = new Set<number>();
-        const deduped: any[] = [];
-        for (const item of existingItems) {
-          if (typeof item?.id === "number" && !seenIds.has(item.id)) {
-            seenIds.add(item.id);
-            deduped.push(item);
-          }
-        }
-
-        const allItems = [
-          ...deduped.map((item: any, idx: number) => ({
-            type: "media" as const,
-            id: item.id,
-            duration: Math.max(item.duration || 15, 15),
-            priority: idx + 1,
-          })),
-          {
-            type: "media" as const,
-            id: newYodeckMediaId,
-            duration: 15,
-            priority: deduped.length + 1,
-          },
-        ];
-
-        const validItems = allItems.filter(i => typeof i.id === "number" && i.id > 0);
-        if (validItems.length === 0) {
-          throw new Error(`EMPTY_PLAYLIST_GUARD: playlist ${playlistId} would be updated with 0 valid media items. Aborting to prevent playlist corruption.`);
-        }
-        log(correlationId, "UPDATE_PLAYLIST", `PUT /playlists/${playlistId}/ with ${validItems.length} items (new media: ${newYodeckMediaId})`, logs);
-
-        const updateResp = await yodeckRequest<any>(`/playlists/${playlistId}/`, {
-          method: "PUT",
-          body: JSON.stringify({
-            items: validItems,
-          }),
+        steps.push({
+          step: "UPDATE_PLAYLIST",
+          status: "success",
+          duration_ms: 0,
+          details: { playlistId, addedMediaId: newYodeckMediaId, alreadyPresent: true, itemCountBefore, itemCountAfter: itemCountBefore },
         });
-
-        if (!updateResp.ok) {
-          throw new Error(`Failed to PUT playlist ${playlistId}: ${updateResp.error}`);
+      } else {
+        const updateResult = await updateYodeckPlaylist(playlistId, currentPlaylist, newYodeckMediaId!, 15, correlationId);
+        if (!updateResult.ok) {
+          throw new Error(`Failed to PUT playlist ${playlistId}: ${updateResult.error}`);
         }
 
-        log(correlationId, "UPDATE_PLAYLIST", `Playlist ${playlistId} updated: ${existingItems.length} → ${validItems.length} items (PUT 200)`, logs);
+        log(correlationId, "UPDATE_PLAYLIST", `Playlist ${playlistId} updated: ${itemCountBefore} → ${updateResult.itemCountAfter} items (PUT 200)`, logs);
         playlistsUpdated++;
+        steps.push({
+          step: "UPDATE_PLAYLIST",
+          status: "success",
+          duration_ms: 0,
+          details: { playlistId, addedMediaId: newYodeckMediaId, alreadyPresent: false, itemCountBefore, itemCountAfter: updateResult.itemCountAfter },
+        });
       }
 
       const pushResp = await yodeckRequest<any>(`/screens/${playerId}/push/`, {
