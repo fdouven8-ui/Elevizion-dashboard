@@ -618,22 +618,20 @@ export async function normalizeAndPublish(
       throw new Error(`PUT to presigned URL failed: HTTP ${putStatus}`);
     }
 
-    // Step D: Call "Complete Media upload" endpoint to finalize
-    const completeEndpoint = `/media/${newYodeckMediaId}/upload/complete/`;
-    log(correlationId, "UPLOAD_TO_YODECK", `POST ${completeEndpoint} (finalize)`, logs);
+    // Step D: PUT /media/{id}/upload/complete to finalize (docs: PUT, body: { upload_url })
+    const completeEndpoint = `/media/${newYodeckMediaId}/upload/complete`;
+    log(correlationId, "UPLOAD_TO_YODECK", `PUT ${completeEndpoint} (finalize)`, logs);
 
     const completeResp = await yodeckRequest<any>(completeEndpoint, {
-      method: "POST",
+      method: "PUT",
       body: JSON.stringify({ upload_url: presignUrl }),
     });
 
-    let completeOk = false;
-    if (completeResp.ok) {
-      completeOk = true;
-      log(correlationId, "UPLOAD_TO_YODECK", `Complete upload succeeded`, logs);
-    } else {
-      log(correlationId, "UPLOAD_TO_YODECK", `Complete upload response: ${completeResp.error} (will check if media progresses)`, logs);
+    if (!completeResp.ok) {
+      console.error(`[YodeckUpload] Complete upload FAILED: ${completeResp.error}`);
+      throw new Error(`PUT /media/{id}/upload/complete failed: ${completeResp.error}`);
     }
+    log(correlationId, "UPLOAD_TO_YODECK", `Complete upload succeeded`, logs);
 
     // Step E: Immediate verification after PUT+complete
     log(correlationId, "UPLOAD_TO_YODECK", `Verifying immediately after upload...`, logs);
@@ -642,7 +640,7 @@ export async function normalizeAndPublish(
     if (immediateCheck.ok && immediateCheck.data) {
       const imStatus = immediateCheck.data.status;
       const imFileSize = immediateCheck.data.filesize || immediateCheck.data.file_size || 0;
-      log(correlationId, "UPLOAD_TO_YODECK", `Immediate check: status=${imStatus} fileSize=${imFileSize} completeOk=${completeOk}`, logs);
+      log(correlationId, "UPLOAD_TO_YODECK", `Immediate check: status=${imStatus} fileSize=${imFileSize}`, logs);
     } else {
       log(correlationId, "UPLOAD_TO_YODECK", `Immediate check failed: ${immediateCheck.error}`, logs);
     }
