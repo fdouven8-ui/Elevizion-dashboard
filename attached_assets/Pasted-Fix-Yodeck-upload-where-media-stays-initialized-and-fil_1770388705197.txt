@@ -1,0 +1,40 @@
+Fix Yodeck upload where media stays initialized and fileSize=0 after PUT.
+
+Current behavior:
+- Create media succeeds -> mediaId returned.
+- get_upload_url present.
+- Code logs "Uploading 1954184 bytes..." and "Upload complete" but polling shows status=initialized, fileSize=0 for 20 polls then fails.
+
+Conclusion:
+- The binary upload never actually lands in Yodeck storage OR we are PUT-ing to the wrong URL.
+- We must hard-verify the presigned upload step and ensure we GET the real presigned upload_url if required.
+
+Tasks (minimal, no refactor):
+1) In transactionalUploadService (or wherever UPLOAD_TO_YODECK does upload):
+   - Ensure we do:
+     a) POST /api/v2/media -> returns media object with get_upload_url
+     b) GET get_upload_url -> response JSON MUST contain { upload_url: "<presigned PUT url>" }
+        - If GET response does not contain upload_url, log full body and fail.
+     c) PUT binary to upload_url (the presigned URL), NOT to get_upload_url.
+2) Harden PUT verification:
+   - Use fetch/undici with:
+     - method: PUT
+     - headers: Content-Type: video/mp4
+     - header: Content-Length: <exact bytes>
+   - Treat success ONLY if status is 200 or 204.
+   - On non-200/204: log status + first 500 chars of body + response headers (esp. x-amz-request-id / cf-ray / etag) then fail.
+3) Add logging (no secrets):
+   - Log GET get_upload_url endpoint path (not query)
+   - Log presigned upload_url host (e.g., r2/cloudfront/s3) and path (strip query)
+   - Log PUT response status and ETag header if present
+   - Log bytes sent and content-length
+4) After PUT success:
+   - Immediately GET /media/{id} once and log fileSize/status BEFORE polling.
+   - Then poll as before.
+5) Timeout/polling:
+   - Keep current polling, but if fileSize stays 0 and status stays initialized for N polls, return error with diagnostics:
+     - putStatus, uploadUrlHost, usedGetUploadUrl (true/false)
+
+Acceptance:
+- After PUT, /media/{id} shows fileSize > 0 within a short time or at least transitions out of initialized.
+- normalize-and-publish no longer fails with fileSize=0.

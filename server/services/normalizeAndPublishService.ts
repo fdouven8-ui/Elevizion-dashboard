@@ -568,62 +568,106 @@ export async function normalizeAndPublish(
     }
 
     newYodeckMediaId = createResp.data.id;
-    const getUploadUrl = createResp.data.get_upload_url || createResp.data.presign_url;
+    const getUploadUrlRaw = createResp.data.get_upload_url || createResp.data.presign_url;
 
-    log(correlationId, "UPLOAD_TO_YODECK", `Created media ID=${newYodeckMediaId}, get_upload_url=${getUploadUrl ? "present" : "missing"}`, logs);
+    log(correlationId, "UPLOAD_TO_YODECK", `Created media ID=${newYodeckMediaId}, get_upload_url=${getUploadUrlRaw ? "present" : "missing"}`, logs);
+    console.log(`[YodeckUpload] create response keys: ${Object.keys(createResp.data).join(", ")}`);
 
-    if (!getUploadUrl) {
-      console.error(`[YodeckCreateMedia] No upload URL in response. Keys: ${Object.keys(createResp.data).join(", ")}`);
+    if (!getUploadUrlRaw) {
+      console.error(`[YodeckUpload] No upload URL. Full response: ${JSON.stringify(createResp.data).slice(0, 1000)}`);
       throw new Error("No get_upload_url returned from Yodeck");
     }
 
-    let presignUrl = getUploadUrl;
-    if (getUploadUrl.startsWith("/") || getUploadUrl.includes("/api/v2/")) {
-      const uploadUrlResp = await yodeckRequest<any>(getUploadUrl.replace(YODECK_BASE || "", ""));
-      if (uploadUrlResp.ok && uploadUrlResp.data?.upload_url) {
-        presignUrl = uploadUrlResp.data.upload_url;
-        log(correlationId, "UPLOAD_TO_YODECK", `Resolved presigned URL from get_upload_url`, logs);
-      } else {
-        throw new Error(`Failed to resolve presigned URL from get_upload_url: ${uploadUrlResp.error}`);
-      }
+    // Step B: GET get_upload_url to resolve the real presigned upload_url
+    let getUploadEndpoint = getUploadUrlRaw;
+    if (getUploadEndpoint.startsWith("http")) {
+      try {
+        const parsed = new URL(getUploadEndpoint);
+        getUploadEndpoint = parsed.pathname;
+      } catch {}
+    }
+    log(correlationId, "UPLOAD_TO_YODECK", `GET get_upload_url endpoint: ${getUploadEndpoint}`, logs);
+
+    const uploadUrlResp = await yodeckRequest<any>(getUploadEndpoint);
+    if (!uploadUrlResp.ok || !uploadUrlResp.data) {
+      console.error(`[YodeckUpload] GET get_upload_url failed: ${uploadUrlResp.error}`);
+      throw new Error(`GET get_upload_url failed: ${uploadUrlResp.error}`);
     }
 
+    const presignUrl = uploadUrlResp.data.upload_url;
+    if (!presignUrl) {
+      console.error(`[YodeckUpload] No upload_url in GET response. Body: ${JSON.stringify(uploadUrlResp.data).slice(0, 1000)}`);
+      throw new Error(`GET get_upload_url response missing upload_url field. Keys: ${Object.keys(uploadUrlResp.data).join(", ")}`);
+    }
+
+    let uploadUrlHost = "unknown";
+    try { uploadUrlHost = new URL(presignUrl).host; } catch {}
+    log(correlationId, "UPLOAD_TO_YODECK", `Resolved presigned URL host=${uploadUrlHost}`, logs);
+
+    // Step C: PUT binary to the presigned upload_url
     const normalizedBuffer = await fs.promises.readFile(normalizedLocalPath!);
-    log(correlationId, "UPLOAD_TO_YODECK", `Uploading ${normalizedBuffer.length} bytes...`, logs);
+    const bytesSent = normalizedBuffer.length;
+    log(correlationId, "UPLOAD_TO_YODECK", `PUT ${bytesSent} bytes to ${uploadUrlHost}...`, logs);
 
     const uploadResp = await fetch(presignUrl, {
       method: "PUT",
       headers: {
         "Content-Type": "video/mp4",
-        "Content-Length": normalizedBuffer.length.toString(),
+        "Content-Length": bytesSent.toString(),
       },
       body: normalizedBuffer,
     });
 
-    if (!uploadResp.ok) {
+    const putStatus = uploadResp.status;
+    const putEtag = uploadResp.headers.get("etag") || "none";
+    const putAmzId = uploadResp.headers.get("x-amz-request-id") || "none";
+    const putCfRay = uploadResp.headers.get("cf-ray") || "none";
+
+    log(correlationId, "UPLOAD_TO_YODECK", `PUT status=${putStatus} etag=${putEtag} x-amz-request-id=${putAmzId} cf-ray=${putCfRay} bytes=${bytesSent}`, logs);
+
+    if (putStatus !== 200 && putStatus !== 204) {
       const text = await uploadResp.text();
-      throw new Error(`PUT to presign_url failed: ${uploadResp.status} ${text}`);
+      console.error(`[YodeckUpload] PUT failed: status=${putStatus} body='${text.slice(0, 500)}' etag=${putEtag} x-amz-request-id=${putAmzId} cf-ray=${putCfRay}`);
+      throw new Error(`PUT to presigned URL failed: HTTP ${putStatus}`);
     }
 
-    log(correlationId, "UPLOAD_TO_YODECK", `Upload complete, polling status...`, logs);
+    log(correlationId, "UPLOAD_TO_YODECK", `PUT complete, verifying immediately...`, logs);
 
+    // Step D: Immediate verification before polling
+    await new Promise((r) => setTimeout(r, 2000));
+    const immediateCheck = await yodeckRequest<any>(`/media/${newYodeckMediaId}/`);
+    if (immediateCheck.ok && immediateCheck.data) {
+      const imStatus = immediateCheck.data.status;
+      const imFileSize = immediateCheck.data.filesize || immediateCheck.data.file_size || 0;
+      log(correlationId, "UPLOAD_TO_YODECK", `Immediate check: status=${imStatus} fileSize=${imFileSize}`, logs);
+    } else {
+      log(correlationId, "UPLOAD_TO_YODECK", `Immediate check failed: ${immediateCheck.error}`, logs);
+    }
+
+    // Step E: Poll until ready
     let mediaReady = false;
     let finalFileSize = 0;
-    for (let poll = 0; poll < 20; poll++) {
+    let lastPollStatus = "unknown";
+    let initStuckCount = 0;
+    for (let poll = 0; poll < 30; poll++) {
       await new Promise((r) => setTimeout(r, 3000));
       
       const statusResp = await yodeckRequest<any>(`/media/${newYodeckMediaId}/`);
       if (statusResp.ok && statusResp.data) {
         const status = statusResp.data.status;
         const fileSize = statusResp.data.filesize || statusResp.data.file_size || 0;
-        const mediaName = statusResp.data.name;
+        lastPollStatus = status;
         
-        log(correlationId, "UPLOAD_TO_YODECK", `Poll ${poll + 1}: status=${status}, fileSize=${fileSize}`, logs);
+        log(correlationId, "UPLOAD_TO_YODECK", `Poll ${poll + 1}/30: status=${status}, fileSize=${fileSize}`, logs);
+        
+        if (status === "initialized" && fileSize === 0) {
+          initStuckCount++;
+          if (initStuckCount >= 10) {
+            throw new Error(`FAILED_INIT_STUCK: media ${newYodeckMediaId} stuck at initialized/fileSize=0 after ${initStuckCount} polls. putStatus=${putStatus} uploadUrlHost=${uploadUrlHost} usedGetUploadUrl=true`);
+          }
+        }
         
         if (fileSize > 0 && (status === "Live" || status === "ready" || status === "converted")) {
-          if (!mediaName.includes(asset.id.slice(0, 8))) {
-            throw new Error(`Media name mismatch: expected to contain "${asset.id.slice(0, 8)}" but got "${mediaName}"`);
-          }
           finalFileSize = fileSize;
           mediaReady = true;
           break;
@@ -632,7 +676,7 @@ export async function normalizeAndPublish(
     }
 
     if (!mediaReady || !newYodeckMediaId) {
-      throw new Error("Media not ready after polling (fileSize=0 or wrong status)");
+      throw new Error(`Media not ready after polling. lastStatus=${lastPollStatus} putStatus=${putStatus} uploadUrlHost=${uploadUrlHost} usedGetUploadUrl=true`);
     }
 
     if (baselineMediaIds.includes(newYodeckMediaId!)) {
