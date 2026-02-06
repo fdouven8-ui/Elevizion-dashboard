@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { adAssets, advertisers } from "@shared/schema";
+import { adAssets, advertisers, uploadJobs, UPLOAD_JOB_STATUS, UPLOAD_FINAL_STATE } from "@shared/schema";
 import { eq, and, or, isNull, inArray } from "drizzle-orm";
 import { spawn } from "child_process";
 import { ObjectStorageService } from "../objectStorage";
@@ -843,6 +843,30 @@ export async function publishSingleAsset(opts: {
   let yodeckMediaId: number | null = asset.yodeckMediaId || null;
   let getUploadUrlEndpoint: string | null = null;
 
+  // Create upload_job for tracking
+  let uploadJobId: string | null = null;
+  try {
+    const fileStats = fs.statSync(localPath);
+    const [job] = await db.insert(uploadJobs)
+      .values({
+        advertiserId: asset.advertiserId,
+        localAssetPath: storagePath,
+        localFileSize: fileStats.size,
+        desiredFilename: mediaName,
+        correlationId,
+        status: UPLOAD_JOB_STATUS.UPLOADING,
+        finalState: null,
+        attempt: 1,
+        maxAttempts: 5,
+        pollAttempts: 0,
+      })
+      .returning();
+    uploadJobId = job.id;
+    console.log(`${LOG} correlationId=${correlationId} UPLOAD_JOB_CREATED jobId=${uploadJobId}`);
+  } catch (jobErr: any) {
+    console.warn(`${LOG} correlationId=${correlationId} Failed to create upload job: ${jobErr.message} (continuing)`);
+  }
+
   try {
     if (!YODECK_TOKEN) {
       throw new Error("YODECK_AUTH_TOKEN not configured");
@@ -931,6 +955,15 @@ export async function publishSingleAsset(opts: {
 
     console.log(`${LOG} correlationId=${correlationId} EARLY_ID_SAVED assetId=${assetId} mediaId=${yodeckMediaId}`);
 
+    // Update upload job with yodeckMediaId
+    if (uploadJobId && yodeckMediaId) {
+      try {
+        await db.update(uploadJobs).set({
+          yodeckMediaId: String(yodeckMediaId),
+        }).where(eq(uploadJobs.id, uploadJobId));
+      } catch {}
+    }
+
     // STEP 2: GET presigned upload URL
     const fullEndpointUrl = getUploadUrlEndpoint!.startsWith("http")
       ? getUploadUrlEndpoint!
@@ -1016,6 +1049,19 @@ export async function publishSingleAsset(opts: {
             updatedAt: new Date(),
           }).where(eq(advertisers.id, asset.advertiserId));
 
+          // Update upload job as READY
+          if (uploadJobId) {
+            try {
+              await db.update(uploadJobs).set({
+                status: UPLOAD_JOB_STATUS.DONE,
+                finalState: UPLOAD_FINAL_STATE.READY,
+                yodeckMediaId: String(yodeckMediaId),
+                pollAttempts: pollCount,
+                completedAt: new Date(),
+              }).where(eq(uploadJobs.id, uploadJobId));
+            } catch {}
+          }
+
           try { fs.unlinkSync(localPath); } catch {}
           return { ok: true, assetId, correlationId, yodeckMediaId };
         }
@@ -1026,11 +1072,48 @@ export async function publishSingleAsset(opts: {
     throw new Error(`Timeout waiting for media ${yodeckMediaId} to become ready after ${pollCount} polls`);
   } catch (uploadErr: any) {
     console.error(`${LOG} correlationId=${correlationId} UPLOAD_ERROR assetId=${assetId} mediaId=${yodeckMediaId} error=${uploadErr.message}`);
-    // Preserve yodeckMediaId if already set - never clear it
-    await db.update(adAssets).set({
-      publishStatus: "PUBLISH_FAILED",
-      publishError: uploadErr.message,
-    }).where(eq(adAssets.id, assetId));
+
+    // Determine error code for terminal failures
+    const errMsg = uploadErr.message || "";
+    const isTerminal = /FAILED_INIT_STUCK|POLL_TIMEOUT|POLL_404|VERIFY_404|FINAL_VERIFY_404/.test(errMsg);
+
+    // For terminal failures: ALWAYS clear canonical media IDs regardless of yodeckMediaId state
+    // This ensures retry always forces a fresh CREATE_MEDIA + upload cycle
+    if (isTerminal) {
+      console.log(`${LOG} correlationId=${correlationId} TERMINAL_FAILURE - clearing all media IDs (yodeckMediaId=${yodeckMediaId}) for retry`);
+      await db.update(adAssets).set({
+        publishStatus: "PUBLISH_FAILED",
+        publishError: uploadErr.message,
+        yodeckMediaId: null,
+      }).where(eq(adAssets.id, assetId));
+      await db.update(advertisers).set({
+        assetStatus: "ready_for_yodeck",
+        yodeckMediaIdCanonical: null,
+        updatedAt: new Date(),
+      }).where(eq(advertisers.id, asset.advertiserId));
+    } else {
+      // Non-terminal: preserve yodeckMediaId for retry without re-upload
+      await db.update(adAssets).set({
+        publishStatus: "PUBLISH_FAILED",
+        publishError: uploadErr.message,
+      }).where(eq(adAssets.id, assetId));
+    }
+
+    // Update upload job as FAILED
+    if (uploadJobId) {
+      try {
+        const errorCode = errMsg.match(/(FAILED_INIT_STUCK|POLL_TIMEOUT|POLL_404|VERIFY_404|FINAL_VERIFY_404)/)?.[1] || "UPLOAD_ERROR";
+        await db.update(uploadJobs).set({
+          status: UPLOAD_JOB_STATUS.DONE,
+          finalState: UPLOAD_FINAL_STATE.FAILED,
+          yodeckMediaId: yodeckMediaId ? String(yodeckMediaId) : null,
+          errorCode,
+          errorMessage: errMsg.substring(0, 500),
+          completedAt: new Date(),
+        }).where(eq(uploadJobs.id, uploadJobId));
+      } catch {}
+    }
+
     try { fs.unlinkSync(localPath); } catch {}
     return { ok: false, assetId, correlationId, yodeckMediaId: yodeckMediaId || undefined, error: uploadErr.message };
   }

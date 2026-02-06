@@ -629,7 +629,7 @@ async function step6PollStatus(
       });
 
       if (status === "initialized" && attempt > 20) {
-        console.error(`${LOG_PREFIX} [${correlationId}] STEP 5 FAILED: Stuck on initialized after ${attempt} polls`);
+        console.error(`${LOG_PREFIX} [${correlationId}] STEP 5 FAILED: Stuck on initialized after ${attempt} polls - clearing canonical ID for retry`);
         await markJobFailed(jobId, "FAILED_INIT_STUCK", { attempts: attempt, lastStatus: status }, "Media stuck on initialized status");
         return { ok: false, errorCode: "FAILED_INIT_STUCK", errorDetails: { attempts: attempt } };
       }
@@ -723,9 +723,9 @@ async function updateAdvertiserSuccess(
 }
 
 /**
- * Mark advertiser as publish_failed (NON-DESTRUCTIVE).
- * Asset blijft zichtbaar in UI en kan opnieuw gepubliceerd worden.
- * We clearen NIET de yodeckMediaIdCanonical tenzij expliciet nodig.
+ * Mark advertiser as publish_failed.
+ * For terminal failures (FAILED_INIT_STUCK, POLL_TIMEOUT, POLL_404), clear canonical ID
+ * so next retry forces a fresh upload. For transient failures, keep canonical ID.
  */
 async function markAdvertiserPublishFailed(
   advertiserId: string,
@@ -735,21 +735,31 @@ async function markAdvertiserPublishFailed(
 ): Promise<void> {
   console.log(`${LOG_PREFIX} [${correlationId}] Marking advertiser ${advertiserId} as publish_failed: ${errorCode}`);
   
-  // Get current retry count
   const current = await db.query.advertisers.findFirst({
     where: eq(advertisers.id, advertiserId),
     columns: { publishRetryCount: true },
   });
   
+  // Terminal failures: media is unusable, clear canonical ID to force fresh upload on retry
+  const TERMINAL_ERRORS = ["FAILED_INIT_STUCK", "POLL_TIMEOUT", "POLL_404", "VERIFY_404", "FINAL_VERIFY_404"];
+  const shouldClearCanonical = TERMINAL_ERRORS.includes(errorCode);
+  
+  const updates: any = {
+    assetStatus: shouldClearCanonical ? "ready_for_yodeck" : "publish_failed",
+    publishErrorCode: errorCode,
+    publishErrorMessage: errorMessage,
+    publishFailedAt: new Date(),
+    publishRetryCount: (current?.publishRetryCount || 0) + 1,
+    updatedAt: new Date(),
+  };
+  
+  if (shouldClearCanonical) {
+    updates.yodeckMediaIdCanonical = null;
+    console.warn(`${LOG_PREFIX} [${correlationId}] TERMINAL FAILURE ${errorCode}: Cleared yodeckMediaIdCanonical, set status=ready_for_yodeck for advertiser ${advertiserId}`);
+  }
+  
   await db.update(advertisers)
-    .set({
-      assetStatus: "publish_failed",
-      publishErrorCode: errorCode,
-      publishErrorMessage: errorMessage,
-      publishFailedAt: new Date(),
-      publishRetryCount: (current?.publishRetryCount || 0) + 1,
-      updatedAt: new Date(),
-    })
+    .set(updates)
     .where(eq(advertisers.id, advertiserId));
 }
 
@@ -839,8 +849,24 @@ export async function ensureAdvertiserMediaIsValid(
 
       const status = (data.status || "").toLowerCase();
       const isReady = READY_STATUSES.includes(status);
+      const fileSize = data.filesize || data.file_size || 0;
       
-      console.log(`${LOG} Media ${existingMediaId} VERIFIED EXISTS in Yodeck (status=${status}, isReady=${isReady})`);
+      console.log(`${LOG} Media ${existingMediaId} VERIFIED EXISTS in Yodeck (status=${status}, isReady=${isReady}, fileSize=${fileSize})`);
+      
+      // If media exists but is NOT ready and NOT encoding, it's stuck - clear it for retry
+      const ENCODING_STATUSES = ["encoding", "processing", "uploading", "initialized"];
+      if (!isReady && !ENCODING_STATUSES.includes(status)) {
+        console.warn(`${LOG} Media ${existingMediaId} exists but status="${status}" is not ready/encoding - clearing canonical for retry`);
+        await db.update(advertisers)
+          .set({
+            assetStatus: "ready_for_yodeck",
+            yodeckMediaIdCanonical: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(advertisers.id, advertiserId));
+        return { ok: false, mediaId: null, reason: `MEDIA_NOT_PLAYABLE_STATUS_${status}`, status, isReady: false };
+      }
+      
       return { ok: true, mediaId: existingMediaId, status, isReady };
 
     } catch (error: any) {

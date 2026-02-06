@@ -12099,14 +12099,51 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       const configHealth = getConfigHealth();
       const baseResult = await getBasePlaylistId();
       
+      // Detect shared playlists
+      const allScreens = await db.select({ id: screens.id, playlistId: screens.playlistId, yodeckPlayerId: screens.yodeckPlayerId }).from(screens);
+      const playlistToScreens = new Map<string, string[]>();
+      for (const s of allScreens) {
+        if (s.playlistId) {
+          const existing = playlistToScreens.get(s.playlistId) || [];
+          existing.push(s.id);
+          playlistToScreens.set(s.playlistId, existing);
+        }
+      }
+      const sharedPlaylists: Array<{ playlistId: string; screenIds: string[] }> = [];
+      for (const [pid, sids] of Array.from(playlistToScreens.entries())) {
+        if (sids.length > 1) sharedPlaylists.push({ playlistId: pid, screenIds: sids });
+      }
+      
+      const warnings = [...configHealth.warnings];
+      const errors = [...configHealth.errors];
+      
+      if (!baseResult.ok || !baseResult.basePlaylistId) {
+        errors.push('BASE_PLAYLIST_MISSING: Maak in Yodeck een playlist aan met exact de naam "Basis playlist"');
+      }
+      if (sharedPlaylists.length > 0) {
+        errors.push(`SHARED_PLAYLISTS: ${sharedPlaylists.length} playlist(s) worden gedeeld door meerdere screens`);
+      }
+      
       res.json({
-        ok: configHealth.errors.length === 0,
+        ok: errors.length === 0,
         ...configHealth,
+        warnings,
+        errors,
         baselinePlaylist: {
           found: baseResult.ok && !!baseResult.basePlaylistId,
           id: baseResult.basePlaylistId,
           name: baseResult.basePlaylistName,
           itemCount: baseResult.itemCount,
+          error: baseResult.ok ? null : baseResult.error,
+        },
+        sharedPlaylists: {
+          found: sharedPlaylists.length,
+          details: sharedPlaylists,
+        },
+        screens: {
+          total: allScreens.length,
+          withPlaylist: allScreens.filter(s => s.playlistId).length,
+          withPlayer: allScreens.filter(s => s.yodeckPlayerId).length,
         },
       });
     } catch (error: any) {
@@ -21177,7 +21214,6 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       
       console.log(`[RetryPublish] Starting retry for advertiser ${advertiserId}`);
       
-      // Check advertiser exists and has publish_failed status
       const advertiser = await db.query.advertisers.findFirst({
         where: eq(advertisers.id, advertiserId),
       });
@@ -21186,15 +21222,14 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         return res.status(404).json({ ok: false, error: "Advertiser niet gevonden" });
       }
       
-      if (advertiser.assetStatus !== "publish_failed" && advertiser.assetStatus !== "ready_for_yodeck") {
+      if (advertiser.assetStatus !== "publish_failed" && advertiser.assetStatus !== "ready_for_yodeck" && advertiser.assetStatus !== "upload_failed") {
         return res.status(400).json({ 
           ok: false, 
           error: `Kan niet opnieuw publiceren - huidige status: ${advertiser.assetStatus}`,
-          hint: "Alleen assets met status 'publish_failed' of 'ready_for_yodeck' kunnen opnieuw gepubliceerd worden",
+          hint: "Alleen assets met status 'publish_failed', 'upload_failed' of 'ready_for_yodeck' kunnen opnieuw gepubliceerd worden",
         });
       }
       
-      // Check we have an asset path to publish
       const storagePath = advertiser.storagePath || advertiser.originalStoragePath;
       if (!storagePath) {
         return res.status(400).json({ 
@@ -21204,8 +21239,23 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         });
       }
       
-      // Reset assetStatus to ready_for_yodeck so publish service will process it
-      // Keep failure metadata until publish succeeds
+      // If canonical media is set, validate it first - clear if invalid
+      if (advertiser.yodeckMediaIdCanonical) {
+        const { ensureAdvertiserMediaIsValid } = await import("./services/transactionalUploadService");
+        const validCheck = await ensureAdvertiserMediaIsValid(advertiserId);
+        if (!validCheck.ok || !validCheck.isReady) {
+          console.log(`[RetryPublish] Canonical media invalid/not-ready for ${advertiserId} - cleared for fresh upload`);
+          // ensureAdvertiserMediaIsValid already cleared canonical if invalid
+          // For not-ready but existing: force clear
+          if (validCheck.ok && !validCheck.isReady) {
+            await db.update(advertisers)
+              .set({ yodeckMediaIdCanonical: null, updatedAt: new Date() })
+              .where(eq(advertisers.id, advertiserId));
+          }
+        }
+      }
+      
+      // Reset assetStatus to ready_for_yodeck for fresh publish
       await db.update(advertisers)
         .set({
           assetStatus: "ready_for_yodeck",
@@ -21215,7 +21265,6 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       
       console.log(`[RetryPublish] Reset assetStatus to ready_for_yodeck for advertiser ${advertiserId}`);
       
-      // Use canonical publish service
       const { publishApprovedAdvertiser } = await import("./services/publishService");
       
       const result = await publishApprovedAdvertiser(advertiserId);
@@ -21943,46 +21992,6 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         filesize: data.filesize || data.file_size,
         created_at: data.created_at,
         last_modified: data.last_modified,
-      });
-    } catch (error: any) {
-      return res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  /**
-   * GET /api/debug/yodeck/upload-jobs
-   * List recent upload jobs with status
-   */
-  app.get("/api/debug/yodeck/upload-jobs", requireAdminAccess, async (req, res) => {
-    res.setHeader("Content-Type", "application/json");
-    const limit = parseInt(req.query.limit as string) || 20;
-    
-    try {
-      const { uploadJobs } = await import("@shared/schema");
-      const { desc } = await import("drizzle-orm");
-      
-      const jobs = await db.select()
-        .from(uploadJobs)
-        .orderBy(desc(uploadJobs.createdAt))
-        .limit(limit);
-      
-      return res.json({
-        ok: true,
-        count: jobs.length,
-        jobs: jobs.map(j => ({
-          id: j.id,
-          advertiserId: j.advertiserId,
-          correlationId: j.correlationId,
-          status: j.status,
-          finalState: j.finalState,
-          yodeckMediaId: j.yodeckMediaId,
-          errorCode: j.errorCode,
-          putStatus: j.putStatus,
-          pollAttempts: j.pollAttempts,
-          localFileSize: j.localFileSize,
-          createdAt: j.createdAt,
-          completedAt: j.completedAt,
-        })),
       });
     } catch (error: any) {
       return res.status(500).json({ ok: false, error: error.message });

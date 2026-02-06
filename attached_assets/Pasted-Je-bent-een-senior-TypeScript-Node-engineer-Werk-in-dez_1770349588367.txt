@@ -1,0 +1,89 @@
+Je bent een senior TypeScript/Node engineer. Werk in deze bestaande Elevizion codebase (Express + Drizzle + services) en FIX de concrete issues rondom Yodeck media/playlists, ZONDER refactor/omgooien. Houd bestaande endpoints en flow aan. Maak alleen minimale, gerichte wijzigingen.
+
+CONTEXT (uit AI dump):
+- 2 screens delen dezelfde playlistId (30461663) maar dat mag NOOIT. Dit veroorzaakt inconsistent push/afspelen.
+  Screen A playerId=591896, Screen B playerId=591895, beide playlistId=30461663.
+- Baseline Playlist configured: false. Het systeem verwacht "Basis playlist" (case-sensitive) via getBasePlaylistId().
+- Minstens 1 advertiser heeft yodeckMediaIdCanonical=29842850 maar assetStatus=upload_failed.
+- Recent upload jobs lijst is leeg → job tracking/logging is mogelijk niet consistent of sommige paden registreren geen jobs.
+- Doel: video upload → Yodeck media READY → media in juiste screen playlist → player source = playlist → werkt uniform op ALLE screens.
+
+EISEN (NIET VERANDEREN):
+- Laat Simple Playlist Model bestaan: 1 global "Basis playlist" + 1 unieke playlist per screen "EVZ | SCREEN | {playerId}"
+- Layout mode blijft verboden; screens moeten playlist mode gebruiken.
+- Alleen /api/admin/screens/:screenId/rebuild-playlist mag playlists muteren.
+- transactionalUploadService blijft de upload methode (legacyUpload blijft disabled).
+
+WAT MOET JE FIXEN (MINIMAAL, HARD):
+1) SHARED PLAYLIST FIX moet 100% betrouwbaar zijn
+   - In server/services/simplePlaylistModel.ts en/of screenPlaylistService.ts:
+     - ensureScreenPlaylist() moet altijd detecteren of playlistId gedeeld wordt door meerdere screens.
+     - Als gedeeld: maak voor ELKE screen een unieke playlist aan (of minstens voor de "conflicting" screen), zet DB playlistId correct, en log duidelijk:
+       "SHARED_PLAYLIST_DETECTED" + betrokken screenIds/playerIds/playlistId.
+   - Voeg een harde invariant check toe in rebuildScreenPlaylist():
+     - Als playlistId in DB ook voorkomt bij een andere actieve screen → STOP en fix eerst via dezelfde code (auto-fix), daarna pas verder.
+   - Zorg dat na fix de playlist namen exact zijn:
+     EVZ | SCREEN | 591895
+     EVZ | SCREEN | 591896
+
+2) Baseline playlist moet een harde, duidelijke requirement zijn
+   - getBasePlaylistId() is case-sensitive "Basis playlist". Dat is oké, maar:
+     - Als niet gevonden → return ok:false met foutcode BASE_PLAYLIST_MISSING + duidelijke message (wat de gebruiker in Yodeck moet aanmaken).
+   - In rebuildScreenPlaylist(): als base ontbreekt → faal vroeg met die fout (geen stille partial success).
+   - Update /api/admin/system/config-health zodat baseline status altijd correct is en warnings/errors concreet zijn.
+
+3) Upload_failed / media not playable moet zichzelf opruimen en retrybaar maken
+   - In transactionalUploadService.ts:
+     - Zorg dat upload_jobs altijd aangemaakt wordt bij CREATE_MEDIA en door alle stappen heen wordt geüpdatet (CREATED, UPLOADED, ENCODING, READY, FAILED).
+     - Als POLL_STATUS time-out of status blijft "initialized" → markeer FAILED_INIT_STUCK en zet advertiser asset terug naar "ready_for_yodeck" en clear yodeckMediaIdCanonical.
+     - ensureAdvertiserMediaIsValid(): als media bestaat maar playable/ready false → clear canonical mediaId en zet status "ready_for_yodeck" (niet laten hangen op upload_failed zonder retry pad).
+   - In /api/admin/advertisers/:id/retry-publish en/of publish-now:
+     - Als assetStatus=upload_failed of canonical media invalid → forceer nieuwe upload (niet hergebruik van oude mediaId).
+
+4) Job visibility: why "No recent upload jobs"
+   - Zorg dat elke transactional upload zijn job ook echt schrijft.
+   - Zorg dat /api/debug/yodeck/upload-jobs de laatste jobs teruggeeft (en dat die route ook de juiste tabel/kolommen gebruikt).
+   - Voeg logregels toe met unieke jobId/correlationId per upload zodat troubleshooting simpel is.
+
+5) End-to-end betrouwbaarheid: rebuild-playlist moet “hard verifiëren” zoals beschreven
+   - addAdsToScreenPlaylist(): na PATCH playlist re-fetch en check dat alle expected mediaIds in playlist zitten.
+     - Als missing → return ok:false met foutcode AD_MEDIA_NOT_IN_PLAYLIST + (expected, actual, missing).
+   - applyPlayerSourceAndPush(): zet player source naar playlist en verifieer via getScreenNowPlayingSimple()/player fetch dat sourceType=playlist en sourceId klopt.
+   - rebuildScreenPlaylist(): dubbele verificatie blijft, maar zorg dat error messages altijd actionable zijn.
+
+NIET DOEN:
+- Geen grote refactors, geen nieuwe architectuur.
+- Geen nieuwe database tabellen behalve als echt nodig (waarschijnlijk niet).
+- Geen UI overhaul. Alleen indien nodig kleine UI melding/knoptekst, maar focus op backend reliability.
+
+DELIVERABLES:
+A) Code changes in:
+   - server/services/simplePlaylistModel.ts
+   - server/services/screenPlaylistService.ts (als relevant)
+   - server/services/transactionalUploadService.ts
+   - server/services/yodeckClient.ts (alleen als nodig voor juiste endpoints/timeouts)
+   - server/routes.ts (alleen wiring/route fixes als nodig)
+   - eventuele storage/db calls waar playlistId per screen wordt opgeslagen
+B) Voeg/verbeter debug output in bestaande endpoints:
+   - GET /api/admin/system/config-health (baseline + yodeck ok + shared playlist detect status)
+   - POST /api/admin/screens/fix-shared-playlists (moet nu echt fixen + reporten)
+   - POST /api/admin/screens/:screenId/rebuild-playlist (moet duidelijk success/fail geven)
+   - GET /api/debug/yodeck/media/:id/status (playable/encoding/filesize/duration)
+   - GET /api/debug/yodeck/upload-jobs (laat de jobs zien)
+C) Voeg een “smoke test script” toe (geen nieuwe tooling) als npm script of simpele node runner:
+   - Test 1: detecteer en fix shared playlist (verwacht 2 verschillende playlistIds in DB)
+   - Test 2: baseline playlist check (BASE_PLAYLIST_MISSING als niet bestaat)
+   - Test 3: force upload van 1 test video (klein mp4) → job moet zichtbaar zijn → media READY
+   - Test 4: rebuild playlist → mediaId staat in playlist → player source playlist.
+
+ACCEPTANCE CRITERIA (HARD):
+1) Twee screens mogen NOOIT dezelfde playlistId hebben. Als het zo is: self-heal/fix endpoint lost het op.
+2) Als "Basis playlist" ontbreekt: rebuild-playlist faalt direct met BASE_PLAYLIST_MISSING (geen stille success).
+3) Een upload die faalt laat NOOIT canonical mediaId hangen; status gaat terug naar ready_for_yodeck en is retrybaar.
+4) Na succesvolle upload + rebuild: de video speelt op beide players en staat in de juiste screen playlist.
+5) upload_jobs zijn zichtbaar in /api/debug/yodeck/upload-jobs.
+
+IMPLEMENTEER NU:
+- Maak de minimale code changes.
+- Run/Update tests/smoke checks.
+- Laat in de output exact zien welke bestanden je aangepast hebt en welke commands ik moet runnen om te verifiëren.

@@ -1028,12 +1028,37 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
   const playerId = screen.yodeckPlayerId;
   actions.push(`Player ID: ${playerId}`);
 
+  // 1b. HARD INVARIANT: Check if this screen's playlistId is shared with another screen
+  if (screen.playlistId) {
+    const screensWithSamePlaylist = await db.select({ id: screens.id, yodeckPlayerId: screens.yodeckPlayerId })
+      .from(screens)
+      .where(eq(screens.playlistId, screen.playlistId));
+    
+    const otherScreens = screensWithSamePlaylist.filter(s => s.id !== screenId);
+    if (otherScreens.length > 0) {
+      const otherIds = otherScreens.map(s => `${s.id}(player=${s.yodeckPlayerId})`).join(", ");
+      console.warn(`${LOG_PREFIX} [${correlationId}] SHARED_PLAYLIST_DETECTED: screen ${screenId} shares playlistId ${screen.playlistId} with ${otherIds}. Auto-fixing...`);
+      actions.push(`SHARED_PLAYLIST_DETECTED: playlistId=${screen.playlistId} shared with ${otherIds} - clearing to force new playlist`);
+      
+      // Clear this screen's playlistId so ensureScreenPlaylist creates a new one
+      await db.update(screens).set({ playlistId: null }).where(eq(screens.id, screenId));
+      // Reload screen object with cleared playlistId
+      const reloadedScreen = await storage.getScreen(screenId);
+      if (reloadedScreen) {
+        Object.assign(screen, reloadedScreen);
+      }
+      actions.push(`Cleared playlistId for screen ${screenId} - ensureScreenPlaylist will create a unique one`);
+    }
+  }
+
   // 2. Get base playlist
   actions.push(`Step 2: Finding base playlist "${BASE_PLAYLIST_NAME}"...`);
   const baseResult = await getBasePlaylistId();
   if (!baseResult.ok || !baseResult.basePlaylistId) {
-    actions.push(`ERROR: Base playlist not found: ${baseResult.error}`);
-    return errorResponse("get_base_playlist", baseResult.error || "BASE_PLAYLIST_NOT_FOUND");
+    const baseMsg = `BASE_PLAYLIST_MISSING: Maak in Yodeck een playlist aan met exact de naam "${BASE_PLAYLIST_NAME}". ${baseResult.error || ""}`;
+    actions.push(`ERROR: ${baseMsg}`);
+    console.error(`${LOG_PREFIX} [${correlationId}] HARD FAIL: ${baseMsg}`);
+    return errorResponse("get_base_playlist", baseMsg);
   }
   actions.push(`Base playlist found: id=${baseResult.basePlaylistId}, items=${baseResult.itemCount}`);
 
