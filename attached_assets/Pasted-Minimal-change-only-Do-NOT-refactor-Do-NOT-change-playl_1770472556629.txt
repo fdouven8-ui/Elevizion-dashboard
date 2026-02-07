@@ -1,0 +1,56 @@
+Minimal change only. Do NOT refactor. Do NOT change playlist logic or upload flow structure.
+
+Context / Problem:
+- Media 29860650 exists in Yodeck with media_origin.source = "local" and status = "finished".
+- But its arguments still contain:
+  - download_from_url: "https://dsbackend.s3.amazonaws.com/..."
+  - play_from_url: "https://dsbackend.s3.amazonaws.com/..."
+  - buffering: true
+- This causes 5–10s “geen netwerk” when the ad starts (player treats it like URL streaming).
+- We created a repair endpoint and called:
+  POST /api/admin/yodeck/media/29860650/repair-local
+  which returned HTTP 400 with Yodeck error err_1003: "Invalid field name or value".
+- Root cause: Yodeck PATCH does NOT accept null values for these fields. We must use empty strings or omit fields.
+
+Goal:
+For LOCAL media uploads (and the repair endpoint), clear URL playback fields without re-upload:
+- arguments.download_from_url should become "" (empty string)
+- arguments.play_from_url should become "" (empty string)
+- arguments.buffering should become false
+This should stop “geen netwerk” at start for current and future ads.
+
+Changes to implement (smallest possible):
+1) Wherever we patch Yodeck media (yodeckClient.patchMedia or similar), keep it as-is; only adjust the payload used by:
+   a) the repair endpoint /api/admin/yodeck/media/:id/repair-local
+   b) the post-upload cleanup in transactionalUploadService.ts (after media is confirmed READY/finished)
+
+2) Replace null with empty string:
+   BEFORE (causes err_1003):
+     arguments: { download_from_url: null, play_from_url: null, buffering: false }
+   AFTER (should be accepted):
+     arguments: { download_from_url: "", play_from_url: "", buffering: false }
+
+3) Keep failure behavior:
+- If the PATCH fails, return { ok:false, status, error } for repair-local.
+- For the upload pipeline: log warn but do NOT fail the whole upload (as previously designed).
+
+4) Add/keep logs:
+- MEDIA_REPAIR_LOCAL_PATCH_START {mediaId}
+- MEDIA_REPAIR_LOCAL_PATCH_OK {mediaId}
+- MEDIA_REPAIR_LOCAL_PATCH_FAIL {mediaId, status, error}
+- MEDIA_POSTUPLOAD_PATCH_START/OK/WARN similarly for the pipeline step.
+
+Acceptance tests:
+A) After deploy, call in browser console:
+   fetch("/api/admin/yodeck/media/29860650/repair-local",{method:"POST",headers:{"Content-Type":"application/json"}}).then(r=>r.json()).then(console.log)
+   -> should return ok:true (patched:true)
+
+B) Verify with:
+   fetch("/api/debug/yodeck/media/29860650/raw").then(r=>r.json()).then(j=>console.log(j.media.media_origin?.source, j.media.arguments?.download_from_url, j.media.arguments?.play_from_url, j.media.arguments?.buffering))
+   Expected:
+   source="local"
+   download_from_url="" (or missing)
+   play_from_url="" (or missing)
+   buffering=false
+
+Do not implement any new endpoints beyond adjusting the existing repair-local and the existing post-upload cleanup step. Keep everything else unchanged.

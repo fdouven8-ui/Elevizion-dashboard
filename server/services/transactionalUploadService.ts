@@ -179,8 +179,8 @@ async function patchClearUrlPlaybackFields(mediaId: number, correlationId: strin
     }
     const patch = {
       arguments: {
-        download_from_url: null,
-        play_from_url: null,
+        download_from_url: "",
+        play_from_url: "",
         buffering: false,
       },
     };

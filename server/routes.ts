@@ -18181,8 +18181,8 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
       const patch = {
         arguments: {
-          download_from_url: null,
-          play_from_url: null,
+          download_from_url: "",
+          play_from_url: "",
           buffering: false,
         },
       };
