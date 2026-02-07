@@ -816,33 +816,29 @@ export class YodeckClient {
 
     const existingArgs = fetchResult.data.arguments || {};
 
-    const mergedArgs: Record<string, any> = { ...existingArgs, ...partialArgs };
+    const safeArgs: Record<string, any> = { ...partialArgs };
 
-    const hasPlayUrl = typeof mergedArgs.play_from_url === "string" && mergedArgs.play_from_url.length > 0;
-    const hasDownloadUrl = typeof mergedArgs.download_from_url === "string" && mergedArgs.download_from_url.length > 0;
+    delete safeArgs.play_from_url;
 
-    if (!hasPlayUrl && !hasDownloadUrl) {
-      if (existingArgs.download_from_url && typeof existingArgs.download_from_url === "string" && existingArgs.download_from_url.length > 0) {
-        mergedArgs.download_from_url = existingArgs.download_from_url;
-      } else if (existingArgs.play_from_url && typeof existingArgs.play_from_url === "string" && existingArgs.play_from_url.length > 0) {
-        mergedArgs.play_from_url = existingArgs.play_from_url;
-      } else {
-        return { ok: false, mediaId, code: "MISSING_URL_FIELDS", message: "Yodeck requires play_from_url or download_from_url when patching media" };
+    const existingDownload = existingArgs.download_from_url;
+    if (typeof existingDownload === "string" && existingDownload.length > 0) {
+      if (!safeArgs.download_from_url) {
+        safeArgs.download_from_url = existingDownload;
       }
     }
 
-    Object.keys(mergedArgs).forEach(k => {
-      if (mergedArgs[k] === null || mergedArgs[k] === undefined) {
-        delete mergedArgs[k];
+    Object.keys(safeArgs).forEach(k => {
+      if (safeArgs[k] === null || safeArgs[k] === undefined) {
+        delete safeArgs[k];
       }
     });
 
-    const patchResult = await this.patchMedia(mediaId, { arguments: mergedArgs });
+    const patchResult = await this.patchMedia(mediaId, { arguments: safeArgs });
     if (!patchResult.ok) {
-      return { ok: false, mediaId, code: "PATCH_FAILED", message: patchResult.error || `HTTP ${patchResult.status}`, beforeArgs: existingArgs, patchedArgs: mergedArgs };
+      return { ok: false, mediaId, code: "PATCH_FAILED", message: patchResult.error || `HTTP ${patchResult.status}`, beforeArgs: existingArgs, patchedArgs: safeArgs };
     }
 
-    return { ok: true, mediaId, beforeArgs: existingArgs, patchedArgs: mergedArgs };
+    return { ok: true, mediaId, beforeArgs: existingArgs, patchedArgs: safeArgs };
   }
 
   /**

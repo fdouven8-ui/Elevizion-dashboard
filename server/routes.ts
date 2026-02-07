@@ -18174,41 +18174,76 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         return res.status(400).json({ ok: false, error: "Invalid media ID" });
       }
 
+      const dryRun = req.query.dryRun === "true";
+
       const { getYodeckClient } = await import("./services/yodeckClient");
       const client = await getYodeckClient();
       if (!client) {
         return res.status(503).json({ ok: false, error: "Yodeck client not available" });
       }
 
-      console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_START mediaId=${mediaId}`);
+      console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_START mediaId=${mediaId} dryRun=${dryRun}`);
 
       const beforeFetch = await client.fetchMediaRaw(mediaId);
-      const beforeSubset = beforeFetch.ok && beforeFetch.data ? {
-        source: beforeFetch.data.media_origin?.source ?? null,
-        buffering: beforeFetch.data.arguments?.buffering ?? null,
-        play_from_url: beforeFetch.data.arguments?.play_from_url ?? null,
-        download_from_url: beforeFetch.data.arguments?.download_from_url ?? null,
-      } : null;
-
-      const result = await client.patchMediaSafe(mediaId, { buffering: false });
-
-      let afterSubset: any = null;
-      if (result.ok) {
-        const afterFetch = await client.fetchMediaRaw(mediaId);
-        if (afterFetch.ok && afterFetch.data) {
-          afterSubset = {
-            source: afterFetch.data.media_origin?.source ?? null,
-            buffering: afterFetch.data.arguments?.buffering ?? null,
-            play_from_url: afterFetch.data.arguments?.play_from_url ?? null,
-            download_from_url: afterFetch.data.arguments?.download_from_url ?? null,
-          };
-        }
-        console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_OK mediaId=${mediaId}`);
-        res.json({ ok: true, mediaId, patched: true, beforeSubset, afterSubset, patchedArgs: result.patchedArgs });
-      } else {
-        console.warn(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_FAIL mediaId=${mediaId} code=${result.code} msg=${result.message}`);
-        res.json({ ok: false, mediaId, patched: false, code: result.code, error: result.message, beforeSubset });
+      if (!beforeFetch.ok || !beforeFetch.data) {
+        return res.status(404).json({ ok: false, error: "Media not found in Yodeck", mediaId });
       }
+
+      const beforeArgs = beforeFetch.data.arguments || {};
+      const beforeSubset = {
+        source: beforeFetch.data.media_origin?.source ?? null,
+        buffering: beforeArgs.buffering ?? null,
+        play_from_url: beforeArgs.play_from_url ?? null,
+        download_from_url: beforeArgs.download_from_url ?? null,
+      };
+
+      const downloadUrl = typeof beforeArgs.download_from_url === "string" && beforeArgs.download_from_url.length > 0
+        ? beforeArgs.download_from_url : null;
+
+      const attemptedPayload = {
+        arguments: {
+          buffering: false,
+          ...(downloadUrl ? { download_from_url: downloadUrl } : {}),
+        },
+      };
+
+      if (dryRun) {
+        console.log(`[RepairLocal] ${correlationId} DRY_RUN mediaId=${mediaId}`);
+        return res.json({ ok: true, mediaId, dryRun: true, patched: false, attemptedPayload, beforeSubset });
+      }
+
+      const patchResult = await client.patchMedia(mediaId, attemptedPayload);
+
+      if (!patchResult.ok) {
+        console.warn(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_FAIL mediaId=${mediaId} status=${patchResult.status} error=${patchResult.error}`);
+        return res.json({ ok: false, mediaId, patched: false, attemptedPayload, beforeSubset, status: patchResult.status, error: patchResult.error });
+      }
+
+      const afterFetch = await client.fetchMediaRaw(mediaId);
+      let afterSubset: any = null;
+      let yodeckRawAfter: any = null;
+      if (afterFetch.ok && afterFetch.data) {
+        const afterArgs = afterFetch.data.arguments || {};
+        afterSubset = {
+          source: afterFetch.data.media_origin?.source ?? null,
+          buffering: afterArgs.buffering ?? null,
+          play_from_url: afterArgs.play_from_url ?? null,
+          download_from_url: afterArgs.download_from_url ?? null,
+        };
+        yodeckRawAfter = {
+          id: afterFetch.data.id,
+          name: afterFetch.data.name,
+          status: afterFetch.data.status,
+          media_origin: afterFetch.data.media_origin,
+          arguments: afterArgs,
+        };
+      }
+
+      const patched = beforeSubset.buffering !== afterSubset?.buffering && afterSubset?.buffering === false;
+      const reason = patched ? null : "NOT_MUTABLE";
+
+      console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_OK mediaId=${mediaId} patched=${patched}`);
+      res.json({ ok: true, mediaId, patched, reason, attemptedPayload, beforeSubset, afterSubset, yodeckRawAfter });
     } catch (error: any) {
       console.error(`[RepairLocal] ${correlationId} exception: ${error.message}`);
       res.status(500).json({ ok: false, error: error.message });

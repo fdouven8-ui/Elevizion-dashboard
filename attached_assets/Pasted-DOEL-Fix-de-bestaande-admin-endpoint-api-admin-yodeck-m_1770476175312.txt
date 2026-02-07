@@ -1,0 +1,93 @@
+DOEL:
+Fix de bestaande admin endpoint /api/admin/yodeck/media/:mediaId/repair-local zodat:
+1) Hij ALTIJD een server-side PATCH doet naar Yodeck (geen CORS)
+2) Hij de JUISTE payload stuurt:
+   - arguments.buffering -> false
+   - arguments.download_from_url -> MEESTUREN met de huidige waarde (read-only maar required in patch)
+   - NIET play_from_url patchen (Yodeck geeft invalid_field)
+3) Hij returned attemptedPayload + beforeSubset + afterSubset + yodeckRawAfter (zodat we kunnen verifiëren)
+4) Fail-safe: als buffering niet verandert na PATCH, return ok:true maar patched:false met reason "NOT_MUTABLE" (zodat we weten dat Yodeck het negeert)
+5) Maak het herbruikbaar: voeg helper toe in yodeckClient voor patchMedia(id, payload)
+
+CONTEXT:
+We zien via /api/debug/yodeck/media/29860650/raw:
+media_origin.source = "local"
+arguments bevat:
+- buffering: true
+- download_from_url: "https://dsbackend.s3.amazonaws.com/media/uploads/.../original"
+- play_from_url: "https://dsbackend.s3.amazonaws.com/media/.../1080p.mp4"
+Probleem: buffering true veroorzaakt traag starten.
+CORS voorkomt direct PATCH vanaf browser naar app.yodeck.com, dus moet via server.
+
+BELANGRIJK:
+- Niet de hele pipeline omgooien.
+- Alleen repair endpoint + client helper + minimale logging.
+- Gebruik bestaande YodeckClient auth/rate-limit/retry patronen.
+
+IMPLEMENTATIE STAPPEN:
+
+A) Zoek bestaande route:
+  /api/admin/yodeck/media/:mediaId/repair-local  (Express routes.ts)
+en de bijbehorende handler/service.
+Zorg dat hij:
+  - Eerst GET /api/v2/media/:id doet om bestaande arguments te lezen
+  - Haalt daar download_from_url uit (mag null zijn)
+  - Bouwt PATCH payload zo:
+
+    const attemptedPayload = {
+      arguments: {
+        buffering: false,
+        ...(download_from_url ? { download_from_url } : {})
+      }
+    };
+
+  LET OP: patch nooit play_from_url.
+
+  - Doe PATCH /api/v2/media/:id met attemptedPayload (server-side)
+  - Daarna GET /api/v2/media/:id opnieuw en bereken:
+      beforeSubset = { source, buffering, download_from_url, play_from_url }
+      afterSubset  = { source, buffering, download_from_url, play_from_url }
+  - patched = (beforeSubset.buffering !== afterSubset.buffering && afterSubset.buffering === false)
+
+  - Return JSON:
+    {
+      ok: true,
+      mediaId,
+      patched,
+      attemptedPayload,
+      beforeSubset,
+      afterSubset,
+      yodeckRawAfter: <optioneel alleen subset of volledige media, maar liever subset om response klein te houden>,
+      reason: patched ? null : "NOT_MUTABLE"
+    }
+
+  - Als PATCH faalt: return ok:false met status + error string + attemptedPayload.
+
+B) YodeckClient helper:
+Voeg methode toe (of gebruik bestaande generic request):
+  async patchMedia(mediaId: number, payload: any) {
+     return this.request("PATCH", `/api/v2/media/${mediaId}`, payload)
+  }
+
+C) Debug output:
+Zorg dat attemptedPayload NIET undefined is. Dit was het probleem in console.
+Return hem altijd.
+
+D) Tests:
+- Voeg een mini self-test toe (alleen intern) in handler:
+  als query ?dryRun=true -> geen PATCH, alleen return attemptedPayload+beforeSubset.
+- Zorg dat endpoint altijd JSON returned.
+
+NA IMPLEMENTATIE:
+- Deploy.
+- Geef mij 1 console snippet om te testen (maar je hoeft hier geen extra routes voor te maken).
+
+LET OP:
+Yodeck gaf eerder error "missing_key: play_from_url or download_from_url" wanneer alleen buffering werd gestuurd.
+Daarom sturen we download_from_url mee als die bestaat.
+We sturen play_from_url nooit mee omdat Yodeck "invalid_field play_from_url" gaf.
+
+START NU MET CODEN, pas alleen de benodigde files aan, en geef na afloop kort:
+- welke files aangepast
+- de exacte route signature
+- voorbeeld response shape
