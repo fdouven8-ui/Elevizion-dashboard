@@ -1,0 +1,55 @@
+DOEL
+Fix /api/admin/yodeck/media/:id/repair-local zodat hij NOOIT play_from_url als lege string patcht.
+Als we play_from_url willen “clearen”, dan moet het óf null zijn óf het veld helemaal weglaten.
+Daarnaast moet buffering naar false gezet worden.
+Alles server-side (geen browser→Yodeck direct i.v.m. CORS).
+
+CONTEXT
+We kregen van Yodeck:
+err_1003 invalid_field: "play_from_url", invalid_value: "" (lege string).
+Huidige media 29860650 heeft:
+media_origin.source = "local"
+arguments.download_from_url = (Yodeck S3 url)
+arguments.play_from_url = (bestaat)
+arguments.buffering = true
+We willen: buffering false, en play_from_url niet meer actief (geen streaming), zonder nieuwe upload.
+
+AANPASSINGEN (klein + veilig)
+1) In server routes: implementeer of fix endpoint:
+POST /api/admin/yodeck/media/:id/repair-local
+
+2) Endpoint flow:
+- parse mediaId uit params
+- fetch current media via bestaande yodeckClient (gebruik dezelfde call als /api/debug/yodeck/media/:id/raw)
+- bouw patchBody MET STRIKTE REGELS:
+  - NOOIT play_from_url doorsturen als "" of " " (lege string)
+  - Als play_from_url bestaat en we willen hem weg:
+      - eerst proberen play_from_url: null (niet "")
+      - ALS Yodeck toch klaagt dat play_from_url invalid_field/invalid_value is:
+          retry PATCH zonder play_from_url veld (dus alleen buffering aanpassen)
+  - Zet altijd arguments.buffering = false
+- Return JSON met:
+  ok, mediaId, patched, attemptedPayload, retryUsed, beforeSubset (source, buffering, play_from_url?, download_from_url?), afterSubset (zelfde)
+
+3) Implementatie details:
+- Maak helper sanitize:
+  function cleanUrlField(v) { if (typeof v !== "string") return v; const t=v.trim(); return t.length? t : null; }
+- Patch attempt A:
+  { arguments: { buffering:false, play_from_url: null } }
+  (GEEN download_from_url aanpassen, tenzij we later besluiten)
+- Als response 400 err_1003 en details.invalid_field === "play_from_url":
+  Patch attempt B:
+  { arguments: { buffering:false } }
+- Na succesvolle patch: re-fetch media en return afterSubset.
+
+4) Log (console/server) met correlationId en beide attempts (zonder secrets).
+
+TEST
+- Call vanuit browser console:
+fetch("/api/admin/yodeck/media/29860650/repair-local",{method:"POST",headers:{"Content-Type":"application/json"}}).then(r=>r.json()).then(console.log)
+- Daarna check:
+fetch("/api/debug/yodeck/media/29860650/raw").then(r=>r.json()).then(j=>console.log(j.media.arguments))
+Verwacht: buffering=false, en geen play_from_url=="" meer (null of ongewijzigd als retry B nodig was).
+
+BELANGRIJK
+Verander verder niets aan playlist/push logic. Alleen repair-local endpoint robuust maken + geen lege string patchen.

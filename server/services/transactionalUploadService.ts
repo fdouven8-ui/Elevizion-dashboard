@@ -177,18 +177,23 @@ async function patchClearUrlPlaybackFields(mediaId: number, correlationId: strin
       console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} reason=no_yodeck_client`);
       return;
     }
-    const patch = {
-      arguments: {
-        download_from_url: "",
-        play_from_url: "",
-        buffering: false,
-      },
-    };
-    const result = await client.patchMedia(mediaId, patch);
-    if (result.ok) {
-      console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_OK mediaId=${mediaId}`);
+    const patchA = { arguments: { buffering: false, play_from_url: null } };
+    console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_POSTUPLOAD_PATCH_START mediaId=${mediaId}`);
+    const resultA = await client.patchMedia(mediaId, patchA);
+
+    if (resultA.ok) {
+      console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_POSTUPLOAD_PATCH_OK mediaId=${mediaId}`);
+    } else if (resultA.error?.includes("play_from_url")) {
+      const patchB = { arguments: { buffering: false } };
+      console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_POSTUPLOAD_PATCH_RETRY mediaId=${mediaId} (play_from_url rejected)`);
+      const resultB = await client.patchMedia(mediaId, patchB);
+      if (resultB.ok) {
+        console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_POSTUPLOAD_PATCH_OK mediaId=${mediaId} retryUsed=true`);
+      } else {
+        console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_POSTUPLOAD_PATCH_WARN mediaId=${mediaId} status=${resultB.status} body=${resultB.error?.substring(0, 200)}`);
+      }
     } else {
-      console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} status=${result.status} body=${result.error?.substring(0, 200)}`);
+      console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_POSTUPLOAD_PATCH_WARN mediaId=${mediaId} status=${resultA.status} body=${resultA.error?.substring(0, 200)}`);
     }
   } catch (err: any) {
     console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} error=${err.message}`);

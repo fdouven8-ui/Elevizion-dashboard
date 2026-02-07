@@ -18167,6 +18167,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
   
   app.post("/api/admin/yodeck/media/:id/repair-local", requireAdminAccess, async (req, res) => {
+    const correlationId = `repair-${Date.now()}`;
     try {
       const mediaId = parseInt(req.params.id, 10);
       if (isNaN(mediaId)) {
@@ -18179,25 +18180,68 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         return res.status(503).json({ ok: false, error: "Yodeck client not available" });
       }
 
-      const patch = {
-        arguments: {
-          download_from_url: "",
-          play_from_url: "",
-          buffering: false,
-        },
-      };
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
 
-      console.log(`[RepairLocal] MEDIA_PATCH_AFTER_UPLOAD_START mediaId=${mediaId}`);
-      const result = await client.patchMedia(mediaId, patch);
+      let beforeSubset: any = null;
+      try {
+        const fetchResp = await fetch(`${yodeckBaseUrl}/media/${mediaId}/`, {
+          headers: { Authorization: `Token ${token}` },
+        });
+        if (fetchResp.ok) {
+          const mediaData = await fetchResp.json();
+          beforeSubset = {
+            source: mediaData.media_origin?.source ?? null,
+            buffering: mediaData.arguments?.buffering ?? null,
+            play_from_url: mediaData.arguments?.play_from_url ?? null,
+            download_from_url: mediaData.arguments?.download_from_url ?? null,
+          };
+        }
+      } catch {}
 
-      if (result.ok) {
-        console.log(`[RepairLocal] MEDIA_PATCH_AFTER_UPLOAD_OK mediaId=${mediaId}`);
-        res.json({ ok: true, mediaId, patched: true });
+      const patchA = { arguments: { buffering: false, play_from_url: null } };
+      console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_START mediaId=${mediaId} attempt=A`);
+      const resultA = await client.patchMedia(mediaId, patchA);
+
+      let retryUsed = false;
+      let attemptedPayload: any = patchA;
+      let finalResult = resultA;
+
+      if (!resultA.ok && resultA.error?.includes("play_from_url")) {
+        retryUsed = true;
+        const patchB = { arguments: { buffering: false } };
+        attemptedPayload = patchB;
+        console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_RETRY mediaId=${mediaId} attempt=B (play_from_url rejected)`);
+        finalResult = await client.patchMedia(mediaId, patchB);
+      }
+
+      let afterSubset: any = null;
+      if (finalResult.ok) {
+        try {
+          const fetchResp2 = await fetch(`${yodeckBaseUrl}/media/${mediaId}/`, {
+            headers: { Authorization: `Token ${token}` },
+          });
+          if (fetchResp2.ok) {
+            const mediaData2 = await fetchResp2.json();
+            afterSubset = {
+              source: mediaData2.media_origin?.source ?? null,
+              buffering: mediaData2.arguments?.buffering ?? null,
+              play_from_url: mediaData2.arguments?.play_from_url ?? null,
+              download_from_url: mediaData2.arguments?.download_from_url ?? null,
+            };
+          }
+        } catch {}
+      }
+
+      if (finalResult.ok) {
+        console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_OK mediaId=${mediaId} retryUsed=${retryUsed}`);
+        res.json({ ok: true, mediaId, patched: true, retryUsed, attemptedPayload, beforeSubset, afterSubset });
       } else {
-        console.warn(`[RepairLocal] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} status=${result.status} body=${result.error}`);
-        res.json({ ok: false, mediaId, patched: false, status: result.status, error: result.error });
+        console.warn(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_FAIL mediaId=${mediaId} status=${finalResult.status} error=${finalResult.error}`);
+        res.json({ ok: false, mediaId, patched: false, retryUsed, status: finalResult.status, error: finalResult.error, attemptedPayload, beforeSubset });
       }
     } catch (error: any) {
+      console.error(`[RepairLocal] ${correlationId} exception: ${error.message}`);
       res.status(500).json({ ok: false, error: error.message });
     }
   });
