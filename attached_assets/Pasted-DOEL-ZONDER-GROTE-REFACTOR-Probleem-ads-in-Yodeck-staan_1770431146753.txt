@@ -1,0 +1,104 @@
+DOEL (ZONDER GROTE REFACTOR):
+- Probleem: ads in Yodeck staan soms als media_origin.source="url" (of blijven hangen / laden traag) waardoor bij start ads “geen netwerk” en/of lange init/loading ontstaat.
+- Gewenst: Elevizion moet ZONDER dat ik opnieuw upload, de bestaande ad automatisch “repareren” door:
+  1) de bronfile van die ad te downloaden (via arguments.download_from_url of via object storage key uit DB),
+  2) een NIEUW Yodeck media object te creëren met media_origin.source="local",
+  3) de file via get_upload_url + presigned PUT te uploaden,
+  4) te poll-en tot status "finished",
+  5) daarna DB canonical mediaId updaten en playlist rebuilden zodat de playlist de “local finished” mediaId gebruikt.
+- Geen nieuwe endpoints nodig (mag wel intern helper + minimale uitbreiding van bestaande rebuild/self-heal).
+- NIET de hele functionaliteit omgooien: bestaande rebuild/push/screenshot blijven. Alleen extra guard + auto-migrate.
+
+AANPAK (MINIMALE WIJZIGINGEN):
+1) Nieuwe helper service: server/services/yodeckMediaMigrationService.ts
+   Voeg functies toe:
+
+   A) async inspectMedia(mediaId)
+      - gebruikt bestaande YodeckClient of bestaande debug raw proxy intern (niet via browser)
+      - haalt minimaal op: id, status, name, media_origin, arguments, file_extension, get_upload_url
+      - returns { ok, media, notFound }
+
+   B) function isPlayableLocal(media):
+      - return true als:
+        media.status === "finished"
+        AND media.media_origin?.type === "video"
+        AND media.media_origin?.source === "local"
+        AND (media.file_extension === "mp4" OR file_extension is truthy)
+      - Anders false.
+
+   C) async ensureMediaIsLocalPlayable(input: { mediaId, fallbackUrl?, fallbackStorageKey? })
+      - Doel: geeft een mediaId terug die guaranteed local+finished is.
+      - Flow:
+        1) inspectMedia(mediaId)
+        2) Als isPlayableLocal(media) -> return { ok:true, mediaIdSame, migrated:false }
+        3) Anders: bepaal download bron:
+           - eerste keuze: media.arguments?.download_from_url (als niet null)
+           - tweede keuze: fallbackUrl (bijv. signedUrl uit object storage)
+           - derde keuze: fallbackStorageKey -> ObjectStorageService.getSignedDownloadUrl(key)
+           - Als geen bron: return ok:false reason="NO_SOURCE_URL"
+        4) Download file als stream (node-fetch/undici) -> buffer naar temp file (/tmp/evz-migrate-<id>.mp4)
+           - enforce max size (bijv. 250MB) + timeout
+           - log bytes
+        5) Create nieuwe Yodeck media (LOCAL):
+           - POST /api/v2/media met:
+             { name: (originele naam of `EVZ-MIGRATED-<oldId>.mp4`),
+               media_origin: { type:"video", source:"local", format:null }
+             }
+           - Pak returned get_upload_url
+        6) GET get_upload_url -> krijg presigned upload_url
+        7) PUT binary naar upload_url met Content-Type video/mp4 + Content-Length
+        8) (soft) finalize attempt: POST naar /upload/complete of bestaande finalize logic (zoals transactionalUploadService)
+        9) Poll status (GET /media/:newId) tot status "finished" (timeout bijv. 180s)
+           - Als stuck -> ok:false reason="MIGRATE_TIMEOUT"
+        10) return { ok:true, migrated:true, oldMediaId, newMediaId }
+
+   Logging:
+   - MIGRATE_START old=.. source=download_from_url|storageSignedUrl bytes=..
+   - MIGRATE_CREATED new=.. get_upload_url=..
+   - MIGRATE_UPLOADED new=.. http=..
+   - MIGRATE_READY new=.. polls=..
+   - MIGRATE_FAIL old=.. reason=..
+
+2) Koppeling aan bestaande rebuild flow (niet omgooien):
+   In server/services/simplePlaylistModel.ts (of screenPlaylistService.ts waar rebuildScreenPlaylist() zit):
+   - Op het moment dat je advertiser mediaIds verzamelt (expectedAdMediaIds):
+     - Voor ELK mediaId: roep ensureMediaIsLocalPlayable({mediaId, fallbackStorageKey/from DB}) aan
+     - Verzamel:
+       playableMediaIds (final ids)
+       migrations [{oldMediaId, newMediaId}]
+       skipped [{mediaId, reason}]
+   - BELANGRIJK:
+     - Gebruik vervolgens playableMediaIds voor addAdsToScreenPlaylist()
+     - Laat bestaande “hard verification” intact (maar verify alleen playableMediaIds)
+   - Update DB als er migrations zijn:
+     - advertiser.yodeckMediaIdCanonical = newMediaId
+     - asset status laten staan (niet opnieuw uploaden), maar voeg audit log entry toe: MIGRATED_MEDIA_ID
+     - zorg dat dit in een transactie gebeurt waar mogelijk
+
+3) Fix voor “er staat al 1 ad in playlist en die werkt maar laadt traag”:
+   - Die ad heeft nu media_origin.source="url" of download_from_url.
+   - Door rebuildScreenPlaylist() opnieuw te runnen, zal hij:
+     - eerst ensureMediaIsLocalPlayable uitvoeren -> maakt local copy in Yodeck
+     - daarna playlist herbouwen met die nieuwe local mediaId
+   - Hierdoor hoef ik NIET opnieuw te uploaden; de server migreert de bestaande ad.
+
+4) UI/Endpoint gedrag (minimaal):
+   - We wijzigen GEEN routestructuur.
+   - Bestaande endpoint POST /api/admin/screens/:screenId/rebuild-playlist krijgt extra velden in response:
+     - { migrations, skipped }
+   - Bestaande /api/admin/screens/push blijft zoals hij is.
+
+5) Extra safety:
+   - Als media al "finished" is maar source="url": MIGREER alsnog (want we willen local).
+   - Als download_from_url wijst naar yodeck/amazonaws url: direct streamen is ok.
+   - Als download faalt: skip en log, maar rebuild gaat door met overige ads.
+
+6) Testplan (moet in code verwerkt als eenvoudige admin test):
+   - Run rebuild-playlist op screen 241377ce... (non-dry-run)
+   - Verwacht in response: migrations length >= 1 als ad nog url-based was
+   - Daarna call /api/admin/screens/push
+   - Daarna refresh screenshot en check: geen “geen netwerk” bij start ads (handmatige observatie) + playback stable.
+
+BELANGRIJK: Niet alles herschrijven.
+- Voeg alleen migration helper toe + call vanuit rebuild.
+- Laat bestaande upload pipeline staan; dit is een extra “repair pad” voor bestaande url-based media.

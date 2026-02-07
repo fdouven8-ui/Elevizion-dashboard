@@ -966,6 +966,8 @@ export interface RebuildPlaylistResult {
     included: number;
     skipped: Array<{ reason: string; advertiserId: string; detail?: string }>;
     adsAdded: Array<{ advertiserId: string; mediaId: number; companyName: string }>;
+    migrations: Array<{ oldMediaId: number; newMediaId: number; advertiserId: string; companyName: string }>;
+    migrationSkipped: Array<{ mediaId: number; advertiserId: string; reason: string }>;
   };
   assign: {
     ok: boolean;
@@ -1001,7 +1003,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
     base: { found: false, basePlaylistId: null, baseItemCount: 0 },
     screenPlaylist: { existed: false, created: false, screenPlaylistId: null, screenPlaylistName: null },
     copy: { ok: false, copiedCount: 0 },
-    ads: { candidates: 0, included: 0, skipped: skippedAds, adsAdded: [] },
+    ads: { candidates: 0, included: 0, skipped: skippedAds, adsAdded: [], migrations: [], migrationSkipped: [] },
     assign: { ok: false, screenSourceType: null, screenSourceId: null },
     push: { ok: false },
     verify: { ok: false, actualSourceType: null, actualSourceId: null, actualPlaylistItemCount: 0 },
@@ -1091,6 +1093,8 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
   const MAX_ADS_PER_SCREEN = 20;
   const adMediaIds: number[] = [];
   const adsAdded: Array<{ advertiserId: string; mediaId: number; companyName: string }> = [];
+  const migrations: Array<{ oldMediaId: number; newMediaId: number; advertiserId: string; companyName: string }> = [];
+  const migrationSkipped: Array<{ mediaId: number; advertiserId: string; reason: string }> = [];
   
   // Get screen's location for targeting
   const location = screen.locationId ? await storage.getLocation(screen.locationId) : null;
@@ -1224,6 +1228,64 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       continue;
     }
 
+    // MIGRATION GUARD: Ensure media is local+playable (not url-based)
+    // If source="url", re-upload as source="local" so screens don't need network for ads
+    const { ensureMediaIsLocalPlayable } = await import("./yodeckMediaMigrationService");
+    
+    // Get fallback storage key from approved adAsset
+    let fallbackStorageKey: string | null = null;
+    try {
+      const approvedAsset = await db.select({ 
+        storagePath: adAssets.storagePath,
+        convertedStoragePath: adAssets.convertedStoragePath,
+      })
+        .from(adAssets)
+        .where(and(
+          eq(adAssets.advertiserId, advertiser.id),
+          eq(adAssets.approvalStatus, "APPROVED"),
+        ))
+        .orderBy(desc(adAssets.createdAt))
+        .limit(1);
+      fallbackStorageKey = approvedAsset[0]?.convertedStoragePath || approvedAsset[0]?.storagePath || null;
+    } catch {}
+
+    const migrationResult = await ensureMediaIsLocalPlayable({
+      mediaId,
+      fallbackStorageKey,
+    });
+    
+    if (!migrationResult.ok) {
+      migrationSkipped.push({ mediaId, advertiserId: advertiser.id, reason: migrationResult.reason || "UNKNOWN" });
+      actions.push(`MIGRATION_SKIP ${advertiser.companyName}: mediaId=${mediaId} reason=${migrationResult.reason} - using original`);
+      // Still include the ad even if migration failed - it works, just might be slow
+      adMediaIds.push(mediaId);
+      adsAdded.push({ 
+        advertiserId: advertiser.id, 
+        mediaId, 
+        companyName: advertiser.companyName || advertiser.id 
+      });
+      actions.push(`Including ad from ${advertiser.companyName}: mediaId=${mediaId} (${matchReason}) [migration skipped]`);
+      continue;
+    }
+    
+    if (migrationResult.migrated && migrationResult.newMediaId && migrationResult.newMediaId !== mediaId) {
+      const oldId = mediaId;
+      mediaId = migrationResult.newMediaId;
+      
+      // Update DB: canonical mediaId = new local one
+      await db.update(advertisers)
+        .set({ 
+          yodeckMediaIdCanonical: mediaId,
+          yodeckMediaIdCanonicalUpdatedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(advertisers.id, advertiser.id));
+      
+      migrations.push({ oldMediaId: oldId, newMediaId: mediaId, advertiserId: advertiser.id, companyName: advertiser.companyName || advertiser.id });
+      actions.push(`MIGRATED ${advertiser.companyName}: old=${oldId} -> new=${mediaId} (url->local)`);
+      console.log(`${LOG_PREFIX} [${correlationId}] MIGRATED_MEDIA_ID advertiser=${advertiser.id} old=${oldId} new=${mediaId}`);
+    }
+
     adMediaIds.push(mediaId);
     adsAdded.push({ 
       advertiserId: advertiser.id, 
@@ -1263,7 +1325,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
       screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
       copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
-      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
+      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded, migrations, migrationSkipped },
       assign: { ok: false, screenSourceType: null, screenSourceId: null },
       push: { ok: false },
       verify: { 
@@ -1297,7 +1359,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
       screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
       copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
-      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
+      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded, migrations, migrationSkipped },
       assign: { ok: false, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
       push: { ok: pushResult.pushed },
       verify: { 
@@ -1328,7 +1390,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
       screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
       copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
-      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
+      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded, migrations, migrationSkipped },
       assign: { ok: true, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
       push: { ok: true },
       verify: { 
@@ -1365,7 +1427,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
       screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
       copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
-      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
+      ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded, migrations, migrationSkipped },
       assign: { ok: true, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
       push: { ok: true },
       verify: { 
@@ -1404,7 +1466,7 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
     base: { found: true, basePlaylistId: baseResult.basePlaylistId, baseItemCount: baseResult.itemCount },
     screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
     copy: { ok: true, copiedCount: syncResult.baseMediaIds.length },
-    ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded },
+    ads: { candidates: adCandidates, included: adMediaIds.length, skipped: skippedAds, adsAdded, migrations, migrationSkipped },
     assign: { ok: true, screenSourceType: pushResult.actualSourceType, screenSourceId: pushResult.actualSourceId },
     push: { ok: true },
     verify: { 

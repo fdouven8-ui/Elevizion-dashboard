@@ -94,6 +94,19 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/debug/yodeck/upload-jobs`: List recent upload jobs with status
   - `GET /api/debug/storage/object?key=<path>`: Inspect storage object (exists, contentType, contentLength, signedUrl)
   - `POST /api/admin/test-e2e-advertiser-upload`: Full 7-step E2E test (asset lookup → storage check → download → upload → verify media → rebuild → verify playback)
+- **Media Migration Service** (yodeckMediaMigrationService.ts): Auto-repairs URL-based Yodeck media to local uploads:
+  - `inspectMedia(mediaId)`: Fetches media details from Yodeck (status, media_origin, arguments, file_extension)
+  - `isPlayableLocal(media)`: Returns true if media is finished AND source="local" (no network dependency)
+  - `ensureMediaIsLocalPlayable({mediaId, fallbackStorageKey?})`: Ensures media is local+playable, migrates if needed:
+    1. Inspects existing media in Yodeck
+    2. If already local+playable → returns same ID (no-op)
+    3. If source="url" or non-local: downloads from arguments.download_from_url or R2 storage fallback
+    4. Creates NEW Yodeck media with source="local", uploads binary, polls until finished
+    5. Returns { ok, migrated, oldMediaId, newMediaId }
+  - **Integration**: Called during `rebuildScreenPlaylist()` for each ad mediaId BEFORE playlist write
+  - **Non-destructive**: If migration fails, original mediaId is still used (just slower loading)
+  - **DB Update**: On successful migration, updates advertiser.yodeckMediaIdCanonical to new local mediaId
+  - Rebuild response now includes `ads.migrations[]` and `ads.migrationSkipped[]`
 - **Transactional Upload Service** (transactionalUploadService.ts): Ensures uploads are 100% reliable:
   - **Step 1: CREATE_MEDIA**: POST /api/v2/media with `media_origin: { type: "video", source: "local", format: null }`, name ends with .mp4. Returns mediaId and get_upload_url (API endpoint, NOT presigned URL)
   - **Step 2: GET_PRESIGNED_URL**: **CRITICAL** - GET get_upload_url endpoint to retrieve actual S3 presigned URL. Response JSON contains `upload_url` field with the real PUT target
