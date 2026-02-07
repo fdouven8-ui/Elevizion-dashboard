@@ -757,6 +757,52 @@ export class YodeckClient {
     }
   }
 
+  async patchMedia(mediaId: number, patch: Record<string, any>): Promise<{ ok: boolean; status?: number; error?: string }> {
+    await semaphore.acquire();
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/`, {
+          method: "PATCH",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(patch),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+
+        if (response.status === 429) {
+          console.log(`[YodeckClient] patchMedia rate limited for mediaId=${mediaId}, skipping`);
+          return { ok: false, status: 429, error: "Rate limited" };
+        }
+
+        if (!response.ok) {
+          const text = await response.text();
+          return { ok: false, status: response.status, error: `HTTP ${response.status}: ${text.substring(0, 200)}` };
+        }
+
+        return { ok: true, status: response.status };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        if (err.name === "AbortError") {
+          return { ok: false, error: "timeout" };
+        }
+        throw err;
+      }
+    } catch (err: any) {
+      return { ok: false, error: err.message || "unknown_error" };
+    } finally {
+      semaphore.release();
+    }
+  }
+
   /**
    * Get all screens (for finding which screen a playlist is assigned to)
    */

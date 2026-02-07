@@ -18166,6 +18166,42 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
   
+  app.post("/api/admin/yodeck/media/:id/repair-local", requireAdminAccess, async (req, res) => {
+    try {
+      const mediaId = parseInt(req.params.id, 10);
+      if (isNaN(mediaId)) {
+        return res.status(400).json({ ok: false, error: "Invalid media ID" });
+      }
+
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      if (!client) {
+        return res.status(503).json({ ok: false, error: "Yodeck client not available" });
+      }
+
+      const patch = {
+        arguments: {
+          download_from_url: null,
+          play_from_url: null,
+          buffering: false,
+        },
+      };
+
+      console.log(`[RepairLocal] MEDIA_PATCH_AFTER_UPLOAD_START mediaId=${mediaId}`);
+      const result = await client.patchMedia(mediaId, patch);
+
+      if (result.ok) {
+        console.log(`[RepairLocal] MEDIA_PATCH_AFTER_UPLOAD_OK mediaId=${mediaId}`);
+        res.json({ ok: true, mediaId, patched: true });
+      } else {
+        console.warn(`[RepairLocal] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} status=${result.status} body=${result.error}`);
+        res.json({ ok: false, mediaId, patched: false, status: result.status, error: result.error });
+      }
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   // ============================================================================
   // RAW YODECK DEBUG ENDPOINTS - Direct API response for debugging
   // ============================================================================

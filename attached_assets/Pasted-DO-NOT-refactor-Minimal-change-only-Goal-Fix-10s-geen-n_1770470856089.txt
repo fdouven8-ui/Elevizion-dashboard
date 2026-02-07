@@ -1,0 +1,40 @@
+DO NOT refactor. Minimal change only.
+
+Goal:
+Fix 10s "geen netwerk" when ads start playing. Root cause confirmed:
+Yodeck media has media_origin.source="local" BUT still has arguments.download_from_url + play_from_url + buffering=true.
+This makes the player fetch/stream from URL when playback starts.
+
+Implement:
+After a successful transactional upload (when media becomes READY/finished), perform an extra PATCH on the same Yodeck mediaId to clear URL-based playback fields.
+
+Where:
+- server/services/transactionalUploadService.ts (after READY status is confirmed, before marking asset live / before returning success)
+- Use existing YodeckClient.
+
+What to do:
+1) Add a YodeckClient method:
+   patchMedia(mediaId: number, patch: any)
+   -> PATCH https://app.yodeck.com/api/v2/media/{id}
+   -> JSON body is the patch
+   -> reuse auth + retry logic + rate limiting conventions already in yodeckClient.ts
+2) Call patchMedia(mediaId, { arguments: { download_from_url: null, play_from_url: null, buffering: false } })
+   - Only do this when media_origin.source is "local" OR when upload path is transactional local upload.
+   - Ignore if Yodeck returns 400 for unknown fields; log a warning with correlationId but continue.
+3) Add logs:
+   - MEDIA_PATCH_AFTER_UPLOAD_START {mediaId}
+   - MEDIA_PATCH_AFTER_UPLOAD_OK {mediaId}
+   - MEDIA_PATCH_AFTER_UPLOAD_WARN {mediaId, status, body}
+4) Update the debug endpoint /api/debug/yodeck/media/:id/raw to also include media.arguments.play_from_url (already returned, just ensure it is not stripped)
+5) No other behavior changes.
+
+Acceptance test:
+- Existing media 29860650 should show arguments.download_from_url = null, play_from_url = null, buffering=false after next re-upload OR after manual admin "repair".
+- Playback should no longer show "geen netwerk" when ad starts.
+- Playlists/push endpoints remain unchanged.
+
+Optional (if easy, but not required):
+Add admin endpoint:
+POST /api/admin/yodeck/media/:id/repair-local
+Body optional. It calls patchMedia with the above patch so we can fix existing media without re-upload.
+Return {ok:true, mediaId, patched:true}.

@@ -3,6 +3,7 @@ import { uploadJobs, advertisers, UPLOAD_JOB_STATUS, UPLOAD_FINAL_STATE } from "
 import { eq } from "drizzle-orm";
 import { Client } from "@replit/object-storage";
 import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
+import { getYodeckClient } from "./yodeckClient";
 
 const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
 const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN?.trim() || "";
@@ -140,6 +141,8 @@ export async function uploadVideoToYodeckTransactional(
       return makeFailResult(jobId, advertiserId, pollResult.errorCode!, pollResult.errorDetails);
     }
 
+    await patchClearUrlPlaybackFields(mediaId!, correlationId);
+
     await updateJob(jobId, {
       status: UPLOAD_JOB_STATUS.READY,
       finalState: UPLOAD_FINAL_STATE.READY,
@@ -165,6 +168,34 @@ export async function uploadVideoToYodeckTransactional(
     return makeFailResult(jobId, advertiserId, "UNEXPECTED_ERROR", { message: error.message });
   }
 }
+
+async function patchClearUrlPlaybackFields(mediaId: number, correlationId: string): Promise<void> {
+  console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_START mediaId=${mediaId}`);
+  try {
+    const client = await getYodeckClient();
+    if (!client) {
+      console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} reason=no_yodeck_client`);
+      return;
+    }
+    const patch = {
+      arguments: {
+        download_from_url: null,
+        play_from_url: null,
+        buffering: false,
+      },
+    };
+    const result = await client.patchMedia(mediaId, patch);
+    if (result.ok) {
+      console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_OK mediaId=${mediaId}`);
+    } else {
+      console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} status=${result.status} body=${result.error?.substring(0, 200)}`);
+    }
+  } catch (err: any) {
+    console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} error=${err.message}`);
+  }
+}
+
+export { patchClearUrlPlaybackFields };
 
 async function readFileFromStorage(path: string, correlationId: string): Promise<Buffer | null> {
   try {
