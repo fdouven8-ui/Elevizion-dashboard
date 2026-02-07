@@ -1,0 +1,70 @@
+DOEL
+We hebben al /api/admin/yodeck/media/:mediaId/repair-local maar die faalt met NO_ADVERTISER_FOR_MEDIA omdat de app nergens kan zien welke DB-record (advertiser/asset) bij een bestaande Yodeck mediaId hoort. Voeg daarom een minimale “usage lookup” toe + maak repair-local bruikbaar zonder DB-link door advertiserId optioneel mee te geven.
+
+BELANGRIJK
+- GEEN refactor van bestaande upload pipeline / playlists
+- Alleen toevoegen wat nodig is
+- Alles blijft JSON-only
+
+WAT TOEVOEGEN
+
+1) Nieuwe endpoint (read-only)
+GET /api/admin/yodeck/media/:mediaId/usage
+Return JSON met:
+{
+  ok: true,
+  mediaId: number,
+  yodeck: { id, name, status, media_origin, argumentsSubset:{buffering, play_from_url, download_from_url} },
+  db: {
+    advertiserMatches: [
+      { advertiserId, companyName, matchType: "canonical"|"asset"|"placement", assetId?: string, assetStatus?: string }
+    ],
+    canonical: { advertiserId, companyName } | null
+  }
+}
+
+Lookup logica (DB):
+- Zoek advertiser waar yodeckMediaIdCanonical == mediaId (matchType: canonical)
+- Zoek assets waar yodeckMediaId == mediaId OR yodeckMediaIdCanonical == mediaId (als die kolommen bestaan) (matchType: asset)
+- Zoek placements die mediaId referencen (als placement tabel bestaat) (matchType: placement)
+Als bepaalde tabellen/kolommen niet bestaan: fail niet hard, maar return lege arrays + noteer in debug veld "skippedLookups": [...]
+
+Yodeck info:
+- Gebruik bestaande yodeckClient/ bestaande debug proxy helper om GET /api/v2/media/:id op te halen
+- Neem subset van arguments (buffering, play_from_url, download_from_url) mee
+
+2) Repair endpoint uitbreiden (minimaal)
+POST /api/admin/yodeck/media/:mediaId/repair-local
+- Voeg optionele body param toe: { advertiserId?: string }
+- Als advertiserId is meegegeven: skip DB auto-lookup en gebruik die advertiserId als “owner context”.
+- Als advertiserId niet meegegeven: doe usage lookup intern en pak de beste match in deze volgorde:
+  canonical match > asset match > placement match
+- Als nog steeds niks: return { ok:false, reason:"NO_ADVERTISER_FOR_MEDIA", hints:{ tryAdvertiserId:true } }
+
+3) Patch payload correct maken voor Yodeck
+We hebben gezien dat PATCH kan falen met:
+- err_1002 missing_key: "play_from_url or download_from_url"
+- err_1003 invalid_field: "play_from_url"
+Dus:
+- Gebruik alleen velden die Yodeck accepteert voor video arguments.
+- Maak patch zo dat je ALTIJD minstens 1 van deze keys meestuurt (zoals Yodeck eist):
+  - download_from_url (als je hem wilt behouden), of
+  - play_from_url (als Yodeck dat accepteert voor video in jouw account)
+Omdat we niet kunnen garanderen dat play_from_url mutabel is, maak de patch conservatief:
+  - Zet buffering naar false ALS mogelijk
+  - Laat download_from_url staan (niet nullen)
+  - Probeer NIET play_from_url te nullen als dat invalid field geeft
+Als patch op buffering alleen faalt door missing_key: stuur dan arguments met buffering + download_from_url (de huidige waarde) mee.
+
+4) Tests (handmatig via browser console)
+Na deploy moeten deze werken:
+A) fetch("/api/admin/yodeck/media/29860650/usage").then(r=>r.json()).then(console.log)
+B) fetch("/api/admin/yodeck/media/29860650/repair-local",{method:"POST",headers:{"Content-Type":"application/json"}}).then(r=>r.json()).then(console.log)
+C) Als B nog NO_ADVERTISER_FOR_MEDIA geeft, dan:
+   fetch("/api/admin/yodeck/media/29860650/repair-local",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({advertiserId:"9a99d555-8676-49d3-9862-f65859bdcfb1"})}).then(r=>r.json()).then(console.log)
+
+ACCEPTANCE
+- usage endpoint bestaat en geeft altijd ok:true met yodeck data, en db arrays (leeg mag)
+- repair-local kan werken met advertiserId override
+- Geen bestaande routes breken
+- JSON-only responses

@@ -18166,6 +18166,80 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
   
+  app.get("/api/admin/yodeck/media/:id/usage", requireAdminAccess, async (req, res) => {
+    try {
+      const mediaId = parseInt(req.params.id, 10);
+      if (isNaN(mediaId)) {
+        return res.status(400).json({ ok: false, error: "Invalid media ID" });
+      }
+
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+
+      let yodeck: any = null;
+      if (client) {
+        const fetchResult = await client.fetchMediaRaw(mediaId);
+        if (fetchResult.ok && fetchResult.data) {
+          const args = fetchResult.data.arguments || {};
+          yodeck = {
+            id: fetchResult.data.id,
+            name: fetchResult.data.name,
+            status: fetchResult.data.status,
+            media_origin: fetchResult.data.media_origin,
+            argumentsSubset: {
+              buffering: args.buffering ?? null,
+              play_from_url: args.play_from_url ?? null,
+              download_from_url: args.download_from_url ?? null,
+            },
+          };
+        }
+      }
+
+      const advertiserMatches: Array<{ advertiserId: string; companyName: string; matchType: string; assetId?: string; assetStatus?: string }> = [];
+      const skippedLookups: string[] = [];
+
+      try {
+        const canonicalMatches = await db.select({ id: advertisers.id, companyName: advertisers.companyName })
+          .from(advertisers).where(eq(advertisers.yodeckMediaIdCanonical, mediaId));
+        for (const m of canonicalMatches) {
+          advertiserMatches.push({ advertiserId: m.id, companyName: m.companyName, matchType: "canonical" });
+        }
+      } catch { skippedLookups.push("advertisers.yodeckMediaIdCanonical"); }
+
+      try {
+        const assetMatches = await db.select({
+          advertiserId: adAssets.advertiserId,
+          assetId: adAssets.id,
+          yodeckMediaId: adAssets.yodeckMediaId,
+        }).from(adAssets).where(eq(adAssets.yodeckMediaId, mediaId));
+        for (const m of assetMatches) {
+          const adv = await db.select({ companyName: advertisers.companyName }).from(advertisers).where(eq(advertisers.id, m.advertiserId)).limit(1);
+          advertiserMatches.push({
+            advertiserId: m.advertiserId,
+            companyName: adv[0]?.companyName || "unknown",
+            matchType: "asset",
+            assetId: m.assetId,
+          });
+        }
+      } catch { skippedLookups.push("adAssets.yodeckMediaId"); }
+
+      const canonical = advertiserMatches.find(m => m.matchType === "canonical") || null;
+
+      res.json({
+        ok: true,
+        mediaId,
+        yodeck,
+        db: {
+          advertiserMatches,
+          canonical: canonical ? { advertiserId: canonical.advertiserId, companyName: canonical.companyName } : null,
+          skippedLookups: skippedLookups.length > 0 ? skippedLookups : undefined,
+        },
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   app.post("/api/admin/yodeck/media/:id/repair-local", requireAdminAccess, async (req, res) => {
     const correlationId = `repair-${Date.now()}`;
     try {
@@ -18245,12 +18319,43 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
       console.log(`[RepairLocal] ${correlationId} CLONE_FLOW_START mediaId=${mediaId}`);
 
-      const [advertiserRow] = await db.select().from(advertisers).where(eq(advertisers.yodeckMediaIdCanonical, mediaId)).limit(1);
+      const bodyAdvertiserId = req.body?.advertiserId as string | undefined;
+      let advertiserRow: any = null;
+      let matchSource = "none";
+
+      if (bodyAdvertiserId) {
+        const [row] = await db.select().from(advertisers).where(eq(advertisers.id, bodyAdvertiserId)).limit(1);
+        advertiserRow = row || null;
+        matchSource = "body_override";
+      }
+
       if (!advertiserRow) {
-        return res.json({ ok: false, mediaId, patched: false, reason: "NO_ADVERTISER_FOR_MEDIA", beforeSubset });
+        const [canonical] = await db.select().from(advertisers).where(eq(advertisers.yodeckMediaIdCanonical, mediaId)).limit(1);
+        if (canonical) {
+          advertiserRow = canonical;
+          matchSource = "canonical";
+        }
+      }
+
+      if (!advertiserRow) {
+        try {
+          const assetMatch = await db.select({ advertiserId: adAssets.advertiserId })
+            .from(adAssets).where(eq(adAssets.yodeckMediaId, mediaId)).limit(1);
+          if (assetMatch.length > 0) {
+            const [row] = await db.select().from(advertisers).where(eq(advertisers.id, assetMatch[0].advertiserId)).limit(1);
+            if (row) {
+              advertiserRow = row;
+              matchSource = "asset";
+            }
+          }
+        } catch {}
+      }
+
+      if (!advertiserRow) {
+        return res.json({ ok: false, mediaId, patched: false, reason: "NO_ADVERTISER_FOR_MEDIA", beforeSubset, hints: { tryAdvertiserId: true } });
       }
       const advertiserId = advertiserRow.id;
-      console.log(`[RepairLocal] ${correlationId} CLONE_FLOW advertiser=${advertiserId} (${advertiserRow.companyName})`);
+      console.log(`[RepairLocal] ${correlationId} CLONE_FLOW advertiser=${advertiserId} (${advertiserRow.companyName}) matchSource=${matchSource}`);
 
       const assets = await db.select().from(adAssets)
         .where(eq(adAssets.advertiserId, advertiserId))
@@ -18273,7 +18378,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       if (dryRun) {
         return res.json({
           ok: true, mediaId, dryRun: true, action: "CLONE_AND_REPLACE", patched: false,
-          advertiserId, assetId: approvedAsset.id, storagePath,
+          advertiserId, matchSource, assetId: approvedAsset.id, storagePath,
           beforeSubset,
         });
       }
