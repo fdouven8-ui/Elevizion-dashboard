@@ -1,0 +1,114 @@
+Je zit nu op het punt dat alles “technisch” gelukt is (upload → media bestaat → status finished → source local), maar:
+
+1) **Buffering blijft TRUE** (en PATCH’en kan vaak niet meer bij finished media → “NOT_MUTABLE”)  
+2) **De playlist wordt niet geüpdatet** (jouw nieuw gekloonde mediaId komt niet in de playlist; `HAS_NEW_MEDIA_ID: false`)
+
+👉 Oplossing zonder alles om te gooien:
+- **Voor toekomstige uploads:** zet `buffering:false` al bij **CREATE media** (dus vóór upload/complete). Dan hoef je achteraf niet te patchen.
+- **Voor bestaande “finished + buffering:true” media:** doe een **CLONE + REUPLOAD** (nieuw media object met `buffering:false` + upload dezelfde file opnieuw vanuit jullie object storage), en daarna **replace** de media in de screen-playlist (of rebuild met harde override).
+
+Maak dit precies, met minimale impact, door je bestaande `repair-local` endpoint uit te breiden i.p.v. overal logica te wijzigen.
+
+========================
+REPLIT PROMPT (KOPIEER 1:1)
+========================
+
+DO NOT REFACTOR THE WHOLE APP.
+ONLY implement the changes described below, preserving existing behavior and routes.
+Goal: Ensure Yodeck video media is “local” AND plays fast by having arguments.buffering=false.
+Problem: PATCH on finished media often returns 200 but does not actually change buffering (NOT_MUTABLE). Current clone may create a new media but playlist is not updated / ad not inserted.
+We need:
+(A) Future pipeline: create media with buffering:false at creation time (no patch needed).
+(B) Existing media: when buffering cannot be mutated, do CLONE + REUPLOAD from our object storage, then REPLACE in the screen playlist (target screen only), and verify now-playing.
+
+Implement minimal changes in these places:
+
+1) server/services/yodeckClient.ts
+- Keep existing functions.
+- Add helper:
+  - async getMediaById(id:number)
+  - async createMediaVideoLocal(params:{name:string, default_duration?:number, arguments?:any, workspace?:any, parent_folder?:any}) -> returns created media (id + get_upload_url if present)
+  - async getUploadUrl(id:number) if needed (use Yodeck endpoint “Retrieve upload URL for Media”)
+  - async completeUpload(id:number) if your code uses that step (Yodeck “Complete media upload”)
+  - async uploadToSignedUrl(uploadUrl:string, bytes:Buffer, contentType:string)
+- Ensure createMediaVideoLocal sends buffering:false inside arguments by default (unless explicitly overridden).
+
+2) Upload pipeline (where you currently do: create media -> upload -> complete -> wait ready -> patchMediaSafe({buffering:false}))
+- DO NOT remove steps, just adjust:
+  - When calling create media, include `arguments: { buffering:false, ...existing defaults... }`
+  - Keep patchMediaSafe after READY as a safety net, but it should become mostly redundant.
+
+3) server/routes.ts (or wherever the admin yodeck routes are defined)
+You already have:
+POST /api/admin/yodeck/media/:mediaId/repair-local
+Extend it (do NOT rename existing route):
+- Accept JSON body (optional): { advertiserId?: string, screenId?: string, forceReupload?: boolean }
+- Behavior:
+  a) Fetch media from Yodeck.
+  b) If media.arguments.buffering === false -> return ok (no changes), still allow optional rebuild/verify when screenId provided.
+  c) Else try patchMediaSafe({ arguments: { buffering:false }, keepExistingUrls:true })
+     - Re-fetch and verify buffering changed.
+     - If changed -> proceed to optional rebuild/verify and return.
+  d) If patch did NOT change buffering (or NOT_MUTABLE / finished media):
+     - REQUIRE advertiserId (and screenId strongly recommended). If missing, return {ok:false, reason:"NO_ADVERTISER_FOR_MEDIA"}.
+     - Resolve the existing storagePath for this advertiser’s current asset/video using your existing DB logic (you already had it working earlier: you logged storagePath like `ad-assets/<advertiserId>/...mp4`).
+       IMPORTANT: Do NOT invent new schema; reuse whatever you already use in the E2E upload flow to locate the asset’s storage key/path for that advertiser.
+     - Download the mp4 bytes via ObjectStorageService.downloadFile(storagePath).
+     - Create a brand new Yodeck media via createMediaVideoLocal with:
+       - name: original name + “_bf0” + timestamp (or similar)
+       - media_origin: { type:"video", source:"local" }
+       - arguments: clone from old arguments BUT force buffering:false. Keep other keys (fps, resolution, rotate, crop_settings, duration/default_duration).
+     - Get upload URL for the new media id.
+     - Upload bytes to signed URL.
+     - Complete upload.
+     - Poll status until finished/ready (reuse your existing “wait ready” code).
+     - After new media is READY:
+        - Update DB “canonical media id” / mapping for this advertiser so rebuild logic can pick it up:
+          - If you already store yodeckMediaId on asset or advertiser, update that to newMediaId.
+          - If there is no single canonical field, add a minimal field in your existing advertiser record (e.g. advertiser.yodeckMediaIdCanonical) and use it in rebuild selection. Keep migration minimal.
+     - Then REPLACE in playlist for the given screenId:
+        OPTION 1 (preferred minimal): call your existing internal rebuild endpoint for that screen (force=true), BUT extend rebuild selection to always use advertiser canonical media id if present.
+        OPTION 2 (fallback): directly patch the screen playlist on Yodeck:
+          - fetch screen’s current playlistId (you already have /api/screens/:id/now-playing which returns expected/actual playlist id)
+          - fetch playlist raw items
+          - if old media id exists in playlist, replace that item’s media id with new media id
+          - if old media id not present, append a new playlist item for new media id with sensible duration/priority
+          - push to screen
+     - Verify:
+       - call /api/screens/:screenId/now-playing after rebuild/push
+       - also fetch playlist raw and confirm it contains newMediaId
+     - Return response including:
+       { ok:true, action:"CLONE_REUPLOAD_REPLACE", oldMediaId, newMediaId, storagePath, rebuild:{...}, verify:{hasNewMedia:true,...}, correlationId }
+
+4) Rebuild selection fix (this is why your newMediaId never appeared):
+Where you compute targeted ads for a screen (you had output where targetedAds had mediaId:null):
+- Make sure targeted ad resolution picks mediaId in this order:
+  1) advertiser.yodeckMediaIdCanonical (new field or existing if you already have it)
+  2) asset.yodeckMediaId (if stored)
+  3) fallback: if you can map by assetId->mediaId, use that
+- If none found, keep existing behavior (skip), but log clearly.
+
+5) Add 2 debug helpers (tiny, no refactor):
+- GET /api/admin/yodeck/media/:mediaId/usage (already exists) -> keep
+- NEW: GET /api/admin/yodeck/media/:mediaId/playlist-check?screenId=...
+  returns {playlistId, hasMedia:boolean, mediaIdsSample:[...]} using your existing yodeck playlist raw route.
+
+Acceptance tests (must be included in your final output):
+- Run repair-local on media 29860650 with body { advertiserId:"9a99d555-8676-49d3-9862-f65859bdcfb1", screenId:"241377ce-a25e-4744-9ea7-cd9359515d07" }
+- Confirm response indicates action CLONE_REUPLOAD_REPLACE and verify.hasNewMedia true.
+- Confirm /api/screens/:screenId/now-playing eventually includes the ad item, and playlist raw contains the new mediaId.
+
+IMPORTANT constraints:
+- Do not remove existing endpoints.
+- Do not change auth model.
+- Do not change the UI.
+- Keep changes localized.
+- Preserve current “patchMediaSafe” but improve it only if required for above.
+
+Output:
+- List changed files with brief bullet points.
+- Provide the exact console fetch commands to test (browser console), including the repair-local call and the playlist-check call.
+
+========================
+EINDE PROMPT
+========================

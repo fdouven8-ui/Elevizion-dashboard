@@ -874,6 +874,200 @@ export class YodeckClient {
       s.screen_content?.source_id === playlistId
     );
   }
+
+  async getMediaById(mediaId: number): Promise<{ ok: boolean; data?: any; error?: string }> {
+    return this.fetchMediaRaw(mediaId);
+  }
+
+  async createMediaVideoLocal(params: {
+    name: string;
+    default_duration?: number;
+    arguments?: Record<string, any>;
+    workspace?: any;
+    parent_folder?: any;
+  }): Promise<{ ok: boolean; mediaId?: number; data?: any; error?: string }> {
+    await semaphore.acquire();
+    try {
+      const payload: Record<string, any> = {
+        name: params.name.endsWith(".mp4") ? params.name : `${params.name}.mp4`,
+        description: "",
+        media_origin: { type: "video", source: "local", format: null },
+        arguments: {
+          resolution: "highest",
+          ...(params.arguments || {}),
+          buffering: params.arguments?.buffering ?? false,
+        },
+      };
+      if (params.default_duration) payload.default_duration = params.default_duration;
+      if (params.workspace) payload.workspace = params.workspace;
+      if (params.parent_folder) payload.parent_folder = params.parent_folder;
+
+      console.log(`[YodeckClient] createMediaVideoLocal payload=${JSON.stringify(payload)}`);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/media/`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+
+        const text = await response.text();
+        let data: any;
+        try { data = JSON.parse(text); } catch { data = { raw: text.substring(0, 500) }; }
+
+        if (!response.ok) {
+          console.error(`[YodeckClient] createMediaVideoLocal FAILED http=${response.status} body=${text.substring(0, 300)}`);
+          return { ok: false, error: `HTTP ${response.status}: ${text.substring(0, 300)}` };
+        }
+
+        const mediaId = data.id;
+        if (!mediaId) {
+          return { ok: false, error: "No id in create response", data };
+        }
+
+        console.log(`[YodeckClient] createMediaVideoLocal OK mediaId=${mediaId}`);
+        return { ok: true, mediaId, data };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        return { ok: false, error: err.name === "AbortError" ? "timeout" : err.message };
+      }
+    } finally {
+      semaphore.release();
+    }
+  }
+
+  async getUploadUrl(mediaId: number): Promise<{ ok: boolean; uploadUrl?: string; error?: string }> {
+    await semaphore.acquire();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/upload`, {
+          method: "GET",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+
+        const text = await response.text();
+        let data: any;
+        try { data = JSON.parse(text); } catch { data = {}; }
+
+        if (!response.ok) {
+          return { ok: false, error: `HTTP ${response.status}: ${text.substring(0, 200)}` };
+        }
+
+        const uploadUrl = data.upload_url;
+        if (!uploadUrl) {
+          return { ok: false, error: "No upload_url in response" };
+        }
+
+        console.log(`[YodeckClient] getUploadUrl mediaId=${mediaId} host=${new URL(uploadUrl).host}`);
+        return { ok: true, uploadUrl };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        return { ok: false, error: err.name === "AbortError" ? "timeout" : err.message };
+      }
+    } finally {
+      semaphore.release();
+    }
+  }
+
+  async uploadToSignedUrl(uploadUrl: string, bytes: Buffer, contentType: string = "video/mp4"): Promise<{ ok: boolean; status?: number; error?: string }> {
+    const startTime = Date.now();
+    try {
+      const response = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: {
+          "Content-Type": contentType,
+          "Content-Length": bytes.length.toString(),
+        },
+        body: bytes,
+      });
+
+      const durationMs = Date.now() - startTime;
+      console.log(`[YodeckClient] uploadToSignedUrl status=${response.status} bytes=${bytes.length} duration=${durationMs}ms`);
+
+      if (response.status !== 200 && response.status !== 204) {
+        const text = await response.text();
+        return { ok: false, status: response.status, error: `PUT ${response.status}: ${text.substring(0, 200)}` };
+      }
+      return { ok: true, status: response.status };
+    } catch (err: any) {
+      return { ok: false, error: err.message };
+    }
+  }
+
+  async completeUpload(mediaId: number, uploadUrl: string): Promise<{ ok: boolean; status?: number; error?: string }> {
+    await semaphore.acquire();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/upload/complete`, {
+          method: "PUT",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ upload_url: uploadUrl }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+
+        const status = response.status;
+        console.log(`[YodeckClient] completeUpload mediaId=${mediaId} status=${status}`);
+        if (status !== 200) {
+          const text = await response.text();
+          return { ok: false, status, error: `COMPLETE ${status}: ${text.substring(0, 200)}` };
+        }
+        return { ok: true, status };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        return { ok: false, error: err.name === "AbortError" ? "timeout" : err.message };
+      }
+    } finally {
+      semaphore.release();
+    }
+  }
+
+  async pollMediaUntilReady(mediaId: number, timeoutMs: number = 180000): Promise<{ ok: boolean; status?: string; polls?: number; reason?: string }> {
+    const READY = ["finished", "ready", "done", "encoded", "active", "ok", "completed", "live"];
+    const FAILED = ["failed", "error", "aborted", "rejected"];
+    const INTERVALS = [2000, 3000, 5000, 8000, 10000, 15000, 15000, 15000, 15000, 15000];
+    const startTime = Date.now();
+    let attempt = 0;
+
+    while (Date.now() - startTime < timeoutMs) {
+      const delay = INTERVALS[Math.min(attempt, INTERVALS.length - 1)];
+      await new Promise(r => setTimeout(r, delay));
+      attempt++;
+
+      const result = await this.fetchMediaRaw(mediaId);
+      if (!result.ok) {
+        if (result.error?.includes("404")) return { ok: false, reason: "POLL_404" };
+        continue;
+      }
+      const status = (result.data?.status || "").toLowerCase();
+      console.log(`[YodeckClient] pollMedia mediaId=${mediaId} attempt=${attempt} status=${status}`);
+
+      if (READY.includes(status)) return { ok: true, status, polls: attempt };
+      if (FAILED.includes(status)) return { ok: false, status, reason: `STATUS_${status.toUpperCase()}` };
+      if (status === "initialized" && attempt > 20) return { ok: false, reason: "INIT_STUCK" };
+    }
+    return { ok: false, reason: "TIMEOUT" };
+  }
 }
 
 let clientInstance: YodeckClient | null = null;

@@ -18240,6 +18240,56 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.get("/api/admin/yodeck/media/:id/playlist-check", requireAdminAccess, async (req, res) => {
+    try {
+      const mediaId = parseInt(req.params.id, 10);
+      if (isNaN(mediaId)) {
+        return res.status(400).json({ ok: false, error: "Invalid media ID" });
+      }
+      const screenId = req.query.screenId as string | undefined;
+      if (!screenId) {
+        return res.status(400).json({ ok: false, error: "screenId query parameter required" });
+      }
+
+      const screenData = await storage.getScreen(screenId);
+      if (!screenData) {
+        return res.status(404).json({ ok: false, error: "Screen not found" });
+      }
+
+      const playlistId = screenData.yodeckPlaylistId;
+      if (!playlistId) {
+        return res.json({ ok: true, mediaId, screenId, playlistId: null, hasMedia: false, note: "Screen has no playlist assigned" });
+      }
+
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      if (!client) {
+        return res.status(503).json({ ok: false, error: "Yodeck client not available" });
+      }
+
+      const playlist = await client.getPlaylist(playlistId);
+      if (!playlist) {
+        return res.json({ ok: true, mediaId, screenId, playlistId, hasMedia: false, note: "Playlist not found in Yodeck" });
+      }
+
+      const items = (playlist as any).items || (playlist as any).playlist_items || [];
+      const mediaIds = items.map((i: any) => i.id || i.media_id || i.media).filter(Boolean).map(Number);
+
+      res.json({
+        ok: true,
+        mediaId,
+        screenId,
+        playlistId,
+        hasMedia: mediaIds.includes(mediaId),
+        mediaIdsSample: mediaIds.slice(0, 30),
+        itemCount: mediaIds.length,
+        playlistName: (playlist as any).name || null,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   app.post("/api/admin/yodeck/media/:id/repair-local", requireAdminAccess, async (req, res) => {
     const correlationId = `repair-${Date.now()}`;
     const LOG = `[RepairLocal] ${correlationId}`;
@@ -18384,43 +18434,118 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
       if (dryRun) {
         return res.json({
-          ok: true, mediaId, dryRun: true, action: "CLONE_AND_REPLACE", patched: false,
+          ok: true, mediaId, dryRun: true, action: "CLONE_REUPLOAD_REPLACE", patched: false,
           advertiserId, matchSource, assetId: approvedAsset.id, storagePath,
           beforeSubset, correlationId,
         });
       }
 
-      const desiredFilename = approvedAsset.storedFilename || `${advertiserRow.linkKey || advertiserId}.mp4`;
-      const mediaName = desiredFilename.endsWith(".mp4") ? desiredFilename : `${desiredFilename}.mp4`;
-      const fileSize = approvedAsset.convertedSizeBytes || approvedAsset.sizeBytes || 0;
-
-      const { uploadVideoToYodeckTransactional } = await import("./services/transactionalUploadService");
-      const uploadResult = await uploadVideoToYodeckTransactional(advertiserId, storagePath, mediaName, fileSize);
-
-      if (!uploadResult.ok || !uploadResult.yodeckMediaId) {
-        return res.json({
-          ok: false, mediaId, action: "CLONE_AND_REPLACE", patched: false,
-          reason: "CLONE_UPLOAD_FAILED",
-          advertiserId, assetId: approvedAsset.id, storagePath,
-          uploadError: { errorCode: uploadResult.errorCode, errorDetails: uploadResult.errorDetails },
-          beforeSubset, correlationId,
-        });
+      // --- CLONE_REUPLOAD_REPLACE using yodeckClient helpers directly ---
+      const { ObjectStorageService } = await import("./objectStorage");
+      const r2 = new ObjectStorageService();
+      console.log(`${LOG} CLONE downloading from storage: ${storagePath}`);
+      let fileBuffer: Buffer;
+      try {
+        fileBuffer = await r2.downloadFile(storagePath);
+        if (!fileBuffer || fileBuffer.length === 0) {
+          return res.json({ ok: false, mediaId, action: "CLONE_REUPLOAD_REPLACE", reason: "STORAGE_DOWNLOAD_EMPTY", advertiserId, storagePath, correlationId });
+        }
+        console.log(`${LOG} CLONE downloaded ${fileBuffer.length} bytes from storage`);
+      } catch (dlErr: any) {
+        return res.json({ ok: false, mediaId, action: "CLONE_REUPLOAD_REPLACE", reason: "STORAGE_DOWNLOAD_FAILED", error: dlErr.message, advertiserId, storagePath, correlationId });
       }
 
-      const newMediaId = uploadResult.yodeckMediaId;
-      console.log(`${LOG} CLONE_FLOW newMediaId=${newMediaId} (old=${mediaId})`);
+      const oldArgs = beforeFetch.data.arguments || {};
+      const cloneArgs: Record<string, any> = { buffering: false };
+      if (oldArgs.resolution) cloneArgs.resolution = oldArgs.resolution;
+      if (oldArgs.fps) cloneArgs.fps = oldArgs.fps;
+      if (oldArgs.rotate) cloneArgs.rotate = oldArgs.rotate;
+      if (oldArgs.crop_settings) cloneArgs.crop_settings = oldArgs.crop_settings;
+      if (oldArgs.default_duration) cloneArgs.default_duration = oldArgs.default_duration;
 
-      const forceBufferingResult = await client.patchMediaSafe(newMediaId, { buffering: false });
-      console.log(`${LOG} CLONE_FLOW forceBuffering ok=${forceBufferingResult.ok} code=${forceBufferingResult.code || "none"}`);
+      const originalName = beforeFetch.data.name || `ad-${advertiserId}`;
+      const cloneName = `${originalName.replace(/\.mp4$/i, "")}_bf0_${Date.now()}.mp4`;
 
-      const rebuildVerify = await repairRebuildAndVerify(bodyScreenId, bodyAdvertiserId, correlationId);
+      console.log(`${LOG} CLONE creating new media: name=${cloneName} args=${JSON.stringify(cloneArgs)}`);
+      const createResult = await client.createMediaVideoLocal({ name: cloneName, arguments: cloneArgs });
+      if (!createResult.ok || !createResult.mediaId) {
+        return res.json({ ok: false, mediaId, action: "CLONE_REUPLOAD_REPLACE", reason: "CREATE_FAILED", error: createResult.error, correlationId });
+      }
+      const newMediaId = createResult.mediaId;
+      console.log(`${LOG} CLONE created newMediaId=${newMediaId}`);
 
-      console.log(`${LOG} CLONE_AND_REPLACE_COMPLETE old=${mediaId} new=${newMediaId}`);
+      const urlResult = await client.getUploadUrl(newMediaId);
+      if (!urlResult.ok || !urlResult.uploadUrl) {
+        return res.json({ ok: false, mediaId, action: "CLONE_REUPLOAD_REPLACE", reason: "GET_UPLOAD_URL_FAILED", newMediaId, error: urlResult.error, correlationId });
+      }
+
+      const putResult = await client.uploadToSignedUrl(urlResult.uploadUrl, fileBuffer);
+      if (!putResult.ok) {
+        return res.json({ ok: false, mediaId, action: "CLONE_REUPLOAD_REPLACE", reason: "PUT_BINARY_FAILED", newMediaId, error: putResult.error, correlationId });
+      }
+
+      const completeResult = await client.completeUpload(newMediaId, urlResult.uploadUrl);
+      console.log(`${LOG} CLONE complete status=${completeResult.status} ok=${completeResult.ok}`);
+
+      console.log(`${LOG} CLONE polling newMediaId=${newMediaId} until ready...`);
+      const pollResult = await client.pollMediaUntilReady(newMediaId);
+      if (!pollResult.ok) {
+        return res.json({ ok: false, mediaId, action: "CLONE_REUPLOAD_REPLACE", reason: `POLL_FAILED_${pollResult.reason}`, newMediaId, correlationId });
+      }
+      console.log(`${LOG} CLONE READY newMediaId=${newMediaId} status=${pollResult.status} polls=${pollResult.polls}`);
+
+      const afterCloneFetch = await client.fetchMediaRaw(newMediaId);
+      const afterCloneArgs = afterCloneFetch.ok && afterCloneFetch.data ? afterCloneFetch.data.arguments || {} : {};
+      const afterCloneSubset = {
+        source: afterCloneFetch.data?.media_origin?.source ?? null,
+        status: afterCloneFetch.data?.status,
+        buffering: afterCloneArgs.buffering ?? null,
+      };
+      console.log(`${LOG} CLONE afterSubset=${JSON.stringify(afterCloneSubset)}`);
+
+      console.log(`${LOG} CLONE updating DB: advertiser=${advertiserId} yodeckMediaIdCanonical=${newMediaId}`);
+      await db.update(advertisers).set({
+        yodeckMediaIdCanonical: newMediaId,
+        yodeckMediaIdCanonicalUpdatedAt: new Date(),
+        updatedAt: new Date(),
+      }).where(eq(advertisers.id, advertiserId));
+
+      try {
+        await db.update(adAssets).set({
+          yodeckMediaId: newMediaId,
+          updatedAt: new Date(),
+        }).where(eq(adAssets.id, approvedAsset.id));
+      } catch {}
+
+      const rebuildVerify = await repairRebuildAndVerify(bodyScreenId, advertiserId, correlationId);
+
+      let playlistVerify: any = null;
+      if (bodyScreenId && rebuildVerify.rebuild?.details?.[0]?.ok) {
+        try {
+          const screenData = await storage.getScreen(bodyScreenId);
+          const playlistId = screenData?.yodeckPlaylistId;
+          if (playlistId) {
+            const playlist = await client.getPlaylist(playlistId);
+            if (playlist) {
+              const items = (playlist as any).items || (playlist as any).playlist_items || [];
+              const mediaIds = items.map((i: any) => i.id || i.media_id || i.media).filter(Boolean);
+              playlistVerify = {
+                playlistId,
+                hasNewMedia: mediaIds.includes(newMediaId),
+                mediaIds: mediaIds.slice(0, 20),
+                itemCount: mediaIds.length,
+              };
+            }
+          }
+        } catch {}
+      }
+
+      console.log(`${LOG} CLONE_REUPLOAD_REPLACE_COMPLETE old=${mediaId} new=${newMediaId} playlistHasNew=${playlistVerify?.hasNewMedia ?? "unknown"}`);
 
       res.json({
         ok: true,
         mediaId,
-        action: "CLONE_AND_REPLACE",
+        action: "CLONE_REUPLOAD_REPLACE",
         patched: true,
         oldMediaId: mediaId,
         newMediaId,
@@ -18428,10 +18553,10 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         assetId: approvedAsset.id,
         storagePath,
         beforeSubset,
-        forceBuffering: { ok: forceBufferingResult.ok, code: forceBufferingResult.code },
+        afterCloneSubset,
         rebuild: rebuildVerify.rebuild,
         nowPlaying: rebuildVerify.nowPlaying,
-        yodeck: { jobId: uploadResult.jobId, finalState: uploadResult.finalState },
+        verify: playlistVerify,
         correlationId,
       });
     } catch (error: any) {
