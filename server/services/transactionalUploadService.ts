@@ -192,6 +192,21 @@ async function patchClearUrlPlaybackFields(mediaId: number, correlationId: strin
 export { patchClearUrlPlaybackFields };
 
 async function readFileFromStorage(path: string, correlationId: string): Promise<Buffer | null> {
+  const { ObjectStorageService, R2_IS_CONFIGURED } = await import("../objectStorage");
+  if (R2_IS_CONFIGURED) {
+    try {
+      const r2Service = new ObjectStorageService();
+      const buffer = await r2Service.downloadFile(path);
+      if (buffer && buffer.length > 0) {
+        console.log(`${LOG_PREFIX} [${correlationId}] Read ${buffer.length} bytes from R2: ${path}`);
+        return buffer;
+      }
+      console.warn(`${LOG_PREFIX} [${correlationId}] R2 download returned empty for: ${path}, trying Replit fallback`);
+    } catch (err: any) {
+      console.warn(`${LOG_PREFIX} [${correlationId}] R2 download failed for ${path}: ${err.message}, trying Replit fallback`);
+    }
+  }
+
   try {
     const client = new Client();
     const result = await client.downloadAsBytes(path);

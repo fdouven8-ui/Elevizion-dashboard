@@ -1,0 +1,96 @@
+Je werkt in Elevizion Dashboard (Express + TS). We hebben een probleem:
+Yodeck media (video) wordt na upload "finished" en is dan NOT_MUTABLE voor arguments (zoals buffering).
+We willen: alle ads "local" met buffering=false (sneller starten). 
+We willen NIET dat Frank handmatig opnieuw uploadt. De app moet bestaande media automatisch kunnen fixen.
+
+BEWIJS:
+POST /api/admin/yodeck/media/29860650/repair-local => ok:true maar patched:false reason:"NOT_MUTABLE"
+Media 29860650 status finished, media_origin.source = "local", arguments.buffering=true, play_from_url/download_from_url bestaan.
+
+DOEL:
+A) Voor toekomstige uploads: buffering=false ALTIJD in de CREATE_MEDIA payload zetten (dus niet patchen na finished).
+B) Voor bestaande media die NOT_MUTABLE is: automatisch "clone & replace":
+   - maak nieuw media resource met buffering=false bij create
+   - upload exact dezelfde binary vanuit object storage (R2) via onze transactional upload flow
+   - update DB zodat advertiser canonical media id verwijst naar nieuwe mediaId
+   - rebuild playlists (minimaal voor alle screens of targeted screens) zodat nieuwe media wordt afgespeeld
+   - return JSON met oldMediaId,newMediaId,steps
+
+CONSTRAINTS:
+- Niet hele functionaliteit omgooien.
+- Gebruik bestaande services: server/services/transactionalUploadService.ts en yodeckPayloadBuilder.ts
+- Respecteer current pipeline + playlist model.
+- Legacy upload blijft disabled.
+- Alles JSON-only.
+
+IMPLEMENTATIE STAPPEN:
+
+1) FIX FUTURE UPLOADS (CREATE payload)
+Zoek in server/services/yodeckPayloadBuilder.ts (of waar create media payload wordt gebouwd) de functie die payload maakt voor POST /api/v2/media.
+Voor video uploads moet in payload komen:
+- media_origin: { type: "video", source: "local", format: null }
+- arguments: { buffering: false }  (alleen dit is genoeg; andere args mogen ontbreken)
+Zorg dat name eindigt op .mp4.
+Belangrijk: we willen buffering=false al bij create, zodat later NOT_MUTABLE geen probleem is.
+
+2) ROBUUSTE "REPAIR LOCAL" endpoint upgraden naar CLONE-AND-REPLACE als NOT_MUTABLE
+We hebben al endpoint: POST /api/admin/yodeck/media/:id/repair-local
+Pas aan:
+- Default gedrag:
+  - Inspect media via Yodeck GET /api/v2/media/:id
+  - Als media_origin.source !== "local": return ok:false reason:"NOT_LOCAL"
+  - Als arguments.buffering === false: return ok:true patched:false reason:"ALREADY_OK"
+  - Probeer (alleen als status NIET finished) patch => set buffering false (als Yodeck dit toelaat).
+- Als patch faalt met NOT_MUTABLE OF status === "finished":
+  => start CLONE FLOW en zet patched=true alleen als clone succesvol.
+
+CLONE FLOW (zonder user upload):
+A) Vind in DB welke advertiser bij deze media hoort.
+   - zoek advertiser record waar yodeckMediaIdCanonical == :id
+   - als niet gevonden: return ok:false reason:"NO_ADVERTISER_FOR_MEDIA"
+B) Vind het te uploaden bestand:
+   - pak de nieuwste approved asset voor deze advertiser uit bestaande tabellen (assets / ad_assets / whatever in project).
+   - We hebben object storage configured en een key/path in DB.
+   - Als geen asset key: return ok:false reason:"NO_ASSET_FOR_ADVERTISER"
+C) Download binary via bestaande ObjectStorageService.downloadFile() (zoals E2E test stap 3)
+D) Maak NIEUWE media aan via transactionalUploadService (zelfde als normale upload)
+   - gebruik de create payload met buffering:false (stap 1)
+   - upload binary naar Yodeck (get_upload_url -> presigned -> PUT)
+   - poll totdat ready/finished (zelfde polling als nu)
+E) Update DB:
+   - advertiser.yodeckMediaIdCanonical = newMediaId
+   - zorg dat asset status consistent blijft (niet terug naar rejected)
+F) Rebuild playlists:
+   - roep bestaande endpoint/service aan (screenPlaylistService rebuild) voor alle actieve screens
+     (simpel: loop screens and call rebuildScreenPlaylist for each) 
+   - Omdat we in test fase zijn met 2 screens is dit prima.
+G) Return JSON:
+   {
+     ok:true,
+     action:"CLONE_AND_REPLACE",
+     oldMediaId,
+     newMediaId,
+     advertiserId,
+     assetId,
+     storageKey,
+     rebuild:{screensProcessed, okCount, failCount},
+     yodeck:{create, upload, poll},
+   }
+
+3) EXTRA: DEBUG/SAFETY
+- Log correlationId per stap.
+- Als clone faalt: geen DB updates doen (transaction where possible).
+- Maak de endpoint ook dryRun-support: /repair-local?dryRun=true
+  - In dryRun: toon wat je zou doen (advertiser, asset, key), maar upload niets en update niets.
+
+4) TESTS (handmatig)
+Geef mij na implement:
+- 1 console snippet voor Frank om te testen:
+  fetch("/api/admin/yodeck/media/29860650/repair-local",{method:"POST",headers:{"Content-Type":"application/json"}}).then(r=>r.json()).then(console.log)
+- 1 snippet om daarna te checken dat playlists nieuwe media bevatten (via /api/screens/:screenId/now-playing en /api/debug/yodeck/playlist/:id/raw)
+
+BELANGRIJK:
+- Maak geen breaking changes in bestaande upload pipeline.
+- Alleen toevoegingen + kleine aanpassingen in payload builder en repair endpoint + reuse existing services.
+- Alle routes blijven JSON.
+Implementeer nu.

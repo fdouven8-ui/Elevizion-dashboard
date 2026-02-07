@@ -62,7 +62,7 @@ export function buildYodeckCreateMediaPayload(name: string): YodeckCreateMediaPa
       format: null
     },
     arguments: {
-      buffering: true,
+      buffering: false,
       resolution: "highest"
     }
   };
