@@ -1,0 +1,212 @@
+DOEL
+We krijgen Yodeck media PATCH errors (err_1002 / err_1003) omdat Yodeck bij PATCH /media/{id}
+verplicht eist dat minstens één van deze velden aanwezig blijft:
+- arguments.play_from_url
+- arguments.download_from_url
+
+Wij willen bij LOCAL media:
+- buffering = false
+- GEEN nieuwe upload
+- GEEN playlist / screen / ad-logica aanpassen
+- Dit moet werken voor huidige én toekomstige media
+
+OPLOSSING
+Introduceer een “safe patch” flow:
+1) Haal bestaande media op
+2) Merge bestaande arguments met gewenste wijzigingen
+3) Zorg dat play_from_url of download_from_url ALTIJD aanwezig blijft
+4) Patch pas daarna naar Yodeck
+5) Bouw hier een repair-local endpoint bovenop
+6) Gebruik dit ook automatisch na toekomstige uploads
+
+
+────────────────────────────────────────
+STAP 1 — Helper toevoegen (NIETS breken)
+────────────────────────────────────────
+
+Bestand: server/services/yodeckClient.ts (of waar Yodeck PATCH nu zit)
+
+Voeg deze functie toe:
+
+async function patchMediaSafe(mediaId: number, partialArgs: Record<string, any>) {
+  // 1. Haal huidige media op
+  const media = await yodeckClient.getMediaById(mediaId);
+  if (!media || !media.arguments) {
+    return {
+      ok: false,
+      code: "MEDIA_NO_ARGUMENTS",
+      message: "Media has no arguments object",
+    };
+  }
+
+  const existingArgs = media.arguments;
+
+  // 2. Merge bestaand + gewenst
+  const mergedArgs = {
+    ...existingArgs,
+    ...partialArgs,
+  };
+
+  // 3. VALIDATIE (cruciaal voor Yodeck)
+  const hasPlayUrl =
+    typeof mergedArgs.play_from_url === "string" &&
+    mergedArgs.play_from_url.length > 0;
+
+  const hasDownloadUrl =
+    typeof mergedArgs.download_from_url === "string" &&
+    mergedArgs.download_from_url.length > 0;
+
+  if (!hasPlayUrl && !hasDownloadUrl) {
+    // probeer fallback uit bestaande arguments
+    if (existingArgs.download_from_url) {
+      mergedArgs.download_from_url = existingArgs.download_from_url;
+    } else if (existingArgs.play_from_url) {
+      mergedArgs.play_from_url = existingArgs.play_from_url;
+    } else {
+      return {
+        ok: false,
+        code: "MISSING_URL_FIELDS",
+        message:
+          "Yodeck requires play_from_url or download_from_url when patching media",
+      };
+    }
+  }
+
+  // 4. PATCH naar Yodeck (geen nulls!)
+  const res = await yodeckClient.patchMedia(mediaId, {
+    arguments: mergedArgs,
+  });
+
+  return {
+    ok: true,
+    mediaId,
+    patchedArgs: mergedArgs,
+    yodeckResponse: res,
+  };
+}
+
+⚠️ BELANGRIJK:
+- Zet NOOIT play_from_url of download_from_url op null
+- Verwijder ze ook niet
+- Alleen hergebruiken of laten staan
+
+
+────────────────────────────────────────
+STAP 2 — Repair endpoint (handmatig & debug)
+────────────────────────────────────────
+
+Bestand: server/routes/admin/yodeck.ts (of vergelijkbaar)
+
+Voeg toe:
+
+POST /api/admin/yodeck/media/:mediaId/repair-local
+
+Implementatie:
+
+router.post(
+  "/media/:mediaId/repair-local",
+  adminAuthMiddleware,
+  async (req, res) => {
+    const mediaId = Number(req.params.mediaId);
+
+    try {
+      const before = await yodeckClient.getMediaById(mediaId);
+
+      const result = await patchMediaSafe(mediaId, {
+        buffering: false,
+      });
+
+      if (!result.ok) {
+        return res.status(400).json({
+          ok: false,
+          mediaId,
+          error: result,
+          beforeSubset: {
+            source: before?.media_origin?.source,
+            buffering: before?.arguments?.buffering,
+            play_from_url: before?.arguments?.play_from_url,
+            download_from_url: before?.arguments?.download_from_url,
+          },
+        });
+      }
+
+      const after = await yodeckClient.getMediaById(mediaId);
+
+      return res.json({
+        ok: true,
+        mediaId,
+        patched: true,
+        beforeSubset: {
+          source: before.media_origin?.source,
+          buffering: before.arguments?.buffering,
+          play_from_url: before.arguments?.play_from_url,
+          download_from_url: before.arguments?.download_from_url,
+        },
+        afterSubset: {
+          source: after.media_origin?.source,
+          buffering: after.arguments?.buffering,
+          play_from_url: after.arguments?.play_from_url,
+          download_from_url: after.arguments?.download_from_url,
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({
+        ok: false,
+        mediaId,
+        error: String(err),
+      });
+    }
+  }
+);
+
+
+────────────────────────────────────────
+STAP 3 — Toekomstbestendig maken (AUTOMATISCH)
+────────────────────────────────────────
+
+In je bestaande upload pipeline
+(bijv. na CREATE + upload complete):
+
+NA:
+- Media bestaat
+- Media heeft arguments met download_from_url of play_from_url
+
+VOEG TOE:
+
+await patchMediaSafe(newMediaId, {
+  buffering: false,
+});
+
+➡️ GEEN nieuwe upload
+➡️ GEEN playlist rebuild
+➡️ Alleen media-instellingen corrigeren
+
+
+────────────────────────────────────────
+STAP 4 — Wat dit oplost
+────────────────────────────────────────
+
+✔ err_1002 / err_1003 verdwijnen
+✔ buffering=false werkt
+✔ local media blijft local
+✔ bestaande ads blijven spelen
+✔ future uploads automatisch correct
+✔ geen refactor van playlists / screens / ads
+
+
+────────────────────────────────────────
+TEST (browser console)
+────────────────────────────────────────
+
+fetch("/api/admin/yodeck/media/29860650/repair-local", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" }
+})
+.then(r => r.json())
+.then(console.log)
+.catch(console.error)
+
+ACCEPTATIE:
+- ok === true
+- afterSubset.buffering === false
+- play_from_url of download_from_url nog steeds aanwezig

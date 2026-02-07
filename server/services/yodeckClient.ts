@@ -803,6 +803,48 @@ export class YodeckClient {
     }
   }
 
+  async fetchMediaRaw(mediaId: number): Promise<{ ok: boolean; data?: any; error?: string }> {
+    const result = await this.request<any>(`/media/${mediaId}`);
+    return result;
+  }
+
+  async patchMediaSafe(mediaId: number, partialArgs: Record<string, any>): Promise<{ ok: boolean; mediaId: number; code?: string; message?: string; patchedArgs?: any; beforeArgs?: any }> {
+    const fetchResult = await this.fetchMediaRaw(mediaId);
+    if (!fetchResult.ok || !fetchResult.data) {
+      return { ok: false, mediaId, code: "MEDIA_FETCH_FAILED", message: fetchResult.error || "Could not fetch media" };
+    }
+
+    const existingArgs = fetchResult.data.arguments || {};
+
+    const mergedArgs: Record<string, any> = { ...existingArgs, ...partialArgs };
+
+    const hasPlayUrl = typeof mergedArgs.play_from_url === "string" && mergedArgs.play_from_url.length > 0;
+    const hasDownloadUrl = typeof mergedArgs.download_from_url === "string" && mergedArgs.download_from_url.length > 0;
+
+    if (!hasPlayUrl && !hasDownloadUrl) {
+      if (existingArgs.download_from_url && typeof existingArgs.download_from_url === "string" && existingArgs.download_from_url.length > 0) {
+        mergedArgs.download_from_url = existingArgs.download_from_url;
+      } else if (existingArgs.play_from_url && typeof existingArgs.play_from_url === "string" && existingArgs.play_from_url.length > 0) {
+        mergedArgs.play_from_url = existingArgs.play_from_url;
+      } else {
+        return { ok: false, mediaId, code: "MISSING_URL_FIELDS", message: "Yodeck requires play_from_url or download_from_url when patching media" };
+      }
+    }
+
+    Object.keys(mergedArgs).forEach(k => {
+      if (mergedArgs[k] === null || mergedArgs[k] === undefined) {
+        delete mergedArgs[k];
+      }
+    });
+
+    const patchResult = await this.patchMedia(mediaId, { arguments: mergedArgs });
+    if (!patchResult.ok) {
+      return { ok: false, mediaId, code: "PATCH_FAILED", message: patchResult.error || `HTTP ${patchResult.status}`, beforeArgs: existingArgs, patchedArgs: mergedArgs };
+    }
+
+    return { ok: true, mediaId, beforeArgs: existingArgs, patchedArgs: mergedArgs };
+  }
+
   /**
    * Get all screens (for finding which screen a playlist is assigned to)
    */

@@ -18180,65 +18180,34 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         return res.status(503).json({ ok: false, error: "Yodeck client not available" });
       }
 
-      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
-      const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
+      console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_START mediaId=${mediaId}`);
 
-      let beforeSubset: any = null;
-      try {
-        const fetchResp = await fetch(`${yodeckBaseUrl}/media/${mediaId}/`, {
-          headers: { Authorization: `Token ${token}` },
-        });
-        if (fetchResp.ok) {
-          const mediaData = await fetchResp.json();
-          beforeSubset = {
-            source: mediaData.media_origin?.source ?? null,
-            buffering: mediaData.arguments?.buffering ?? null,
-            play_from_url: mediaData.arguments?.play_from_url ?? null,
-            download_from_url: mediaData.arguments?.download_from_url ?? null,
-          };
-        }
-      } catch {}
+      const beforeFetch = await client.fetchMediaRaw(mediaId);
+      const beforeSubset = beforeFetch.ok && beforeFetch.data ? {
+        source: beforeFetch.data.media_origin?.source ?? null,
+        buffering: beforeFetch.data.arguments?.buffering ?? null,
+        play_from_url: beforeFetch.data.arguments?.play_from_url ?? null,
+        download_from_url: beforeFetch.data.arguments?.download_from_url ?? null,
+      } : null;
 
-      const patchA = { arguments: { buffering: false, play_from_url: null } };
-      console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_START mediaId=${mediaId} attempt=A`);
-      const resultA = await client.patchMedia(mediaId, patchA);
-
-      let retryUsed = false;
-      let attemptedPayload: any = patchA;
-      let finalResult = resultA;
-
-      if (!resultA.ok && resultA.error?.includes("play_from_url")) {
-        retryUsed = true;
-        const patchB = { arguments: { buffering: false } };
-        attemptedPayload = patchB;
-        console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_RETRY mediaId=${mediaId} attempt=B (play_from_url rejected)`);
-        finalResult = await client.patchMedia(mediaId, patchB);
-      }
+      const result = await client.patchMediaSafe(mediaId, { buffering: false });
 
       let afterSubset: any = null;
-      if (finalResult.ok) {
-        try {
-          const fetchResp2 = await fetch(`${yodeckBaseUrl}/media/${mediaId}/`, {
-            headers: { Authorization: `Token ${token}` },
-          });
-          if (fetchResp2.ok) {
-            const mediaData2 = await fetchResp2.json();
-            afterSubset = {
-              source: mediaData2.media_origin?.source ?? null,
-              buffering: mediaData2.arguments?.buffering ?? null,
-              play_from_url: mediaData2.arguments?.play_from_url ?? null,
-              download_from_url: mediaData2.arguments?.download_from_url ?? null,
-            };
-          }
-        } catch {}
-      }
-
-      if (finalResult.ok) {
-        console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_OK mediaId=${mediaId} retryUsed=${retryUsed}`);
-        res.json({ ok: true, mediaId, patched: true, retryUsed, attemptedPayload, beforeSubset, afterSubset });
+      if (result.ok) {
+        const afterFetch = await client.fetchMediaRaw(mediaId);
+        if (afterFetch.ok && afterFetch.data) {
+          afterSubset = {
+            source: afterFetch.data.media_origin?.source ?? null,
+            buffering: afterFetch.data.arguments?.buffering ?? null,
+            play_from_url: afterFetch.data.arguments?.play_from_url ?? null,
+            download_from_url: afterFetch.data.arguments?.download_from_url ?? null,
+          };
+        }
+        console.log(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_OK mediaId=${mediaId}`);
+        res.json({ ok: true, mediaId, patched: true, beforeSubset, afterSubset, patchedArgs: result.patchedArgs });
       } else {
-        console.warn(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_FAIL mediaId=${mediaId} status=${finalResult.status} error=${finalResult.error}`);
-        res.json({ ok: false, mediaId, patched: false, retryUsed, status: finalResult.status, error: finalResult.error, attemptedPayload, beforeSubset });
+        console.warn(`[RepairLocal] ${correlationId} MEDIA_REPAIR_LOCAL_PATCH_FAIL mediaId=${mediaId} code=${result.code} msg=${result.message}`);
+        res.json({ ok: false, mediaId, patched: false, code: result.code, error: result.message, beforeSubset });
       }
     } catch (error: any) {
       console.error(`[RepairLocal] ${correlationId} exception: ${error.message}`);
