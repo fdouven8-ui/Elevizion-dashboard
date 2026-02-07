@@ -1,0 +1,83 @@
+Je bent mijn senior engineer in mijn Replit project “Elevizion dashboard”. We willen 1 ding fixen zonder de rest om te gooien:
+
+DOEL
+- Elke advertentie-video die via ons dashboard naar Yodeck gaat moet “local” afspelen op de player (zoals wanneer ik handmatig upload).
+- De player mag GEEN “Connection error” krijgen door buffering/URL-stream gedrag.
+- We mogen NIET afhankelijk zijn van browser CORS (dus alles via server-side Yodeck API).
+- We willen dit oplossen voor:
+  1) bestaande media (zoals mediaId=29860650 met buffering=true)
+  2) toekomstige uploads (alle nieuwe advertenties)
+
+OBSERVATIES (belangrijk)
+- Media 29860650 is status=finished, media_origin.source=local, maar arguments bevatten:
+  - buffering: true
+  - play_from_url: https://dsbackend.s3.amazonaws.com/.../1080p.mp4
+  - download_from_url: https://dsbackend.s3.amazonaws.com/.../original
+- PATCH met play_from_url: null faalt (err_1003 invalid field name or value)
+- PATCH met alleen {arguments:{buffering:false}} faalt (err_1002 missing_key: "play_from_url or download_from_url")
+=> Dus Yodeck API verwacht bij patchen van arguments minstens 1 van (play_from_url, download_from_url) aanwezig in request payload.
+=> Oplossing: patch buffering=false, maar stuur daarbij play_from_url en/of download_from_url mee MET HUIDIGE WAARDES (niet null).
+
+WAT JE MOET IMPLEMENTEREN (MINIMALE WIJZIGINGEN)
+A) Maak een helper in de Yodeck integratie (service laag) die een “safe patch payload” bouwt:
+   - Haal eerst de huidige media op via GET /api/v2/media/{id}
+   - Lees current arguments.play_from_url en arguments.download_from_url
+   - Bouw PATCH payload:
+     {
+       "arguments": {
+          "buffering": false,
+          "play_from_url": "<existing_play_from_url_if_present>",
+          "download_from_url": "<existing_download_from_url_if_present>"
+       }
+     }
+   - Alleen keys opnemen als ze bestaan; maar zorg dat minstens 1 van play_from_url/download_from_url in payload zit, anders return een duidelijke error.
+
+B) Update de upload pipeline (stap na succesvolle upload/ready):
+   - Na “media READY/finished” roep je automatisch bovenstaande helper aan om buffering=false te forceren.
+   - Dit moet gebeuren voor elke video advertentie upload.
+   - Extra guard: alleen doen als media_origin.source === "local" en type === "video".
+
+C) Fix/upgrade bestaande endpoint: POST /api/admin/yodeck/media/:mediaId/repair-local
+   Deze endpoint moet:
+   1) Bepalen bij welke advertiser/asset deze media hoort:
+      - Gebruik bestaande db match logica (je hebt al /api/admin/yodeck/media/:id/usage die advertiserMatches teruggeeft)
+      - Als advertiserId/screenId niet in body zitten, gebruik usage match om advertiserId/assetId te vinden.
+   2) Probeer eerst “in-place” patch:
+      - call the helper: set buffering=false met behoud van bestaande play_from_url/download_from_url
+      - Als dit lukt: return ok:true, action:"PATCH_ARGS", patched:true
+   3) Als patch niet kan (bv NOT_MUTABLE):
+      - Doe CLONE_AND_REPLACE zoals je al hebt, maar voeg direct daarna toe:
+        - Force buffering=false op de NIEUWE media via dezelfde helper
+        - Update DB mapping zodat toekomstige playlist-build het nieuwe mediaId gebruikt
+        - Rebuild playlist(s) voor screen(s) waar deze advertiser/asset target is
+        - Push naar Yodeck player(s)
+      - Return: ok:true, action:"CLONE_AND_REPLACE", newMediaId, rebuild/push resultaten
+
+D) Playlist/push regression fix:
+   - Zorg dat “repair-local” NOOIT eindigt met een situatie waar de ad uit de playlist verdwijnt.
+   - Dus: na patch/clone moet je altijd:
+     - rebuild playlist voor de meegegeven screenId (of alle screens van die location/target rule)
+     - verify now-playing endpoint call (jullie hebben /api/screens/:id/now-playing) en log topItems
+   - Als rebuild/push faalt: return ok:false met duidelijke error + correlationId.
+
+E) Debug/Logging:
+   - Log correlationId in elke stap.
+   - Log vóór en ná subset van arguments:
+     {source, status, buffering, play_from_url, download_from_url}
+   - Bij Yodeck patch errors: parse JSON error body en return structured details (code, message, details.missing_key/invalid_field)
+
+ACCEPTANCE TESTS (MOET JE OOK DOEN)
+1) Run repair-local op mediaId=29860650 met body { advertiserId:"9a99d555-8676-49d3-9862-f65859bdcfb1", screenId:"241377ce-a25e-4744-9ea7-cd9359515d07" }
+   - Verwacht: ok:true, patched:true en buffering wordt false (of clone naar nieuw mediaId + buffering=false op nieuw).
+2) Rebuild playlist voor screenId 241377ce-a25e-4744-9ea7-cd9359515d07 en push.
+3) Verify now-playing topItems bevat de advertentie media (en geen “Connection error” op het scherm).
+4) Upload een nieuwe advertentie video (via dashboard) en check dat na READY automatisch buffering=false gezet wordt.
+
+BELANGRIJK
+- Verander zo min mogelijk bestaande architectuur.
+- Maak geen nieuwe grote flows; alleen: “safe patch arguments” + “call after upload ready” + “repair-local robuust” + “rebuild/push gegarandeerd”.
+- Hou endpoints backwards compatible; voeg alleen optionele body velden toe.
+
+LEVER OP
+- Welke files je hebt aangepast + korte uitleg.
+- De exacte endpoints die ik in browser console kan fetchen om te testen.

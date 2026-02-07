@@ -18242,29 +18242,32 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   app.post("/api/admin/yodeck/media/:id/repair-local", requireAdminAccess, async (req, res) => {
     const correlationId = `repair-${Date.now()}`;
+    const LOG = `[RepairLocal] ${correlationId}`;
     try {
       const mediaId = parseInt(req.params.id, 10);
       if (isNaN(mediaId)) {
-        return res.status(400).json({ ok: false, error: "Invalid media ID" });
+        return res.status(400).json({ ok: false, error: "Invalid media ID", correlationId });
       }
 
       const dryRun = req.query.dryRun === "true";
+      const bodyAdvertiserId = req.body?.advertiserId as string | undefined;
+      const bodyScreenId = req.body?.screenId as string | undefined;
 
       const { getYodeckClient } = await import("./services/yodeckClient");
       const client = await getYodeckClient();
       if (!client) {
-        return res.status(503).json({ ok: false, error: "Yodeck client not available" });
+        return res.status(503).json({ ok: false, error: "Yodeck client not available", correlationId });
       }
 
-      console.log(`[RepairLocal] ${correlationId} START mediaId=${mediaId} dryRun=${dryRun}`);
+      console.log(`${LOG} START mediaId=${mediaId} dryRun=${dryRun} bodyAdvertiserId=${bodyAdvertiserId || "none"} bodyScreenId=${bodyScreenId || "none"}`);
 
       const beforeFetch = await client.fetchMediaRaw(mediaId);
       if (!beforeFetch.ok || !beforeFetch.data) {
-        return res.status(404).json({ ok: false, error: "Media not found in Yodeck", mediaId });
+        return res.status(404).json({ ok: false, error: "Media not found in Yodeck", mediaId, correlationId });
       }
 
       const beforeArgs = beforeFetch.data.arguments || {};
-      const mediaStatus = beforeFetch.data.status;
+      const mediaStatus = (beforeFetch.data.status || "").toLowerCase();
       const beforeSubset = {
         source: beforeFetch.data.media_origin?.source ?? null,
         status: mediaStatus,
@@ -18272,32 +18275,31 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         play_from_url: beforeArgs.play_from_url ?? null,
         download_from_url: beforeArgs.download_from_url ?? null,
       };
+      console.log(`${LOG} BEFORE_SUBSET ${JSON.stringify(beforeSubset)}`);
 
       if (beforeSubset.source !== "local") {
-        return res.json({ ok: false, mediaId, patched: false, reason: "NOT_LOCAL", beforeSubset });
+        return res.json({ ok: false, mediaId, patched: false, reason: "NOT_LOCAL", beforeSubset, correlationId });
       }
 
-      if (beforeArgs.buffering === false) {
-        return res.json({ ok: true, mediaId, patched: false, reason: "ALREADY_OK", beforeSubset });
+      if (beforeArgs.buffering === false && !beforeArgs.play_from_url && !beforeArgs.download_from_url) {
+        return res.json({ ok: true, mediaId, patched: false, reason: "ALREADY_OK", beforeSubset, correlationId });
       }
 
-      const isFinished = mediaStatus === "finished";
+      const needsPatch = beforeArgs.buffering !== false;
 
-      if (!isFinished) {
-        const downloadUrl = typeof beforeArgs.download_from_url === "string" && beforeArgs.download_from_url.length > 0
-          ? beforeArgs.download_from_url : null;
-        const attemptedPayload = {
-          arguments: {
-            buffering: false,
-            ...(downloadUrl ? { download_from_url: downloadUrl } : {}),
-          },
-        };
+      // --- STEP 1: Try in-place PATCH via patchMediaSafe ---
+      if (needsPatch) {
+        console.log(`${LOG} STEP1_PATCH_ATTEMPT mediaId=${mediaId} status=${mediaStatus}`);
 
         if (dryRun) {
-          return res.json({ ok: true, mediaId, dryRun: true, action: "PATCH", patched: false, attemptedPayload, beforeSubset });
+          return res.json({
+            ok: true, mediaId, dryRun: true, action: "PATCH_ARGS", patched: false,
+            willPatch: { buffering: false },
+            beforeSubset, correlationId,
+          });
         }
 
-        const patchResult = await client.patchMedia(mediaId, attemptedPayload);
+        const patchResult = await client.patchMediaSafe(mediaId, { buffering: false });
         if (patchResult.ok) {
           const afterFetch = await client.fetchMediaRaw(mediaId);
           const afterArgs = afterFetch.ok && afterFetch.data ? afterFetch.data.arguments || {} : {};
@@ -18308,33 +18310,41 @@ KvK: 90982541 | BTW: NL004857473B37</p>
             play_from_url: afterArgs.play_from_url ?? null,
             download_from_url: afterArgs.download_from_url ?? null,
           } : null;
-          const patched = afterSubset?.buffering === false;
-          if (patched) {
-            console.log(`[RepairLocal] ${correlationId} PATCH_OK mediaId=${mediaId}`);
-            return res.json({ ok: true, mediaId, action: "PATCH", patched: true, reason: null, attemptedPayload, beforeSubset, afterSubset });
+
+          const actuallyChanged = afterSubset?.buffering === false;
+          console.log(`${LOG} PATCH_RESULT mediaId=${mediaId} httpOk=true actuallyChanged=${actuallyChanged} afterSubset=${JSON.stringify(afterSubset)}`);
+
+          if (actuallyChanged) {
+            const rebuildVerify = await repairRebuildAndVerify(bodyScreenId, bodyAdvertiserId, correlationId);
+            return res.json({
+              ok: true, mediaId, action: "PATCH_ARGS", patched: true,
+              beforeSubset, afterSubset,
+              rebuild: rebuildVerify.rebuild,
+              nowPlaying: rebuildVerify.nowPlaying,
+              correlationId,
+            });
           }
+
+          console.log(`${LOG} PATCH_HTTP_OK_BUT_VALUE_UNCHANGED mediaId=${mediaId} - media is NOT_MUTABLE, falling through to CLONE`);
+        } else {
+          console.log(`${LOG} PATCH_FAILED code=${patchResult.code} msg=${patchResult.message?.substring(0, 200)} - falling through to CLONE`);
         }
-        console.log(`[RepairLocal] ${correlationId} PATCH_NOT_MUTABLE mediaId=${mediaId} - falling through to CLONE`);
       }
 
-      console.log(`[RepairLocal] ${correlationId} CLONE_FLOW_START mediaId=${mediaId}`);
+      // --- STEP 2: CLONE_AND_REPLACE (patch failed or NOT_MUTABLE) ---
+      console.log(`${LOG} CLONE_FLOW_START mediaId=${mediaId}`);
 
-      const bodyAdvertiserId = req.body?.advertiserId as string | undefined;
       let advertiserRow: any = null;
       let matchSource = "none";
 
       if (bodyAdvertiserId) {
         const [row] = await db.select().from(advertisers).where(eq(advertisers.id, bodyAdvertiserId)).limit(1);
-        advertiserRow = row || null;
-        matchSource = "body_override";
+        if (row) { advertiserRow = row; matchSource = "body_override"; }
       }
 
       if (!advertiserRow) {
         const [canonical] = await db.select().from(advertisers).where(eq(advertisers.yodeckMediaIdCanonical, mediaId)).limit(1);
-        if (canonical) {
-          advertiserRow = canonical;
-          matchSource = "canonical";
-        }
+        if (canonical) { advertiserRow = canonical; matchSource = "canonical"; }
       }
 
       if (!advertiserRow) {
@@ -18343,19 +18353,16 @@ KvK: 90982541 | BTW: NL004857473B37</p>
             .from(adAssets).where(eq(adAssets.yodeckMediaId, mediaId)).limit(1);
           if (assetMatch.length > 0) {
             const [row] = await db.select().from(advertisers).where(eq(advertisers.id, assetMatch[0].advertiserId)).limit(1);
-            if (row) {
-              advertiserRow = row;
-              matchSource = "asset";
-            }
+            if (row) { advertiserRow = row; matchSource = "asset"; }
           }
         } catch {}
       }
 
       if (!advertiserRow) {
-        return res.json({ ok: false, mediaId, patched: false, reason: "NO_ADVERTISER_FOR_MEDIA", beforeSubset, hints: { tryAdvertiserId: true } });
+        return res.json({ ok: false, mediaId, patched: false, reason: "NO_ADVERTISER_FOR_MEDIA", beforeSubset, correlationId, hints: { tryAdvertiserId: true } });
       }
       const advertiserId = advertiserRow.id;
-      console.log(`[RepairLocal] ${correlationId} CLONE_FLOW advertiser=${advertiserId} (${advertiserRow.companyName}) matchSource=${matchSource}`);
+      console.log(`${LOG} CLONE_FLOW advertiser=${advertiserId} (${advertiserRow.companyName}) matchSource=${matchSource}`);
 
       const assets = await db.select().from(adAssets)
         .where(eq(adAssets.advertiserId, advertiserId))
@@ -18365,21 +18372,21 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         || assets[0];
 
       if (!approvedAsset) {
-        return res.json({ ok: false, mediaId, patched: false, reason: "NO_ASSET_FOR_ADVERTISER", advertiserId, beforeSubset });
+        return res.json({ ok: false, mediaId, patched: false, reason: "NO_ASSET_FOR_ADVERTISER", advertiserId, beforeSubset, correlationId });
       }
 
       const storagePath = approvedAsset.convertedStoragePath || approvedAsset.storagePath;
       if (!storagePath) {
-        return res.json({ ok: false, mediaId, patched: false, reason: "NO_STORAGE_PATH", advertiserId, assetId: approvedAsset.id, beforeSubset });
+        return res.json({ ok: false, mediaId, patched: false, reason: "NO_STORAGE_PATH", advertiserId, assetId: approvedAsset.id, beforeSubset, correlationId });
       }
 
-      console.log(`[RepairLocal] ${correlationId} CLONE_FLOW asset=${approvedAsset.id} storagePath=${storagePath}`);
+      console.log(`${LOG} CLONE_FLOW asset=${approvedAsset.id} storagePath=${storagePath}`);
 
       if (dryRun) {
         return res.json({
           ok: true, mediaId, dryRun: true, action: "CLONE_AND_REPLACE", patched: false,
           advertiserId, matchSource, assetId: approvedAsset.id, storagePath,
-          beforeSubset,
+          beforeSubset, correlationId,
         });
       }
 
@@ -18396,28 +18403,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           reason: "CLONE_UPLOAD_FAILED",
           advertiserId, assetId: approvedAsset.id, storagePath,
           uploadError: { errorCode: uploadResult.errorCode, errorDetails: uploadResult.errorDetails },
-          beforeSubset,
+          beforeSubset, correlationId,
         });
       }
 
       const newMediaId = uploadResult.yodeckMediaId;
-      console.log(`[RepairLocal] ${correlationId} CLONE_FLOW newMediaId=${newMediaId} (old=${mediaId})`);
+      console.log(`${LOG} CLONE_FLOW newMediaId=${newMediaId} (old=${mediaId})`);
 
-      const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
-      const allScreens = await storage.getScreens();
-      const rebuildResults: Array<{ screenId: string; ok: boolean; error?: string }> = [];
-      for (const screen of allScreens) {
-        try {
-          const rbResult = await rebuildScreenPlaylist(screen.id);
-          rebuildResults.push({ screenId: screen.id, ok: rbResult.ok, error: rbResult.ok ? undefined : "rebuild failed" });
-        } catch (err: any) {
-          rebuildResults.push({ screenId: screen.id, ok: false, error: err.message });
-        }
-      }
-      const okCount = rebuildResults.filter(r => r.ok).length;
-      const failCount = rebuildResults.filter(r => !r.ok).length;
+      const forceBufferingResult = await client.patchMediaSafe(newMediaId, { buffering: false });
+      console.log(`${LOG} CLONE_FLOW forceBuffering ok=${forceBufferingResult.ok} code=${forceBufferingResult.code || "none"}`);
 
-      console.log(`[RepairLocal] ${correlationId} CLONE_AND_REPLACE_COMPLETE old=${mediaId} new=${newMediaId} screens=${allScreens.length} ok=${okCount} fail=${failCount}`);
+      const rebuildVerify = await repairRebuildAndVerify(bodyScreenId, bodyAdvertiserId, correlationId);
+
+      console.log(`${LOG} CLONE_AND_REPLACE_COMPLETE old=${mediaId} new=${newMediaId}`);
 
       res.json({
         ok: true,
@@ -18426,18 +18424,78 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         patched: true,
         oldMediaId: mediaId,
         newMediaId,
-        advertiserId,
+        advertiserId, matchSource,
         assetId: approvedAsset.id,
         storagePath,
         beforeSubset,
-        rebuild: { screensProcessed: allScreens.length, okCount, failCount, details: rebuildResults },
+        forceBuffering: { ok: forceBufferingResult.ok, code: forceBufferingResult.code },
+        rebuild: rebuildVerify.rebuild,
+        nowPlaying: rebuildVerify.nowPlaying,
         yodeck: { jobId: uploadResult.jobId, finalState: uploadResult.finalState },
+        correlationId,
       });
     } catch (error: any) {
-      console.error(`[RepairLocal] ${correlationId} exception: ${error.message}`);
-      res.status(500).json({ ok: false, error: error.message });
+      console.error(`${LOG} exception: ${error.message}`);
+      res.status(500).json({ ok: false, error: error.message, correlationId });
     }
   });
+
+  async function repairRebuildAndVerify(
+    screenId: string | undefined,
+    advertiserId: string | undefined,
+    correlationId: string
+  ): Promise<{ rebuild: any; nowPlaying: any }> {
+    const LOG = `[RepairRebuild] ${correlationId}`;
+    const { rebuildScreenPlaylist, getScreenNowPlayingSimple } = await import("./services/simplePlaylistModel");
+
+    let screensToRebuild: string[] = [];
+
+    if (screenId) {
+      screensToRebuild = [screenId];
+    } else {
+      const allScreens = await storage.getScreens();
+      screensToRebuild = allScreens.map(s => s.id);
+    }
+
+    console.log(`${LOG} rebuilding ${screensToRebuild.length} screen(s)`);
+
+    const rebuildResults: Array<{ screenId: string; ok: boolean; error?: string }> = [];
+    for (const sid of screensToRebuild) {
+      try {
+        const rbResult = await rebuildScreenPlaylist(sid);
+        rebuildResults.push({ screenId: sid, ok: rbResult.ok, error: rbResult.ok ? undefined : "rebuild failed" });
+      } catch (err: any) {
+        rebuildResults.push({ screenId: sid, ok: false, error: err.message });
+      }
+    }
+
+    const okCount = rebuildResults.filter(r => r.ok).length;
+    const failCount = rebuildResults.filter(r => !r.ok).length;
+    console.log(`${LOG} rebuild done ok=${okCount} fail=${failCount}`);
+
+    let nowPlayingResult: any = null;
+    if (screenId) {
+      try {
+        const np = await getScreenNowPlayingSimple(screenId);
+        nowPlayingResult = {
+          screenId,
+          isCorrect: np.isCorrect,
+          itemCount: np.itemCount,
+          topItems: np.topItems,
+          actualSourceType: np.actualSourceType,
+        };
+        console.log(`${LOG} nowPlaying screenId=${screenId} isCorrect=${np.isCorrect} items=${np.itemCount} topItems=${np.topItems?.join(", ")}`);
+      } catch (err: any) {
+        nowPlayingResult = { screenId, error: err.message };
+        console.warn(`${LOG} nowPlaying check failed: ${err.message}`);
+      }
+    }
+
+    return {
+      rebuild: { screensProcessed: screensToRebuild.length, okCount, failCount, details: rebuildResults },
+      nowPlaying: nowPlayingResult,
+    };
+  }
 
   // ============================================================================
   // RAW YODECK DEBUG ENDPOINTS - Direct API response for debugging

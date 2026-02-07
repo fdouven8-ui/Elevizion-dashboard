@@ -808,23 +808,33 @@ export class YodeckClient {
     return result;
   }
 
-  async patchMediaSafe(mediaId: number, partialArgs: Record<string, any>): Promise<{ ok: boolean; mediaId: number; code?: string; message?: string; patchedArgs?: any; beforeArgs?: any }> {
+  async patchMediaSafe(mediaId: number, partialArgs: Record<string, any>): Promise<{ ok: boolean; mediaId: number; code?: string; message?: string; patchedArgs?: any; beforeArgs?: any; yodeckError?: any }> {
+    const LOG = `[patchMediaSafe] mediaId=${mediaId}`;
     const fetchResult = await this.fetchMediaRaw(mediaId);
     if (!fetchResult.ok || !fetchResult.data) {
       return { ok: false, mediaId, code: "MEDIA_FETCH_FAILED", message: fetchResult.error || "Could not fetch media" };
     }
 
     const existingArgs = fetchResult.data.arguments || {};
+    console.log(`${LOG} BEFORE args=${JSON.stringify({ buffering: existingArgs.buffering, play_from_url: existingArgs.play_from_url ?? null, download_from_url: existingArgs.download_from_url ?? null })}`);
 
     const safeArgs: Record<string, any> = { ...partialArgs };
 
     delete safeArgs.play_from_url;
 
+    const existingPlay = existingArgs.play_from_url;
     const existingDownload = existingArgs.download_from_url;
+
     if (typeof existingDownload === "string" && existingDownload.length > 0) {
-      if (!safeArgs.download_from_url) {
-        safeArgs.download_from_url = existingDownload;
-      }
+      safeArgs.download_from_url = existingDownload;
+    }
+    if (typeof existingPlay === "string" && existingPlay.length > 0) {
+      safeArgs.play_from_url = existingPlay;
+    }
+
+    if (!safeArgs.download_from_url && !safeArgs.play_from_url) {
+      console.error(`${LOG} FAIL: no play_from_url or download_from_url available - Yodeck requires at least one`);
+      return { ok: false, mediaId, code: "NO_URL_FIELDS", message: "Yodeck requires play_from_url or download_from_url in arguments PATCH but neither exists on this media", beforeArgs: existingArgs };
     }
 
     Object.keys(safeArgs).forEach(k => {
@@ -833,10 +843,23 @@ export class YodeckClient {
       }
     });
 
+    console.log(`${LOG} PATCH payload args=${JSON.stringify(safeArgs)}`);
     const patchResult = await this.patchMedia(mediaId, { arguments: safeArgs });
     if (!patchResult.ok) {
-      return { ok: false, mediaId, code: "PATCH_FAILED", message: patchResult.error || `HTTP ${patchResult.status}`, beforeArgs: existingArgs, patchedArgs: safeArgs };
+      let yodeckError: any = null;
+      try {
+        if (patchResult.error) {
+          const parsed = JSON.parse(patchResult.error);
+          yodeckError = { code: parsed.error_code, message: parsed.message || parsed.detail, missing_key: parsed.missing_key, invalid_field: parsed.invalid_field };
+        }
+      } catch {}
+      console.error(`${LOG} PATCH_FAILED http=${patchResult.status} error=${patchResult.error?.substring(0, 300)}`);
+      return { ok: false, mediaId, code: "PATCH_FAILED", message: patchResult.error || `HTTP ${patchResult.status}`, beforeArgs: existingArgs, patchedArgs: safeArgs, yodeckError };
     }
+
+    const afterFetch = await this.fetchMediaRaw(mediaId);
+    const afterArgs = afterFetch.ok && afterFetch.data ? afterFetch.data.arguments || {} : {};
+    console.log(`${LOG} AFTER args=${JSON.stringify({ buffering: afterArgs.buffering, play_from_url: afterArgs.play_from_url ?? null, download_from_url: afterArgs.download_from_url ?? null })}`);
 
     return { ok: true, mediaId, beforeArgs: existingArgs, patchedArgs: safeArgs };
   }
