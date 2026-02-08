@@ -582,21 +582,26 @@ async function stepCompleteUpload(
   uploadUrl: string,
   correlationId: string
 ): Promise<FinalizeResult> {
-  const endpointPath = `/media/${mediaId}/upload/complete`;
+  const endpointPath = `/media/${mediaId}/upload/complete/`;
   const fullUrl = `${YODECK_API_BASE}${endpointPath}`;
   const hasQuery = uploadUrl.includes("?");
 
+  let uploadUrlHost = "unknown";
+  try { uploadUrlHost = new URL(uploadUrl).host; } catch {}
+  console.log(`[YodeckUploadCompleteRequest] mediaId=${mediaId} uploadUrlPresent=${!!uploadUrl} uploadUrlHost=${uploadUrlHost} hasQuery=${hasQuery}`);
   console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_CALL url=${endpointPath}`);
-  console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_BODY hasQuery=${hasQuery}`);
 
   try {
+    const completeBody = JSON.stringify({ upload_url: uploadUrl });
+    console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_BODY_LENGTH=${completeBody.length} method=PUT`);
+    
     const response = await fetch(fullUrl, {
       method: "PUT",
       headers: {
         "Authorization": `Token ${YODECK_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ upload_url: uploadUrl }),
+      body: completeBody,
     });
 
     const completeStatus = response.status;
