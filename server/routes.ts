@@ -168,6 +168,10 @@ export async function registerRoutes(
   // Mount Yodeck routes (mapping endpoints)
   const yodeckRouter = (await import("./routes/yodeck")).default;
   app.use("/api/yodeck", yodeckRouter);
+
+  // Mount media CDN proxy (public, no auth - Yodeck needs to access this)
+  const mediaCdnRouter = (await import("./routes/mediaCdn")).default;
+  app.use("/api/media-cdn", mediaCdnRouter);
   
   // ============================================================================
   // SEO & PUBLIC ROUTES (no auth required)

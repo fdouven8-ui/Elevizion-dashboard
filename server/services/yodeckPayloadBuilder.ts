@@ -71,6 +71,33 @@ export function buildYodeckCreateMediaPayload(name: string): YodeckCreateMediaPa
   return payload;
 }
 
+export interface YodeckCreateMediaPayloadUrl {
+  name: string;
+  description: string;
+  media_type: string;
+  arguments: {
+    download_from_url: string;
+    buffering: boolean;
+    resolution: string;
+  };
+}
+
+export function buildYodeckUrlMediaPayload(name: string, downloadUrl: string): YodeckCreateMediaPayloadUrl {
+  const payload: YodeckCreateMediaPayloadUrl = {
+    name,
+    description: "",
+    media_type: "video",
+    arguments: {
+      download_from_url: downloadUrl,
+      buffering: false,
+      resolution: "highest",
+    },
+  };
+
+  console.log("[YodeckPayload] CREATE_MEDIA_URL FINAL PAYLOAD:", JSON.stringify(payload, null, 2));
+  return payload;
+}
+
 /**
  * Assert that a payload does NOT contain any forbidden keys.
  * Throws immediately if forbidden keys are found - fail fast before API call.
