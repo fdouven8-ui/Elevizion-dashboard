@@ -21813,13 +21813,15 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         return res.status(502).json({ ok: false, error: `Playlist fetch failed: ${playlistResp.status}`, correlationId });
       }
       const playlistData = await playlistResp.json();
-      const playlistItems = playlistData.items || [];
+      const playlistItems = playlistData.playlistItems ?? playlistData.playlist_items ?? playlistData.items ?? playlistData.playlist?.items ?? [];
       
-      console.log(`[PurifyMedia] ${correlationId} Playlist ${playlistId} has ${playlistItems.length} items`);
+      console.log(`[Purify][PLAYLIST_RAW_SUMMARY]`, { playlistId, itemCount: playlistData.itemCount ?? playlistData.item_count ?? playlistItems.length, keys: Object.keys(playlistData || {}), correlationId });
 
       const mediaIds: number[] = playlistItems
-        .filter((item: any) => item.type === "media" || !item.type)
-        .map((item: any) => item.id);
+        .map((it: any) => it?.mediaId ?? it?.media_id ?? it?.media?.id ?? (it?.id != null ? it.id : null))
+        .filter((id: any) => id != null && typeof id === "number");
+
+      console.log(`[Purify][MEDIA_IDS]`, { playlistId, mediaIds, count: mediaIds.length, correlationId });
 
       const inspections: any[] = [];
       const toClone: Array<{ mediaId: number; index: number }> = [];
