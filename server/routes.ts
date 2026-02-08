@@ -3143,10 +3143,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
       // Get current plan
       const plan = await placementEngine.getPlan(planId);
       if (!plan) {
-        return res.status(404).json({ message: "Plan niet gevonden" });
+        console.log(`[PlacementPlanPublishGate] planId=${planId} exists=false status=null approved_at=null`);
+        return res.status(404).json({ message: "Plan niet gevonden", planId, exists: false, status: null, approved_at: null, simulated_at: null });
       }
       if (plan.status !== "APPROVED") {
-        return res.status(400).json({ message: "Plan moet status APPROVED hebben om te publiceren" });
+        console.log(`[PlacementPlanPublishGate] planId=${planId} exists=true status=${plan.status} approved_at=${plan.approvedAt || null}`);
+        return res.status(400).json({ message: "Plan moet status APPROVED hebben om te publiceren", planId, exists: true, status: plan.status, approved_at: plan.approvedAt || null, simulated_at: (plan as any).simulatedAt || null });
       }
       
       // RE-SIMULATE before publish for safety (detect capacity/exclusivity changes)
