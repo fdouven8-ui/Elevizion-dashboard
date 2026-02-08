@@ -21939,7 +21939,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         const inspection = inspections.find((x: any) => x.mediaId === item.mediaId);
         let result;
         try {
-          result = await ensurePureLocalVideo(item.mediaId, correlationId);
+          result = await ensurePureLocalVideo(item.mediaId, correlationId, { skipDetection: true });
         } catch (e: any) {
           const step = "EXCEPTION";
           const failEntry = {

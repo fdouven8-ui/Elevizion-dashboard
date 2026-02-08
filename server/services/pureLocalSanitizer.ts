@@ -47,10 +47,11 @@ function isLocalVideo(media: YodeckMediaInfo): boolean {
 
 export async function ensurePureLocalVideo(
   mediaId: number,
-  correlationId: string
+  correlationId: string,
+  options?: { skipDetection?: boolean }
 ): Promise<PurifyMediaResult> {
   const prefix = `${LOG_PREFIX} [${correlationId}]`;
-  console.log(`${prefix} PURIFY_CHECK mediaId=${mediaId}`);
+  console.log(`${prefix} PURIFY_CHECK mediaId=${mediaId} skipDetection=${!!options?.skipDetection}`);
 
   const rawResult = await getMediaRaw(mediaId);
   if (!rawResult.ok || !rawResult.data) {
@@ -64,9 +65,13 @@ export async function ensurePureLocalVideo(
 
   console.log(`${prefix} [INSPECT] mediaId=${mediaId} isLocalVideo=${localVid} hasUrlArgs=${urlArgs} top.play_from_url=${media.play_from_url ?? "null"} top.download_from_url=${media.download_from_url ?? "null"} args=${JSON.stringify(media.arguments)}`);
 
-  if (!(localVid && urlArgs)) {
+  if (!options?.skipDetection && !(localVid && urlArgs)) {
     console.log(`${prefix} SKIP mediaId=${mediaId} reason=not_local_video_with_urls (localVid=${localVid}, urlArgs=${urlArgs})`);
     return { mediaId, cloned: false, reason: "NOT_AFFECTED" };
+  }
+
+  if (options?.skipDetection) {
+    console.log(`${prefix} SKIP_DETECTION: caller already determined media is affected, proceeding to clone`);
   }
 
   console.log(`${prefix} CLONE_URL_MEDIA_START old=${mediaId}`);
