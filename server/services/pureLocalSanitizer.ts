@@ -218,12 +218,13 @@ export async function ensurePureLocalVideo(
     console.warn(`${prefix} COMPLETE soft fail: ${err.message}`);
   }
 
-  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished", "processing", "encoding", "live"];
+  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished"];
   const FAILED_STATUSES = ["failed", "error", "aborted", "rejected"];
   const POLL_TIMEOUT = 180_000;
   const POLL_INTERVALS = [2000, 3000, 5000, 8000, 10000, 15000, 15000, 15000, 15000, 15000];
   const startTime = Date.now();
   let attempt = 0;
+  let statusReady = false;
 
   while (Date.now() - startTime < POLL_TIMEOUT) {
     const delay = POLL_INTERVALS[Math.min(attempt, POLL_INTERVALS.length - 1)];
@@ -240,8 +241,19 @@ export async function ensurePureLocalVideo(
       if (!resp.ok) continue;
       const data = await resp.json();
       const status = (data.status || "").toLowerCase();
-      console.log(`${prefix} poll ${attempt}: status=${status}`);
-      if (READY_STATUSES.includes(status)) break;
+      const fileObj = data.file;
+      const fileSize = fileObj?.size || fileObj?.file_size || data.filesize || data.file_size || 0;
+      const hasFile = fileObj != null && fileSize > 0;
+      console.log(`${prefix} poll ${attempt}: status=${status} hasFile=${hasFile} size=${fileSize}`);
+      if (READY_STATUSES.includes(status) && hasFile) {
+        statusReady = true;
+        console.log(`${prefix} CLONE_READY: status=${status} hasFile=true size=${fileSize}`);
+        break;
+      }
+      if (READY_STATUSES.includes(status) && !hasFile) {
+        console.log(`${prefix} status=${status} but file not ready yet, continuing poll...`);
+        continue;
+      }
       if (FAILED_STATUSES.includes(status)) {
         return { mediaId, cloned: false, reason: `YODECK_STATUS_${status.toUpperCase()}` };
       }
@@ -249,6 +261,11 @@ export async function ensurePureLocalVideo(
         return { mediaId, cloned: false, reason: "INIT_STUCK" };
       }
     } catch {}
+  }
+
+  if (!statusReady) {
+    console.error(`${prefix} CLONE_TIMEOUT: file never became ready after ${attempt} polls`);
+    return { mediaId, cloned: false, reason: "CLONE_FILE_NOT_READY" };
   }
 
   // CRITICAL: Yodeck auto-generates play_from_url/download_from_url after upload.

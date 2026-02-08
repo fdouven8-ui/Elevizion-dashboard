@@ -1043,7 +1043,7 @@ export class YodeckClient {
   }
 
   async pollMediaUntilReady(mediaId: number, timeoutMs: number = 180000): Promise<{ ok: boolean; status?: string; polls?: number; reason?: string }> {
-    const READY = ["finished", "ready", "done", "encoded", "active", "ok", "completed", "live"];
+    const READY = ["finished", "ready", "done", "encoded", "active", "ok", "completed"];
     const FAILED = ["failed", "error", "aborted", "rejected"];
     const INTERVALS = [2000, 3000, 5000, 8000, 10000, 15000, 15000, 15000, 15000, 15000];
     const startTime = Date.now();
@@ -1067,6 +1067,74 @@ export class YodeckClient {
       if (status === "initialized" && attempt > 20) return { ok: false, reason: "INIT_STUCK" };
     }
     return { ok: false, reason: "TIMEOUT" };
+  }
+
+  async waitUntilMediaHasFile(
+    mediaId: number,
+    opts?: { timeoutMs?: number; intervalMs?: number }
+  ): Promise<{ ok: boolean; hasFile: boolean; size: number; status: string; polls: number; error?: string }> {
+    const timeoutMs = opts?.timeoutMs ?? 60000;
+    const intervalMs = opts?.intervalMs ?? 2000;
+    const startTime = Date.now();
+    let attempt = 0;
+    let lastStatus = "unknown";
+    let lastHasFile = false;
+    let lastSize = 0;
+
+    while (Date.now() - startTime < timeoutMs) {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, intervalMs));
+      }
+      attempt++;
+
+      try {
+        const resp = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/`, {
+          headers: { "Authorization": `Token ${this.apiKey}` },
+        });
+
+        if (resp.status === 404) {
+          return { ok: false, hasFile: false, size: 0, status: "404", polls: attempt, error: "MEDIA_NOT_FOUND" };
+        }
+        if (!resp.ok) {
+          console.warn(`[YodeckClient] waitUntilMediaHasFile mediaId=${mediaId} poll=${attempt} http=${resp.status}`);
+          continue;
+        }
+
+        const data = await resp.json();
+        const status = (data.status || "").toLowerCase();
+        const fileObj = data.file;
+        const size = fileObj?.size || fileObj?.file_size || data.filesize || data.file_size || 0;
+        const hasFile = fileObj != null && size > 0;
+        lastStatus = status;
+        lastHasFile = hasFile;
+        lastSize = size;
+
+        console.log(`[YodeckClient] waitUntilMediaHasFile mediaId=${mediaId} poll=${attempt} status=${status} hasFile=${hasFile} size=${size} name=${data.name}`);
+
+        if (hasFile) {
+          console.log(`[YodeckUploadReady] mediaId=${mediaId} hasFile=true size=${size} name=${data.name}`);
+          return { ok: true, hasFile: true, size, status, polls: attempt };
+        }
+
+        const FAILED = ["failed", "error", "aborted", "rejected"];
+        if (FAILED.includes(status)) {
+          console.error(`[YodeckUploadNotReady] mediaId=${mediaId} hasFile=false size=null status=${status}`);
+          return { ok: false, hasFile: false, size: 0, status, polls: attempt, error: `YODECK_STATUS_${status.toUpperCase()}` };
+        }
+      } catch (err: any) {
+        console.warn(`[YodeckClient] waitUntilMediaHasFile mediaId=${mediaId} poll=${attempt} error=${err.message}`);
+      }
+    }
+
+    console.error(`[YodeckUploadNotReady] mediaId=${mediaId} hasFile=${lastHasFile} size=${lastSize || "null"} status=${lastStatus} polls=${attempt}`);
+    return {
+      ok: false,
+      hasFile: lastHasFile,
+      size: lastSize,
+      status: lastStatus,
+      polls: attempt,
+      error: "UPLOAD_NOT_READY",
+    };
   }
 
   async pushScreen(screenIdOrPlayerId: number, opts?: { use_download_timeslots?: boolean }): Promise<{ ok: boolean; data?: any; error?: string; status?: number }> {

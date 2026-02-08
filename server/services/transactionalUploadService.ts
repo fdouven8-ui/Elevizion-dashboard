@@ -96,7 +96,7 @@ export async function uploadVideoToYodeckTransactional(
     if (!createResult.ok) {
       return makeFailResult(jobId, advertiserId, createResult.errorCode!, createResult.errorDetails);
     }
-    const { mediaId } = createResult;
+    const { mediaId, getUploadUrlEndpoint } = createResult;
     
     // EARLY SAVE: Store yodeckMediaId immediately after create to prevent duplicate media on retries
     console.log(`${LOG_PREFIX} [${correlationId}] CREATE_MEDIA SUCCESS: mediaId=${mediaId} - saving to advertiser early`);
@@ -108,8 +108,8 @@ export async function uploadVideoToYodeckTransactional(
       })
       .where(eq(advertisers.id, advertiserId));
 
-    // Step 2: GET /media/{id}/upload to retrieve presigned upload_url
-    const uploadUrlResult = await step2GetUploadUrl(jobId, mediaId!, correlationId);
+    // Step 2: GET upload URL (use get_upload_url from create response if available)
+    const uploadUrlResult = await step2GetUploadUrl(jobId, mediaId!, correlationId, getUploadUrlEndpoint);
     if (!uploadUrlResult.ok) {
       return makeFailResult(jobId, advertiserId, uploadUrlResult.errorCode!, uploadUrlResult.errorDetails);
     }
@@ -120,7 +120,7 @@ export async function uploadVideoToYodeckTransactional(
       return makeFailResult(jobId, advertiserId, putResult.errorCode!, putResult.errorDetails);
     }
 
-    // STEP 4: PUT /media/{id}/upload/complete with { upload_url } (REQUIRED)
+    // Step 4: PUT /media/{id}/upload/complete with { upload_url } (REQUIRED)
     const completeResult = await stepCompleteUpload(jobId, mediaId!, presignedUrl, correlationId);
     console.log(`${LOG_PREFIX} [${correlationId}] Complete result: ok=${completeResult.ok} endpoint=${completeResult.endpoint || "none"} status=${completeResult.status || 0} error=${completeResult.error || "none"}`);
 
@@ -129,18 +129,37 @@ export async function uploadVideoToYodeckTransactional(
       return makeFailResult(jobId, advertiserId, "COMPLETE_UPLOAD_FAILED", { error: completeResult.error, status: completeResult.status });
     }
 
+    // Step 5: Verify media exists
     const verifyResult = await step5VerifyExistsImmediately(jobId, mediaId!, correlationId);
     if (!verifyResult.ok) {
       await markAdvertiserPublishFailed(advertiserId, verifyResult.errorCode!, JSON.stringify(verifyResult.errorDetails), correlationId);
       return makeFailResult(jobId, advertiserId, verifyResult.errorCode!, verifyResult.errorDetails);
     }
 
+    // Step 6: Poll until status is ready
     const pollResult = await step6PollStatus(jobId, mediaId!, correlationId);
     if (!pollResult.ok) {
       await markAdvertiserPublishFailed(advertiserId, pollResult.errorCode!, JSON.stringify(pollResult.errorDetails), correlationId);
       return makeFailResult(jobId, advertiserId, pollResult.errorCode!, pollResult.errorDetails);
     }
 
+    // Step 7: CRITICAL - Wait until file is ACTUALLY present (file!=null, size>0)
+    // This is the safety net: status may be "ready" but file may still be null
+    const client = await getYodeckClient();
+    if (!client) {
+      console.error(`${LOG_PREFIX} [${correlationId}] HARD_FAIL: Yodeck client unavailable - cannot verify file presence for mediaId=${mediaId}`);
+      await markAdvertiserPublishFailed(advertiserId, "YODECK_CLIENT_UNAVAILABLE", "Cannot verify file presence", correlationId);
+      return makeFailResult(jobId, advertiserId, "YODECK_CLIENT_UNAVAILABLE", { mediaId, reason: "File presence verification requires Yodeck client" });
+    }
+    const fileResult = await client.waitUntilMediaHasFile(mediaId!, { timeoutMs: 60000, intervalMs: 2000 });
+    if (!fileResult.ok) {
+      console.error(`${LOG_PREFIX} [${correlationId}] HARD_FAIL: file not present after upload. mediaId=${mediaId} hasFile=${fileResult.hasFile} size=${fileResult.size} status=${fileResult.status} polls=${fileResult.polls}`);
+      await markAdvertiserPublishFailed(advertiserId, "UPLOAD_FILE_NOT_READY", `file=${fileResult.hasFile} size=${fileResult.size} status=${fileResult.status}`, correlationId);
+      return makeFailResult(jobId, advertiserId, "UPLOAD_FILE_NOT_READY", { mediaId, hasFile: fileResult.hasFile, size: fileResult.size, status: fileResult.status });
+    }
+    console.log(`${LOG_PREFIX} [${correlationId}] FILE_CONFIRMED: mediaId=${mediaId} size=${fileResult.size} polls=${fileResult.polls}`);
+
+    // Step 8: Defensive strip of URL playback fields
     await patchClearUrlPlaybackFields(mediaId!, correlationId);
 
     await updateJob(jobId, {
@@ -287,7 +306,7 @@ async function step1CreateMedia(
   jobId: string,
   name: string,
   correlationId: string
-): Promise<{ ok: boolean; mediaId?: number; presignUrl?: string; errorCode?: string; errorDetails?: any }> {
+): Promise<{ ok: boolean; mediaId?: number; presignUrl?: string; getUploadUrlEndpoint?: string; errorCode?: string; errorDetails?: any }> {
   console.log(`${LOG_PREFIX} [${correlationId}] STEP 1: CREATE_MEDIA`);
   
   const mediaName = name.endsWith(".mp4") ? name : `${name}.mp4`;
@@ -350,8 +369,9 @@ async function step1CreateMedia(
       return { ok: false, errorCode: "CREATE_NO_MEDIA_ID", errorDetails: responseData };
     }
 
-    if (responseData.get_upload_url) {
-      console.warn(`${LOG_PREFIX} [${correlationId}] IGNORING legacy get_upload_url from create response - using /media/{id}/upload instead`);
+    const getUploadUrlEndpoint = responseData.get_upload_url || null;
+    if (getUploadUrlEndpoint) {
+      console.log(`${LOG_PREFIX} [${correlationId}] CREATE response includes get_upload_url: ${getUploadUrlEndpoint}`);
     }
 
     await updateJob(jobId, {
@@ -360,7 +380,7 @@ async function step1CreateMedia(
     });
 
     console.log(`${LOG_PREFIX} [${correlationId}] STEP 1 SUCCESS: mediaId=${mediaId}`);
-    return { ok: true, mediaId };
+    return { ok: true, mediaId, getUploadUrlEndpoint };
 
   } catch (error: any) {
     console.error(`${LOG_PREFIX} [${correlationId}] STEP 1 ERROR:`, error);
@@ -372,12 +392,16 @@ async function step1CreateMedia(
 async function step2GetUploadUrl(
   jobId: string,
   mediaId: number,
-  correlationId: string
+  correlationId: string,
+  getUploadUrlEndpoint?: string
 ): Promise<{ ok: boolean; presignedUrl?: string; errorCode?: string; errorDetails?: any }> {
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 2: GET /media/${mediaId}/upload`);
+  // Use get_upload_url from create response if available, else fallback to standard endpoint
+  const url = getUploadUrlEndpoint
+    ? (getUploadUrlEndpoint.startsWith("http") ? getUploadUrlEndpoint : `https://app.yodeck.com${getUploadUrlEndpoint}`)
+    : `${YODECK_API_BASE}/media/${mediaId}/upload`;
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 2: GET ${getUploadUrlEndpoint ? "get_upload_url from create response" : `/media/${mediaId}/upload`}`);
 
   try {
-    const url = `${YODECK_API_BASE}/media/${mediaId}/upload`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -706,13 +730,7 @@ async function step6PollStatus(
       }
 
       if (READY_STATUSES.includes(status)) {
-        const finalVerify = await finalVerification(mediaId, correlationId);
-        if (!finalVerify.ok) {
-          await markJobFailed(jobId, finalVerify.errorCode!, finalVerify.errorDetails, "Final verification failed");
-          return { ok: false, errorCode: finalVerify.errorCode, errorDetails: finalVerify.errorDetails };
-        }
-        
-        console.log(`${LOG_PREFIX} [${correlationId}] STEP 5 SUCCESS: Media is READY`);
+        console.log(`${LOG_PREFIX} [${correlationId}] STEP 6 SUCCESS: Media status is READY (${status}) - file presence check deferred to waitUntilMediaHasFile`);
         return { ok: true };
       }
 
@@ -899,7 +917,7 @@ export async function ensureAdvertiserMediaIsValid(
   advertiserId: string
 ): Promise<{ ok: boolean; mediaId: number | null; reason?: string; status?: string; isReady?: boolean }> {
   const LOG = "[EnsureMediaValid]";
-  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished", "processing", "encoding", "live"];
+  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished"];
   
   const advertiser = await db.query.advertisers.findFirst({
     where: eq(advertisers.id, advertiserId),
@@ -944,9 +962,24 @@ export async function ensureAdvertiserMediaIsValid(
 
       const status = (data.status || "").toLowerCase();
       const isReady = READY_STATUSES.includes(status);
-      const fileSize = data.filesize || data.file_size || 0;
+      const fileObj = data.file;
+      const fileSize = fileObj?.size || fileObj?.file_size || data.filesize || data.file_size || 0;
+      const hasFile = fileObj != null && fileSize > 0;
       
-      console.log(`${LOG} Media ${existingMediaId} VERIFIED EXISTS in Yodeck (status=${status}, isReady=${isReady}, fileSize=${fileSize})`);
+      console.log(`${LOG} Media ${existingMediaId} VERIFIED EXISTS in Yodeck (status=${status}, isReady=${isReady}, fileSize=${fileSize}, hasFile=${hasFile})`);
+
+      // File must be present for media to be considered valid
+      if (isReady && !hasFile) {
+        console.warn(`${LOG} Media ${existingMediaId} status=${status} but file=null or size=0 - BROKEN_URL_MEDIA, clearing for re-upload`);
+        await db.update(advertisers)
+          .set({
+            assetStatus: "ready_for_yodeck",
+            yodeckMediaIdCanonical: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(advertisers.id, advertiserId));
+        return { ok: false, mediaId: null, reason: "MEDIA_FILE_MISSING", status, isReady: false };
+      }
       
       // If media exists but is NOT ready and NOT encoding, it's stuck - clear it for retry
       const ENCODING_STATUSES = ["encoding", "processing", "uploading", "initialized"];

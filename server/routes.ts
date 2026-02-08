@@ -18519,7 +18519,23 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       if (!pollResult.ok) {
         return res.json({ ok: false, mediaId, action: "CLONE_REUPLOAD_REPLACE", reason: `POLL_FAILED_${pollResult.reason}`, newMediaId, correlationId });
       }
-      console.log(`${LOG} CLONE READY newMediaId=${newMediaId} status=${pollResult.status} polls=${pollResult.polls}`);
+      console.log(`${LOG} CLONE status READY newMediaId=${newMediaId} status=${pollResult.status} polls=${pollResult.polls}`);
+
+      // CRITICAL: Wait for file to be present (file!=null, size>0)
+      const fileResult = await client.waitUntilMediaHasFile(newMediaId, { timeoutMs: 60000, intervalMs: 2000 });
+      if (!fileResult.ok) {
+        console.error(`${LOG} CLONE HARD_FAIL: file not present. newMediaId=${newMediaId} hasFile=${fileResult.hasFile} size=${fileResult.size}`);
+        return res.json({ ok: false, mediaId, action: "CLONE_REUPLOAD_REPLACE", reason: "CLONE_FILE_NOT_READY", newMediaId, fileResult, correlationId });
+      }
+      console.log(`${LOG} CLONE FILE_CONFIRMED newMediaId=${newMediaId} size=${fileResult.size}`);
+
+      // Defensive: strip URL args
+      try {
+        await client.patchMedia(newMediaId, { arguments: { play_from_url: null, download_from_url: null, buffering: false } });
+        console.log(`${LOG} CLONE URL_ARGS_STRIPPED newMediaId=${newMediaId}`);
+      } catch (patchErr: any) {
+        console.warn(`${LOG} CLONE URL_STRIP_SOFT_FAIL: ${patchErr.message}`);
+      }
 
       const afterCloneFetch = await client.fetchMediaRaw(newMediaId);
       const afterCloneArgs = afterCloneFetch.ok && afterCloneFetch.data ? afterCloneFetch.data.arguments || {} : {};
@@ -18527,6 +18543,10 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         source: afterCloneFetch.data?.media_origin?.source ?? null,
         status: afterCloneFetch.data?.status,
         buffering: afterCloneArgs.buffering ?? null,
+        file: afterCloneFetch.data?.file != null ? "present" : "null",
+        fileSize: afterCloneFetch.data?.file?.size || afterCloneFetch.data?.filesize || 0,
+        play_from_url: afterCloneArgs.play_from_url ?? null,
+        download_from_url: afterCloneArgs.download_from_url ?? null,
       };
       console.log(`${LOG} CLONE afterSubset=${JSON.stringify(afterCloneSubset)}`);
 
@@ -18588,6 +18608,206 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       });
     } catch (error: any) {
       console.error(`${LOG} exception: ${error.message}`);
+      res.status(500).json({ ok: false, error: error.message, correlationId });
+    }
+  });
+
+  /**
+   * POST /api/admin/yodeck/media/:id/repair-to-file
+   * Re-uploads broken URL-media as a true file-based media in Yodeck.
+   * Downloads the video from args URLs or R2 storage, creates new media via upload flow,
+   * waits for file!=null, strips URL args, swaps in playlists, optionally deletes old.
+   */
+  app.post("/api/admin/yodeck/media/:id/repair-to-file", requireAdminAccess, async (req, res) => {
+    const correlationId = `rtf-${Date.now()}`;
+    const LOG = `[RepairToFile] ${correlationId}`;
+    try {
+      const mediaId = parseInt(req.params.id, 10);
+      if (isNaN(mediaId)) {
+        return res.status(400).json({ ok: false, error: "Invalid media ID", correlationId });
+      }
+
+      const deleteOld = req.body?.deleteOld !== false;
+      const bodyScreenId = req.body?.screenId as string | undefined;
+
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      if (!client) {
+        return res.status(503).json({ ok: false, error: "Yodeck client not available", correlationId });
+      }
+
+      console.log(`${LOG} START mediaId=${mediaId} deleteOld=${deleteOld} screenId=${bodyScreenId || "auto"}`);
+
+      // Step 1: Fetch raw media to inspect
+      const rawResult = await client.fetchMediaRaw(mediaId);
+      if (!rawResult.ok || !rawResult.data) {
+        return res.status(404).json({ ok: false, error: "Media not found in Yodeck", mediaId, correlationId });
+      }
+
+      const raw = rawResult.data;
+      const args = raw.arguments || {};
+      const hasFile = raw.file != null && ((raw.file?.size || raw.filesize || raw.file_size || 0) > 0);
+      const playUrl = args.play_from_url || raw.play_from_url;
+      const dlUrl = args.download_from_url || raw.download_from_url;
+
+      console.log(`${LOG} INSPECT mediaId=${mediaId} hasFile=${hasFile} play_from_url=${playUrl ? "present" : "null"} download_from_url=${dlUrl ? "present" : "null"} status=${raw.status}`);
+
+      if (hasFile && !playUrl && !dlUrl) {
+        return res.json({ ok: true, mediaId, action: "ALREADY_FILE_BASED", correlationId });
+      }
+
+      // Step 2: Download binary from URL or R2
+      let buffer: Buffer | null = null;
+      let downloadSource = "none";
+
+      const downloadUrl = dlUrl || playUrl;
+      if (downloadUrl && typeof downloadUrl === "string" && downloadUrl.startsWith("http")) {
+        console.log(`${LOG} DOWNLOADING from ${downloadUrl.substring(0, 100)}...`);
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 120_000);
+          const dlResp = await fetch(downloadUrl, { signal: controller.signal });
+          clearTimeout(timeout);
+          if (dlResp.ok) {
+            const ab = await dlResp.arrayBuffer();
+            if (ab.byteLength > 0) {
+              buffer = Buffer.from(ab);
+              downloadSource = "yodeck_url";
+              console.log(`${LOG} DOWNLOADED ${buffer.length} bytes from URL`);
+            }
+          }
+        } catch (err: any) {
+          console.warn(`${LOG} URL download failed: ${err.message}`);
+        }
+      }
+
+      // Fallback: Try R2 storage via advertiser lookup
+      if (!buffer) {
+        try {
+          const [advRow] = await db.select().from(advertisers).where(eq(advertisers.yodeckMediaIdCanonical, mediaId)).limit(1);
+          if (advRow) {
+            const assets = await db.select().from(adAssets).where(eq(adAssets.advertiserId, advRow.id)).orderBy(desc(adAssets.createdAt)).limit(1);
+            const storagePath = assets[0]?.convertedStoragePath || assets[0]?.storagePath;
+            if (storagePath) {
+              const { ObjectStorageService } = await import("./objectStorage");
+              const r2 = new ObjectStorageService();
+              const dl = await r2.downloadFile(storagePath);
+              if (dl && dl.length > 0) {
+                buffer = dl;
+                downloadSource = `r2:${storagePath}`;
+                console.log(`${LOG} FALLBACK_R2 ${buffer.length} bytes from ${storagePath}`);
+              }
+            }
+          }
+        } catch (err: any) {
+          console.warn(`${LOG} R2 fallback error: ${err.message}`);
+        }
+      }
+
+      if (!buffer) {
+        return res.json({ ok: false, mediaId, error: "SOURCE_UNAVAILABLE", correlationId });
+      }
+
+      // Step 3: Create new media via upload flow
+      const newName = `${(raw.name || `media-${mediaId}`).replace(/\.mp4$/i, "")}_file_${Date.now()}.mp4`;
+      const createResult = await client.createMediaVideoLocal({ name: newName, arguments: { buffering: false, resolution: "highest" } });
+      if (!createResult.ok || !createResult.mediaId) {
+        return res.json({ ok: false, mediaId, error: "CREATE_FAILED", detail: createResult.error, correlationId });
+      }
+      const newMediaId = createResult.mediaId;
+      console.log(`${LOG} CREATED newMediaId=${newMediaId}`);
+
+      const urlResult = await client.getUploadUrl(newMediaId);
+      if (!urlResult.ok || !urlResult.uploadUrl) {
+        return res.json({ ok: false, mediaId, newMediaId, error: "GET_UPLOAD_URL_FAILED", correlationId });
+      }
+
+      const putResult = await client.uploadToSignedUrl(urlResult.uploadUrl, buffer);
+      if (!putResult.ok) {
+        return res.json({ ok: false, mediaId, newMediaId, error: "PUT_BINARY_FAILED", detail: putResult.error, correlationId });
+      }
+
+      await client.completeUpload(newMediaId, urlResult.uploadUrl);
+
+      // Step 4: Wait for file presence
+      const fileResult = await client.waitUntilMediaHasFile(newMediaId, { timeoutMs: 60000, intervalMs: 2000 });
+      if (!fileResult.ok) {
+        return res.json({ ok: false, mediaId, newMediaId, error: "FILE_NOT_READY", fileResult, correlationId });
+      }
+      console.log(`${LOG} FILE_CONFIRMED newMediaId=${newMediaId} size=${fileResult.size}`);
+
+      // Step 5: Strip URL args defensively
+      try {
+        await client.patchMedia(newMediaId, { arguments: { play_from_url: null, download_from_url: null, buffering: false } });
+      } catch {}
+
+      // Step 6: Update DB - swap canonical ID
+      const [advRow] = await db.select().from(advertisers).where(eq(advertisers.yodeckMediaIdCanonical, mediaId)).limit(1);
+      if (advRow) {
+        await db.update(advertisers).set({
+          yodeckMediaIdCanonical: newMediaId,
+          yodeckMediaIdCanonicalUpdatedAt: new Date(),
+          assetStatus: "live",
+          updatedAt: new Date(),
+        }).where(eq(advertisers.id, advRow.id));
+        console.log(`${LOG} DB_UPDATED advertiser=${advRow.id} newCanonical=${newMediaId}`);
+
+        // Update asset record too
+        try {
+          const assets = await db.select().from(adAssets).where(eq(adAssets.advertiserId, advRow.id)).orderBy(desc(adAssets.createdAt)).limit(1);
+          if (assets[0]) {
+            await db.update(adAssets).set({ yodeckMediaId: newMediaId, updatedAt: new Date() }).where(eq(adAssets.id, assets[0].id));
+          }
+        } catch {}
+      }
+
+      // Step 7: Rebuild playlists and push
+      const rebuildVerify = await repairRebuildAndVerify(bodyScreenId, advRow?.id, correlationId);
+
+      // Step 8: Delete old media (optional)
+      let deleteResult: any = null;
+      if (deleteOld) {
+        try {
+          const delResp = await fetch(`https://app.yodeck.com/api/v2/media/${mediaId}/`, {
+            method: "DELETE",
+            headers: { "Authorization": `Token ${process.env.YODECK_AUTH_TOKEN?.trim() || ""}` },
+          });
+          deleteResult = { ok: delResp.status === 204 || delResp.status === 200, status: delResp.status };
+          console.log(`${LOG} DELETE_OLD mediaId=${mediaId} status=${delResp.status}`);
+        } catch (err: any) {
+          deleteResult = { ok: false, error: err.message };
+        }
+      }
+
+      // Final verify
+      const finalFetch = await client.fetchMediaRaw(newMediaId);
+      const finalArgs = finalFetch.data?.arguments || {};
+      const finalSubset = {
+        file: finalFetch.data?.file != null ? "present" : "null",
+        fileSize: finalFetch.data?.file?.size || finalFetch.data?.filesize || 0,
+        play_from_url: finalArgs.play_from_url ?? null,
+        download_from_url: finalArgs.download_from_url ?? null,
+        status: finalFetch.data?.status,
+      };
+
+      console.log(`${LOG} COMPLETE old=${mediaId} new=${newMediaId} final=${JSON.stringify(finalSubset)}`);
+
+      res.json({
+        ok: true,
+        action: "REPAIR_TO_FILE",
+        oldMediaId: mediaId,
+        newMediaId,
+        downloadSource,
+        downloadBytes: buffer.length,
+        fileConfirmed: fileResult,
+        finalSubset,
+        rebuild: rebuildVerify.rebuild,
+        nowPlaying: rebuildVerify.nowPlaying,
+        deleteOld: deleteResult,
+        correlationId,
+      });
+    } catch (error: any) {
+      console.error(`${LOG} EXCEPTION: ${error.message}`);
       res.status(500).json({ ok: false, error: error.message, correlationId });
     }
   });

@@ -1,0 +1,109 @@
+ROL: Senior engineer. Maak een minimale, gerichte fix. Respecteer bestaande architectuur (yodeckClient.ts, routes.ts, upload pipeline, patchMediaSafe, purge-local-media endpoint). Geen herontwerp.
+
+PROBLEEM (HARD BEWEZEN):
+Dashboard-uploaded ad video media in Yodeck eindigt als URL-based media:
+- /api/debug/yodeck/media/{id}/raw toont: file = null, fileSize = null
+- arguments.play_from_url + arguments.download_from_url bevatten dsbackend.s3.amazonaws.com URLs
+Gevolg: Player moet tijdens playback downloaden → “connection error / loading”.
+Handmatige upload in Yodeck geeft wél file!=null en geen loading.
+
+DOEL:
+Ads moeten als ECHT Yodeck-uploaded files bestaan:
+- media.file != null
+- file size > 0
+- GEEN args.play_from_url / args.download_from_url
+Hierdoor kan de player de content lokaal cachen en verdwijnt de melding.
+
+OPLOSSING (MINIMAAL):
+1) Verwijder/disable elke codepath die video ads aanmaakt met play_from_url/download_from_url (URL-media).
+2) Forceer dat ad video’s ALTIJD via de Yodeck “upload file” flow gaan:
+   - create media resource (POST /media)
+   - get upload url (GET /media/{id}/upload_url)
+   - PUT bytes naar upload_url
+   - complete upload (PUT /media/{id}/upload/complete)
+   - poll GET /media/{id} tot file aanwezig is en size > 0
+   - pas daarna playlist update + push
+3) Voeg een safety-net toe: als na upload complete file nog null is → FAIL HARD (niet in playlist zetten) + duidelijke error code.
+
+IMPLEMENTATIE DETAILS:
+
+A) server/services/yodeckClient.ts
+- Voeg helpers toe:
+  - getMediaRaw(id)
+  - getUploadUrl(id)
+  - completeUpload(id)
+  - waitUntilMediaHasFile(id, {timeoutMs, intervalMs})
+- In waitUntilMediaHasFile:
+  - loop (timeout 60s, interval 2s):
+    - GET /media/{id}
+    - bepaal size via:
+      m.file?.size || m.file_size || m.filesize
+    - klaar als m.file bestaat EN size > 0 (of m.file niet-null + size > 0)
+  - anders throw { code:"UPLOAD_NOT_READY", mediaId, lastSeen: {hasFile, size, status} }
+
+B) server/services/upload pipeline (waar ad videos naar yodeck gaan)
+- Identificeer de functie die nu dsbackend URL’s in arguments zet (bijv createMediaFromUrl / createVideoFromUrl / media.arguments.play_from_url).
+- Verwijder dat gebruik voor advertentie video’s.
+- Zorg dat bij “upload ad to yodeck” NIET:
+  - play_from_url
+  - download_from_url
+  - source_url/download_url
+  wordt meegestuurd.
+- Laat de pipeline het MP4-bestand server-side ophalen (dit bestaat al: ObjectStorageService.downloadFile / Storage download gefixed).
+- Upload bytes naar Yodeck via upload_url.
+
+C) server/routes.ts / bestaande admin endpoints
+- Na succesvolle upload + waitUntilMediaHasFile:
+  - update playlist (bestaand)
+  - trigger push naar juiste screen/player (bestaande endpoint /api/admin/yodeck/screens/:playerId/push)
+- Zorg dat publish flow automatisch push triggert voor target screen(s) zodra playlist gewijzigd is.
+
+D) Extra Safety: “strip URL args” is NIET voldoende, maar mag defensief.
+- Na waitUntilMediaHasFile success:
+  - PATCH /media/{id} met arguments.play_from_url = null en arguments.download_from_url = null
+  - Dit is alleen defensief; primair moet file bestaan.
+
+E) Logging (kort, maar nuttig)
+- Log 1 regel bij succes:
+  [YodeckUploadReady] mediaId=... hasFile=true size=... name=...
+- Log error bij failure:
+  [YodeckUploadNotReady] mediaId=... hasFile=false size=null status=... correlationId=...
+
+F) Regression: purge-local-media endpoint
+- Deze endpoint mag blijven.
+- Maar: de detectie van “URL-media” moet kijken naar:
+  - media.arguments.play_from_url OR media.arguments.download_from_url
+  - EN/OF media.file == null
+- Als file null maar origin.source=local: treat as BROKEN_URL_MEDIA en fix via re-upload (niet clone).
+  (Clone op URL-media lost niets op, het blijft URL-media.)
+
+NIEUWE ADMIN ENDPOINT (optioneel maar handig):
+POST /api/admin/yodeck/media/:id/repair-to-file
+- Doet:
+  - fetch raw
+  - als arguments URLs aanwezig -> download het MP4 (via args_play_from_url of original)
+  - maak nieuwe media via upload_url flow
+  - swap in playlist(s) waar oud id voorkomt (minimaal: alleen target screen playlist)
+  - delete oude media (DELETE /media/{id})
+Gebruik bestaande delete endpoint in yodeckClient.
+
+BELANGRIJK:
+- Minimale wijzigingen; hergebruik bestaande download + upload code.
+- Geen nieuwe infra.
+- Geen browser->Yodeck calls (CORS).
+- Alles server-to-server.
+
+TESTPLAN (MOET WERKEN):
+1) Upload 1 nieuwe ad via dashboard.
+2) Pak de mediaId.
+3) Call /api/debug/yodeck/media/{id}/raw:
+   - EXPECT: file != null, size > 0
+   - EXPECT: arguments.play_from_url == null, arguments.download_from_url == null
+4) Push screen via /api/admin/yodeck/screens/591896/push
+5) Observe physical screen: geen “connection error” bij starten.
+
+ACCEPTANCE:
+- De media die door dashboard pipeline wordt aangemaakt is file-based (zelfde gedrag als handmatige upload).
+- Connection error verdwijnt bij ad start.
+
+GA NU IMPLEMENTEREN in de bestaande codebase.
