@@ -118,15 +118,39 @@ export async function uploadVideoToYodeckTransactional(
     }
     const presignedUrl = uploadUrlResult.presignedUrl!;
 
+    console.log(`[YodeckUploadStart] mediaId=${mediaId} name=${desiredFilename}`);
     console.log(`[YodeckUploadBytes] mediaId=${mediaId} bytesLength=${fileBuffer.length}`);
     const putResult = await step3PutBinary(jobId, presignedUrl, fileBuffer, correlationId);
     if (!putResult.ok) {
-      console.error(`[YodeckUploadFailed] mediaId=${mediaId} step=PUT_BINARY reason=${putResult.errorCode}`);
+      console.error(`[YodeckUploadFailed] mediaId=${mediaId} step=PUT_BINARY statusCode=${putResult.errorCode} responseSnippet=${JSON.stringify(putResult.errorDetails).substring(0, 200)}`);
       return makeFailResult(jobId, advertiserId, putResult.errorCode!, putResult.errorDetails);
     }
+    console.log(`[YodeckUploadPutDone] mediaId=${mediaId} bytesUploaded=${fileBuffer.length}`);
 
     // Step 4: PUT /media/{id}/upload/complete with { upload_url } (REQUIRED)
-    const completeResult = await stepCompleteUpload(jobId, mediaId!, presignedUrl, correlationId);
+    // Re-fetch upload_url to ensure we use the EXACT string Yodeck expects
+    let uploadUrlForComplete = presignedUrl;
+    try {
+      const refetchResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/upload/`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Token ${YODECK_TOKEN}`,
+          "Accept": "application/json",
+        },
+      });
+      if (refetchResp.ok) {
+        const refetchData = await refetchResp.json();
+        if (refetchData.upload_url && typeof refetchData.upload_url === "string") {
+          uploadUrlForComplete = refetchData.upload_url;
+          console.log(`${LOG_PREFIX} [${correlationId}] Re-fetched upload_url for complete call (host=${new URL(uploadUrlForComplete).host})`);
+        }
+      }
+    } catch (e: any) {
+      console.warn(`${LOG_PREFIX} [${correlationId}] Failed to re-fetch upload_url, using original: ${e.message}`);
+    }
+    
+    console.log(`[YodeckUploadComplete] mediaId=${mediaId} upload_url_host=${(() => { try { return new URL(uploadUrlForComplete).host; } catch { return "unknown"; } })()}`);
+    const completeResult = await stepCompleteUpload(jobId, mediaId!, uploadUrlForComplete, correlationId);
     console.log(`${LOG_PREFIX} [${correlationId}] Complete result: ok=${completeResult.ok} endpoint=${completeResult.endpoint || "none"} status=${completeResult.status || 0} error=${completeResult.error || "none"}`);
 
     if (!completeResult.ok) {
@@ -431,8 +455,8 @@ async function step2GetUploadUrl(
   // Use get_upload_url from create response if available, else fallback to standard endpoint
   const url = getUploadUrlEndpoint
     ? (getUploadUrlEndpoint.startsWith("http") ? getUploadUrlEndpoint : `https://app.yodeck.com${getUploadUrlEndpoint}`)
-    : `${YODECK_API_BASE}/media/${mediaId}/upload`;
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 2: GET ${getUploadUrlEndpoint ? "get_upload_url from create response" : `/media/${mediaId}/upload`}`);
+    : `${YODECK_API_BASE}/media/${mediaId}/upload/`;
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 2: GET ${getUploadUrlEndpoint ? "get_upload_url from create response" : `/media/${mediaId}/upload/`}`);
 
   try {
     const response = await fetch(url, {
