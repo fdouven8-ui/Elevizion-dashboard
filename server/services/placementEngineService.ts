@@ -428,66 +428,42 @@ export class PlacementEngineService {
     });
     
     if (!plan) {
-      console.error("[PlacementEngine] Plan not found:", planId);
+      console.log(`[PlacementPlanApproveUpdate] planId=${planId} updated=false prevStatus=NOT_FOUND newStatus=NOT_FOUND`);
       return false;
     }
     
     if (plan.status === "APPROVED" || plan.status === "PUBLISHING" || plan.status === "PUBLISHED") {
-      console.log(`[PlacementPlanApproveIdempotentHit] planId=${planId} status=${plan.status} - already approved, skipping`);
+      console.log(`[PlacementPlanApproveUpdate] planId=${planId} updated=false prevStatus=${plan.status} newStatus=${plan.status} (already approved)`);
       return true;
     }
     
     if (plan.status !== "SIMULATED_OK") {
-      console.error("[PlacementEngine] Cannot approve plan with status:", plan.status);
+      console.log(`[PlacementPlanApproveUpdate] planId=${planId} updated=false prevStatus=${plan.status} newStatus=${plan.status} (wrong status)`);
       return false;
     }
     
-    const idempotencyKey = crypto.createHash("sha256")
-      .update(`${plan.advertiserId}:${plan.adAssetId}:${JSON.stringify(plan.proposedTargets)}`)
-      .digest("hex");
+    const result = await db.update(placementPlans)
+      .set({
+        status: "APPROVED",
+        approvedTargets: plan.proposedTargets,
+        approvedAt: new Date(),
+        approvedByUserId: userId,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(placementPlans.id, planId), eq(placementPlans.status, "SIMULATED_OK")))
+      .returning({ id: placementPlans.id, status: placementPlans.status, approvedAt: placementPlans.approvedAt });
     
-    try {
-      const result = await db.update(placementPlans)
-        .set({
-          status: "APPROVED",
-          approvedTargets: plan.proposedTargets,
-          idempotencyKey,
-          approvedAt: new Date(),
-          approvedByUserId: userId,
-          updatedAt: new Date(),
-        })
-        .where(and(eq(placementPlans.id, planId), eq(placementPlans.status, "SIMULATED_OK")))
-        .returning({ id: placementPlans.id, status: placementPlans.status });
-      
-      const rowsAffected = result.length;
-      console.log(`[PlacementPlanApprove] planId=${planId} rowsAffected=${rowsAffected}`);
-      
-      if (rowsAffected === 0) {
-        const recheck = await db.query.placementPlans.findFirst({
-          where: eq(placementPlans.id, planId),
-        });
-        if (recheck && (recheck.status === "APPROVED" || recheck.status === "PUBLISHING" || recheck.status === "PUBLISHED")) {
-          console.log(`[PlacementPlanApprove] planId=${planId} already ${recheck.status}, treating as success`);
-          return true;
-        }
-        console.error(`[PlacementPlanApprove] planId=${planId} UPDATE matched 0 rows, current status=${recheck?.status}`);
-        return false;
-      }
-    } catch (err: any) {
-      if (err.code === "23505" && err.constraint?.includes("idempotency_key")) {
-        console.log(`[PlacementPlanApproveIdempotentHit] planId=${planId} idempotencyKey=${idempotencyKey} - duplicate key`);
-        await db.update(placementPlans)
-          .set({
-            status: "APPROVED",
-            approvedAt: new Date(),
-            approvedByUserId: userId,
-            updatedAt: new Date(),
-          })
-          .where(eq(placementPlans.id, planId));
-        console.log(`[PlacementPlanApprove] planId=${planId} set APPROVED after idempotency conflict`);
+    const updated = result.length > 0;
+    console.log(`[PlacementPlanApproveUpdate] planId=${planId} updated=${updated} prevStatus=SIMULATED_OK newStatus=${updated ? result[0].status : "SIMULATED_OK"}`);
+    
+    if (!updated) {
+      const recheck = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+      if (recheck && (recheck.status === "APPROVED" || recheck.status === "PUBLISHING" || recheck.status === "PUBLISHED")) {
         return true;
       }
-      throw err;
+      return false;
     }
     
     if (plan.proposedTargets && Array.isArray(plan.proposedTargets)) {
