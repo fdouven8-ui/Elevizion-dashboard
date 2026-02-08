@@ -29,6 +29,55 @@ router.get("/yodeck/media", async (req, res) => {
   }
 });
 
+router.get("/yodeck/media/:id/upload", async (req, res) => {
+  try {
+    const token = await getYodeckToken();
+    if (!token.isValid) {
+      return res.status(503).json({ error: "Yodeck token niet beschikbaar" });
+    }
+    const mediaId = req.params.id;
+    const response = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/upload/`, {
+      headers: { "Authorization": `Token ${token.label}:${token.value}` },
+    });
+    if (response.status === 404) {
+      return res.status(404).json({ ok: false, error: "Media not found in Yodeck", mediaId });
+    }
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Yodeck API: ${response.status}` });
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (err: any) {
+    console.error("[Debug] /yodeck/media/:id/upload error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/yodeck/media/:id/status", async (req, res) => {
+  try {
+    const token = await getYodeckToken();
+    if (!token.isValid) {
+      return res.status(503).json({ error: "Yodeck token niet beschikbaar" });
+    }
+    const mediaId = req.params.id;
+    const response = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/status/`, {
+      headers: { "Authorization": `Token ${token.label}:${token.value}` },
+    });
+    if (response.status === 404) {
+      return res.status(404).json({ ok: false, error: "Media not found in Yodeck", mediaId });
+    }
+    if (!response.ok) {
+      const text = await response.text();
+      return res.status(response.status).json({ error: `Yodeck API: ${response.status}`, body: text.substring(0, 500) });
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (err: any) {
+    console.error("[Debug] /yodeck/media/:id/status error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/yodeck/media/:id/raw", async (req, res) => {
   try {
     const client = await getYodeckClient();
@@ -45,6 +94,30 @@ router.get("/yodeck/media/:id/raw", async (req, res) => {
     }
     res.json(result.data);
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get("/yodeck/media/:id", async (req, res) => {
+  try {
+    const token = await getYodeckToken();
+    if (!token.isValid) {
+      return res.status(503).json({ error: "Yodeck token niet beschikbaar" });
+    }
+    const mediaId = req.params.id;
+    const response = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/`, {
+      headers: { "Authorization": `Token ${token.label}:${token.value}` },
+    });
+    if (response.status === 404) {
+      return res.status(404).json({ ok: false, error: "Media not found in Yodeck", mediaId });
+    }
+    if (!response.ok) {
+      return res.status(response.status).json({ error: `Yodeck API: ${response.status}` });
+    }
+    const data = await response.json();
+    res.json(data);
+  } catch (err: any) {
+    console.error("[Debug] /yodeck/media/:id error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
