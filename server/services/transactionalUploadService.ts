@@ -329,34 +329,73 @@ async function patchClearUrlPlaybackFields(mediaId: number, correlationId: strin
 
 export { patchClearUrlPlaybackFields };
 
+function bufferHexHead(buf: Buffer, n: number = 32): string {
+  return buf.subarray(0, Math.min(n, buf.length)).toString("hex");
+}
+function bufferHexTail(buf: Buffer, n: number = 32): string {
+  const start = Math.max(0, buf.length - n);
+  return buf.subarray(start).toString("hex");
+}
+function validateMp4Header(buf: Buffer): { valid: boolean; reason?: string } {
+  if (buf.length < 8) return { valid: false, reason: "File too small (<8 bytes)" };
+  const ftypMarker = buf.toString("ascii", 4, 8);
+  if (ftypMarker === "ftyp") return { valid: true };
+  const moovMarker = buf.toString("ascii", 4, 8);
+  if (moovMarker === "moov" || moovMarker === "mdat" || moovMarker === "free" || moovMarker === "wide") {
+    return { valid: true };
+  }
+  return { valid: false, reason: `Not an MP4: bytes[4..8]='${ftypMarker}' (expected 'ftyp')` };
+}
+
 async function readFileFromStorage(path: string, correlationId: string): Promise<Buffer | null> {
   const { ObjectStorageService, R2_IS_CONFIGURED } = await import("../objectStorage");
+  let rawBuffer: Buffer | null = null;
+
   if (R2_IS_CONFIGURED) {
     try {
       const r2Service = new ObjectStorageService();
       const buffer = await r2Service.downloadFile(path);
       if (buffer && buffer.length > 0) {
         console.log(`${LOG_PREFIX} [${correlationId}] Read ${buffer.length} bytes from R2: ${path}`);
-        return buffer;
+        rawBuffer = buffer;
+      } else {
+        console.warn(`${LOG_PREFIX} [${correlationId}] R2 download returned empty for: ${path}, trying Replit fallback`);
       }
-      console.warn(`${LOG_PREFIX} [${correlationId}] R2 download returned empty for: ${path}, trying Replit fallback`);
     } catch (err: any) {
       console.warn(`${LOG_PREFIX} [${correlationId}] R2 download failed for ${path}: ${err.message}, trying Replit fallback`);
     }
   }
 
-  try {
-    const client = new Client();
-    const result = await client.downloadAsBytes(path);
-    if (!result.ok) {
-      console.error(`${LOG_PREFIX} [${correlationId}] Failed to read from storage: ${path}`);
+  if (!rawBuffer) {
+    try {
+      const client = new Client();
+      const result = await client.downloadAsBytes(path);
+      if (!result.ok) {
+        console.error(`${LOG_PREFIX} [${correlationId}] Failed to read from storage: ${path}`);
+        return null;
+      }
+      rawBuffer = Buffer.from(result.value as Uint8Array);
+    } catch (error: any) {
+      console.error(`${LOG_PREFIX} [${correlationId}] Storage read error:`, error);
       return null;
     }
-    return Buffer.from(result.value as Uint8Array);
-  } catch (error: any) {
-    console.error(`${LOG_PREFIX} [${correlationId}] Storage read error:`, error);
-    return null;
   }
+
+  if (!rawBuffer || rawBuffer.length === 0) return null;
+
+  const cleanBuffer = Buffer.alloc(rawBuffer.length);
+  rawBuffer.copy(cleanBuffer);
+
+  console.log(`${LOG_PREFIX} [${correlationId}] File loaded: ${cleanBuffer.length} bytes, head32=${bufferHexHead(cleanBuffer)}, tail32=${bufferHexTail(cleanBuffer)}`);
+
+  const mp4Check = validateMp4Header(cleanBuffer);
+  if (!mp4Check.valid) {
+    console.error(`${LOG_PREFIX} [${correlationId}] MP4 VALIDATION FAILED: ${mp4Check.reason} path=${path}`);
+  } else {
+    console.log(`${LOG_PREFIX} [${correlationId}] MP4 header valid (ftyp box detected)`);
+  }
+
+  return cleanBuffer;
 }
 
 async function step1CreateMedia(
@@ -505,61 +544,82 @@ async function step2GetUploadUrl(
   }
 }
 
+function presignedPutWithNode(
+  url: string,
+  buffer: Buffer,
+  contentType: string
+): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+  return new Promise((resolve, reject) => {
+    const https = require("node:https");
+    const http = require("node:http");
+    const parsed = new URL(url);
+    const transport = parsed.protocol === "https:" ? https : http;
+
+    const options = {
+      method: "PUT",
+      hostname: parsed.hostname,
+      port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
+      path: parsed.pathname + parsed.search,
+      headers: {
+        "Content-Type": contentType,
+        "Content-Length": buffer.byteLength,
+      },
+    };
+
+    const req = transport.request(options, (res: any) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => {
+        const responseHeaders: Record<string, string> = {};
+        for (const [key, value] of Object.entries(res.headers)) {
+          responseHeaders[key] = String(value);
+        }
+        resolve({
+          status: res.statusCode,
+          headers: responseHeaders,
+          body: Buffer.concat(chunks).toString("utf-8"),
+        });
+      });
+    });
+
+    req.on("error", reject);
+    req.end(buffer);
+  });
+}
+
 async function step3PutBinary(
   jobId: string,
   presignUrl: string,
   fileBuffer: Buffer,
   correlationId: string
 ): Promise<{ ok: boolean; errorCode?: string; errorDetails?: any }> {
-  const fileSize = fileBuffer.length;
+  const fileSize = fileBuffer.byteLength;
   console.log(`${LOG_PREFIX} [${correlationId}] STEP 3: PUT_BINARY (${fileSize} bytes)`);
   
-  // Validate file size
   if (fileSize === 0) {
     console.error(`${LOG_PREFIX} [${correlationId}] STEP 3 FAILED: File is empty (0 bytes)`);
     await markJobFailed(jobId, "PUT_EMPTY_FILE", { fileSize: 0 }, "File is empty");
     return { ok: false, errorCode: "PUT_EMPTY_FILE", errorDetails: { fileSize: 0 } };
   }
+
+  const mp4Check = validateMp4Header(fileBuffer);
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 3 MP4 pre-flight: valid=${mp4Check.valid} reason=${mp4Check.reason || "ok"}`);
+  console.log(`${LOG_PREFIX} [${correlationId}] STEP 3 buffer diagnostics: byteLength=${fileBuffer.byteLength} byteOffset=${fileBuffer.byteOffset} isBuffer=${Buffer.isBuffer(fileBuffer)} head32=${bufferHexHead(fileBuffer)} tail32=${bufferHexTail(fileBuffer)}`);
   
-  // Log presigned URL host for debugging (masked)
   let urlHost = "unknown";
-  try {
-    urlHost = new URL(presignUrl).host;
-  } catch {}
-  console.log(`${LOG_PREFIX} [${correlationId}] STEP 3: PUT to host=${urlHost} size=${fileSize}`);
+  try { urlHost = new URL(presignUrl).host; } catch {}
+  console.log(`[YodeckUploadPresignedPUT] byteLength=${fileSize} host=${urlHost} method=node:https`);
   
   const startTime = Date.now();
   
   try {
-    const bodyBytes = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
-    console.log(`[YodeckUploadPresignedPUT] bytesLength=${bodyBytes.byteLength} host=${urlHost}`);
+    const result = await presignedPutWithNode(presignUrl, fileBuffer, "video/mp4");
 
-    const response = await fetch(presignUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "video/mp4",
-        "Content-Length": bodyBytes.byteLength.toString(),
-      },
-      body: bodyBytes,
-    });
-
-    const putStatus = response.status;
-    const putEtag = response.headers.get("etag") || null;
-    const putContentLength = response.headers.get("content-length");
+    const putStatus = result.status;
+    const putEtag = result.headers["etag"] || null;
     const putDurationMs = Date.now() - startTime;
     
-    // Log response headers for diagnostics
-    const responseHeaders: Record<string, string> = {};
-    response.headers.forEach((value, key) => {
-      responseHeaders[key] = value;
-    });
-    
-    let responseBody = "";
-    try {
-      responseBody = await response.text();
-    } catch {}
-    
-    console.log(`${LOG_PREFIX} [${correlationId}] STEP 3 response: status=${putStatus} etag=${putEtag} duration=${putDurationMs}ms body=${responseBody.substring(0, 200)}`);
+    console.log(`${LOG_PREFIX} [${correlationId}] STEP 3 response: status=${putStatus} etag=${putEtag} duration=${putDurationMs}ms body=${result.body.substring(0, 200)}`);
 
     await updateJob(jobId, {
       putStatus,
@@ -568,16 +628,16 @@ async function step3PutBinary(
 
     if (putStatus !== 200 && putStatus !== 204) {
       const errorCode = `PUT_FAILED_${putStatus}`;
-      console.error(`${LOG_PREFIX} [${correlationId}] STEP 3 FAILED: status=${putStatus} body=${responseBody.substring(0, 500)}`);
+      console.error(`${LOG_PREFIX} [${correlationId}] STEP 3 FAILED: status=${putStatus} body=${result.body.substring(0, 500)}`);
       await markJobFailed(jobId, errorCode, { 
         status: putStatus, 
         host: urlHost,
         fileSize,
         durationMs: putDurationMs,
-        responseBody: responseBody.substring(0, 500),
-        headers: responseHeaders,
+        responseBody: result.body.substring(0, 500),
+        headers: result.headers,
       }, `PUT failed with status ${putStatus}`);
-      return { ok: false, errorCode, errorDetails: { status: putStatus, responseBody: responseBody.substring(0, 200) } };
+      return { ok: false, errorCode, errorDetails: { status: putStatus, responseBody: result.body.substring(0, 200) } };
     }
 
     await updateJob(jobId, { finalState: UPLOAD_FINAL_STATE.UPLOADED });
