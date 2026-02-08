@@ -113,12 +113,14 @@ export async function uploadVideoToYodeckTransactional(
     // Step 2: GET upload URL (use get_upload_url from create response if available)
     const uploadUrlResult = await step2GetUploadUrl(jobId, mediaId!, correlationId, getUploadUrlEndpoint);
     if (!uploadUrlResult.ok) {
+      console.error(`[YodeckUploadFailed] mediaId=${mediaId} step=GET_UPLOAD_URL reason=${uploadUrlResult.errorCode}`);
       return makeFailResult(jobId, advertiserId, uploadUrlResult.errorCode!, uploadUrlResult.errorDetails);
     }
     const presignedUrl = uploadUrlResult.presignedUrl!;
 
     const putResult = await step3PutBinary(jobId, presignedUrl, fileBuffer, correlationId);
     if (!putResult.ok) {
+      console.error(`[YodeckUploadFailed] mediaId=${mediaId} step=PUT_BINARY reason=${putResult.errorCode}`);
       return makeFailResult(jobId, advertiserId, putResult.errorCode!, putResult.errorDetails);
     }
 
@@ -127,6 +129,7 @@ export async function uploadVideoToYodeckTransactional(
     console.log(`${LOG_PREFIX} [${correlationId}] Complete result: ok=${completeResult.ok} endpoint=${completeResult.endpoint || "none"} status=${completeResult.status || 0} error=${completeResult.error || "none"}`);
 
     if (!completeResult.ok) {
+      console.error(`[YodeckUploadFailed] mediaId=${mediaId} step=COMPLETE_UPLOAD reason=${completeResult.error}`);
       await markAdvertiserPublishFailed(advertiserId, "COMPLETE_UPLOAD_FAILED", completeResult.error || "unknown", correlationId);
       return makeFailResult(jobId, advertiserId, "COMPLETE_UPLOAD_FAILED", { error: completeResult.error, status: completeResult.status });
     }
@@ -134,6 +137,7 @@ export async function uploadVideoToYodeckTransactional(
     // Step 5: Verify media exists
     const verifyResult = await step5VerifyExistsImmediately(jobId, mediaId!, correlationId);
     if (!verifyResult.ok) {
+      console.error(`[YodeckUploadFailed] mediaId=${mediaId} step=VERIFY_EXISTS reason=${verifyResult.errorCode}`);
       await markAdvertiserPublishFailed(advertiserId, verifyResult.errorCode!, JSON.stringify(verifyResult.errorDetails), correlationId);
       return makeFailResult(jobId, advertiserId, verifyResult.errorCode!, verifyResult.errorDetails);
     }
@@ -141,6 +145,7 @@ export async function uploadVideoToYodeckTransactional(
     // Step 6: Poll until status is ready
     const pollResult = await step6PollStatus(jobId, mediaId!, correlationId);
     if (!pollResult.ok) {
+      console.error(`[YodeckUploadFailed] mediaId=${mediaId} step=POLL_STATUS reason=${pollResult.errorCode}`);
       await markAdvertiserPublishFailed(advertiserId, pollResult.errorCode!, JSON.stringify(pollResult.errorDetails), correlationId);
       return makeFailResult(jobId, advertiserId, pollResult.errorCode!, pollResult.errorDetails);
     }
