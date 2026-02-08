@@ -170,22 +170,84 @@ export async function uploadVideoToYodeckTransactional(
 }
 
 async function patchClearUrlPlaybackFields(mediaId: number, correlationId: string): Promise<void> {
-  console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_START mediaId=${mediaId}`);
+  console.log(`${LOG_PREFIX} [${correlationId}] PATCH_STRIP_URLS_START mediaId=${mediaId}`);
+
+  // Step 1: Try full patch (arguments + top-level fields)
+  const fullPayload = {
+    arguments: {
+      play_from_url: null,
+      download_from_url: null,
+      buffering: false,
+    },
+    play_from_url: null,
+    download_from_url: null,
+    source_url: null,
+    download_url: null,
+  };
+
   try {
-    const client = await getYodeckClient();
-    if (!client) {
-      console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} reason=no_yodeck_client`);
-      return;
-    }
-    console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_POSTUPLOAD_PATCH_START mediaId=${mediaId}`);
-    const result = await client.patchMediaSafe(mediaId, { buffering: false });
-    if (result.ok) {
-      console.log(`${LOG_PREFIX} [${correlationId}] MEDIA_POSTUPLOAD_PATCH_OK mediaId=${mediaId}`);
+    const resp1 = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+      method: "PATCH",
+      headers: {
+        "Authorization": `Token ${YODECK_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(fullPayload),
+    });
+    if (resp1.ok) {
+      console.log(`${LOG_PREFIX} [${correlationId}] PATCH_STRIP_URLS_FULL_OK mediaId=${mediaId}`);
     } else {
-      console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_POSTUPLOAD_PATCH_WARN mediaId=${mediaId} code=${result.code} msg=${result.message}`);
+      // Yodeck may reject top-level fields with err_1003; fallback to arguments-only
+      const errText = await resp1.text().catch(() => "");
+      console.warn(`${LOG_PREFIX} [${correlationId}] PATCH_STRIP_URLS_FULL_REJECTED mediaId=${mediaId} http=${resp1.status} body=${errText.substring(0, 200)} - trying arguments-only fallback`);
+
+      const argsOnlyPayload = {
+        arguments: {
+          play_from_url: null,
+          download_from_url: null,
+          buffering: false,
+        },
+      };
+      const resp2 = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+        method: "PATCH",
+        headers: {
+          "Authorization": `Token ${YODECK_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(argsOnlyPayload),
+      });
+      if (resp2.ok) {
+        console.log(`${LOG_PREFIX} [${correlationId}] PATCH_STRIP_URLS_ARGS_ONLY_OK mediaId=${mediaId}`);
+      } else {
+        const errText2 = await resp2.text().catch(() => "");
+        console.warn(`${LOG_PREFIX} [${correlationId}] PATCH_STRIP_URLS_ARGS_ONLY_WARN mediaId=${mediaId} http=${resp2.status} body=${errText2.substring(0, 200)}`);
+      }
     }
   } catch (err: any) {
-    console.warn(`${LOG_PREFIX} [${correlationId}] MEDIA_PATCH_AFTER_UPLOAD_WARN mediaId=${mediaId} error=${err.message}`);
+    console.warn(`${LOG_PREFIX} [${correlationId}] PATCH_STRIP_URLS_SOFT_FAIL mediaId=${mediaId} error=${err.message}`);
+  }
+
+  // Step 2: Verify URL fields are cleared
+  try {
+    await new Promise(r => setTimeout(r, 1000));
+    const verifyResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+      headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+    });
+    if (verifyResp.ok) {
+      const data = await verifyResp.json();
+      const args = data.arguments || {};
+      const playUrl = args.play_from_url || data.play_from_url || null;
+      const dlUrl = args.download_from_url || data.download_from_url || null;
+      const SAFE_CDN = ["dsbackend.s3.amazonaws.com", "yodeck.com", "yodeck-"];
+      const isSafe = (url: any) => !url || typeof url !== "string" || SAFE_CDN.some(p => url.includes(p));
+      if (isSafe(playUrl) && isSafe(dlUrl)) {
+        console.log(`${LOG_PREFIX} [${correlationId}] PATCH_VERIFY_OK mediaId=${mediaId} play_from_url=${playUrl ? "yodeck_cdn" : "null"} download_from_url=${dlUrl ? "yodeck_cdn" : "null"}`);
+      } else {
+        console.error(`${LOG_PREFIX} [${correlationId}] PATCH_VERIFY_WARN mediaId=${mediaId} EXTERNAL_URLS_REMAIN play_from_url=${typeof playUrl === "string" ? playUrl.substring(0, 80) : playUrl} download_from_url=${typeof dlUrl === "string" ? dlUrl.substring(0, 80) : dlUrl}`);
+      }
+    }
+  } catch (err: any) {
+    console.warn(`${LOG_PREFIX} [${correlationId}] PATCH_VERIFY_ERROR mediaId=${mediaId} error=${err.message}`);
   }
 }
 
@@ -596,7 +658,8 @@ async function step6PollStatus(
   const startTime = Date.now();
   let attempt = 0;
 
-  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished", "processing", "encoding", "live"];
+  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished"];
+  const IN_PROGRESS_STATUSES = ["processing", "encoding", "uploading", "initialized"];
   const FAILED_STATUSES = ["failed", "error", "aborted", "rejected"];
 
   while (Date.now() - startTime < POLL_TIMEOUT_MS) {
@@ -677,36 +740,60 @@ async function finalVerification(
   mediaId: number,
   correlationId: string
 ): Promise<{ ok: boolean; errorCode?: string; errorDetails?: any }> {
-  console.log(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION: GET /media/${mediaId}`);
+  console.log(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION: GET /media/${mediaId} (checking file presence + size)`);
   
-  try {
-    const response = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
-      headers: { "Authorization": `Token ${YODECK_TOKEN}` },
-    });
+  const MAX_FILE_POLLS = 15;
+  const FILE_POLL_DELAY_MS = 2000;
 
-    if (response.status === 404) {
-      console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: 404`);
-      return { ok: false, errorCode: "FINAL_VERIFY_404", errorDetails: { status: 404 } };
+  for (let poll = 1; poll <= MAX_FILE_POLLS; poll++) {
+    try {
+      const response = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+        headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+      });
+
+      if (response.status === 404) {
+        console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: 404`);
+        return { ok: false, errorCode: "FINAL_VERIFY_404", errorDetails: { status: 404 } };
+      }
+
+      if (!response.ok) {
+        console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: ${response.status}`);
+        return { ok: false, errorCode: `FINAL_VERIFY_${response.status}`, errorDetails: { status: response.status } };
+      }
+
+      const data = await response.json();
+      if (!data.id) {
+        console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: missing id`);
+        return { ok: false, errorCode: "FINAL_VERIFY_INVALID", errorDetails: data };
+      }
+
+      const fileObj = data.file;
+      const fileSize = fileObj?.size || fileObj?.file_size || data.filesize || data.file_size || 0;
+      const filePresent = fileObj != null && fileSize > 0;
+      const status = (data.status || "").toLowerCase();
+
+      console.log(`${LOG_PREFIX} [${correlationId}] FINAL VERIFY poll=${poll}: status=${status} file=${fileObj != null ? "present" : "null"} fileSize=${fileSize} name=${data.name}`);
+
+      if (filePresent) {
+        console.log(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION PASSED: mediaId=${mediaId} filePresent=true size=${fileSize} name=${data.name}`);
+        return { ok: true };
+      }
+
+      if (poll < MAX_FILE_POLLS) {
+        console.log(`${LOG_PREFIX} [${correlationId}] FINAL VERIFY: file not ready yet, waiting ${FILE_POLL_DELAY_MS}ms (poll ${poll}/${MAX_FILE_POLLS})`);
+        await new Promise(r => setTimeout(r, FILE_POLL_DELAY_MS));
+      }
+    } catch (error: any) {
+      console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION poll=${poll} ERROR: ${error.message}`);
+      if (poll >= MAX_FILE_POLLS) {
+        return { ok: false, errorCode: "FINAL_VERIFY_EXCEPTION", errorDetails: { message: error.message } };
+      }
+      await new Promise(r => setTimeout(r, FILE_POLL_DELAY_MS));
     }
-
-    if (!response.ok) {
-      console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: ${response.status}`);
-      return { ok: false, errorCode: `FINAL_VERIFY_${response.status}`, errorDetails: { status: response.status } };
-    }
-
-    const data = await response.json();
-    if (!data.id) {
-      console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: missing id`);
-      return { ok: false, errorCode: "FINAL_VERIFY_INVALID", errorDetails: data };
-    }
-
-    console.log(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION PASSED`);
-    return { ok: true };
-
-  } catch (error: any) {
-    console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION ERROR:`, error);
-    return { ok: false, errorCode: "FINAL_VERIFY_EXCEPTION", errorDetails: { message: error.message } };
   }
+
+  console.error(`${LOG_PREFIX} [${correlationId}] FINAL VERIFICATION FAILED: file still null after ${MAX_FILE_POLLS} polls - UPLOAD_NOT_READY`);
+  return { ok: false, errorCode: "UPLOAD_NOT_READY", errorDetails: { mediaId, polls: MAX_FILE_POLLS, message: "file is null or size=0 after polling" } };
 }
 
 async function updateAdvertiserSuccess(
