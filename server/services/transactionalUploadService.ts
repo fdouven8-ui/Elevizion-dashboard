@@ -507,13 +507,16 @@ async function step3PutBinary(
   const startTime = Date.now();
   
   try {
+    const bodyBytes = new Uint8Array(fileBuffer.buffer, fileBuffer.byteOffset, fileBuffer.byteLength);
+    console.log(`[YodeckUploadPresignedPUT] bytesLength=${bodyBytes.byteLength} host=${urlHost}`);
+
     const response = await fetch(presignUrl, {
       method: "PUT",
       headers: {
         "Content-Type": "video/mp4",
-        "Content-Length": fileSize.toString(),
+        "Content-Length": bodyBytes.byteLength.toString(),
       },
-      body: fileBuffer,
+      body: bodyBytes,
     });
 
     const putStatus = response.status;
