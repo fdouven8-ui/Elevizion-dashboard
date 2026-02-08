@@ -18240,6 +18240,33 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.post("/api/admin/yodeck/screens/:playerId/push", requireAdminAccess, async (req, res) => {
+    const correlationId = `push-${Date.now().toString(16)}`;
+    try {
+      const playerId = parseInt(req.params.playerId, 10);
+      if (isNaN(playerId)) {
+        return res.status(400).json({ ok: false, error: "Invalid playerId" });
+      }
+      const use_download_timeslots = req.body?.use_download_timeslots ?? false;
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      if (!client) {
+        return res.status(503).json({ ok: false, error: "Yodeck client not available" });
+      }
+      console.log(`[Push] ${correlationId} playerId=${playerId} use_download_timeslots=${use_download_timeslots}`);
+      const result = await client.pushScreen(playerId, { use_download_timeslots });
+      if (!result.ok) {
+        console.warn(`[Push] ${correlationId} FAILED: ${result.error}`);
+        return res.status(result.status || 502).json({ ok: false, playerId, error: result.error, correlationId });
+      }
+      console.log(`[Push] ${correlationId} OK`);
+      return res.json({ ok: true, playerId, result: result.data, correlationId });
+    } catch (err: any) {
+      console.error(`[Push] ${correlationId} ERROR: ${err.message}`);
+      return res.status(500).json({ ok: false, error: err.message, correlationId });
+    }
+  });
+
   app.get("/api/admin/yodeck/media/:id/playlist-check", requireAdminAccess, async (req, res) => {
     try {
       const mediaId = parseInt(req.params.id, 10);

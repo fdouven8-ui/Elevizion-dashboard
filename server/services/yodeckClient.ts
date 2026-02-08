@@ -1068,6 +1068,40 @@ export class YodeckClient {
     }
     return { ok: false, reason: "TIMEOUT" };
   }
+
+  async pushScreen(screenIdOrPlayerId: number, opts?: { use_download_timeslots?: boolean }): Promise<{ ok: boolean; data?: any; error?: string; status?: number }> {
+    await semaphore.acquire();
+    try {
+      const url = `${YODECK_BASE_URL}/screens/${screenIdOrPlayerId}/push`;
+      const body = { use_download_timeslots: opts?.use_download_timeslots ?? false };
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (!response.ok) {
+          const errText = await response.text().catch(() => "");
+          return { ok: false, status: response.status, error: `HTTP ${response.status}: ${errText.substring(0, 300)}` };
+        }
+        const data = await response.json().catch(() => ({}));
+        return { ok: true, data };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        return { ok: false, error: err.message };
+      }
+    } finally {
+      semaphore.release();
+    }
+  }
 }
 
 let clientInstance: YodeckClient | null = null;
