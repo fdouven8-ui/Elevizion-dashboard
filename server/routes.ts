@@ -21915,17 +21915,66 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       }
 
       const cloned: Array<{ old: number; new: number }> = [];
-      const cloneFailed: Array<{ mediaId: number; reason: string }> = [];
+      const cloneFailed: any[] = [];
       const updatedMediaIds = [...mediaIds];
 
+      const reasonToStep: Record<string, string> = {
+        MEDIA_NOT_FOUND: "GET_MEDIA", INSPECT_FAILED: "GET_MEDIA", MEDIA_EMPTY_RESPONSE: "GET_MEDIA",
+        NOT_AFFECTED: "DETECT", SOURCE_UNAVAILABLE: "DOWNLOAD_SOURCE",
+        CREATE_NO_ID: "UPLOAD_INIT", CREATE_EXCEPTION: "UPLOAD_INIT",
+        NO_UPLOAD_URL: "UPLOAD_INIT", GET_UPLOAD_URL_EXCEPTION: "UPLOAD_INIT",
+        PUT_EXCEPTION: "UPLOAD_PUT", POLL_404: "UPLOAD_COMPLETE", INIT_STUCK: "UPLOAD_COMPLETE",
+      };
+      function stepFromReason(reason: string): string {
+        if (reasonToStep[reason]) return reasonToStep[reason];
+        if (reason.startsWith("CREATE_FAILED")) return "UPLOAD_INIT";
+        if (reason.startsWith("GET_UPLOAD_URL_FAILED")) return "UPLOAD_INIT";
+        if (reason.startsWith("PUT_FAILED")) return "UPLOAD_PUT";
+        if (reason.startsWith("DOWNLOAD_")) return "DOWNLOAD_SOURCE";
+        if (reason.startsWith("YODECK_STATUS_")) return "UPLOAD_COMPLETE";
+        return "UNKNOWN";
+      }
+
       for (const item of toClone) {
-        const result = await ensurePureLocalVideo(item.mediaId, correlationId);
+        const inspection = inspections.find((x: any) => x.mediaId === item.mediaId);
+        let result;
+        try {
+          result = await ensurePureLocalVideo(item.mediaId, correlationId);
+        } catch (e: any) {
+          const step = "EXCEPTION";
+          const failEntry = {
+            mediaId: item.mediaId,
+            name: inspection?.name || null,
+            step,
+            reason: "EXCEPTION",
+            status: e?.status || e?.response?.status || null,
+            code: e?.code || e?.error?.code || null,
+            message: e?.message || String(e),
+            details: e?.details || e?.response?.data || e?.body || null,
+          };
+          console.error(`[Purify][CLONE_FAIL]`, { correlationId, ...failEntry });
+          cloneFailed.push(failEntry);
+          continue;
+        }
         if (result.cloned && result.newMediaId) {
           cloned.push({ old: item.mediaId, new: result.newMediaId });
           const idx = updatedMediaIds.indexOf(item.mediaId);
           if (idx !== -1) updatedMediaIds[idx] = result.newMediaId;
         } else {
-          cloneFailed.push({ mediaId: item.mediaId, reason: result.reason || "UNKNOWN" });
+          const reason = result.reason || "UNKNOWN";
+          const step = stepFromReason(reason);
+          const failEntry = {
+            mediaId: item.mediaId,
+            name: inspection?.name || null,
+            step,
+            reason,
+            status: null,
+            code: null,
+            message: result.error || reason,
+            details: null,
+          };
+          console.error(`[Purify][CLONE_FAIL]`, { correlationId, ...failEntry });
+          cloneFailed.push(failEntry);
         }
       }
 
