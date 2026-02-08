@@ -94,9 +94,11 @@ export async function uploadVideoToYodeckTransactional(
 
     const createResult = await step1CreateMedia(jobId, desiredFilename, correlationId);
     if (!createResult.ok) {
+      console.error(`[YodeckUploadFailed] mediaId=none advertiserId=${advertiserId} reason=${createResult.errorCode}`);
       return makeFailResult(jobId, advertiserId, createResult.errorCode!, createResult.errorDetails);
     }
     const { mediaId, getUploadUrlEndpoint } = createResult;
+    console.log(`[YodeckUploadStart] mediaId=${mediaId} name=${desiredFilename} advertiserId=${advertiserId}`);
     
     // EARLY SAVE: Store yodeckMediaId immediately after create to prevent duplicate media on retries
     console.log(`${LOG_PREFIX} [${correlationId}] CREATE_MEDIA SUCCESS: mediaId=${mediaId} - saving to advertiser early`);
@@ -148,19 +150,44 @@ export async function uploadVideoToYodeckTransactional(
     const client = await getYodeckClient();
     if (!client) {
       console.error(`${LOG_PREFIX} [${correlationId}] HARD_FAIL: Yodeck client unavailable - cannot verify file presence for mediaId=${mediaId}`);
+      console.error(`[YodeckUploadFailed] mediaId=${mediaId} lastState=CLIENT_UNAVAILABLE`);
       await markAdvertiserPublishFailed(advertiserId, "YODECK_CLIENT_UNAVAILABLE", "Cannot verify file presence", correlationId);
       return makeFailResult(jobId, advertiserId, "YODECK_CLIENT_UNAVAILABLE", { mediaId, reason: "File presence verification requires Yodeck client" });
     }
     const fileResult = await client.waitUntilMediaHasFile(mediaId!, { timeoutMs: 60000, intervalMs: 2000 });
     if (!fileResult.ok) {
       console.error(`${LOG_PREFIX} [${correlationId}] HARD_FAIL: file not present after upload. mediaId=${mediaId} hasFile=${fileResult.hasFile} size=${fileResult.size} status=${fileResult.status} polls=${fileResult.polls}`);
+      console.error(`[YodeckUploadFailed] mediaId=${mediaId} lastState=FILE_NOT_READY hasFile=${fileResult.hasFile} size=${fileResult.size}`);
       await markAdvertiserPublishFailed(advertiserId, "UPLOAD_FILE_NOT_READY", `file=${fileResult.hasFile} size=${fileResult.size} status=${fileResult.status}`, correlationId);
       return makeFailResult(jobId, advertiserId, "UPLOAD_FILE_NOT_READY", { mediaId, hasFile: fileResult.hasFile, size: fileResult.size, status: fileResult.status });
     }
     console.log(`${LOG_PREFIX} [${correlationId}] FILE_CONFIRMED: mediaId=${mediaId} size=${fileResult.size} polls=${fileResult.polls}`);
+    console.log(`[YodeckUploadComplete] mediaId=${mediaId} fileSize=${fileResult.size} advertiserId=${advertiserId}`);
 
     // Step 8: Defensive strip of URL playback fields
     await patchClearUrlPlaybackFields(mediaId!, correlationId);
+
+    // Step 8b: SAFETY ASSERTION - verify play_from_url and download_from_url are null
+    try {
+      const assertResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+        headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+      });
+      if (assertResp.ok) {
+        const assertData = await assertResp.json();
+        const assertArgs = assertData.arguments || {};
+        const assertPlayUrl = assertArgs.play_from_url;
+        const assertDlUrl = assertArgs.download_from_url;
+        const SAFE_CDN = ["dsbackend.s3.amazonaws.com", "yodeck.com", "yodeck-"];
+        const isExternalUrl = (url: any) => url && typeof url === "string" && !SAFE_CDN.some((p: string) => url.includes(p));
+        if (isExternalUrl(assertPlayUrl) || isExternalUrl(assertDlUrl)) {
+          console.error(`[YodeckUploadFailed] mediaId=${mediaId} SAFETY_ASSERT_FAIL: external URLs remain after upload. play_from_url=${assertPlayUrl} download_from_url=${assertDlUrl}`);
+        } else {
+          console.log(`${LOG_PREFIX} [${correlationId}] SAFETY_ASSERT_OK: no external URLs on mediaId=${mediaId}`);
+        }
+      }
+    } catch (assertErr: any) {
+      console.warn(`${LOG_PREFIX} [${correlationId}] SAFETY_ASSERT_CHECK_ERROR: ${assertErr.message}`);
+    }
 
     await updateJob(jobId, {
       status: UPLOAD_JOB_STATUS.READY,
@@ -316,7 +343,7 @@ async function step1CreateMedia(
   
   // Safety guard: fail fast if forbidden keys somehow sneak in
   assertNoForbiddenKeys(payload, "step1CreateMedia");
-  logCreateMediaPayload(payload, correlationId);
+  logCreateMediaPayload(payload as any, correlationId);
   
   try {
     const response = await fetch(`${YODECK_API_BASE}/media/`, {

@@ -820,21 +820,35 @@ export class YodeckClient {
 
     const safeArgs: Record<string, any> = { ...partialArgs };
 
-    delete safeArgs.play_from_url;
+    // For file-based (local) media: do NOT require or preserve play_from_url/download_from_url
+    // These URL fields are only needed for URL-imported media
+    const origin = fetchResult.data.media_origin;
+    const isLocalMedia = (typeof origin === "object" && origin?.source === "local") ||
+                         (typeof origin === "string" && (origin === "my_device" || origin === "local"));
+    const hasFile = fetchResult.data.file != null;
 
-    const existingPlay = existingArgs.play_from_url;
-    const existingDownload = existingArgs.download_from_url;
+    if (isLocalMedia || hasFile) {
+      // Local/file-based media: strip URL fields, they should be null
+      console.log(`${LOG} LOCAL_MEDIA detected (source=${typeof origin === "object" ? origin?.source : origin}, hasFile=${hasFile}) - NOT preserving URL fields`);
+      delete safeArgs.play_from_url;
+      delete safeArgs.download_from_url;
+    } else {
+      // URL-based media: preserve existing URL fields (legacy compat)
+      delete safeArgs.play_from_url;
+      const existingPlay = existingArgs.play_from_url;
+      const existingDownload = existingArgs.download_from_url;
 
-    if (typeof existingDownload === "string" && existingDownload.length > 0) {
-      safeArgs.download_from_url = existingDownload;
-    }
-    if (typeof existingPlay === "string" && existingPlay.length > 0) {
-      safeArgs.play_from_url = existingPlay;
-    }
+      if (typeof existingDownload === "string" && existingDownload.length > 0) {
+        safeArgs.download_from_url = existingDownload;
+      }
+      if (typeof existingPlay === "string" && existingPlay.length > 0) {
+        safeArgs.play_from_url = existingPlay;
+      }
 
-    if (!safeArgs.download_from_url && !safeArgs.play_from_url) {
-      console.error(`${LOG} FAIL: no play_from_url or download_from_url available - Yodeck requires at least one`);
-      return { ok: false, mediaId, code: "NO_URL_FIELDS", message: "Yodeck requires play_from_url or download_from_url in arguments PATCH but neither exists on this media", beforeArgs: existingArgs };
+      if (!safeArgs.download_from_url && !safeArgs.play_from_url) {
+        console.error(`${LOG} FAIL: URL-based media has no play_from_url or download_from_url`);
+        return { ok: false, mediaId, code: "NO_URL_FIELDS", message: "URL-based media requires play_from_url or download_from_url but neither exists", beforeArgs: existingArgs };
+      }
     }
 
     Object.keys(safeArgs).forEach(k => {

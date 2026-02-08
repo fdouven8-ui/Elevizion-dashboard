@@ -1,0 +1,92 @@
+ROL: Senior backend engineer. Fix exact dit probleem, zonder herontwerp.
+
+PROBLEEM (BEWEZEN):
+Yodeck media die via het dashboard wordt aangemaakt eindigt als URL-media:
+- media.file == null
+- arguments.play_from_url aanwezig
+- arguments.download_from_url aanwezig
+Gevolg: player downloadt tijdens playback → connection/loading error.
+Handmatige upload in Yodeck heeft dit probleem niet.
+
+DOEL:
+Advertentie-video’s moeten IDENTIEK werken aan handmatige Yodeck uploads:
+- media.file != null
+- fileSize > 0
+- GEEN play_from_url / download_from_url
+- Volledig lokaal gecached op de player
+
+VERBODEN:
+- Geen play_from_url
+- Geen download_from_url
+- Geen source_url
+- Geen “URL-media” voor ads
+
+VERPLICHT:
+- ALLE advertentie-video’s moeten via de Yodeck UPLOAD FILE FLOW.
+
+IMPLEMENTATIE:
+
+1) Zoek de code die advertentie-video media aanmaakt in Yodeck.
+   (Waarschijnlijk iets als createMediaFromUrl, createVideoMedia, of arguments.play_from_url.)
+
+2) VERWIJDER dit gedrag volledig voor advertentie-video’s.
+
+3) Implementeer/vervang door deze flow:
+
+   a) POST /media
+      payload:
+        {
+          "name": "<filename>.mp4",
+          "type": "video"
+        }
+
+   b) GET /media/{id}/upload_url
+
+   c) Download het MP4-bestand server-side
+      (Gebruik bestaande ObjectStorageService.downloadFile of equivalent)
+
+   d) PUT bytes naar upload_url (Content-Type: video/mp4)
+
+   e) PUT /media/{id}/upload/complete
+
+   f) Poll GET /media/{id} tot:
+      - media.file bestaat
+      - file.size > 0
+      - timeout max 60s, interval 2s
+
+   g) ALS file na timeout nog null is:
+      - THROW error:
+        code: "YODECK_UPLOAD_NOT_READY"
+        mediaId
+      - Zet media NIET in playlist
+
+4) PAS NA succesvolle upload:
+   - voeg media toe aan playlist
+   - trigger push naar screen(s)
+
+5) Extra safety:
+   - PATCH /media/{id}
+     zet arguments.play_from_url = null
+     zet arguments.download_from_url = null
+
+6) Logging:
+   - Succes:
+     [YodeckUploadReady] mediaId=... fileSize=... name=...
+   - Fout:
+     [YodeckUploadFailed] mediaId=... lastState=...
+
+BELANGRIJK:
+- Geen browser → Yodeck calls (CORS).
+- Alles server-to-server.
+- Geen clone/purify gebruiken als “oplossing”.
+- Upload is de enige geldige fix.
+
+ACCEPTATIECRITERIA:
+- /api/debug/yodeck/media/{id}/raw toont:
+  file != null
+  fileSize > 0
+  play_from_url == null
+  download_from_url == null
+- Advertentie start op scherm zonder loading/connection melding.
+
+IMPLEMENTEER NU.

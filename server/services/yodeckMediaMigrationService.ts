@@ -59,7 +59,7 @@ export async function inspectMedia(mediaId: number): Promise<InspectMediaResult>
 }
 
 export function isPlayableLocal(media: YodeckMediaInfo): boolean {
-  const READY_STATUSES = ["finished", "ready", "done", "encoded", "active", "ok", "completed", "live"];
+  const READY_STATUSES = ["finished", "ready", "done", "encoded", "active", "ok", "completed"];
   if (!READY_STATUSES.includes(media.status)) return false;
 
   const origin = media.media_origin;
@@ -73,6 +73,8 @@ export function isPlayableLocal(media: YodeckMediaInfo): boolean {
   } else {
     return false;
   }
+
+  if (media.filesize <= 0) return false;
 
   return true;
 }
@@ -293,7 +295,7 @@ async function pollUntilReady(
   mediaId: number,
   prefix: string
 ): Promise<{ ok: boolean; reason?: string; polls?: number }> {
-  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished", "processing", "encoding", "live"];
+  const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished"];
   const FAILED_STATUSES = ["failed", "error", "aborted", "rejected"];
 
   const startTime = Date.now();
@@ -319,10 +321,18 @@ async function pollUntilReady(
 
       const data = await resp.json();
       const status = (data.status || "").toLowerCase();
-      console.log(`${prefix} poll ${attempt}: status=${status} filesize=${data.filesize || 0}`);
+      const fileObj = data.file;
+      const fileSize = fileObj?.size || fileObj?.file_size || data.filesize || data.file_size || 0;
+      const hasFile = fileObj != null && fileSize > 0;
+      console.log(`${prefix} poll ${attempt}: status=${status} hasFile=${hasFile} filesize=${fileSize}`);
 
-      if (READY_STATUSES.includes(status)) {
+      if (READY_STATUSES.includes(status) && hasFile) {
+        console.log(`${prefix} MIGRATE_READY: status=${status} hasFile=true filesize=${fileSize}`);
         return { ok: true, polls: attempt };
+      }
+      if (READY_STATUSES.includes(status) && !hasFile) {
+        console.log(`${prefix} poll ${attempt}: status=${status} but file not present yet, continuing...`);
+        continue;
       }
       if (FAILED_STATUSES.includes(status)) {
         return { ok: false, reason: `YODECK_STATUS_${status.toUpperCase()}` };

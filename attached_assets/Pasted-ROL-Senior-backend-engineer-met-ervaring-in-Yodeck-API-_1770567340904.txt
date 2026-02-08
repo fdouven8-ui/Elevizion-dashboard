@@ -1,0 +1,97 @@
+ROL: Senior backend engineer met ervaring in Yodeck API integraties.
+
+CONTEXT (OFFICIËLE YODECK DOCS):
+Yodeck ondersteunt twee manieren om media aan te maken:
+1) Import from URL  → source = "url" + download_from_url
+2) File Upload      → source = "local" + upload_url + upload complete
+
+Import from URL resulteert expliciet in URL-based media die tijdens playback
+gedownload wordt. File Upload resulteert in lokaal gecachte media.
+
+PROBLEEM (BEWEZEN IN PRODUCTIE):
+Advertentie-video’s worden momenteel via “Import from URL” aangemaakt.
+Gevolg:
+- media.file == null
+- fileSize == null
+- play_from_url / download_from_url aanwezig
+- Yodeck player toont “connecting / loading” errors
+- Handmatige upload via Yodeck UI heeft dit probleem niet
+
+DOEL:
+ALLE advertentie-video’s moeten IDENTIEK zijn aan handmatig geüploade media
+in Yodeck UI, dus via het File Upload pad.
+
+HARD REQUIREMENTS:
+- source MUST be "local"
+- NO usage of:
+  - source = "url"
+  - download_from_url
+  - play_from_url
+- media.file MUST exist
+- file.size MUST be > 0
+- player must not download media during playback
+
+IMPLEMENTATIE-INSTRUCTIES:
+
+1) Zoek alle code die media aanmaakt voor advertenties.
+   (CreateMedia, createVideoMedia, uploadAd, etc.)
+
+2) VERBIED Import-from-URL voor advertenties.
+   Verwijder elke vorm van:
+     source = "url"
+     download_from_url
+     play_from_url
+
+3) Implementeer exact deze Yodeck File Upload flow:
+
+   a) POST /media
+      body:
+      {
+        "name": "<filename>.mp4",
+        "type": "video",
+        "source": "local"
+      }
+
+   b) GET /media/{mediaId}/upload_url
+
+   c) Download MP4 server-side (Cloudflare R2 / S3 / disk)
+
+   d) PUT bytes naar upload_url
+      Headers:
+        Content-Type: video/mp4
+
+   e) PUT /media/{mediaId}/upload/complete
+
+   f) Poll GET /media/{mediaId} until:
+      - media.file != null
+      - file.size > 0
+      Timeout: 60s, interval: 2s
+
+   g) If timeout reached:
+      THROW error:
+        code: YODECK_UPLOAD_INCOMPLETE
+        mediaId
+      Do NOT add media to playlist
+
+4) Pas NA succesvolle upload:
+   - voeg media toe aan playlist
+   - trigger push to screen(s)
+
+5) Safety check:
+   - assert arguments.play_from_url == null
+   - assert arguments.download_from_url == null
+
+LOGGING (VERPLICHT):
+- [YodeckUploadStart] mediaId, name
+- [YodeckUploadComplete] mediaId, fileSize
+- [YodeckUploadFailed] mediaId, lastState
+
+ACCEPTATIECRITERIA:
+- /api/debug/yodeck/media/{id}/raw toont:
+  - source: "local"
+  - file != null
+  - file.size > 0
+  - GEEN download_from_url / play_from_url
+- Advertentie start direct op scherm, zonder loading / connection melding.
+
+IMPLEMENTS NOW. NO ALTERNATIVES.
