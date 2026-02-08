@@ -1,4 +1,4 @@
-import { inspectMedia, isPlayableLocal, ensureMediaIsLocalPlayable, type YodeckMediaInfo } from "./yodeckMediaMigrationService";
+import { type YodeckMediaInfo } from "./yodeckMediaMigrationService";
 import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys } from "./yodeckPayloadBuilder";
 
 const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
@@ -52,16 +52,17 @@ export async function ensurePureLocalVideo(
   const prefix = `${LOG_PREFIX} [${correlationId}]`;
   console.log(`${prefix} PURIFY_CHECK mediaId=${mediaId}`);
 
-  const inspection = await inspectMedia(mediaId);
-  if (!inspection.ok || !inspection.media) {
-    return { mediaId, cloned: false, reason: inspection.notFound ? "MEDIA_NOT_FOUND" : "INSPECT_FAILED", error: inspection.error };
+  const rawResult = await getMediaRaw(mediaId);
+  if (!rawResult.ok || !rawResult.data) {
+    console.warn(`${prefix} MEDIA_NOT_FOUND mediaId=${mediaId} http=${rawResult.http} error=${rawResult.error}`);
+    return { mediaId, cloned: false, reason: rawResult.notFound ? "MEDIA_NOT_FOUND" : "INSPECT_FAILED", error: rawResult.error };
   }
 
-  const media = inspection.media;
-  const localVid = isLocalVideo(media);
+  const media = rawResult.data;
+  const localVid = media.media_origin?.source === "local" && media.media_origin?.type === "video";
   const urlArgs = hasProblematicUrlArgs(media);
 
-  console.log(`${prefix} mediaId=${mediaId} isLocalVideo=${localVid} hasUrlArgs=${urlArgs} status=${media.status} origin=${JSON.stringify(media.media_origin)} args=${JSON.stringify(media.arguments)}`);
+  console.log(`${prefix} [INSPECT] mediaId=${mediaId} isLocalVideo=${localVid} hasUrlArgs=${urlArgs} top.play_from_url=${media.play_from_url ?? "null"} top.download_from_url=${media.download_from_url ?? "null"} args=${JSON.stringify(media.arguments)}`);
 
   if (!(localVid && urlArgs)) {
     console.log(`${prefix} SKIP mediaId=${mediaId} reason=not_local_video_with_urls (localVid=${localVid}, urlArgs=${urlArgs})`);
@@ -305,17 +306,28 @@ export async function deleteMediaById(mediaId: number, correlationId: string): P
   }
 }
 
-export async function getMediaRaw(mediaId: number): Promise<{ ok: boolean; data?: any; error?: string }> {
+export async function getMediaRaw(mediaId: number): Promise<{ ok: boolean; data?: any; notFound?: boolean; error?: string; http?: number }> {
   try {
     const resp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
       headers: { "Authorization": `Token ${YODECK_TOKEN}` },
     });
-    if (!resp.ok) {
-      return { ok: false, error: `HTTP_${resp.status}` };
+    if (resp.status === 404) {
+      console.warn(`${LOG_PREFIX} [GET_MEDIA_RAW] mediaId=${mediaId} 404 NOT_FOUND`);
+      return { ok: false, notFound: true, http: 404, error: "MEDIA_NOT_FOUND" };
     }
-    const data = await resp.json();
-    return { ok: true, data };
+    if (!resp.ok) {
+      console.warn(`${LOG_PREFIX} [GET_MEDIA_RAW] mediaId=${mediaId} HTTP_${resp.status}`);
+      return { ok: false, notFound: false, http: resp.status, error: `HTTP_${resp.status}` };
+    }
+    const raw = await resp.json();
+    const media = raw?.media ?? raw;
+    if (!media || (typeof media === "object" && !media.id && !media.name && !media.status)) {
+      console.warn(`${LOG_PREFIX} [GET_MEDIA_EMPTY] mediaId=${mediaId} envelope had no usable media object`, { keys: Object.keys(raw || {}) });
+      return { ok: false, notFound: true, http: resp.status, error: "MEDIA_EMPTY_RESPONSE" };
+    }
+    return { ok: true, data: media };
   } catch (err: any) {
+    console.error(`${LOG_PREFIX} [GET_MEDIA_RAW] mediaId=${mediaId} exception: ${err.message}`);
     return { ok: false, error: err.message };
   }
 }

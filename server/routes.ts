@@ -21828,7 +21828,13 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         const mid = mediaIds[i];
         const rawResult = await getMediaRaw(mid);
         if (!rawResult.ok || !rawResult.data) {
-          inspections.push({ mediaId: mid, status: "fetch_failed", error: rawResult.error });
+          inspections.push({
+            mediaId: mid,
+            status: "fetch_failed",
+            reason: rawResult.notFound ? "MEDIA_NOT_FOUND" : "FETCH_FAILED",
+            error: rawResult.error,
+            http: rawResult.http,
+          });
           continue;
         }
         const d = rawResult.data;
@@ -21875,11 +21881,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       }
 
       if (toClone.length === 0) {
+        const hasNotFound = inspections.some((x: any) => x.reason === "MEDIA_NOT_FOUND");
+        const hasFetchFailed = inspections.some((x: any) => x.status === "fetch_failed" && x.reason !== "MEDIA_NOT_FOUND");
+        let message = "Geen media met URL-argumenten gevonden";
+        if (hasNotFound) {
+          message = "Kon sommige media niet ophalen (MEDIA_NOT_FOUND) - check Yodeck access / id";
+        } else if (hasFetchFailed) {
+          message = "Sommige media konden niet opgehaald worden - check Yodeck verbinding";
+        }
         return res.json({
           ok: true,
           correlationId,
           playlistId,
-          message: "Geen media met URL-argumenten gevonden, alles is al puur lokaal",
+          message,
           cloned: [],
           deleted: [],
           failedDeletes: [],

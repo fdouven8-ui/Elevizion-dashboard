@@ -1,0 +1,41 @@
+FIX: /purify-local-media vindt geen URL-args omdat de media raw response een envelope is en `media` soms ontbreekt (notFound). We moeten de inspectie robuust maken en dezelfde data gebruiken als de werkende debug.
+
+DO NOT redesign. Minimal changes only.
+
+1) In server/services/yodeckClient.ts:
+   - Zorg dat getMediaRaw(mediaId) ALTIJD het envelope-object retourneert zoals de debug endpoint doet.
+   - Voeg helper `unwrapMedia(raw)` toe:
+       const m = raw?.media ?? raw;
+       // maar als raw keys de envelope tonen (ok/mediaId/media/status/http/notFound...), dan is `m` raw.media
+       // Return { envelope: raw, media: raw?.media ?? null }
+   - Log bij ontbreken van media:
+       logger.warn("[Yodeck][GET_MEDIA_EMPTY]", { mediaId, status: raw?.status, http: raw?.http, notFound: raw?.notFound, correlationId });
+
+2) In ensurePureLocalVideo(mediaId, correlationId):
+   - Call getMediaRaw(mediaId)
+   - Unwrap:
+       const env = raw;
+       const media = env?.media ?? null;
+   - ALS media == null:
+       return { mediaId, cloned:false, reason:"MEDIA_NOT_FOUND" } (NIET zeggen “pure local”)
+   - Anders: voer detectie uit op `media` (niet op envelope)
+       isLocalVideo = media.media_origin?.source === "local" && media.media_origin?.type === "video"
+       hasUrlArgs = !!(media.arguments?.play_from_url ||
+                       media.arguments?.download_from_url ||
+                       media.play_from_url ||
+                       media.download_from_url ||
+                       media.source_url ||
+                       media.download_url)
+   - Voeg log toe:
+       logger.info("[PureLocal][INSPECT]", { mediaId, isLocalVideo, hasUrlArgs, top: { play_from_url: media.play_from_url, download_from_url: media.download_from_url }, args: media.arguments, correlationId });
+
+3) In route POST /api/admin/screens/:screenId/purify-local-media:
+   - De `inspections` array moet per mediaId ook `reason` bevatten als MEDIA_NOT_FOUND.
+   - message mag NIET meer “alles is al puur lokaal” als er items MEDIA_NOT_FOUND zijn.
+     Gebruik bv:
+       if (inspections.some(x=>x.reason==="MEDIA_NOT_FOUND")) message="Kon sommige media niet ophalen (MEDIA_NOT_FOUND) - check Yodeck access / id"
+       else if (cloned.length===0) message="Geen media met URL-argumenten gevonden"
+
+4) Deploy.
+
+NA DEPLOY: ik wil dat de endpoint response `inspections` nu laat zien of 29881729 MEDIA_NOT_FOUND is, zodat we weten waarom yodeck get media faalt.
