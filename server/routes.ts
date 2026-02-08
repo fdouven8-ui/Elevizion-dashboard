@@ -21765,6 +21765,220 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/screens/:screenId/purify-local-media
+   * Detect and fix local video media with URL arguments (causes connection errors).
+   * Clones affected media to pure local uploads, updates playlist, deletes old media.
+   * Admin-only, force-only repair tool.
+   */
+  app.post("/api/admin/screens/:screenId/purify-local-media", requireAdminAccess, async (req, res) => {
+    const correlationId = `purify-${Date.now().toString(16)}`;
+    try {
+      const { screenId } = req.params;
+      const { dryRun = false } = req.body || {};
+      
+      console.log(`[PurifyMedia] ${correlationId} START screen=${screenId} dryRun=${dryRun}`);
+      
+      const { ensurePureLocalVideo, deleteMediaById, getMediaRaw } = await import("./services/pureLocalSanitizer");
+      
+      const screen = (await storage.getScreens()).find(s => s.id === screenId);
+      if (!screen?.yodeckPlayerId) {
+        return res.status(404).json({ ok: false, error: "Screen niet gevonden of geen Yodeck player", correlationId });
+      }
+
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      if (!token) {
+        return res.status(500).json({ ok: false, error: "Yodeck token niet geconfigureerd", correlationId });
+      }
+
+      const playerResp = await fetch(`https://app.yodeck.com/api/v2/screens/${screen.yodeckPlayerId}/`, {
+        headers: { "Authorization": `Token ${token}` },
+      });
+      if (!playerResp.ok) {
+        return res.status(502).json({ ok: false, error: `Yodeck player fetch failed: ${playerResp.status}`, correlationId });
+      }
+      const playerData = await playerResp.json();
+      
+      const sourceType = playerData.screen_content?.source_type || playerData.content_source_type;
+      const sourceId = playerData.screen_content?.source_id || playerData.content_source_id;
+      
+      if (!sourceId || sourceType !== "playlist") {
+        return res.status(422).json({ ok: false, error: `Screen heeft geen playlist source (type=${sourceType})`, correlationId });
+      }
+
+      const playlistId = sourceId;
+      const playlistResp = await fetch(`https://app.yodeck.com/api/v2/playlists/${playlistId}/`, {
+        headers: { "Authorization": `Token ${token}` },
+      });
+      if (!playlistResp.ok) {
+        return res.status(502).json({ ok: false, error: `Playlist fetch failed: ${playlistResp.status}`, correlationId });
+      }
+      const playlistData = await playlistResp.json();
+      const playlistItems = playlistData.items || [];
+      
+      console.log(`[PurifyMedia] ${correlationId} Playlist ${playlistId} has ${playlistItems.length} items`);
+
+      const mediaIds: number[] = playlistItems
+        .filter((item: any) => item.type === "media" || !item.type)
+        .map((item: any) => item.id);
+
+      const inspections: any[] = [];
+      const toClone: Array<{ mediaId: number; index: number }> = [];
+
+      for (let i = 0; i < mediaIds.length; i++) {
+        const mid = mediaIds[i];
+        const rawResult = await getMediaRaw(mid);
+        if (!rawResult.ok || !rawResult.data) {
+          inspections.push({ mediaId: mid, status: "fetch_failed", error: rawResult.error });
+          continue;
+        }
+        const d = rawResult.data;
+        const origin = d.media_origin;
+        const isLocal = typeof origin === "object" && origin?.source === "local" && origin?.type === "video";
+        const YODECK_CDN = ["dsbackend.s3.amazonaws.com", "yodeck.com", "yodeck-"];
+        const isYodeckUrl = (u: string) => YODECK_CDN.some(p => u.includes(p));
+        const playUrl = d.arguments?.play_from_url || d.play_from_url;
+        const hasPlayUrl = !!(playUrl && typeof playUrl === "string" && playUrl.startsWith("http") && !isYodeckUrl(playUrl));
+        const dlUrl = d.arguments?.download_from_url || d.download_from_url;
+        const hasDlOnly = !!(dlUrl && typeof dlUrl === "string" && dlUrl.startsWith("http") && !isYodeckUrl(dlUrl));
+        const playFalseOrNull = d.arguments?.play_from_url === false || d.arguments?.play_from_url === null;
+        const hasProblematicUrls = hasPlayUrl || (hasDlOnly && !playFalseOrNull);
+        
+        inspections.push({
+          mediaId: mid,
+          name: d.name,
+          status: d.status,
+          isLocalVideo: isLocal,
+          hasUrlArgs: hasProblematicUrls,
+          needsPurify: isLocal && hasProblematicUrls,
+          origin: d.media_origin,
+          args: d.arguments ? { play_from_url: d.arguments.play_from_url, download_from_url: d.arguments.download_from_url } : null,
+        });
+
+        if (isLocal && hasProblematicUrls) {
+          toClone.push({ mediaId: mid, index: i });
+        }
+      }
+
+      console.log(`[PurifyMedia] ${correlationId} Found ${toClone.length} media needing purification out of ${mediaIds.length}`);
+
+      if (dryRun) {
+        return res.json({
+          ok: true,
+          dryRun: true,
+          correlationId,
+          playlistId,
+          totalMedia: mediaIds.length,
+          needsPurify: toClone.length,
+          plan: toClone.map(c => ({ mediaId: c.mediaId, action: "would_clone_and_replace" })),
+          inspections,
+        });
+      }
+
+      if (toClone.length === 0) {
+        return res.json({
+          ok: true,
+          correlationId,
+          playlistId,
+          message: "Geen media met URL-argumenten gevonden, alles is al puur lokaal",
+          cloned: [],
+          deleted: [],
+          failedDeletes: [],
+          inspections,
+        });
+      }
+
+      const cloned: Array<{ old: number; new: number }> = [];
+      const cloneFailed: Array<{ mediaId: number; reason: string }> = [];
+      const updatedMediaIds = [...mediaIds];
+
+      for (const item of toClone) {
+        const result = await ensurePureLocalVideo(item.mediaId, correlationId);
+        if (result.cloned && result.newMediaId) {
+          cloned.push({ old: item.mediaId, new: result.newMediaId });
+          const idx = updatedMediaIds.indexOf(item.mediaId);
+          if (idx !== -1) updatedMediaIds[idx] = result.newMediaId;
+        } else {
+          cloneFailed.push({ mediaId: item.mediaId, reason: result.reason || "UNKNOWN" });
+        }
+      }
+
+      console.log(`[PurifyMedia] ${correlationId} Cloned ${cloned.length}/${toClone.length} media`);
+
+      if (cloneFailed.length > 0 && cloned.length === 0) {
+        return res.json({ ok: false, error: "ALL_CLONES_FAILED", correlationId, cloned, cloneFailed, warning: "No media was cloned; playlist unchanged" });
+      }
+
+      if (cloneFailed.length > 0) {
+        console.warn(`[PurifyMedia] ${correlationId} PARTIAL_CLONE: ${cloneFailed.length} failed, proceeding with ${cloned.length} successful clones`);
+      }
+
+      if (cloned.length > 0) {
+        const newItems = playlistItems.map((item: any) => {
+          const cloneEntry = cloned.find(c => c.old === item.id);
+          return {
+            id: cloneEntry ? cloneEntry.new : item.id,
+            type: item.type || "media",
+            duration: item.duration || 10,
+            priority: item.priority || 1,
+          };
+        });
+
+        console.log(`[PurifyMedia] ${correlationId} Updating playlist ${playlistId} with purified media`);
+        const patchResp = await fetch(`https://app.yodeck.com/api/v2/playlists/${playlistId}/`, {
+          method: "PATCH",
+          headers: {
+            "Authorization": `Token ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ items: newItems }),
+        });
+
+        if (!patchResp.ok) {
+          const errText = await patchResp.text();
+          console.error(`[PurifyMedia] ${correlationId} PLAYLIST_PATCH_FAILED http=${patchResp.status} body=${errText.substring(0, 300)}`);
+          return res.status(502).json({ ok: false, error: `Playlist update failed: ${patchResp.status}`, correlationId, cloned, cloneFailed });
+        }
+        console.log(`[PurifyMedia] ${correlationId} Playlist updated successfully`);
+
+        const pushResp = await fetch(`https://app.yodeck.com/api/v2/screens/${screen.yodeckPlayerId}/push/`, {
+          method: "POST",
+          headers: { "Authorization": `Token ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        console.log(`[PurifyMedia] ${correlationId} Push result: ${pushResp.status}`);
+      }
+
+      const deleted: number[] = [];
+      const failedDeletes: Array<{ mediaId: number; error: string }> = [];
+
+      for (const c of cloned) {
+        const delResult = await deleteMediaById(c.old, correlationId);
+        if (delResult.ok) {
+          deleted.push(c.old);
+        } else {
+          failedDeletes.push({ mediaId: c.old, error: delResult.error || "unknown" });
+        }
+      }
+
+      console.log(`[PurifyMedia] ${correlationId} DONE cloned=${cloned.length} deleted=${deleted.length} failed=${failedDeletes.length}`);
+
+      res.json({
+        ok: true,
+        correlationId,
+        playlistId,
+        cloned,
+        cloneFailed,
+        deleted,
+        failedDeletes,
+        ...(cloneFailed.length > 0 ? { partialCloneWarning: `${cloneFailed.length} media could not be cloned` } : {}),
+      });
+    } catch (error: any) {
+      console.error(`[PurifyMedia] ${correlationId} ERROR:`, error);
+      res.status(500).json({ ok: false, error: error.message, correlationId });
+    }
+  });
+
+  /**
    * GET /api/admin/diagnostics/publish/:advertiserId
    * Get publish diagnostics for an advertiser (screens + targeting + eligibility)
    */

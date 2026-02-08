@@ -1,0 +1,114 @@
+CONTEXT
+We hebben bewezen dat sommige Yodeck video media-items “local” zijn (media_origin.source = "local", type = "video) maar tóch nog play_from_url / download_from_url bevatten.
+Dit veroorzaakt een “connection error” bij het starten van de ad.
+Bestaande architectuur (patchMediaSafe, NOT_MUTABLE → CLONE fallback, upload pipeline, playlist push) moet gerespecteerd worden.
+We willen een minimale, gerichte fix: “pure local video sanitizer” + automatische cleanup van oude media.
+
+DOEL
+1. Detecteer local video media met URL-velden.
+2. Clone deze naar een echte pure local video (via file upload, NIET via URL).
+3. Update playlist zodat deze naar de nieuwe mediaId verwijst.
+4. Verwijder daarna de oude media via DELETE /media/{id}.
+5. Voeg een admin repair endpoint toe om dit voor bestaande schermen uit te voeren.
+
+IMPLEMENTATIE
+
+A) server/services/yodeckClient.ts
+
+1) Voeg helper toe: getMediaRaw(mediaId)
+- Haalt media op via Yodeck “Retrieve Media by ID”
+- Retourneert ruwe media (zelfde shape als debug endpoint)
+
+2) Voeg helper toe: deleteMediaById(mediaId)
+- DELETE https://app.yodeck.com/api/v2/media/{id}
+- Auth identiek aan andere calls
+- Succes = HTTP 204
+- Log:
+  [Yodeck] DELETE_MEDIA_OK id=...
+- Parse errors zoals patchMediaSafe
+
+3) Voeg helper toe: ensurePureLocalVideo(mediaId, correlationId)
+Flow:
+- getMediaRaw(mediaId)
+- isLocalVideo =
+  media.media_origin.source === "local" &&
+  media.media_origin.type === "video"
+- hasUrlArgs =
+  !!(media.arguments?.play_from_url ||
+     media.arguments?.download_from_url ||
+     media.play_from_url ||
+     media.download_from_url)
+
+- ALS NOT (isLocalVideo && hasUrlArgs):
+  return { mediaId, cloned:false }
+
+- ALS WEL:
+  - Download originele file via bestaande ObjectStorageService (zoals huidige upload pipeline)
+  - Upload opnieuw naar Yodeck via bestaande upload-flow (retrieve upload url → upload → complete)
+  - Zorg dat GEEN play_from_url / download_from_url wordt gezet
+  - newMediaId = resultaat
+  - Log:
+    [PureLocal] CLONE_URL_MEDIA old={mediaId} new={newMediaId} correlationId=...
+  - return { mediaId:newMediaId, cloned:true, oldMediaId:mediaId }
+
+B) Integratie in bestaande publish / push flow
+
+- Vlak vóór playlist update:
+  for each mediaId:
+    const res = await ensurePureLocalVideo(mediaId, correlationId)
+    gebruik res.mediaId in playlist
+    verzamel res.oldMediaId indien cloned === true
+
+- Playlist update blijft ongewijzigd (alleen andere mediaIds)
+
+- Na succesvolle playlist update + push:
+  for each oldMediaId:
+    call deleteMediaById(oldMediaId)
+    failures zijn warnings (publish mag niet falen)
+
+C) Nieuw admin repair endpoint
+
+POST /api/admin/screens/:screenId/purify-local-media
+Body (optioneel):
+{ "dryRun": false }
+
+Flow:
+1. Haal playback-state op
+2. Pak actual.sourceId (playlistId)
+3. Haal playlist raw op
+4. Verzamel mediaIds uit playlist
+5. Run ensurePureLocalVideo voor elk item
+6. Als dryRun=true: return plan (wat zou clonen/verwijderen)
+7. Anders:
+   - update playlist met nieuwe mediaIds
+   - push playlist naar screen (bestaande flow)
+   - delete oude media (best-effort)
+
+Response:
+{
+  ok: true,
+  correlationId,
+  playlistId,
+  cloned: [{ old, new }],
+  deleted: [oldIds],
+  failedDeletes: []
+}
+
+D) Veiligheid
+- NOOIT apps clonen of verwijderen
+- Alleen media_origin.source === "local" && type === "video"
+- Alles loggen met correlationId
+
+TEST
+Na deploy uitvoeren:
+
+fetch("/api/admin/screens/d7e9a5b2-0ded-44b6-951b-01ac743e7d78/purify-local-media", {
+  method:"POST",
+  headers:{ "Content-Type":"application/json" },
+  body: JSON.stringify({ dryRun:false })
+}).then(r=>r.json()).then(console.log)
+
+SUCCESCRITERIA
+- Ad start zonder “connection error”
+- Media heeft play_from_url=false en download_from_url=false
+- Oude media verwijderd (DELETE 204)
