@@ -118,6 +118,7 @@ export async function uploadVideoToYodeckTransactional(
     }
     const presignedUrl = uploadUrlResult.presignedUrl!;
 
+    console.log(`[YodeckUploadBytes] mediaId=${mediaId} bytesLength=${fileBuffer.length}`);
     const putResult = await step3PutBinary(jobId, presignedUrl, fileBuffer, correlationId);
     if (!putResult.ok) {
       console.error(`[YodeckUploadFailed] mediaId=${mediaId} step=PUT_BINARY reason=${putResult.errorCode}`);
@@ -626,23 +627,46 @@ async function stepCompleteUpload(
 
     console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_UPLOAD SUCCESS (200)`);
 
-    // Immediately GET /media/{id} to check status after complete
-    await new Promise(r => setTimeout(r, 1500));
-    try {
-      const checkResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
-        headers: { "Authorization": `Token ${YODECK_TOKEN}` },
-      });
-      if (checkResp.ok) {
-        const checkData = await checkResp.json();
-        const mStatus = checkData.status || "unknown";
-        const mFileSize = checkData.filesize || checkData.file_size || 0;
-        const mLastUploaded = checkData.last_uploaded || checkData.updated_at || "unknown";
-        console.log(`${LOG_PREFIX} [${correlationId}] AFTER_COMPLETE_MEDIA status=${mStatus} fileSize=${mFileSize} last_uploaded=${mLastUploaded}`);
-      } else {
-        console.warn(`${LOG_PREFIX} [${correlationId}] AFTER_COMPLETE_MEDIA check failed: ${checkResp.status}`);
+    // Verify media is no longer "initialized" — retry complete if stuck
+    for (let retry = 0; retry < 3; retry++) {
+      const waitMs = retry === 0 ? 2000 : 4000;
+      await new Promise(r => setTimeout(r, waitMs));
+      try {
+        const checkResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
+          headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+        });
+        if (checkResp.ok) {
+          const checkData = await checkResp.json();
+          const mStatus = (checkData.status || "unknown").toLowerCase();
+          const mFileSize = checkData.filesize || checkData.file_size || 0;
+          const mLastUploaded = checkData.last_uploaded || checkData.updated_at || "unknown";
+          console.log(`${LOG_PREFIX} [${correlationId}] AFTER_COMPLETE_CHECK[${retry}] status=${mStatus} fileSize=${mFileSize} last_uploaded=${mLastUploaded}`);
+
+          if (mStatus !== "initialized") {
+            console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_VERIFIED: media moved past initialized (status=${mStatus})`);
+            break;
+          }
+
+          if (retry < 2) {
+            console.warn(`${LOG_PREFIX} [${correlationId}] Media still initialized after complete, retrying complete call (attempt ${retry + 2})`);
+            const retryResp = await fetch(fullUrl, {
+              method: "PUT",
+              headers: {
+                "Authorization": `Token ${YODECK_TOKEN}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ upload_url: uploadUrl }),
+            });
+            console.log(`${LOG_PREFIX} [${correlationId}] COMPLETE_RETRY[${retry + 1}] status=${retryResp.status}`);
+          } else {
+            console.warn(`${LOG_PREFIX} [${correlationId}] Media still initialized after ${retry + 1} complete attempts - continuing to poll phase`);
+          }
+        } else {
+          console.warn(`${LOG_PREFIX} [${correlationId}] AFTER_COMPLETE_CHECK[${retry}] failed: ${checkResp.status}`);
+        }
+      } catch (err: any) {
+        console.warn(`${LOG_PREFIX} [${correlationId}] AFTER_COMPLETE_CHECK[${retry}] error: ${err.message}`);
       }
-    } catch (err: any) {
-      console.warn(`${LOG_PREFIX} [${correlationId}] AFTER_COMPLETE_MEDIA check error: ${err.message}`);
     }
 
     return { ok: true, endpoint: fullUrl, status: completeStatus };
