@@ -156,11 +156,16 @@ async function getPlaylistItems(playlistId: string): Promise<{ ok: boolean; item
 }
 
 async function setPlaylistItems(playlistId: string, itemIds: string[]): Promise<{ ok: boolean; error?: string }> {
-  const numericItems = itemIds.map(id => parseInt(id, 10));
+  const playlistItems = itemIds.map((id, index) => ({
+    id: parseInt(id, 10),
+    type: "media",
+    duration: 15,
+    priority: index + 1,
+  }));
   
   const result = await yodeckRequest<any>(`/playlists/${playlistId}/`, {
     method: "PATCH",
-    body: JSON.stringify({ items: numericItems }),
+    body: JSON.stringify({ items: playlistItems }),
   });
 
   return { ok: result.ok, error: result.error };

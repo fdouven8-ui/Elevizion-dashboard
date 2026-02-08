@@ -1,0 +1,50 @@
+DOEL: Fix ad publishing zodat ads (local media) daadwerkelijk in de screen playlists komen en zichtbaar worden op de fysieke schermen.
+
+CONTEXT (BEWEZEN VIA CONSOLE):
+1) Rebuild-playlist endpoint werkt:
+   - POST /api/admin/screens/:screenId/rebuild-playlist -> ok:true
+   - assign.ok:true sourceType=playlist, push.ok:true, verify.ok:true (actualPlaylistItemCount=4)
+   - maar ads.candidates=0 / ads.included=0: alleen base items.
+2) publish-dry-run voor advertiser 9a99d555-8676-49d3-9862-f65859bdcfb1 faalt met log:
+   - "[ResolveTargets] No placements found for advertiser ..."
+   => root cause: placements ontbreken, daarom nooit candidates.
+3) POST /api/admin/auto-placements met advertiserId + targetYodeckPlayerIds geeft:
+   - ok:true total:1 created:0 skipped:1
+   => auto-placement logic SKIPT deze advertiser. We moeten de skip reason zichtbaar maken én correct maken zodat placements wel worden aangemaakt.
+4) publish-now faalt met Yodeck API 400 err_1003 "Invalid field name or value" details field_name="items[0]" field_value=29889127.
+   Raw playlist items schema is: { id:<mediaId>, type:"media", duration:<sec>, priority:<n> }.
+   => code stuurt waarschijnlijk een kale mediaId (number) in items[] i.p.v. objecten.
+
+WAT TE IMPLEMENTEREN:
+A) Maak auto-placements diagnostisch + correct:
+   - In /api/admin/auto-placements response: voeg per result expliciet toe:
+     { advertiserId, ok, createdCount, skippedReason, blockedBy[], details{} }
+   - Log exact waarom skipped (bijv. needsContract, noActivePlan, advertiserInactive, noScreens, etc.)
+   - Pas de skip rules aan zodat admin mode "force" echt placements kan aanmaken voor target players, óók als contract ontbreekt (admin override).
+   - Zorg dat placements aangemaakt worden voor targetYodeckPlayerIds, gekoppeld aan de juiste screens/locations.
+   - Voeg unit-ish guardrails: nooit dubbele placements per advertiser+screen.
+
+B) Fix playlist PATCH payload bij ads toevoegen:
+   - In SimplePlaylistModel.addAdsToScreenPlaylist() (of waar playlist items gebouwd worden):
+     converteer adMediaIds (number[]) naar playlist items:
+       { id: mediaId, type: "media", duration: 15, priority: <append order> }
+   - Gebruik dezelfde structuur als /api/debug/yodeck/playlist/:id/raw laat zien.
+   - Verify: na PATCH re-fetch playlist en check item.id bevat de mediaId.
+   - Als PATCH ok maar playlist niet wijzigt, fall back naar CLONE (zoals jullie patchMediaSafe/NOT_MUTABLE pattern).
+
+C) Maak publish-now robuust:
+   - publish-now moet eerst placements oplossen:
+     - Als placements ontbreken: probeer auto-placements (admin override) of return 422 met duidelijke reason.
+   - Daarna rebuild-playlist voor elke target screenId zodat ads echt worden toegevoegd.
+
+BESTANDEN OM TE CHECKEN:
+- server/services/simplePlaylistModel.ts (addAdsToScreenPlaylist, rebuildScreenPlaylist)
+- server/services/screenPlaylistService.ts (als daar nog oude combined logic zit)
+- server/routes.ts endpoints: /api/admin/auto-placements, /api/admin/advertisers/:id/publish-now, /publish-dry-run
+- server/services/yodeckClient.ts playlist patch helper(s)
+
+ACCEPTANCE TEST (MOET SLAGEN):
+1) Run POST /api/admin/auto-placements met advertiserId + target players => created >= 1 (niet skipped).
+2) Run GET /api/admin/advertisers/:id/publish-dry-run => outcome SUCCESS of duidelijk targetsResolved > 0.
+3) Run POST /api/admin/screens/:screenId/rebuild-playlist => ads.candidates > 0 en verify.actualMediaIds bevat nieuwe mediaId (29889127).
+4) /api/screens/:screenId/now-playing toont actualSourceType=playlist en itemCount > baseCount.

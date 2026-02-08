@@ -20506,102 +20506,195 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * POST /api/admin/auto-placements
-   * Automatically create placements for advertisers with ready assets
-   * Matches screens based on targetRegionCodes/targetCities
+   * Automatically create placements for advertisers
+   * 
+   * Body options:
+   *   advertiserId?: string         - target single advertiser (if omitted, processes all)
+   *   targetYodeckPlayerIds?: string[] - explicit Yodeck player IDs to target
+   *   force?: boolean               - admin override: skip contract requirement (auto-creates contract if missing)
    */
   app.post("/api/admin/auto-placements", requireAdminAccess, async (req, res) => {
     try {
-      console.log("[AutoPlacements] Starting auto-placement for ready ads...");
+      const { advertiserId: targetAdvertiserId, targetYodeckPlayerIds, force } = req.body || {};
+      console.log(`[AutoPlacements] Starting: advertiserId=${targetAdvertiserId || "ALL"} force=${!!force} targetPlayers=${targetYodeckPlayerIds?.join(",") || "auto"}`);
       
-      const advertisers = await storage.getAdvertisers();
-      const screens = await storage.getScreens();
-      const contracts = await storage.getContracts();
+      const allAdvertisers = await storage.getAdvertisers();
+      const allScreens = await storage.getScreens();
+      const allContracts = await storage.getContracts();
       const existingPlacements = await storage.listPlacements();
+      
+      const advertiserList = targetAdvertiserId 
+        ? allAdvertisers.filter(a => a.id === targetAdvertiserId) 
+        : allAdvertisers;
+
+      if (targetAdvertiserId && advertiserList.length === 0) {
+        return res.status(404).json({ ok: false, error: `Advertiser ${targetAdvertiserId} not found` });
+      }
       
       const results: Array<{
         advertiserId: string;
         advertiserName: string;
-        action: string;
-        screenId?: string;
-        screenName?: string;
-        error?: string;
+        ok: boolean;
+        createdCount: number;
+        skippedReason?: string;
+        blockedBy: string[];
+        details: Record<string, any>;
+        placements: Array<{ screenId: string; screenName: string; contractId: string }>;
       }> = [];
       
-      for (const advertiser of advertisers) {
-        if (!advertiser.packageType) continue;
+      for (const advertiser of advertiserList) {
+        const blockedBy: string[] = [];
+        const advDetails: Record<string, any> = { 
+          status: advertiser.status,
+          assetStatus: advertiser.assetStatus,
+          packageType: advertiser.packageType,
+          yodeckMediaIdCanonical: advertiser.yodeckMediaIdCanonical,
+        };
         
-        const contract = contracts.find(c => c.advertiserId === advertiser.id);
+        if (advertiser.status !== "active" && !force) {
+          blockedBy.push("advertiser_not_active");
+        }
+
+        let contract = allContracts.find(c => c.advertiserId === advertiser.id);
+        
+        if (!contract && !force) {
+          blockedBy.push("no_contract");
+        }
+        
+        if (!contract && force) {
+          try {
+            contract = await storage.createContract({
+              advertiserId: advertiser.id,
+              name: `Auto-contract ${advertiser.companyName || advertiser.id}`,
+              startDate: new Date().toISOString().split("T")[0],
+              monthlyPriceExVat: "0.00",
+              vatPercent: "21.00",
+              billingCycle: "monthly",
+              status: "active",
+            });
+            advDetails.autoContractCreated = true;
+            advDetails.autoContractId = contract.id;
+            console.log(`[AutoPlacements] Force mode: auto-created contract ${contract.id} for ${advertiser.companyName}`);
+          } catch (err: any) {
+            blockedBy.push(`contract_creation_failed: ${err.message}`);
+          }
+        }
+
         if (!contract) {
           results.push({
             advertiserId: advertiser.id,
             advertiserName: advertiser.companyName || "Unknown",
-            action: "skipped",
-            error: "No contract found",
+            ok: false,
+            createdCount: 0,
+            skippedReason: blockedBy.join(", "),
+            blockedBy,
+            details: advDetails,
+            placements: [],
           });
           continue;
         }
+
+        let targetScreens: typeof allScreens = [];
         
-        const hasPlacement = existingPlacements.some(p => p.contractId === contract.id);
-        if (hasPlacement) {
+        if (targetYodeckPlayerIds && targetYodeckPlayerIds.length > 0) {
+          const playerIdSet = new Set(targetYodeckPlayerIds.map(String));
+          targetScreens = allScreens.filter(s => s.yodeckPlayerId && playerIdSet.has(s.yodeckPlayerId));
+          advDetails.targetMethod = "explicit_player_ids";
+          advDetails.requestedPlayerIds = targetYodeckPlayerIds;
+          advDetails.matchedScreenCount = targetScreens.length;
+        } else {
+          for (const screen of allScreens) {
+            if (!screen.yodeckPlayerId) continue;
+            const location = screen.locationId ? await storage.getLocation(screen.locationId) : null;
+            const targetRegions = advertiser.targetRegionCodes || [];
+            const targetCitiesRaw = advertiser.targetCities || "";
+            const targetCitiesList = typeof targetCitiesRaw === "string" 
+              ? targetCitiesRaw.split(",").map(c => c.trim().toLowerCase()).filter(Boolean) 
+              : [];
+            const isNationwide = targetRegions.length === 0 && targetCitiesList.length === 0;
+            
+            if (isNationwide) {
+              targetScreens.push(screen);
+            } else if (location) {
+              const locCity = (location.city || "").toLowerCase().trim();
+              const locRegion = (location.region || "").toLowerCase().trim();
+              const cityMatch = targetCitiesList.some(t => locCity.includes(t) || t.includes(locCity));
+              const regionMatch = targetRegions.some(r => locRegion.includes(r.toLowerCase()) || r.toLowerCase().includes(locRegion));
+              if (cityMatch || regionMatch) {
+                targetScreens.push(screen);
+              }
+            }
+          }
+          advDetails.targetMethod = "auto_targeting";
+          advDetails.matchedScreenCount = targetScreens.length;
+        }
+        
+        if (targetScreens.length === 0) {
+          blockedBy.push("no_matching_screens");
           results.push({
             advertiserId: advertiser.id,
             advertiserName: advertiser.companyName || "Unknown",
-            action: "skipped",
-            error: "Already has placement",
+            ok: false,
+            createdCount: 0,
+            skippedReason: "No matching screens for targeting",
+            blockedBy,
+            details: advDetails,
+            placements: [],
           });
           continue;
         }
         
-        const targetCities = advertiser.targetRegionCodes || [];
-        let matchedScreen = null;
+        const createdPlacements: Array<{ screenId: string; screenName: string; contractId: string }> = [];
+        let skippedDuplicates = 0;
         
-        for (const screen of screens) {
-          if (!screen.yodeckPlayerId) continue;
-          const location = await storage.getLocation(screen.locationId || "");
-          if (!location) continue;
+        for (const screen of targetScreens) {
+          const alreadyExists = existingPlacements.some(
+            p => p.contractId === contract!.id && p.screenId === screen.id
+          );
+          if (alreadyExists) {
+            skippedDuplicates++;
+            continue;
+          }
           
-          const cityMatch = targetCities.length === 0 || 
-            targetCities.some(t => location.city?.toLowerCase().includes(t.toLowerCase()));
-          
-          if (cityMatch) {
-            matchedScreen = screen;
-            break;
+          try {
+            await storage.createPlacement({
+              contractId: contract.id,
+              screenId: screen.id,
+              source: force ? "admin_force" : "auto_targeting",
+              isActive: true,
+            });
+            createdPlacements.push({
+              screenId: screen.id,
+              screenName: screen.name || screen.screenId,
+              contractId: contract.id,
+            });
+            console.log(`[AutoPlacements] Created placement for ${advertiser.companyName} on ${screen.name}`);
+          } catch (err: any) {
+            console.error(`[AutoPlacements] Failed to create placement for screen ${screen.id}: ${err.message}`);
           }
         }
         
-        if (!matchedScreen) {
-          results.push({
-            advertiserId: advertiser.id,
-            advertiserName: advertiser.companyName || "Unknown",
-            action: "skipped",
-            error: "No matching screen for targeting",
-          });
-          continue;
-        }
-        
-        const placement = await storage.createPlacement({
-          contractId: contract.id,
-          screenId: matchedScreen.id,
-          source: "auto_targeting",
-          isActive: true,
-        });
+        advDetails.skippedDuplicates = skippedDuplicates;
         
         results.push({
           advertiserId: advertiser.id,
           advertiserName: advertiser.companyName || "Unknown",
-          action: "created",
-          screenId: matchedScreen.id,
-          screenName: matchedScreen.name || undefined,
+          ok: createdPlacements.length > 0,
+          createdCount: createdPlacements.length,
+          skippedReason: createdPlacements.length === 0 
+            ? (skippedDuplicates > 0 ? "All placements already exist" : blockedBy.join(", ") || "Unknown") 
+            : undefined,
+          blockedBy,
+          details: advDetails,
+          placements: createdPlacements,
         });
-        
-        console.log(`[AutoPlacements] Created placement for ${advertiser.companyName} on screen ${matchedScreen.name}`);
       }
       
       res.json({
         ok: true,
         total: results.length,
-        created: results.filter(r => r.action === "created").length,
-        skipped: results.filter(r => r.action === "skipped").length,
+        created: results.reduce((sum, r) => sum + r.createdCount, 0),
+        skipped: results.filter(r => r.createdCount === 0).length,
         results,
       });
     } catch (error: any) {
@@ -21863,38 +21956,184 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * POST /api/admin/advertisers/:id/publish-now
-   * Deterministic E2E publish flow for ads to Yodeck screens
+   * Deterministic E2E publish flow for ads to Yodeck screens.
+   * Uses rebuildScreenPlaylist as the canonical path.
    * 
    * Request body:
    * {
-   *   "targetYodeckPlayerIds": ["591896"]  // optional, if omitted publish to resolved screens
+   *   "targetYodeckPlayerIds": ["591896"],  // optional, if omitted publish to resolved screens
+   *   "force": true                          // optional, admin override: auto-create placements if missing
    * }
-   * 
-   * Response: Full trace JSON with correlationId, never fails silently
    */
   app.post("/api/admin/advertisers/:id/publish-now", requireAdminAccess, async (req, res) => {
+    const correlationId = `pub-${Date.now().toString(16)}`;
     try {
       const { id: advertiserId } = req.params;
-      const { usePlaybackEngine } = req.body || {};
+      const { targetYodeckPlayerIds, force } = req.body || {};
       
-      console.log(`[PublishNow] Starting publish for advertiser ${advertiserId}`);
+      console.log(`[PublishNow] ${correlationId} START advertiser=${advertiserId} force=${!!force} targets=${targetYodeckPlayerIds?.join(",") || "auto"}`);
       
-      // Use new canonical playback engine
-      const { publishApprovedAdvertiser } = await import("./services/publishService");
-      
-      const result = await publishApprovedAdvertiser(advertiserId);
-      
-      if (!result.ok) {
-        return res.status(422).json(result);
+      const advertiser = (await storage.getAdvertisers()).find(a => a.id === advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ ok: false, error: "Advertiser niet gevonden", correlationId });
       }
+
+      const mediaId = advertiser.yodeckMediaIdCanonical;
+      if (!mediaId) {
+        return res.status(422).json({ 
+          ok: false, 
+          error: "Geen Yodeck media ID - upload eerst een video", 
+          correlationId,
+          advertiserStatus: advertiser.assetStatus,
+          hint: "Gebruik eerst validate-media-now of retry-publish om media te uploaden",
+        });
+      }
+
+      let targetScreenIds: string[] = [];
+      let placementMethod = "unknown";
+
+      if (targetYodeckPlayerIds && targetYodeckPlayerIds.length > 0) {
+        const allScreens = await storage.getScreens();
+        const playerIdSet = new Set(targetYodeckPlayerIds.map(String));
+        const matched = allScreens.filter(s => s.yodeckPlayerId && playerIdSet.has(s.yodeckPlayerId));
+        targetScreenIds = matched.map(s => s.id);
+        placementMethod = "explicit_player_ids";
+        console.log(`[PublishNow] ${correlationId} Explicit targets: ${targetScreenIds.length} screens from ${targetYodeckPlayerIds.length} player IDs`);
+      } else {
+        const allContracts = await storage.getContracts();
+        const allPlacements = await storage.listPlacements();
+        const advContracts = allContracts.filter(c => c.advertiserId === advertiserId);
+        const advContractIds = new Set(advContracts.map(c => c.id));
+        const advPlacements = allPlacements.filter(p => advContractIds.has(p.contractId) && p.isActive);
+        
+        if (advPlacements.length > 0) {
+          targetScreenIds = [...new Set(advPlacements.map(p => p.screenId))];
+          placementMethod = "existing_placements";
+          console.log(`[PublishNow] ${correlationId} Found ${advPlacements.length} existing placements -> ${targetScreenIds.length} screens`);
+        } else if (force) {
+          console.log(`[PublishNow] ${correlationId} No placements found, force mode: auto-creating with targeting...`);
+          const allScreens = await storage.getScreens();
+          
+          let contract = advContracts[0];
+          if (!contract) {
+            contract = await storage.createContract({
+              advertiserId,
+              name: `Auto-contract ${advertiser.companyName || advertiserId}`,
+              startDate: new Date().toISOString().split("T")[0],
+              monthlyPriceExVat: "0.00",
+              vatPercent: "21.00",
+              billingCycle: "monthly",
+              status: "active",
+            });
+            console.log(`[PublishNow] ${correlationId} Auto-created contract ${contract.id}`);
+          }
+          
+          const targetRegions = advertiser.targetRegionCodes || [];
+          const targetCitiesRaw = advertiser.targetCities || "";
+          const targetCitiesList = typeof targetCitiesRaw === "string" 
+            ? targetCitiesRaw.split(",").map((c: string) => c.trim().toLowerCase()).filter(Boolean) 
+            : [];
+          const isNationwide = targetRegions.length === 0 && targetCitiesList.length === 0;
+          
+          for (const screen of allScreens) {
+            if (!screen.yodeckPlayerId) continue;
+            
+            let shouldInclude = false;
+            if (isNationwide) {
+              shouldInclude = true;
+            } else {
+              const location = screen.locationId ? await storage.getLocation(screen.locationId) : null;
+              if (location) {
+                const locCity = (location.city || "").toLowerCase().trim();
+                const locRegion = (location.region || "").toLowerCase().trim();
+                const cityMatch = targetCitiesList.some((t: string) => locCity.includes(t) || t.includes(locCity));
+                const regionMatch = targetRegions.some((r: string) => locRegion.includes(r.toLowerCase()) || r.toLowerCase().includes(locRegion));
+                shouldInclude = cityMatch || regionMatch;
+              }
+            }
+            
+            if (!shouldInclude) continue;
+            
+            try {
+              await storage.createPlacement({
+                contractId: contract.id,
+                screenId: screen.id,
+                source: "publish_now_force",
+                isActive: true,
+              });
+              targetScreenIds.push(screen.id);
+            } catch {}
+          }
+          placementMethod = "force_auto_created_with_targeting";
+          console.log(`[PublishNow] ${correlationId} Force-created placements for ${targetScreenIds.length} screens (nationwide=${isNationwide})`);
+        } else {
+          return res.status(422).json({
+            ok: false,
+            error: "Geen placements gevonden voor deze adverteerder",
+            correlationId,
+            hint: "Gebruik force:true of maak eerst placements via /api/admin/auto-placements",
+            advertiserStatus: advertiser.status,
+            assetStatus: advertiser.assetStatus,
+          });
+        }
+      }
+
+      if (targetScreenIds.length === 0) {
+        return res.status(422).json({
+          ok: false,
+          error: "Geen target screens gevonden",
+          correlationId,
+          placementMethod,
+        });
+      }
+
+      const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
       
-      res.json(result);
+      const rebuildResults: Array<{ screenId: string; ok: boolean; candidates?: number; included?: number; error?: string }> = [];
+      
+      for (const screenId of targetScreenIds) {
+        try {
+          console.log(`[PublishNow] ${correlationId} Rebuilding playlist for screen ${screenId}...`);
+          const result = await rebuildScreenPlaylist(screenId);
+          rebuildResults.push({
+            screenId,
+            ok: result.ok,
+            candidates: (result as any).ads?.candidates,
+            included: (result as any).ads?.included,
+            error: result.ok ? undefined : ((result as any).error?.message || "Unknown error"),
+          });
+          console.log(`[PublishNow] ${correlationId} Rebuild ${screenId}: ok=${result.ok} candidates=${(result as any).ads?.candidates} included=${(result as any).ads?.included}`);
+        } catch (err: any) {
+          rebuildResults.push({ screenId, ok: false, error: err.message });
+          console.error(`[PublishNow] ${correlationId} Rebuild FAILED for ${screenId}: ${err.message}`);
+        }
+      }
+
+      const successCount = rebuildResults.filter(r => r.ok).length;
+      const failedCount = rebuildResults.filter(r => !r.ok).length;
+      const totalIncluded = rebuildResults.reduce((sum, r) => sum + (r.included || 0), 0);
+
+      res.json({
+        ok: successCount > 0,
+        correlationId,
+        advertiserId,
+        mediaId,
+        placementMethod,
+        summary: {
+          targetsResolved: targetScreenIds.length,
+          publishAttempts: rebuildResults.length,
+          successCount,
+          failedCount,
+          totalAdsIncluded: totalIncluded,
+        },
+        rebuilds: rebuildResults,
+      });
     } catch (error: any) {
-      console.error("[PublishNow] Error:", error);
+      console.error(`[PublishNow] ${correlationId} Error:`, error);
       res.status(500).json({ 
         ok: false, 
         error: error.message,
-        correlationId: `err-${Date.now()}`,
+        correlationId,
       });
     }
   });
@@ -21995,6 +22234,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   /**
    * GET /api/admin/advertisers/:id/publish-dry-run
    * Dry run publish flow - no mutations, returns trace of what WOULD happen
+   * Uses same resolution logic as publish-now + simulateRebuild per screen
    */
   app.get("/api/admin/advertisers/:id/publish-dry-run", requireAdminAccess, async (req, res) => {
     try {
@@ -22005,13 +22245,84 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       
       console.log(`[PublishDryRun] Starting dry run for advertiser ${advertiserId}`);
       
-      const { publishDryRun } = await import("./services/publishNowService");
+      const advertiser = (await storage.getAdvertisers()).find(a => a.id === advertiserId);
+      if (!advertiser) {
+        return res.status(404).json({ ok: false, error: "Advertiser niet gevonden" });
+      }
+
+      const diagnostics: Record<string, any> = {
+        advertiser: {
+          id: advertiser.id,
+          companyName: advertiser.companyName,
+          status: advertiser.status,
+          assetStatus: advertiser.assetStatus,
+          yodeckMediaIdCanonical: advertiser.yodeckMediaIdCanonical,
+          packageType: advertiser.packageType,
+          targetRegionCodes: advertiser.targetRegionCodes,
+          targetCities: advertiser.targetCities,
+        },
+      };
+
+      let targetScreenIds: string[] = [];
+      let placementMethod = "none";
+
+      if (targetYodeckPlayerIds && targetYodeckPlayerIds.length > 0) {
+        const allScreens = await storage.getScreens();
+        const playerIdSet = new Set(targetYodeckPlayerIds.map(String));
+        const matched = allScreens.filter(s => s.yodeckPlayerId && playerIdSet.has(s.yodeckPlayerId));
+        targetScreenIds = matched.map(s => s.id);
+        placementMethod = "explicit_player_ids";
+        diagnostics.targetResolution = { method: placementMethod, requestedPlayers: targetYodeckPlayerIds, matchedScreens: targetScreenIds.length };
+      } else {
+        const allContracts = await storage.getContracts();
+        const allPlacements = await storage.listPlacements();
+        const advContracts = allContracts.filter(c => c.advertiserId === advertiserId);
+        const advContractIds = new Set(advContracts.map(c => c.id));
+        const advPlacements = allPlacements.filter(p => advContractIds.has(p.contractId) && p.isActive);
+        
+        diagnostics.contracts = { count: advContracts.length, ids: advContracts.map(c => c.id) };
+        diagnostics.placements = { count: advPlacements.length, screenIds: advPlacements.map(p => p.screenId) };
+
+        if (advPlacements.length > 0) {
+          targetScreenIds = [...new Set(advPlacements.map(p => p.screenId))];
+          placementMethod = "existing_placements";
+        } else {
+          placementMethod = "none_found";
+          diagnostics.targetResolution = { 
+            method: "none_found", 
+            reason: "No active placements found",
+            hint: "Use POST /api/admin/auto-placements with force:true to create placements first",
+          };
+        }
+      }
+
+      const { simulateRebuild } = await import("./services/simplePlaylistModel");
       
-      const result = await publishDryRun(advertiserId, {
-        targetYodeckPlayerIds,
+      const simulations: any[] = [];
+      for (const screenId of targetScreenIds) {
+        try {
+          const sim = await simulateRebuild(screenId);
+          simulations.push(sim);
+        } catch (err: any) {
+          simulations.push({ screenId, error: err.message });
+        }
+      }
+
+      const wouldSucceed = simulations.filter(s => s.ok && s.expectedResult?.adsToAdd > 0).length;
+
+      res.json({
+        ok: true,
+        dryRun: true,
+        advertiserId,
+        placementMethod,
+        summary: {
+          targetsResolved: targetScreenIds.length,
+          wouldSucceed,
+          totalAdsWouldBeAdded: simulations.reduce((sum: number, s: any) => sum + (s.expectedResult?.adsToAdd || 0), 0),
+        },
+        diagnostics,
+        simulations,
       });
-      
-      res.json(result);
     } catch (error: any) {
       console.error("[PublishDryRun] Error:", error);
       res.status(500).json({ 
