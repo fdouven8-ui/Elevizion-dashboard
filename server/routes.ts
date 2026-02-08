@@ -3575,7 +3575,15 @@ Sitemap: ${SITE_URL}/sitemap.xml
       for (const planId of planIds) {
         try {
           const plan = await placementEngine.getPlan(planId);
-          if (!plan || plan.status !== "SIMULATED_OK") {
+          if (!plan) {
+            results.push({ planId, success: false, error: "Plan niet gevonden" });
+            continue;
+          }
+          if (plan.status === "APPROVED" || plan.status === "PUBLISHING" || plan.status === "PUBLISHED") {
+            results.push({ planId, success: true });
+            continue;
+          }
+          if (plan.status !== "SIMULATED_OK") {
             results.push({ planId, success: false, error: "Plan moet status SIMULATED_OK hebben om goed te keuren" });
             continue;
           }

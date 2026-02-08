@@ -432,6 +432,11 @@ export class PlacementEngineService {
       return false;
     }
     
+    if (plan.status === "APPROVED" || plan.status === "PUBLISHING" || plan.status === "PUBLISHED") {
+      console.log(`[PlacementPlanApproveIdempotentHit] planId=${planId} status=${plan.status} - already approved, skipping`);
+      return true;
+    }
+    
     if (plan.status !== "SIMULATED_OK") {
       console.error("[PlacementEngine] Cannot approve plan with status:", plan.status);
       return false;
@@ -441,27 +446,42 @@ export class PlacementEngineService {
       .update(`${plan.advertiserId}:${plan.adAssetId}:${JSON.stringify(plan.proposedTargets)}`)
       .digest("hex");
     
-    await db.update(placementPlans)
-      .set({
-        status: "APPROVED",
-        approvedTargets: plan.proposedTargets,
-        idempotencyKey,
-        approvedAt: new Date(),
-        approvedByUserId: userId,
-        updatedAt: new Date(),
-      })
-      .where(eq(placementPlans.id, planId));
+    try {
+      await db.update(placementPlans)
+        .set({
+          status: "APPROVED",
+          approvedTargets: plan.proposedTargets,
+          idempotencyKey,
+          approvedAt: new Date(),
+          approvedByUserId: userId,
+          updatedAt: new Date(),
+        })
+        .where(eq(placementPlans.id, planId));
+    } catch (err: any) {
+      if (err.code === "23505" && err.constraint?.includes("idempotency_key")) {
+        console.log(`[PlacementPlanApproveIdempotentHit] planId=${planId} idempotencyKey=${idempotencyKey} - duplicate key, treating as success`);
+        return true;
+      }
+      throw err;
+    }
     
     if (plan.proposedTargets && Array.isArray(plan.proposedTargets)) {
       for (const target of plan.proposedTargets) {
-        await db.insert(placementTargets).values({
-          planId,
-          locationId: (target as any).locationId,
-          yodeckPlaylistId: (target as any).yodeckPlaylistId,
-          status: "PENDING",
-          expectedImpressionsPerWeek: (target as any).expectedImpressionsPerWeek,
-          score: String((target as any).score),
-        });
+        try {
+          await db.insert(placementTargets).values({
+            planId,
+            locationId: (target as any).locationId,
+            yodeckPlaylistId: (target as any).yodeckPlaylistId,
+            status: "PENDING",
+            expectedImpressionsPerWeek: (target as any).expectedImpressionsPerWeek,
+            score: String((target as any).score),
+          });
+        } catch (targetErr: any) {
+          if (targetErr.code === "23505") {
+            continue;
+          }
+          throw targetErr;
+        }
       }
     }
     
