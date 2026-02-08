@@ -21836,33 +21836,44 @@ KvK: 90982541 | BTW: NL004857473B37</p>
             reason: rawResult.notFound ? "MEDIA_NOT_FOUND" : "FETCH_FAILED",
             error: rawResult.error,
             http: rawResult.http,
+            originSource: null,
+            originType: null,
+            play_from_url: false,
+            download_from_url: false,
+            source_url: null,
+            download_url: null,
+            name: null,
+            needsPurify: false,
           });
           continue;
         }
-        const d = rawResult.data;
-        const origin = d.media_origin;
-        const isLocal = typeof origin === "object" && origin?.source === "local" && origin?.type === "video";
-        const YODECK_CDN = ["dsbackend.s3.amazonaws.com", "yodeck.com", "yodeck-"];
-        const isYodeckUrl = (u: string) => YODECK_CDN.some(p => u.includes(p));
-        const playUrl = d.arguments?.play_from_url || d.play_from_url;
-        const hasPlayUrl = !!(playUrl && typeof playUrl === "string" && playUrl.startsWith("http") && !isYodeckUrl(playUrl));
-        const dlUrl = d.arguments?.download_from_url || d.download_from_url;
-        const hasDlOnly = !!(dlUrl && typeof dlUrl === "string" && dlUrl.startsWith("http") && !isYodeckUrl(dlUrl));
-        const playFalseOrNull = d.arguments?.play_from_url === false || d.arguments?.play_from_url === null;
-        const hasProblematicUrls = hasPlayUrl || (hasDlOnly && !playFalseOrNull);
-        
+        const m = rawResult.data;
+        const originSource = m?.media_origin?.source ?? null;
+        const originType = m?.media_origin?.type ?? null;
+        const hasPlayFromUrl = !!(m?.arguments?.play_from_url || m?.play_from_url);
+        const hasDownloadFromUrl = !!(m?.arguments?.download_from_url || m?.download_from_url);
+        const sourceUrl = m?.source_url ?? null;
+        const downloadUrl = m?.download_url ?? null;
+        const isLocal = originSource === "local" && originType === "video";
+        const hasUrlArgs = hasPlayFromUrl || hasDownloadFromUrl || !!sourceUrl || !!downloadUrl;
+        const shouldPurify = isLocal && hasUrlArgs;
+
         inspections.push({
           mediaId: mid,
-          name: d.name,
-          status: d.status,
+          name: m?.name ?? null,
+          status: m?.status ?? m?.finished ?? null,
+          originSource,
+          originType,
+          play_from_url: hasPlayFromUrl,
+          download_from_url: hasDownloadFromUrl,
+          source_url: sourceUrl,
+          download_url: downloadUrl,
           isLocalVideo: isLocal,
-          hasUrlArgs: hasProblematicUrls,
-          needsPurify: isLocal && hasProblematicUrls,
-          origin: d.media_origin,
-          args: d.arguments ? { play_from_url: d.arguments.play_from_url, download_from_url: d.arguments.download_from_url } : null,
+          hasUrlArgs,
+          needsPurify: shouldPurify,
         });
 
-        if (isLocal && hasProblematicUrls) {
+        if (shouldPurify) {
           toClone.push({ mediaId: mid, index: i });
         }
       }
