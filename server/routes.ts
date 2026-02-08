@@ -20515,8 +20515,10 @@ KvK: 90982541 | BTW: NL004857473B37</p>
    */
   app.post("/api/admin/auto-placements", requireAdminAccess, async (req, res) => {
     try {
-      const { advertiserId: targetAdvertiserId, targetYodeckPlayerIds, force } = req.body || {};
-      console.log(`[AutoPlacements] Starting: advertiserId=${targetAdvertiserId || "ALL"} force=${!!force} targetPlayers=${targetYodeckPlayerIds?.join(",") || "auto"}`);
+      const { advertiserId: targetAdvertiserId, targetYodeckPlayerIds, force: forceFlag, mode } = req.body || {};
+      // Admin override: accept both force:true and mode:"force" (safe: admin-only endpoint)
+      const force = forceFlag === true || mode === "force";
+      console.log(`[AutoPlacements] Starting: advertiserId=${targetAdvertiserId || "ALL"} force=${force} mode=${mode || "normal"} targetPlayers=${targetYodeckPlayerIds?.join(",") || "auto"}`);
       
       const allAdvertisers = await storage.getAdvertisers();
       const allScreens = await storage.getScreens();
@@ -22242,8 +22244,10 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       const targetYodeckPlayerIds = req.query.targetYodeckPlayerIds 
         ? (req.query.targetYodeckPlayerIds as string).split(",")
         : undefined;
+      // Admin override: accept force=true query param (safe: admin-only, read-only simulation)
+      const force = req.query.force === "true" || req.query.force === "1";
       
-      console.log(`[PublishDryRun] Starting dry run for advertiser ${advertiserId}`);
+      console.log(`[PublishDryRun] Starting dry run for advertiser ${advertiserId} force=${force}`);
       
       const advertiser = (await storage.getAdvertisers()).find(a => a.id === advertiserId);
       if (!advertiser) {
@@ -22286,12 +22290,45 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         if (advPlacements.length > 0) {
           targetScreenIds = [...new Set(advPlacements.map(p => p.screenId))];
           placementMethod = "existing_placements";
+        } else if (force) {
+          // [FORCE] Simulate what screens would be targeted via advertiser targeting (no mutations)
+          console.log(`[PublishDryRun][FORCE] No placements found, simulating force targeting...`);
+          const allScreens = await storage.getScreens();
+          const targetRegions = advertiser.targetRegionCodes || [];
+          const targetCitiesRaw = advertiser.targetCities || "";
+          const targetCitiesList = typeof targetCitiesRaw === "string"
+            ? targetCitiesRaw.split(",").map((c: string) => c.trim().toLowerCase()).filter(Boolean)
+            : [];
+          const isNationwide = targetRegions.length === 0 && targetCitiesList.length === 0;
+
+          for (const screen of allScreens) {
+            if (!screen.yodeckPlayerId) continue;
+            if (isNationwide) {
+              targetScreenIds.push(screen.id);
+            } else {
+              const location = screen.locationId ? await storage.getLocation(screen.locationId) : null;
+              if (location) {
+                const locCity = (location.city || "").toLowerCase().trim();
+                const locRegion = (location.region || "").toLowerCase().trim();
+                const cityMatch = targetCitiesList.some((t: string) => locCity.includes(t) || t.includes(locCity));
+                const regionMatch = targetRegions.some((r: string) => locRegion.includes(r.toLowerCase()) || r.toLowerCase().includes(locRegion));
+                if (cityMatch || regionMatch) targetScreenIds.push(screen.id);
+              }
+            }
+          }
+          placementMethod = "force_simulated_targeting";
+          diagnostics.targetResolution = {
+            method: placementMethod,
+            isNationwide,
+            matchedScreens: targetScreenIds.length,
+            note: "Dry run: no placements created, showing what force mode would target",
+          };
         } else {
           placementMethod = "none_found";
           diagnostics.targetResolution = { 
             method: "none_found", 
             reason: "No active placements found",
-            hint: "Use POST /api/admin/auto-placements with force:true to create placements first",
+            hint: "Use POST /api/admin/auto-placements with mode:'force' to create placements first, or add ?force=true to this dry-run",
           };
         }
       }

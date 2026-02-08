@@ -1,0 +1,63 @@
+Je bent een senior TypeScript/Node developer. Los 1 specifiek probleem op zonder refactor of grote herstructurering.
+
+PROBLEEM (bewezen via browser console):
+- /api/admin/auto-placements met mode:"force" geeft: created:0, skipped:1, skippedReason:"no_contract", blockedBy:["no_contract"].
+- /api/admin/advertisers/:id/publish-dry-run faalt met: "[ResolveTargets] No placements found for advertiser ..."
+- Rebuild-playlist werkt technisch (assign/push/verify ok) maar ads.candidates=0 omdat er geen placements zijn.
+- Config toggles via API zijn disabled:
+  - POST /api/admin/autopilot/config -> 410 LEGACY_AUTOPILOT_CONFIG_DISABLED
+  - POST /api/admin/canonical-broadcast/config -> 410 LEGACY_CANONICAL_SYSTEM_DISABLED
+Dus we kunnen adsRequireContract niet via API uitzetten.
+We hebben daarom een ADMIN OVERRIDE nodig, maar zonder de app om te gooien.
+
+DOEL:
+Maak het mogelijk om placements (en daarna publish) te doen voor een advertiser zónder contract, maar alléén via admin endpoints en alléén wanneer expliciet "force" is aangevraagd. Dit is bedoeld voor testing/ops.
+
+EISEN:
+1) Minimale wijziging: alleen kleine patch in bestaande code, geen refactor, geen nieuwe grote systemen.
+2) Veilig: default behavior blijft ongewijzigd (adsRequireContract blijft gelden).
+3) Alleen admin override:
+   - /api/admin/auto-placements: als mode === "force" -> contract gating bypassen.
+   - /api/admin/advertisers/:id/publish-now: als force === true -> placements auto-aanmaken (force) als ze ontbreken.
+4) Goede debug output:
+   - auto-placements result moet altijd { skippedReason, blockedBy[], details{} } teruggeven (bestaat al) en bij force moet createdCount > 0 als er target players zijn.
+5) Geen database schema wijziging als het niet nodig is.
+6) De override mag NIET gelden voor niet-admin routes.
+
+IMPLEMENTATIE INSTRUCTIES:
+A) Zoek de handler voor POST /api/admin/auto-placements (waarschijnlijk in server/routes.ts of een admin router).
+   - Identificeer waar "no_contract" wordt beslist (adsRequireContract / advertiser.contracts / contract status check).
+   - Pas dit aan:
+     - Als request body mode === "force" (of force===true), EN targetYodeckPlayerIds non-empty:
+       -> sla de no_contract blokkade over.
+       -> maak placements aan voor de screens die bij targetYodeckPlayerIds horen (of via bestaande resolve logic).
+     - Als mode niet force: gedrag exact hetzelfde houden.
+
+B) Patch publish-now:
+   - Handler POST /api/admin/advertisers/:id/publish-now
+   - Als force===true en placementsResolved===0:
+     -> roep intern dezelfde placement-create logic aan als auto-placements met mode:"force" en de meegegeven targetYodeckPlayerIds.
+     -> ga daarna door met de bestaande publish flow.
+   - Zorg dat de response duidelijk aangeeft:
+     - placementsCreatedCount
+     - targetsResolvedCount
+     - als nog steeds 0: return 422 met reason + blockedBy.
+
+C) Laat tests/console reproduceerbaar:
+   Na deploy moet dit werken:
+   1) POST /api/admin/auto-placements met { advertiserId, targetYodeckPlayerIds:[591895,591896], mode:"force" }
+      -> created >= 1, skipped=0, placements[] gevuld.
+   2) GET /api/admin/advertisers/<id>/publish-dry-run
+      -> geen "No placements found", targetsResolved > 0
+   3) POST /api/admin/screens/<screenId>/rebuild-playlist
+      -> ads.candidates > 0 en adsAdded bevat de ad mediaId.
+
+BELANGRIJK:
+- Maak geen wijziging aan auth/role checks: dit blijft admin-only.
+- Houd de bestaande output structuur aan, voeg alleen velden toe als nodig.
+- Voeg duidelijke logregels toe met een prefix, bijv. [AutoPlacements][FORCE] en [PublishNow][FORCE].
+
+LEVER OP:
+- Concrete code changes in de relevante bestanden (liefst 1-2 files).
+- Zorg dat TypeScript buildt.
+- Voeg korte comments toe waarom bypass veilig is (admin-only, force-only).
