@@ -161,6 +161,10 @@ export async function registerRoutes(
   await setupAuth(app);
   registerAuthRoutes(app);
   
+  // Mount debug routes FIRST (before any dynamic :screenId routes)
+  const debugRouter = (await import("./routes/debug")).default;
+  app.use("/api/debug", debugRouter);
+
   // Mount Yodeck routes (mapping endpoints)
   const yodeckRouter = (await import("./routes/yodeck")).default;
   app.use("/api/yodeck", yodeckRouter);
@@ -932,11 +936,6 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
   
-  // Debug ping endpoint (no auth required for quick health check)
-  app.get("/api/debug/ping", (_req, res) => {
-    res.json({ ok: true, source: "debug" });
-  });
-
   // Debug endpoint for availability diagnostics (admin-only, temporary)
   app.get("/api/debug/availability", requirePermission("manage_users"), async (_req, res) => {
     try {
