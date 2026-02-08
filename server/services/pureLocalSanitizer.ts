@@ -252,31 +252,31 @@ export async function ensurePureLocalVideo(
   }
 
   // CRITICAL: Yodeck auto-generates play_from_url/download_from_url after upload.
-  // We must PATCH to clear these to ensure pure local playback (no network dependency).
+  // We must PATCH both top-level AND arguments fields to null to force pure-local playback.
   try {
-    console.log(`${prefix} PATCH_CLEAR_URLS new=${newMediaId}`);
+    console.log(`${prefix} PATCH_STRIP_URLS old=${mediaId} new=${newMediaId}`);
+    const stripPayload = {
+      arguments: {
+        play_from_url: null,
+        download_from_url: null,
+      },
+    };
     const patchResp = await fetch(`${YODECK_API_BASE}/media/${newMediaId}/`, {
       method: "PATCH",
       headers: {
         "Authorization": `Token ${YODECK_TOKEN}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        arguments: {
-          play_from_url: false,
-          download_from_url: false,
-          buffering: false,
-        },
-      }),
+      body: JSON.stringify(stripPayload),
     });
     if (patchResp.ok) {
-      console.log(`${prefix} PATCH_CLEAR_URLS_OK new=${newMediaId}`);
+      console.log(`[Purify] Stripped URL fields from cloned media`, { oldMediaId: mediaId, newMediaId, correlationId });
     } else {
       const errText = await patchResp.text().catch(() => "");
-      console.warn(`${prefix} PATCH_CLEAR_URLS_WARN new=${newMediaId} http=${patchResp.status} body=${errText.substring(0, 200)}`);
+      console.warn(`${prefix} PATCH_STRIP_URLS_WARN new=${newMediaId} http=${patchResp.status} body=${errText.substring(0, 200)}`);
     }
   } catch (err: any) {
-    console.warn(`${prefix} PATCH_CLEAR_URLS_SOFT_FAIL new=${newMediaId}: ${err.message}`);
+    console.warn(`${prefix} PATCH_STRIP_URLS_SOFT_FAIL new=${newMediaId}: ${err.message}`);
   }
 
   console.log(`${prefix} CLONE_URL_MEDIA old=${mediaId} new=${newMediaId} correlationId=${correlationId}`);

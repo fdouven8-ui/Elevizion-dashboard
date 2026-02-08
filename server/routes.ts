@@ -21850,12 +21850,22 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         const m = rawResult.data;
         const originSource = m?.media_origin?.source ?? null;
         const originType = m?.media_origin?.type ?? null;
-        const hasPlayFromUrl = !!(m?.arguments?.play_from_url || m?.play_from_url);
-        const hasDownloadFromUrl = !!(m?.arguments?.download_from_url || m?.download_from_url);
+        const playFromUrlVal = m?.arguments?.play_from_url || m?.play_from_url || null;
+        const downloadFromUrlVal = m?.arguments?.download_from_url || m?.download_from_url || null;
         const sourceUrl = m?.source_url ?? null;
         const downloadUrl = m?.download_url ?? null;
         const isLocal = originSource === "local" && originType === "video";
-        const hasUrlArgs = hasPlayFromUrl || hasDownloadFromUrl || !!sourceUrl || !!downloadUrl;
+
+        const YODECK_CDN_SAFE = ["dsbackend.s3.amazonaws.com", "yodeck.com", "yodeck-"];
+        const isYodeckCdn = (url: any): boolean => {
+          if (!url || typeof url !== "string") return false;
+          return YODECK_CDN_SAFE.some(p => url.includes(p));
+        };
+        const hasPlayFromUrl = !!playFromUrlVal && !isYodeckCdn(playFromUrlVal);
+        const hasDownloadFromUrl = !!downloadFromUrlVal && !isYodeckCdn(downloadFromUrlVal);
+        const hasExternalSourceUrl = !!sourceUrl && !isYodeckCdn(sourceUrl);
+        const hasExternalDownloadUrl = !!downloadUrl && !isYodeckCdn(downloadUrl);
+        const hasUrlArgs = hasPlayFromUrl || hasDownloadFromUrl || hasExternalSourceUrl || hasExternalDownloadUrl;
         const shouldPurify = isLocal && hasUrlArgs;
 
         inspections.push({
