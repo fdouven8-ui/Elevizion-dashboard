@@ -932,6 +932,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
   
+  // Debug ping endpoint (no auth required for quick health check)
+  app.get("/api/debug/ping", (_req, res) => {
+    res.json({ ok: true, source: "debug" });
+  });
+
   // Debug endpoint for availability diagnostics (admin-only, temporary)
   app.get("/api/debug/availability", requirePermission("manage_users"), async (_req, res) => {
     try {

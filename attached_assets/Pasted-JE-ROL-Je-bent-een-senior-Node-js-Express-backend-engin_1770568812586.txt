@@ -1,0 +1,72 @@
+JE ROL:
+Je bent een senior Node.js / Express backend engineer.
+
+PROBLEEM:
+Alle requests naar /api/debug/* geven 404 of "Scherm niet gevonden".
+Dit betekent dat /api/debug routes NIET bereikbaar zijn en worden
+opgeslokt door een dynamische :screenId route.
+
+BEWIJS:
+Requests zoals:
+- GET /api/debug/ping
+- GET /api/debug/yodeck/media
+worden gematcht door een route die een screenId verwacht
+(respons: "Scherm niet gevonden").
+
+DOEL:
+1) /api/debug/* moet ALTIJD correct bereikbaar zijn
+2) /api/debug/* mag NOOIT door :screenId of wildcard routes gematcht worden
+3) Voeg minimaal een test-endpoint toe: GET /api/debug/ping → { ok: true }
+
+OPDRACHT (STAP VOOR STAP):
+
+1. Zoek in het backend-project waar Express routes worden gemount.
+   Bestanden kunnen o.a. zijn:
+   - server/routes.ts
+   - server/index.ts
+   - server/app.ts
+   - server/api.ts
+
+2. Identificeer ALLE dynamische routes zoals:
+   - app.use("/api/:screenId", ...)
+   - router.use("/:screenId", ...)
+   - app.use("/api/screens/:screenId", ...)
+   - wildcard of catch-all routes onder /api
+
+3. Zorg dat de debug routes EERDER worden gemount dan deze dynamische routes.
+   De volgorde MOET zijn:
+
+   app.use("/api/debug", debugRouter);
+   // daarna pas:
+   app.use("/api/:screenId", screenRouter);
+
+   OF bij gebruik van router:
+   router.use("/debug", debugRouter);
+   router.use("/:screenId", screenRouter);
+
+4. Als er nog GEEN debugRouter bestaat:
+   - Maak server/routes/debug.ts aan
+   - Exporteer een Express router
+   - Voeg endpoint toe:
+
+     GET /api/debug/ping
+     Response:
+     { "ok": true, "source": "debug" }
+
+5. Zorg dat GEEN enkele route met :screenId, :id of wildcard
+   vóór /api/debug wordt geregistreerd.
+
+6. Hercompileer / herstart de server zodat de wijziging actief is.
+
+ACCEPTATIECRITERIA:
+Na deploy moet dit werken in de browser console:
+
+fetch("/api/debug/ping")
+  .then(r => r.json())
+  .then(console.log)
+
+Verwachte output:
+{ ok: true, source: "debug" }
+
+GEEN ANDERE WIJZIGINGEN DOEN.
+ALLEEN DIT OPLOSSEN.
