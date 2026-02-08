@@ -447,7 +447,7 @@ export class PlacementEngineService {
       .digest("hex");
     
     try {
-      await db.update(placementPlans)
+      const result = await db.update(placementPlans)
         .set({
           status: "APPROVED",
           approvedTargets: plan.proposedTargets,
@@ -456,10 +456,35 @@ export class PlacementEngineService {
           approvedByUserId: userId,
           updatedAt: new Date(),
         })
-        .where(eq(placementPlans.id, planId));
+        .where(and(eq(placementPlans.id, planId), eq(placementPlans.status, "SIMULATED_OK")))
+        .returning({ id: placementPlans.id, status: placementPlans.status });
+      
+      const rowsAffected = result.length;
+      console.log(`[PlacementPlanApprove] planId=${planId} rowsAffected=${rowsAffected}`);
+      
+      if (rowsAffected === 0) {
+        const recheck = await db.query.placementPlans.findFirst({
+          where: eq(placementPlans.id, planId),
+        });
+        if (recheck && (recheck.status === "APPROVED" || recheck.status === "PUBLISHING" || recheck.status === "PUBLISHED")) {
+          console.log(`[PlacementPlanApprove] planId=${planId} already ${recheck.status}, treating as success`);
+          return true;
+        }
+        console.error(`[PlacementPlanApprove] planId=${planId} UPDATE matched 0 rows, current status=${recheck?.status}`);
+        return false;
+      }
     } catch (err: any) {
       if (err.code === "23505" && err.constraint?.includes("idempotency_key")) {
-        console.log(`[PlacementPlanApproveIdempotentHit] planId=${planId} idempotencyKey=${idempotencyKey} - duplicate key, treating as success`);
+        console.log(`[PlacementPlanApproveIdempotentHit] planId=${planId} idempotencyKey=${idempotencyKey} - duplicate key`);
+        await db.update(placementPlans)
+          .set({
+            status: "APPROVED",
+            approvedAt: new Date(),
+            approvedByUserId: userId,
+            updatedAt: new Date(),
+          })
+          .where(eq(placementPlans.id, planId));
+        console.log(`[PlacementPlanApprove] planId=${planId} set APPROVED after idempotency conflict`);
         return true;
       }
       throw err;
