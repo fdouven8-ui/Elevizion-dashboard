@@ -3146,10 +3146,19 @@ Sitemap: ${SITE_URL}/sitemap.xml
         console.log(`[PlacementPlanPublishGate] planId=${planId} exists=false status=null approved_at=null`);
         return res.status(404).json({ message: "Plan niet gevonden", planId, exists: false, status: null, approved_at: null, simulated_at: null });
       }
-      if (plan.status !== "APPROVED") {
-        console.log(`[PlacementPlanPublishGate] planId=${planId} exists=true status=${plan.status} approved_at=${plan.approvedAt || null}`);
+      
+      const allowedStatuses = ["APPROVED", "PUBLISHING", "PUBLISHED"];
+      if (!allowedStatuses.includes(plan.status)) {
+        console.log(`[PlacementPlanPublishGate] planId=${planId} exists=true status=${plan.status} approved_at=${plan.approvedAt || null} BLOCKED`);
         return res.status(400).json({ message: "Plan moet status APPROVED hebben om te publiceren", planId, exists: true, status: plan.status, approved_at: plan.approvedAt || null, simulated_at: (plan as any).simulatedAt || null });
       }
+      
+      if (plan.status === "PUBLISHED") {
+        console.log(`[PlacementPlanPublishGate] planId=${planId} already PUBLISHED, returning idempotent success`);
+        return res.json({ success: true, alreadyPublished: true });
+      }
+      
+      console.log(`[PlacementPlanPublishGate] planId=${planId} status=${plan.status} ALLOWED`);
       
       // RE-SIMULATE before publish for safety (detect capacity/exclusivity changes)
       console.log(`[Publish] Re-simulating plan ${planId} before publish...`);
