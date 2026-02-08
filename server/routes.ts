@@ -3147,7 +3147,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(404).json({ message: "Plan niet gevonden", planId, exists: false, status: null, approved_at: null, simulated_at: null });
       }
       
-      const allowedStatuses = ["APPROVED", "PUBLISHING", "PUBLISHED"];
+      const allowedStatuses = ["APPROVED", "PUBLISHING", "FAILED", "PUBLISHED"];
       if (!allowedStatuses.includes(plan.status)) {
         console.log(`[PlacementPlanPublishGate] planId=${planId} exists=true status=${plan.status} approved_at=${plan.approvedAt || null} BLOCKED`);
         return res.status(400).json({ message: "Plan moet status APPROVED hebben om te publiceren", planId, exists: true, status: plan.status, approved_at: plan.approvedAt || null, simulated_at: (plan as any).simulatedAt || null });
@@ -3156,6 +3156,20 @@ Sitemap: ${SITE_URL}/sitemap.xml
       if (plan.status === "PUBLISHED") {
         console.log(`[PlacementPlanPublishGate] planId=${planId} already PUBLISHED, returning idempotent success`);
         return res.json({ success: true, alreadyPublished: true });
+      }
+      
+      if (plan.status === "FAILED") {
+        console.log(`[PlacementPlanPublishGate] planId=${planId} retrying from FAILED, resetting error fields`);
+        const { db } = await import("./db");
+        const { placementPlans } = await import("@shared/schema");
+        const { eq } = await import("drizzle-orm");
+        await db.update(placementPlans).set({
+          status: "PUBLISHING",
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          lastErrorDetails: null,
+          updatedAt: new Date(),
+        }).where(eq(placementPlans.id, planId));
       }
       
       console.log(`[PlacementPlanPublishGate] planId=${planId} status=${plan.status} ALLOWED`);
