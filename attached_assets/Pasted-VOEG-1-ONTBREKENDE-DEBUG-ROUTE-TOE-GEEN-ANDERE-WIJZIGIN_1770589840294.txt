@@ -1,0 +1,51 @@
+VOEG 1 ONTBREKENDE DEBUG ROUTE TOE + GEEN ANDERE WIJZIGINGEN.
+
+Context (bewezen):
+- GET /api/debug/yodeck/media?limit=5 werkt
+- GET /api/debug/yodeck/media/:id werkt
+- GET /api/debug/yodeck/media/:id/upload werkt en geeft upload_url (presigned S3)
+- GET /api/debug/yodeck/media/:id/status werkt en blijft "initialized"
+- In browser konden we direct PUT naar upload_url doen: PUT RESULT 200 true
+- MAAR: PUT /api/debug/yodeck/media/:id/upload/complete bestaat NIET (404 API_NOT_FOUND)
+=> Daardoor blijft Yodeck media op "initialized".
+
+OPDRACHT:
+1) Implementeer route:
+   PUT /api/debug/yodeck/media/:id/upload/complete
+
+2) Route gedrag:
+   - Verwacht JSON body: { "upload_url": "<string>" }
+   - Valideer upload_url aanwezig, anders 400 met { ok:false, error:"upload_url required" }
+   - Proxy 1-op-1 naar Yodeck API:
+     PUT https://app.yodeck.com/api/v2/media/{id}/upload/complete
+     Headers:
+       Authorization: ApiKey <bestaande yodeck api key uit jullie config>
+       Content-Type: application/json
+     Body:
+       { "upload_url": "<exact dezelfde upload_url>" }
+
+3) Response:
+   - Geef statuscode van Yodeck door
+   - Geef response body (text/json) ongewijzigd door
+
+4) Logging verplicht:
+   - console.log("[DebugYodeckUploadComplete]", { mediaId, hasUploadUrl: !!upload_url })
+   - bij error: console.error("[DebugYodeckUploadCompleteFailed]", { mediaId, status, bodySnippet })
+
+5) Plaats dit in dezelfde router/module waar de andere /api/debug/yodeck/... routes staan.
+   (Waarschijnlijk server/routes.ts of server/routes/debug/yodeck.ts)
+
+ACCEPTATIE:
+Na deploy moet dit werken vanuit browser console:
+
+fetch("/api/debug/yodeck/media/29879038/upload/complete", {
+  method:"PUT",
+  headers:{ "Content-Type":"application/json" },
+  body: JSON.stringify({ upload_url: "<presigned_url_from_/upload>" })
+}).then(r=>r.text()).then(console.log)
+
+Daarna moet:
+GET /api/debug/yodeck/media/29879038/status
+van "initialized" naar "encoding" / "finished" gaan.
+
+Wijzig NIETS anders (geen publish flow, geen placement logic).

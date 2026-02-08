@@ -78,6 +78,43 @@ router.get("/yodeck/media/:id/status", async (req, res) => {
   }
 });
 
+router.put("/yodeck/media/:id/upload/complete", async (req, res) => {
+  const mediaId = req.params.id;
+  try {
+    const uploadUrl = req.body?.upload_url;
+    console.log("[DebugYodeckUploadComplete]", { mediaId, hasUploadUrl: !!uploadUrl });
+    if (!uploadUrl || typeof uploadUrl !== "string") {
+      return res.status(400).json({ ok: false, error: "upload_url required" });
+    }
+    const token = await getYodeckToken();
+    if (!token.isValid) {
+      return res.status(503).json({ error: "Yodeck token niet beschikbaar" });
+    }
+    const response = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/upload/complete/`, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Token ${token.label}:${token.value}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ upload_url: uploadUrl }),
+    });
+    const respText = await response.text();
+    if (!response.ok) {
+      console.error("[DebugYodeckUploadCompleteFailed]", { mediaId, status: response.status, bodySnippet: respText.substring(0, 300) });
+    }
+    res.status(response.status);
+    const ct = response.headers.get("content-type") || "";
+    if (ct.includes("json")) {
+      try { res.json(JSON.parse(respText)); } catch { res.send(respText); }
+    } else {
+      res.send(respText);
+    }
+  } catch (err: any) {
+    console.error("[DebugYodeckUploadCompleteFailed]", { mediaId, status: 500, bodySnippet: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get("/yodeck/media/:id/raw", async (req, res) => {
   try {
     const client = await getYodeckClient();
