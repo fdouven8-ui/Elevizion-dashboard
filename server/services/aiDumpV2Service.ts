@@ -430,8 +430,11 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
 
           for (const mediaId of mediaIdsToCheck) {
             try {
-              const mResult = await yodeckRequest<any>(`/media/${mediaId}/`);
+              const mediaUrl = `/media/${mediaId}/`;
+              console.log(`[YODECK_GET_MEDIA] url=https://app.yodeck.com/api/v2${mediaUrl} mediaId=${mediaId}`);
+              const mResult = await yodeckRequest<any>(mediaUrl);
               if (!mResult.ok) {
+                console.error(`[YODECK_GET_MEDIA] FAILED mediaId=${mediaId} status=${mResult.status} error=${mResult.error}`);
                 const errMsg = mResult.error || `HTTP ${mResult.status}`;
                 mediaSnapshots.push({ id: mediaId, error: errMsg });
                 failedMedia.push({ mediaId, message: errMsg, statusCode: mResult.status });
