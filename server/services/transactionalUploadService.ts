@@ -2,9 +2,8 @@ import { db } from "../db";
 import { uploadJobs, advertisers, UPLOAD_JOB_STATUS, UPLOAD_FINAL_STATE } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { Client } from "@replit/object-storage";
-import { buildYodeckCreateMediaPayload, buildYodeckUrlMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
+import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 import { getYodeckClient } from "./yodeckClient";
-import { generateMediaCdnUrl } from "../routes/mediaCdn";
 
 const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
 const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN?.trim() || "";
@@ -63,12 +62,7 @@ export async function uploadVideoToYodeckTransactional(
   desiredFilename: string,
   fileSize: number
 ): Promise<TransactionalUploadResult> {
-  const useUrlUpload = process.env.YODECK_UPLOAD_MODE !== "presigned";
-  if (useUrlUpload) {
-    console.log(`[TransactionalUpload] Using URL-based upload (set YODECK_UPLOAD_MODE=presigned to use S3 PUT)`);
-    return uploadVideoToYodeckViaUrl(advertiserId, assetPath, desiredFilename, fileSize);
-  }
-  console.log(`[TransactionalUpload] Using presigned S3 PUT upload`);
+  console.log(`[TransactionalUpload] Using server-side binary PUT upload (download_from_url DISABLED)`);
 
   const correlationId = generateCorrelationId();
   console.log(`${LOG_PREFIX} [${correlationId}] Starting transactional upload for advertiser=${advertiserId}`);
@@ -286,151 +280,26 @@ export async function uploadVideoToYodeckTransactional(
   }
 }
 
+/**
+ * @deprecated URL-based upload DISABLED — Yodeck gets 403 when fetching download_from_url.
+ * All uploads now use server-side binary PUT via uploadVideoToYodeckTransactional().
+ */
 export async function uploadVideoToYodeckViaUrl(
   advertiserId: string,
   assetPath: string,
   desiredFilename: string,
   fileSize: number
 ): Promise<TransactionalUploadResult> {
-  const correlationId = generateCorrelationId();
-  console.log(`${LOG_PREFIX} [${correlationId}] Starting URL-based upload for advertiser=${advertiserId} path=${assetPath}`);
-
-  const [job] = await db.insert(uploadJobs)
-    .values({
-      advertiserId,
-      localAssetPath: assetPath,
-      localFileSize: fileSize,
-      desiredFilename,
-      correlationId,
-      status: UPLOAD_JOB_STATUS.UPLOADING,
-      finalState: null,
-      attempt: 1,
-      maxAttempts: 5,
-      pollAttempts: 0,
-    })
-    .returning();
-
-  const jobId = job.id;
-  console.log(`${LOG_PREFIX} [${correlationId}] Created URL-upload job=${jobId}`);
-
-  try {
-    const cdnUrl = generateMediaCdnUrl(assetPath, 24);
-    console.log(`${LOG_PREFIX} [${correlationId}] Generated CDN URL: ${cdnUrl.substring(0, 80)}...`);
-
-    console.log(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT: Checking CDN URL returns valid MP4...`);
-    const preflightResp = await fetch(cdnUrl, { method: "GET", headers: { "Range": "bytes=0-31" } });
-    if (!preflightResp.ok && preflightResp.status !== 206) {
-      const errBody = await preflightResp.text().catch(() => "");
-      console.error(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT FAILED: status=${preflightResp.status} body=${errBody.substring(0, 200)}`);
-      await markJobFailed(jobId, "PREFLIGHT_CDN_FAILED", { status: preflightResp.status, body: errBody.substring(0, 200) }, `CDN URL returned ${preflightResp.status}`);
-      return makeFailResult(jobId, advertiserId, "PREFLIGHT_CDN_FAILED", { status: preflightResp.status });
-    }
-
-    const preflightBytes = Buffer.from(await preflightResp.arrayBuffer());
-    const preflightContentType = preflightResp.headers.get("content-type") || "";
-    console.log(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT: received ${preflightBytes.length} bytes, content-type=${preflightContentType}`);
-
-    if (preflightBytes.length >= 8) {
-      const ftypCheck = preflightBytes.toString("ascii", 4, 8);
-      if (ftypCheck !== "ftyp") {
-        const head = preflightBytes.toString("hex");
-        console.error(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT MP4_INVALID: bytes[4..8]='${ftypCheck}' (expected 'ftyp') head=${head}`);
-        await markJobFailed(jobId, "PREFLIGHT_NOT_MP4", { ftypCheck, head }, `CDN returns non-MP4: bytes[4..8]='${ftypCheck}'`);
-        return makeFailResult(jobId, advertiserId, "PREFLIGHT_NOT_MP4", { ftypCheck });
-      }
-      console.log(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT MP4_VALID: ftyp header confirmed`);
-    } else {
-      console.warn(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT: Only ${preflightBytes.length} bytes received, cannot verify ftyp`);
-    }
-
-    if (!preflightContentType.includes("video/mp4") && !preflightContentType.includes("application/octet-stream") && !preflightContentType.includes("video")) {
-      console.warn(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT CONTENT_TYPE_WARN: expected video/mp4, got '${preflightContentType}'`);
-    }
-
-    const mediaName = desiredFilename.endsWith(".mp4") ? desiredFilename : `${desiredFilename}.mp4`;
-    const payload = buildYodeckUrlMediaPayload(mediaName, cdnUrl);
-
-    console.log(`${LOG_PREFIX} [${correlationId}] Creating Yodeck media via URL import...`);
-    const createResp = await fetch(`${YODECK_API_BASE}/media/`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Token ${YODECK_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-
-    const createText = await createResp.text();
-    let createData: any;
-    try { createData = JSON.parse(createText); } catch { createData = null; }
-
-    if (!createResp.ok) {
-      console.error(`${LOG_PREFIX} [${correlationId}] CREATE_MEDIA_URL FAILED: status=${createResp.status} body=${createText.substring(0, 500)}`);
-      await markJobFailed(jobId, "CREATE_MEDIA_URL_FAILED", { status: createResp.status, body: createText.substring(0, 300) }, `Yodeck create-media returned ${createResp.status}`);
-      return makeFailResult(jobId, advertiserId, "CREATE_MEDIA_URL_FAILED", { status: createResp.status });
-    }
-
-    const mediaId = createData?.id;
-    if (!mediaId) {
-      console.error(`${LOG_PREFIX} [${correlationId}] CREATE_MEDIA_URL: No mediaId in response`);
-      await markJobFailed(jobId, "CREATE_MEDIA_URL_NO_ID", { response: createText.substring(0, 300) }, "No mediaId returned");
-      return makeFailResult(jobId, advertiserId, "CREATE_MEDIA_URL_NO_ID", {});
-    }
-
-    console.log(`${LOG_PREFIX} [${correlationId}] CREATE_MEDIA_URL SUCCESS: mediaId=${mediaId}`);
-    await updateJob(jobId, { yodeckMediaId: mediaId });
-
-    await db.update(advertisers)
-      .set({
-        yodeckMediaIdCanonical: mediaId,
-        yodeckMediaIdCanonicalUpdatedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(advertisers.id, advertiserId));
-
-    console.log(`${LOG_PREFIX} [${correlationId}] Polling for encoding completion...`);
-    const pollResult = await step6PollStatus(jobId, mediaId, correlationId);
-    if (!pollResult.ok) {
-      console.error(`[YodeckUploadFailed] mediaId=${mediaId} step=POLL_STATUS_URL reason=${pollResult.errorCode}`);
-      await markAdvertiserPublishFailed(advertiserId, pollResult.errorCode!, JSON.stringify(pollResult.errorDetails), correlationId);
-      return makeFailResult(jobId, advertiserId, pollResult.errorCode!, pollResult.errorDetails);
-    }
-
-    const client = await getYodeckClient();
-    if (client) {
-      const fileResult = await client.waitUntilMediaHasFile(mediaId, { timeoutMs: 120000, intervalMs: 3000 });
-      if (!fileResult.ok) {
-        console.error(`${LOG_PREFIX} [${correlationId}] URL_UPLOAD FILE_NOT_READY: mediaId=${mediaId} hasFile=${fileResult.hasFile} size=${fileResult.size} status=${fileResult.status}`);
-        await markAdvertiserPublishFailed(advertiserId, "UPLOAD_FILE_NOT_READY", `file=${fileResult.hasFile} size=${fileResult.size}`, correlationId);
-        return makeFailResult(jobId, advertiserId, "UPLOAD_FILE_NOT_READY", { mediaId, hasFile: fileResult.hasFile, size: fileResult.size });
-      }
-      console.log(`${LOG_PREFIX} [${correlationId}] URL_UPLOAD FILE_CONFIRMED: mediaId=${mediaId} size=${fileResult.size}`);
-    }
-
-    await updateJob(jobId, {
-      status: UPLOAD_JOB_STATUS.READY,
-      finalState: UPLOAD_FINAL_STATE.READY,
-      completedAt: new Date(),
-    });
-
-    await updateAdvertiserSuccess(advertiserId, mediaId, correlationId);
-
-    console.log(`${LOG_PREFIX} [${correlationId}] URL_UPLOAD COMPLETE: job=${jobId} mediaId=${mediaId}`);
-
-    return {
-      ok: true,
-      jobId,
-      advertiserId,
-      yodeckMediaId: mediaId,
-      finalState: UPLOAD_FINAL_STATE.READY,
-    };
-
-  } catch (error: any) {
-    console.error(`${LOG_PREFIX} [${correlationId}] URL_UPLOAD unexpected error:`, error);
-    await markJobFailed(jobId, "UNEXPECTED_ERROR", { message: error.message }, error.message);
-    await markAdvertiserPublishFailed(advertiserId, "UNEXPECTED_ERROR", error.message, correlationId);
-    return makeFailResult(jobId, advertiserId, "UNEXPECTED_ERROR", { message: error.message });
-  }
+  console.error("[TransactionalUpload] URL-based upload is DISABLED. Use server-side binary PUT instead.");
+  return {
+    ok: false,
+    jobId: "disabled",
+    advertiserId,
+    yodeckMediaId: null,
+    finalState: "DISABLED",
+    errorCode: "URL_UPLOAD_DISABLED",
+    errorDetails: { reason: "download_from_url causes 403 errors in Yodeck encoding. Use binary PUT." },
+  };
 }
 
 async function patchClearUrlPlaybackFields(mediaId: number, correlationId: string): Promise<void> {
