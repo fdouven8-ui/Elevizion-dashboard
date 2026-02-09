@@ -1,0 +1,94 @@
+Je bent senior backend engineer in dit Elevizion project.
+
+HARD BEWEZEN STATUS:
+- AI_DUMP v2 detecteert stale mediaId (29881729) met Yodeck 404 err_1004.
+- In summary.nextActions staat “run rebuild-playlist to auto-repair”.
+- Maar er bestaat GEEN API route om dit te triggeren (alles onder /api/admin/* zoals rebuild/repair/publish geeft 404).
+
+DOEL:
+Voeg 1 admin endpoint toe die stale/404 Yodeck mediaIds automatisch repareert door opnieuw te uploaden vanuit Cloudflare R2, en daarna (optioneel) playlists rebuild/push triggert.
+
+NIEUWE ROUTE (MOET EXACT ZO):
+POST /api/admin/rebuild-playlist
+
+REQUEST BODY:
+{
+  "mode": "auto-repair",          // default
+  "reason": "stale-media-404",    // for logging only
+  "limit": 10,                    // max advertisers to repair in one run
+  "dryRun": false,                // true => alleen rapporteren, geen writes/uploads
+  "screenIds": [],                // optional filter
+  "advertiserIds": []             // optional filter
+}
+
+RESPONSE:
+{
+  "ok": true,
+  "correlationId": "...",
+  "checkedAdvertisers": N,
+  "staleFound": M,
+  "repaired": K,
+  "skipped": S,
+  "details": [
+    {
+      "advertiserId": "...",
+      "oldMediaId": 29881729,
+      "newMediaId": 12345678,
+      "status": "repaired|skipped|dryRun|error",
+      "message": "..."
+    }
+  ],
+  "errors": [...]
+}
+
+IMPLEMENTATIE (klein, hergebruik bestaande code):
+1) Voeg route toe in server/routes.ts (of waar alle routes gedefinieerd zijn).
+   - Deze route moet achter admin auth zitten (zelfde als ai-dump-v2).
+   - Gebruik correlationId (bijv. "rebuild-"+random).
+
+2) Vind de bestaande services voor:
+   - DB: advertisers + placements
+   - upload pipeline naar Yodeck (Cloudflare->Yodeck) OF create/upload/complete/poll helpers
+   - playlist rebuild/push (als aanwezig). Als niet aanwezig: laat die stap optioneel/skip met duidelijke log.
+
+3) Repair logica:
+   A) Selecteer advertisers:
+      - start met alle actieve advertisers (of advertisers met mediaId != null)
+      - filter op advertiserIds / screenIds indien meegegeven
+      - limit toepassen
+
+   B) Check of mediaId bestaat in Yodeck:
+      - if advertiser.mediaId:
+          GET /api/v2/media/{id}
+          - 200 => ok (skip)
+          - 404 => stale (needs repair)
+      - if mediaId null => skip (of markeer "noMediaId")
+
+   C) Als stale en dryRun=false:
+      - Zet advertiser.mediaId = null in DB (zodat pipeline forced recreate)
+      - Trigger de bestaande “ensureValidYodeckMedia/ad upload” flow die:
+          create media -> get upload url -> upload bytes vanuit R2 -> complete -> poll -> returns new mediaId
+      - Sla new mediaId op in advertiser
+      - (optioneel) trigger publish/rebuild placements + push naar screens
+      - Log elke stap: [REBUILD_PLAYLIST] correlationId=... advertiserId=... step=...
+
+   D) Als stale en dryRun=true:
+      - geen writes, alleen reporten
+
+4) Zorg dat errors NIET stil verdwijnen:
+   - elke failure in details[] met status:"error" + message
+   - top-level errors[] ook vullen
+
+5) Voeg ook een GET health route toe (handig):
+GET /api/admin/rebuild-playlist/status
+Return: { ok:true, hint:"use POST", exampleBody:{...} }
+
+VALIDATIE (must):
+- POST /api/admin/rebuild-playlist met dryRun:true toont staleFound=1 voor 29881729.
+- POST met dryRun:false maakt newMediaId aan en slaat op.
+- Daarna AI_DUMP v2 includeMediaDetails toont plannedMediaIds != 29881729 en failed=[].
+
+OPLEVEREN:
+- Toon gewijzigde files
+- Volledige code van de nieuwe route(s) + gebruikte helper(s)
+- Zorg dat het compileert en draait.

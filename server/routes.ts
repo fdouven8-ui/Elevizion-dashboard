@@ -8,7 +8,7 @@ import { type Server } from "http";
 import { z } from "zod";
 import crypto from "crypto";
 import { encryptToken, decryptToken, isTokenEncryptionEnabled } from "./tokenEncryption";
-import { sql, desc, eq, and, or, isNull, isNotNull } from "drizzle-orm";
+import { sql, desc, eq, and, or, isNull, isNotNull, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens, placements, adAssets, tagPolicies, e2eTestRuns, placementPlans, placementTargets, integrationOutbox } from "@shared/schema";
 import { MAX_ADS_PER_SCREEN } from "@shared/regions";
@@ -23796,6 +23796,252 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     } catch (error: any) {
       console.error(`[AI-Dump-V2] Error:`, error);
       return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/admin/rebuild-playlist/status
+   * Health/hint endpoint
+   */
+  app.get("/api/admin/rebuild-playlist/status", requireAdminAccess, (_req, res) => {
+    res.json({
+      ok: true,
+      hint: "Use POST /api/admin/rebuild-playlist to repair stale media",
+      exampleBody: {
+        mode: "auto-repair",
+        reason: "stale-media-404",
+        limit: 10,
+        dryRun: true,
+        screenIds: [],
+        advertiserIds: [],
+      },
+    });
+  });
+
+  /**
+   * POST /api/admin/rebuild-playlist
+   * Auto-repair stale/404 Yodeck mediaIds by re-uploading from R2
+   */
+  app.post("/api/admin/rebuild-playlist", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+
+    const bodySchema = z.object({
+      mode: z.string().default("auto-repair"),
+      reason: z.string().default("manual"),
+      limit: z.number().int().min(1).max(50).default(10),
+      dryRun: z.boolean().default(false),
+      screenIds: z.array(z.string()).default([]),
+      advertiserIds: z.array(z.string()).default([]),
+      rebuildPlaylists: z.boolean().default(false),
+    });
+
+    const parsed = bodySchema.safeParse(req.body || {});
+    if (!parsed.success) {
+      return res.status(400).json({ ok: false, error: "Invalid request body", details: parsed.error.format() });
+    }
+
+    const { mode, reason, limit, dryRun, screenIds: filterScreenIds, advertiserIds: filterAdvertiserIds, rebuildPlaylists } = parsed.data;
+    const correlationId = `rebuild-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`;
+    const LOG = `[REBUILD_PLAYLIST] [${correlationId}]`;
+
+    console.log(`${LOG} START mode=${mode} reason=${reason} limit=${limit} dryRun=${dryRun} rebuildPlaylists=${rebuildPlaylists} filterScreenIds=${JSON.stringify(filterScreenIds)} filterAdvertiserIds=${JSON.stringify(filterAdvertiserIds)}`);
+
+    const details: any[] = [];
+    const errors: any[] = [];
+    let staleFound = 0;
+    let repaired = 0;
+    let skipped = 0;
+    const playlistRebuilds: any[] = [];
+
+    try {
+      const { ensureAdvertiserMediaIsValid } = await import("./services/transactionalUploadService");
+      const allAdvertisers = await db.select({
+        id: advertisers.id,
+        companyName: advertisers.companyName,
+        status: advertisers.status,
+        assetStatus: advertisers.assetStatus,
+        yodeckMediaIdCanonical: advertisers.yodeckMediaIdCanonical,
+      }).from(advertisers);
+
+      let candidates = allAdvertisers.filter(a => a.status === "active" || a.yodeckMediaIdCanonical != null);
+
+      if (filterAdvertiserIds.length > 0) {
+        candidates = candidates.filter(a => filterAdvertiserIds.includes(a.id));
+      }
+
+      if (filterScreenIds.length > 0) {
+        const placementRows = await db.select({
+          advertiserId: placements.advertiserId,
+        }).from(placements).where(
+          inArray(placements.screenId, filterScreenIds)
+        );
+        const linkedAdvertiserIds = new Set(placementRows.map(p => p.advertiserId));
+        candidates = candidates.filter(a => linkedAdvertiserIds.has(a.id));
+      }
+
+      candidates = candidates.slice(0, limit);
+      console.log(`${LOG} Checking ${candidates.length} advertisers...`);
+
+      for (const adv of candidates) {
+        const advLog = `${LOG} advertiser=${adv.id} (${adv.companyName})`;
+        const oldMediaId = adv.yodeckMediaIdCanonical;
+
+        if (!oldMediaId) {
+          console.log(`${advLog} step=CHECK result=NO_MEDIA_ID`);
+          details.push({
+            advertiserId: adv.id,
+            companyName: adv.companyName,
+            oldMediaId: null,
+            newMediaId: null,
+            status: "skipped",
+            message: "No yodeckMediaIdCanonical set",
+          });
+          skipped++;
+          continue;
+        }
+
+        console.log(`${advLog} step=VALIDATE mediaId=${oldMediaId}`);
+
+        try {
+          const checkResult = await ensureAdvertiserMediaIsValid(adv.id, { autoHeal: false });
+          console.log(`${advLog} step=VALIDATE_RESULT ok=${checkResult.ok} reason=${checkResult.reason || "valid"}`);
+
+          if (checkResult.ok && checkResult.mediaId) {
+            details.push({
+              advertiserId: adv.id,
+              companyName: adv.companyName,
+              oldMediaId,
+              newMediaId: oldMediaId,
+              status: "skipped",
+              message: `Media ${oldMediaId} valid in Yodeck (status=${checkResult.status})`,
+            });
+            skipped++;
+            continue;
+          }
+
+          staleFound++;
+          console.log(`${advLog} step=STALE_DETECTED mediaId=${oldMediaId} reason=${checkResult.reason}`);
+
+          if (dryRun) {
+            details.push({
+              advertiserId: adv.id,
+              companyName: adv.companyName,
+              oldMediaId,
+              newMediaId: null,
+              status: "dryRun",
+              message: `Would repair: mediaId ${oldMediaId} is invalid (${checkResult.reason})`,
+            });
+            continue;
+          }
+
+          console.log(`${advLog} step=SELF_HEAL_START oldMediaId=${oldMediaId}`);
+
+          await db.update(advertisers)
+            .set({
+              yodeckMediaIdCanonical: null,
+              assetStatus: "ready_for_yodeck",
+              updatedAt: new Date(),
+            })
+            .where(eq(advertisers.id, adv.id));
+          console.log(`${advLog} step=CLEARED_CANONICAL`);
+
+          const healResult = await ensureAdvertiserMediaIsValid(adv.id, { autoHeal: true });
+
+          if (healResult.ok && healResult.mediaId) {
+            repaired++;
+            console.log(`${advLog} step=SELF_HEAL_OK newMediaId=${healResult.mediaId}`);
+            details.push({
+              advertiserId: adv.id,
+              companyName: adv.companyName,
+              oldMediaId,
+              newMediaId: healResult.mediaId,
+              status: "repaired",
+              message: `Repaired: ${oldMediaId} -> ${healResult.mediaId}`,
+            });
+          } else {
+            console.error(`${advLog} step=SELF_HEAL_FAILED reason=${healResult.reason}`);
+            details.push({
+              advertiserId: adv.id,
+              companyName: adv.companyName,
+              oldMediaId,
+              newMediaId: null,
+              status: "error",
+              message: `Self-heal failed: ${healResult.reason}`,
+            });
+            errors.push({ advertiserId: adv.id, error: healResult.reason });
+          }
+        } catch (e: any) {
+          console.error(`${advLog} step=ERROR error=${e.message}`);
+          details.push({
+            advertiserId: adv.id,
+            companyName: adv.companyName,
+            oldMediaId,
+            newMediaId: null,
+            status: "error",
+            message: e.message,
+          });
+          errors.push({ advertiserId: adv.id, error: e.message });
+        }
+      }
+
+      if (rebuildPlaylists && repaired > 0 && !dryRun) {
+        console.log(`${LOG} REBUILD_PLAYLISTS: triggering playlist rebuild for all screens...`);
+        try {
+          const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
+          const allScreens = await db.select({ id: screens.id, screenId: screens.screenId }).from(screens).where(eq(screens.isActive, true));
+
+          const targetScreens = filterScreenIds.length > 0
+            ? allScreens.filter(s => filterScreenIds.includes(s.id) || filterScreenIds.includes(s.screenId))
+            : allScreens;
+
+          for (const scr of targetScreens) {
+            try {
+              console.log(`${LOG} REBUILD screen=${scr.screenId}`);
+              const rbResult = await rebuildScreenPlaylist(scr.id);
+              playlistRebuilds.push({ screenId: scr.screenId, ok: rbResult.ok, adsAdded: rbResult.adsAdded?.length || 0 });
+            } catch (e: any) {
+              playlistRebuilds.push({ screenId: scr.screenId, ok: false, error: e.message });
+            }
+          }
+        } catch (e: any) {
+          console.error(`${LOG} REBUILD_PLAYLISTS ERROR:`, e.message);
+          errors.push({ phase: "rebuildPlaylists", error: e.message });
+        }
+      } else if (rebuildPlaylists && dryRun) {
+        console.log(`${LOG} REBUILD_PLAYLISTS: skipped (dryRun=true)`);
+      } else if (!rebuildPlaylists) {
+        console.log(`${LOG} REBUILD_PLAYLISTS: not requested (set rebuildPlaylists:true to trigger)`);
+      }
+
+      console.log(`${LOG} DONE checked=${candidates.length} staleFound=${staleFound} repaired=${repaired} skipped=${skipped} errors=${errors.length} playlistRebuilds=${playlistRebuilds.length}`);
+
+      return res.json({
+        ok: errors.length === 0,
+        correlationId,
+        mode,
+        reason,
+        dryRun,
+        checkedAdvertisers: candidates.length,
+        staleFound,
+        repaired,
+        skipped,
+        playlistRebuilds: playlistRebuilds.length > 0 ? playlistRebuilds : undefined,
+        details,
+        errors,
+      });
+    } catch (error: any) {
+      console.error(`${LOG} FATAL ERROR:`, error);
+      return res.status(500).json({
+        ok: false,
+        correlationId,
+        error: error.message,
+        checkedAdvertisers: 0,
+        staleFound,
+        repaired,
+        skipped,
+        details,
+        errors: [...errors, { error: error.message }],
+      });
     }
   });
 
