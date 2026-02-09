@@ -1,0 +1,43 @@
+Je bent senior backend engineer in Elevizion.
+
+PROBLEEM (bewezen):
+- POST /api/admin/rebuild-playlist skipt advertisers met message "No yodeckMediaIdCanonical..." en oldMediaId=null.
+- Terwijl AI_DUMP v2 wel plannedMediaIds=[29881729] vindt vanuit advertisers.
+=> Rebuild endpoint leest de verkeerde veldnaam/bron voor mediaId.
+
+DOEL:
+Laat /api/admin/rebuild-playlist dezelfde “media id detectie” gebruiken als AI_DUMP v2:
+- Zoek per advertiser de huidige Yodeck mediaId uit meerdere mogelijke velden, in deze volgorde:
+  1) advertiser.yodeckMediaIdCanonical
+  2) advertiser.mediaId
+  3) advertiser.yodeckMediaId
+  4) advertiser.media_id
+  5) advertiser.yodeck_media_id
+- Als geen van deze bestaat: probeer fallback:
+  - zoek gekoppelde asset/placement records en pak daar mediaId (als die relatie bestaat)
+- Log per advertiser welke bron gebruikt is: mediaIdSource (string)
+
+IMPLEMENTATIE:
+1) Voeg helper functie toe in rebuild-playlist handler:
+   function pickMediaId(advertiser): { mediaId: number|null, source: string|null }
+2) Gebruik pickMediaId() in plaats van alleen yodeckMediaIdCanonical.
+3) Zet in details[] altijd:
+   - oldMediaId (de gevonden id)
+   - mediaIdSource
+   - status/message
+4) Als oldMediaId gevonden is:
+   - doe GET /api/v2/media/{oldMediaId}
+   - bij 404 => staleFound++ en (dryRun? report : repair)
+5) Bij repair:
+   - update het JUISTE veld in DB zodat het consistent wordt:
+     - zet advertiser.yodeckMediaIdCanonical = newMediaId (primary)
+     - en update advertiser.mediaId (als dat een legacy veld is) ook naar newMediaId of zet hem uit fase
+   - (optioneel) laat AI_DUMP v2 plannedMediaIds voortaan yodeckMediaIdCanonical prefereren
+
+VALIDATIE:
+- dryRun:true moet nu staleFound=1 tonen met oldMediaId=29881729 en mediaIdSource="advertiser.mediaId" (of wat het is).
+- dryRun:false moet repaired=1 en newMediaId vullen.
+- daarna AI_DUMP v2 includeMediaDetails moet failed=[] zijn.
+
+OPLEVEREN:
+- gewijzigde files + code van pickMediaId + rebuild handler diff

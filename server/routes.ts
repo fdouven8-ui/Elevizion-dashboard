@@ -23855,6 +23855,30 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
     try {
       const { ensureAdvertiserMediaIsValid } = await import("./services/transactionalUploadService");
+
+      async function pickMediaId(advId: string, advRow: any): Promise<{ mediaId: number | null; source: string | null }> {
+        if (advRow.yodeckMediaIdCanonical && typeof advRow.yodeckMediaIdCanonical === "number") {
+          return { mediaId: advRow.yodeckMediaIdCanonical, source: "advertiser.yodeckMediaIdCanonical" };
+        }
+
+        const assetRows = await db.select({
+          yodeckMediaId: adAssets.yodeckMediaId,
+          approvalStatus: adAssets.approvalStatus,
+        })
+          .from(adAssets)
+          .where(eq(adAssets.advertiserId, advId))
+          .orderBy(desc(adAssets.createdAt))
+          .limit(5);
+
+        for (const asset of assetRows) {
+          if (asset.yodeckMediaId && typeof asset.yodeckMediaId === "number") {
+            return { mediaId: asset.yodeckMediaId, source: `adAsset.yodeckMediaId (approval=${asset.approvalStatus})` };
+          }
+        }
+
+        return { mediaId: null, source: null };
+      }
+
       const allAdvertisers = await db.select({
         id: advertisers.id,
         companyName: advertisers.companyName,
@@ -23884,43 +23908,66 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
       for (const adv of candidates) {
         const advLog = `${LOG} advertiser=${adv.id} (${adv.companyName})`;
-        const oldMediaId = adv.yodeckMediaIdCanonical;
+        const picked = await pickMediaId(adv.id, adv);
+        const oldMediaId = picked.mediaId;
+        const mediaIdSource = picked.source;
 
         if (!oldMediaId) {
-          console.log(`${advLog} step=CHECK result=NO_MEDIA_ID`);
+          console.log(`${advLog} step=CHECK result=NO_MEDIA_ID (checked: yodeckMediaIdCanonical, adAssets.yodeckMediaId)`);
           details.push({
             advertiserId: adv.id,
             companyName: adv.companyName,
             oldMediaId: null,
             newMediaId: null,
+            mediaIdSource: null,
             status: "skipped",
-            message: "No yodeckMediaIdCanonical set",
+            message: "No mediaId found in any source (yodeckMediaIdCanonical, adAssets.yodeckMediaId)",
           });
           skipped++;
           continue;
         }
 
-        console.log(`${advLog} step=VALIDATE mediaId=${oldMediaId}`);
+        console.log(`${advLog} step=VALIDATE mediaId=${oldMediaId} source=${mediaIdSource}`);
 
         try {
-          const checkResult = await ensureAdvertiserMediaIsValid(adv.id, { autoHeal: false });
-          console.log(`${advLog} step=VALIDATE_RESULT ok=${checkResult.ok} reason=${checkResult.reason || "valid"}`);
+          const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
+          const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN?.trim() || "";
 
-          if (checkResult.ok && checkResult.mediaId) {
+          const checkResp = await fetch(`${YODECK_API_BASE}/media/${oldMediaId}/`, {
+            headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+          });
+          console.log(`${advLog} step=YODECK_CHECK mediaId=${oldMediaId} httpStatus=${checkResp.status}`);
+
+          if (checkResp.ok) {
             details.push({
               advertiserId: adv.id,
               companyName: adv.companyName,
               oldMediaId,
               newMediaId: oldMediaId,
+              mediaIdSource,
               status: "skipped",
-              message: `Media ${oldMediaId} valid in Yodeck (status=${checkResult.status})`,
+              message: `Media ${oldMediaId} valid in Yodeck (HTTP 200)`,
             });
             skipped++;
             continue;
           }
 
+          if (checkResp.status !== 404) {
+            details.push({
+              advertiserId: adv.id,
+              companyName: adv.companyName,
+              oldMediaId,
+              newMediaId: null,
+              mediaIdSource,
+              status: "error",
+              message: `Unexpected HTTP ${checkResp.status} checking media ${oldMediaId}`,
+            });
+            errors.push({ advertiserId: adv.id, error: `HTTP ${checkResp.status}` });
+            continue;
+          }
+
           staleFound++;
-          console.log(`${advLog} step=STALE_DETECTED mediaId=${oldMediaId} reason=${checkResult.reason}`);
+          console.log(`${advLog} step=STALE_DETECTED mediaId=${oldMediaId} source=${mediaIdSource} => 404`);
 
           if (dryRun) {
             details.push({
@@ -23928,8 +23975,9 @@ KvK: 90982541 | BTW: NL004857473B37</p>
               companyName: adv.companyName,
               oldMediaId,
               newMediaId: null,
+              mediaIdSource,
               status: "dryRun",
-              message: `Would repair: mediaId ${oldMediaId} is invalid (${checkResult.reason})`,
+              message: `Would repair: mediaId ${oldMediaId} returns 404 (source: ${mediaIdSource})`,
             });
             continue;
           }
@@ -23943,7 +23991,16 @@ KvK: 90982541 | BTW: NL004857473B37</p>
               updatedAt: new Date(),
             })
             .where(eq(advertisers.id, adv.id));
-          console.log(`${advLog} step=CLEARED_CANONICAL`);
+
+          if (mediaIdSource?.startsWith("adAsset.")) {
+            await db.update(adAssets)
+              .set({ yodeckMediaId: null })
+              .where(and(
+                eq(adAssets.advertiserId, adv.id),
+                eq(adAssets.yodeckMediaId, oldMediaId),
+              ));
+          }
+          console.log(`${advLog} step=CLEARED_STALE_IDS`);
 
           const healResult = await ensureAdvertiserMediaIsValid(adv.id, { autoHeal: true });
 
@@ -23955,8 +24012,9 @@ KvK: 90982541 | BTW: NL004857473B37</p>
               companyName: adv.companyName,
               oldMediaId,
               newMediaId: healResult.mediaId,
+              mediaIdSource,
               status: "repaired",
-              message: `Repaired: ${oldMediaId} -> ${healResult.mediaId}`,
+              message: `Repaired: ${oldMediaId} -> ${healResult.mediaId} (source: ${mediaIdSource})`,
             });
           } else {
             console.error(`${advLog} step=SELF_HEAL_FAILED reason=${healResult.reason}`);
@@ -23965,6 +24023,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
               companyName: adv.companyName,
               oldMediaId,
               newMediaId: null,
+              mediaIdSource,
               status: "error",
               message: `Self-heal failed: ${healResult.reason}`,
             });
@@ -23977,6 +24036,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
             companyName: adv.companyName,
             oldMediaId,
             newMediaId: null,
+            mediaIdSource,
             status: "error",
             message: e.message,
           });

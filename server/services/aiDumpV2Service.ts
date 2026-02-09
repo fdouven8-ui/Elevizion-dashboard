@@ -132,6 +132,13 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
     const allAdvertisers = await storage.getAdvertisers();
     const allContracts = await storage.getContracts();
     const allPlacements = await storage.getPlacements();
+    const allAdAssets = await db.select({
+      id: adAssets.id,
+      advertiserId: adAssets.advertiserId,
+      yodeckMediaId: adAssets.yodeckMediaId,
+      approvalStatus: adAssets.approvalStatus,
+      publishStatus: adAssets.publishStatus,
+    }).from(adAssets);
 
     const uploadJobRows = await db.select().from(uploadJobs)
       .orderBy(desc(uploadJobs.createdAt))
@@ -212,6 +219,7 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
       screens: screenSnapshots,
       locations: locationSnapshots,
       advertisers: advertiserSnapshots,
+      adAssets: allAdAssets,
       uploadQueue: {
         pending: uploadJobPending.length,
         failed: uploadJobFailed.length,
@@ -407,6 +415,7 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
           const fromAdvertisers: number[] = [];
           const fromPlaylistsFallback: number[] = [];
 
+          const fromAdAssets: number[] = [];
           const allAdvertisersDb = (dbLayer.advertisers || []) as any[];
           for (const adv of allAdvertisersDb) {
             if (adv.yodeckMediaIdCanonical && typeof adv.yodeckMediaIdCanonical === "number") {
@@ -415,8 +424,16 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
             }
           }
 
+          const allAssetsDb = (dbLayer.adAssets || []) as any[];
+          for (const asset of allAssetsDb) {
+            if (asset.yodeckMediaId && typeof asset.yodeckMediaId === "number" && !allMediaIds.has(asset.yodeckMediaId)) {
+              fromAdAssets.push(asset.yodeckMediaId);
+              allMediaIds.add(asset.yodeckMediaId);
+            }
+          }
+
           for (const mid of Array.from(allMediaIds)) {
-            if (!fromAdvertisers.includes(mid)) {
+            if (!fromAdvertisers.includes(mid) && !fromAdAssets.includes(mid)) {
               fromPlaylistsFallback.push(mid);
             }
           }
@@ -426,7 +443,7 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
           const mediaSnapshots: any[] = [];
           const failedMedia: Array<{ mediaId: number; message: string; statusCode?: number }> = [];
 
-          console.log(`${LOG_PREFIX} [${correlationId}] Media details: ${plannedMediaIds.length} planned (${fromAdvertisers.length} from advertisers, ${fromPlaylistsFallback.length} from playlists)`);
+          console.log(`${LOG_PREFIX} [${correlationId}] Media details: ${plannedMediaIds.length} planned (${fromAdvertisers.length} from advertisers, ${fromAdAssets.length} from adAssets, ${fromPlaylistsFallback.length} from playlists)`);
 
           for (const mediaId of mediaIdsToCheck) {
             try {
