@@ -403,14 +403,39 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
         }
 
         // ── Media details ──
-        if (options.includeMediaDetails && allMediaIds.size > 0) {
+        if (options.includeMediaDetails) {
+          const fromAdvertisers: number[] = [];
+          const fromPlaylistsFallback: number[] = [];
+
+          const allAdvertisersDb = (dbLayer.advertisers || []) as any[];
+          for (const adv of allAdvertisersDb) {
+            if (adv.yodeckMediaIdCanonical && typeof adv.yodeckMediaIdCanonical === "number") {
+              fromAdvertisers.push(adv.yodeckMediaIdCanonical);
+              allMediaIds.add(adv.yodeckMediaIdCanonical);
+            }
+          }
+
+          for (const mid of Array.from(allMediaIds)) {
+            if (!fromAdvertisers.includes(mid)) {
+              fromPlaylistsFallback.push(mid);
+            }
+          }
+
+          const plannedMediaIds = Array.from(allMediaIds);
+          const mediaIdsToCheck = plannedMediaIds.slice(0, maxMedia);
           const mediaSnapshots: any[] = [];
-          const mediaIdsToCheck = Array.from(allMediaIds).slice(0, maxMedia);
+          const failedMedia: Array<{ mediaId: number; message: string; statusCode?: number }> = [];
+
+          console.log(`${LOG_PREFIX} [${correlationId}] Media details: ${plannedMediaIds.length} planned (${fromAdvertisers.length} from advertisers, ${fromPlaylistsFallback.length} from playlists)`);
+
           for (const mediaId of mediaIdsToCheck) {
             try {
               const mResult = await yodeckRequest<any>(`/media/${mediaId}/`);
               if (!mResult.ok) {
-                mediaSnapshots.push({ id: mediaId, error: mResult.error });
+                const errMsg = mResult.error || `HTTP ${mResult.status}`;
+                mediaSnapshots.push({ id: mediaId, error: errMsg });
+                failedMedia.push({ mediaId, message: errMsg, statusCode: mResult.status });
+                pushError("yodeck.mediaDetails", { message: errMsg }, { detail: `mediaId=${mediaId}`, statusCode: mResult.status });
                 continue;
               }
               const m = mResult.data;
@@ -433,10 +458,21 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
               });
             } catch (e: any) {
               mediaSnapshots.push({ id: mediaId, error: e.message });
-              pushError("yodeck.media", e, { detail: `mediaId=${mediaId}` });
+              failedMedia.push({ mediaId, message: e.message });
+              pushError("yodeck.mediaDetails", e, { detail: `mediaId=${mediaId}` });
             }
           }
+
           yodeckLayer.mediaDetails = mediaSnapshots;
+          yodeckLayer.mediaDetailRequest = {
+            plannedMediaIds,
+            sources: {
+              fromAdvertisers,
+              fromPlaylistsFallback,
+            },
+            fetched: mediaSnapshots.filter((m: any) => !m.error).length,
+            failed: failedMedia,
+          };
         }
 
         // ── Shared playlist detection ──
