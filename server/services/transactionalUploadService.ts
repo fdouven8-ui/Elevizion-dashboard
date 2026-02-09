@@ -100,6 +100,13 @@ export async function uploadVideoToYodeckTransactional(
 
     console.log(`${LOG_PREFIX} [${correlationId}] File read: ${fileBuffer.length} bytes`);
 
+    console.log("[AdBytesSource]", {
+      mediaId: "pending",
+      name: desiredFilename,
+      source: assetPath.startsWith("http") ? "http" : "r2",
+      bytesLen: fileBuffer.length,
+    });
+
     const createResult = await step1CreateMedia(jobId, desiredFilename, correlationId);
     if (!createResult.ok) {
       console.error(`[YodeckUploadFailed] mediaId=none advertiserId=${advertiserId} reason=${createResult.errorCode}`);
@@ -126,7 +133,33 @@ export async function uploadVideoToYodeckTransactional(
     }
     const presignedUrl = uploadUrlResult.presignedUrl!;
 
-    console.log(`[YodeckUploadStart] mediaId=${mediaId} name=${desiredFilename}`);
+    const buf = Buffer.isBuffer(fileBuffer) ? fileBuffer : Buffer.from(fileBuffer);
+    const head = buf.subarray(0, Math.min(128, buf.length)).toString("latin1");
+    const hasFtyp = head.includes("ftyp");
+
+    console.log("[YodeckUploadStart]", {
+      mediaId,
+      name: desiredFilename,
+      bytesLen: buf.length,
+      headHex: buf.subarray(0, 32).toString("hex"),
+      hasFtyp,
+    });
+
+    if (buf.length < 1024 || !hasFtyp) {
+      console.error("[YodeckUploadFailed]", {
+        mediaId,
+        name: desiredFilename,
+        reason: "INVALID_MP4_BYTES",
+        bytesLen: buf.length,
+        headPreview: head.slice(0, 200),
+      });
+      const err: any = new Error("INVALID_MP4_BYTES: buffer is not a valid MP4 (ftyp missing or too small)");
+      err.code = "INVALID_MP4_BYTES";
+      err.mediaId = mediaId;
+      await markJobFailed(jobId, "INVALID_MP4_BYTES", { bytesLen: buf.length, hasFtyp, headHex: buf.subarray(0, 32).toString("hex") }, "Buffer is not a valid MP4");
+      return makeFailResult(jobId, advertiserId, "INVALID_MP4_BYTES", { bytesLen: buf.length, hasFtyp });
+    }
+
     console.log(`[YodeckUploadBytes] mediaId=${mediaId} bytesLength=${fileBuffer.length}`);
     const putResult = await step3PutBinary(jobId, presignedUrl, fileBuffer, correlationId);
     if (!putResult.ok) {
@@ -512,6 +545,7 @@ async function readFileFromStorage(path: string, correlationId: string): Promise
       const buffer = await r2Service.downloadFile(path);
       if (buffer && buffer.length > 0) {
         console.log(`${LOG_PREFIX} [${correlationId}] Read ${buffer.length} bytes from R2: ${path}`);
+        console.log("[AdBytesSource]", { mediaId: "n/a", name: path, source: "r2", bytesLen: buffer.length });
         rawBuffer = buffer;
       } else {
         console.warn(`${LOG_PREFIX} [${correlationId}] R2 download returned empty for: ${path}, trying Replit fallback`);
@@ -530,6 +564,7 @@ async function readFileFromStorage(path: string, correlationId: string): Promise
         return null;
       }
       rawBuffer = Buffer.from(result.value as unknown as ArrayBuffer);
+      console.log("[AdBytesSource]", { mediaId: "n/a", name: path, source: "replit-objectstore", bytesLen: rawBuffer.length });
     } catch (error: any) {
       console.error(`${LOG_PREFIX} [${correlationId}] Storage read error:`, error);
       return null;

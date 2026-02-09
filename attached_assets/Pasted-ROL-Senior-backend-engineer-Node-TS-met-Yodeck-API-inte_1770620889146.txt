@@ -1,0 +1,70 @@
+ROL: Senior backend engineer (Node/TS) met Yodeck API integraties.
+
+DOEL VAN DEZE PROMPT (1 wijziging, geen extra features):
+We moeten bewijzen waarom Yodeck media upload op "failed" eindigt. Uit de browser-sanity-check blijkt dat wat we uploaden géén echte MP4 is (243 bytes, geen 'ftyp') en er is een 403 op de storage URL. Dus: voeg een harde server-side preflight + logging toe op de exacte bytes die we naar Yodeck uploaden, en fail-fast als het geen MP4 is.
+
+✅ IMPLEMENT NOW:
+1) Zoek in de code het pad waar advertentie-video’s naar Yodeck worden geüpload via:
+   - GET /media/{id}/upload  (upload_url ophalen)
+   - PUT upload_url          (bytes uploaden)
+   - PUT /media/{id}/upload/complete
+   Dit zit in server/services/yodeckClient.ts (of vergelijkbaar). Dit is de ENIGE plek die aangepast mag worden.
+
+2) Voeg DIRECT vóór de PUT naar upload_url deze preflight + logging toe op de buffer "bytes" die geüpload wordt:
+
+   - Log:
+     [YodeckUploadStart] { mediaId, name, bytesLen, headHex, hasFtyp }
+   - Controle:
+     - bytesLen >= 1024
+     - 'ftyp' komt voor binnen de eerste 128 bytes (latin1 decode)
+   - Als check faalt:
+     - log [YodeckUploadFailed] { mediaId, name, reason:"INVALID_MP4_BYTES", bytesLen, headPreview }
+     - throw Error met err.code="INVALID_MP4_BYTES" en err.mediaId=mediaId
+     - STOP: doe géén upload/complete, géén playlist-add, géén push
+
+   Code (copy exact):
+
+   const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+   const head = buf.subarray(0, Math.min(128, buf.length)).toString("latin1");
+   const hasFtyp = head.includes("ftyp");
+
+   console.log("[YodeckUploadStart]", {
+     mediaId,
+     name,
+     bytesLen: buf.length,
+     headHex: buf.subarray(0, 32).toString("hex"),
+     hasFtyp,
+   });
+
+   if (buf.length < 1024 || !hasFtyp) {
+     console.error("[YodeckUploadFailed]", {
+       mediaId,
+       name,
+       reason: "INVALID_MP4_BYTES",
+       bytesLen: buf.length,
+       headPreview: head.slice(0, 200),
+     });
+     const err: any = new Error("INVALID_MP4_BYTES: buffer is not a valid MP4 (ftyp missing or too small)");
+     err.code = "INVALID_MP4_BYTES";
+     err.mediaId = mediaId;
+     throw err;
+   }
+
+3) Voeg daarnaast 1 extra log toe op het moment dat je de bytes download/ophaalt (dus waar bytes vandaan komt):
+   - Log status/bron in 1 regel:
+     [AdBytesSource] { mediaId, name, source:"<cloudflare|r2|s3|disk|http>", bytesLen }
+   (Geen extra fetches, alleen log wat je al hebt.)
+
+4) Republish. Klaar.
+
+✅ ACCEPTATIE:
+- Bij publish moet je óf:
+  A) [YodeckUploadStart] zien met bytesLen >> 1024 en hasFtyp=true
+  OF
+  B) direct failen met err.code=INVALID_MP4_BYTES (dan weten we 100% dat we HTML/403/tekst uploaden)
+- Geen stille "upload succeeded" terwijl encoding faalt.
+
+BELANGRIJK:
+- GEEN andere refactors.
+- GEEN playlist/push wijzigingen.
+- Alleen preflight + logging in het Yodeck upload pad.
