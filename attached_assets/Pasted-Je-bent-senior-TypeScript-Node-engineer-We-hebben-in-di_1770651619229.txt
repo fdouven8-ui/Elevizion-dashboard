@@ -1,0 +1,36 @@
+Je bent senior TypeScript/Node engineer. We hebben in dit project veel patches gemaakt omdat we dachten dat een Yodeck “connection error/loading” kwam door media upload / transitions. Nu blijkt de echte oorzaak: een Yodeck app “NOS Opmerkelijk” (news/RSS app) stond in dezelfde playlist als video ads. Daardoor kwam de fout. De oude URL-based media methode was goed.
+
+DOEL:
+1) Herstel de oude URL-based media setup (zoals vóór de grote transition/upload fixes).
+2) Zorg dat apps zoals “NOS Opmerkelijk” NOOIT meer in een ads-playlist kunnen komen.
+3) Houd changes minimaal: geen redesign, geen nieuwe architectuur.
+
+AANPAK:
+A) Maak een rollback-branch en bepaal welke commits de overgang/upload fixes introduceerden.
+- Run: git log --oneline -- server/services/yodeckClient.ts server/routes.ts (en relevante playlist builder files)
+- Identificeer commits die: patchMediaSafe, repair-local endpoint rewrite, clone fallbacks, buffering verify logic, screen targeting changes etc hebben toegevoegd vanwege “transition problem”.
+
+B) Revert naar legacy gedrag:
+- Revert die commits met git revert (niet reset) zodat history intact blijft.
+- Herstel de code zoals hij was toen URL-based media werkte.
+
+C) Voeg harde guardrails toe in playlist building:
+- In de functie(s) die playlist items samenstellen:
+  - Als item.type === "app" of item.app_type aanwezig is, dan mag dit item NIET in de ads playlist.
+  - Apps moeten naar een aparte playlist: e.g. playlist_info_{screenId} of playlist_news_{location}.
+- Voeg een log/warning toe als er toch geprobeerd wordt een app in ads playlist te stoppen.
+
+D) Voeg een “migratie/repair” script/endpoint toe (klein) om bestaande playlists te corrigeren:
+- Loop door alle bestaande playlists die ads bevatten
+- Verwijder app-items uit ads playlists
+- Voeg die app-items toe aan info/news playlists (maak aan indien niet bestaat)
+- Herpubliceer/push de playlists naar de screens
+
+E) Verificatie:
+- Unit-ish check: log output met hoeveel items uit ads playlists zijn verwijderd.
+- Handmatige test: push naar 1 screen, bevestig dat de “connection error/loading” niet meer voorkomt.
+
+LEVER OP:
+- Exacte reverted commits (in output)
+- De minimale code changes met duidelijke comments
+- Eén endpoint of script om bes

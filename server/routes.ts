@@ -12631,6 +12631,106 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/playlists/remove-apps
+   * Scan all screen playlists and remove app/widget items (e.g. NOS Opmerkelijk).
+   * Apps in ads playlists cause "connection error/loading" on Yodeck screens.
+   * Supports dryRun=true to preview without modifying.
+   */
+  app.post("/api/admin/playlists/remove-apps", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    const { dryRun = false } = req.body || {};
+
+    console.log(`[RemoveAppsFromPlaylists] Starting (dryRun=${dryRun})`);
+
+    try {
+      const { yodeckRequest } = await import("./services/simplePlaylistModel");
+
+      const allScreens = await db.select().from(screens);
+      const playlistIds = new Set<string>();
+      for (const screen of allScreens) {
+        if (screen.playlistId) playlistIds.add(screen.playlistId);
+      }
+
+      console.log(`[RemoveAppsFromPlaylists] Found ${playlistIds.size} screen playlists to scan`);
+
+      const APP_TYPES = new Set(["widget", "layout", "playlist"]);
+      const results: Array<{
+        playlistId: string;
+        playlistName: string;
+        totalItems: number;
+        appsRemoved: Array<{ id: number; name: string; type: string }>;
+        itemsAfter: number;
+        patched: boolean;
+      }> = [];
+      let totalAppsRemoved = 0;
+
+      for (const playlistId of Array.from(playlistIds)) {
+        const plResp = await yodeckRequest<{
+          id: number;
+          name: string;
+          items: Array<{ id: number; priority: number; duration: number; name: string; type: string }>;
+        }>(`/playlists/${playlistId}/`);
+
+        if (!plResp.ok || !plResp.data) {
+          console.warn(`[RemoveAppsFromPlaylists] Could not fetch playlist ${playlistId}: ${plResp.error}`);
+          continue;
+        }
+
+        const items = plResp.data.items || [];
+        const appsFound = items.filter(item => APP_TYPES.has(item.type));
+
+        if (appsFound.length === 0) continue;
+
+        const mediaOnlyItems = items.filter(item => !APP_TYPES.has(item.type));
+
+        console.log(`[RemoveAppsFromPlaylists] Playlist ${playlistId} "${plResp.data.name}": ${appsFound.length} apps found: ${appsFound.map(a => `${a.name}(${a.type})`).join(", ")}`);
+
+        let patched = false;
+        if (!dryRun) {
+          const patchResult = await yodeckRequest(`/playlists/${playlistId}/`, "PATCH", {
+            items: mediaOnlyItems.map((item, index) => ({
+              id: item.id,
+              priority: index + 1,
+              duration: item.duration || 10,
+              type: item.type,
+            })),
+          });
+          patched = !!patchResult.ok;
+          if (patched) {
+            console.log(`[RemoveAppsFromPlaylists] Patched playlist ${playlistId}: removed ${appsFound.length} apps, ${mediaOnlyItems.length} items remain`);
+          } else {
+            console.error(`[RemoveAppsFromPlaylists] PATCH FAILED for playlist ${playlistId}: ${patchResult.error}`);
+          }
+        }
+
+        totalAppsRemoved += appsFound.length;
+        results.push({
+          playlistId,
+          playlistName: plResp.data.name,
+          totalItems: items.length,
+          appsRemoved: appsFound.map(a => ({ id: a.id, name: a.name, type: a.type })),
+          itemsAfter: mediaOnlyItems.length,
+          patched,
+        });
+      }
+
+      console.log(`[RemoveAppsFromPlaylists] Complete: ${totalAppsRemoved} apps removed from ${results.length} playlists (dryRun=${dryRun})`);
+
+      res.json({
+        ok: true,
+        dryRun,
+        playlistsScanned: playlistIds.size,
+        playlistsAffected: results.length,
+        totalAppsRemoved,
+        results,
+      });
+    } catch (error: any) {
+      console.error("[RemoveAppsFromPlaylists] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/admin/screens/smoke-check
    * Verify system invariants: unique playlists, base exists, naming convention
    */

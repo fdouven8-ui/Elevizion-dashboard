@@ -281,7 +281,7 @@ function getYodeckApiKey(): string {
   return parsed.raw;
 }
 
-async function yodeckRequest<T>(
+export async function yodeckRequest<T>(
   endpoint: string,
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" = "GET",
   body?: any
@@ -606,23 +606,34 @@ export async function syncScreenPlaylistFromBase(screenPlaylistId: number): Prom
     };
   }
 
-  const baseItems = basePlaylistResult.data.items || [];
-  // The item.id is the playlist item ID, not the media ID
-  // We need to copy the item structure to the screen playlist
+  const allBaseItems = basePlaylistResult.data.items || [];
+
+  const APP_TYPES = new Set(["widget", "layout", "playlist"]);
+  const baseItems = allBaseItems.filter(item => {
+    if (APP_TYPES.has(item.type)) {
+      console.warn(`${LOG_PREFIX} [APP_GUARD] BLOCKED app/widget from ads playlist: name="${item.name}" id=${item.id} type=${item.type}`);
+      return false;
+    }
+    return true;
+  });
+
+  if (allBaseItems.length !== baseItems.length) {
+    console.log(`${LOG_PREFIX} [APP_GUARD] Filtered ${allBaseItems.length - baseItems.length} non-media items from base playlist (${allBaseItems.length} total → ${baseItems.length} media-only)`);
+  }
+
   const baseMediaIds = baseItems.map(item => item.id);
   
-  console.log(`${LOG_PREFIX} Base playlist has ${baseItems.length} items: ${baseItems.map(i => `${i.name}(${i.id})`).join(", ")}`);
+  console.log(`${LOG_PREFIX} Base playlist has ${baseItems.length} media items: ${baseItems.map(i => `${i.name}(${i.id})`).join(", ")}`);
 
   // 3. Get current screen playlist
   const currentPlaylistResult = await yodeckRequest<PlaylistResponse>(
     `/playlists/${screenPlaylistId}/`
   );
 
-  // 4. Replace screen playlist items with base items
-  // Use PATCH to replace the entire items array
+  // 4. Replace screen playlist items with base items (media only, no apps/widgets)
   const patchResult = await yodeckRequest(`/playlists/${screenPlaylistId}/`, "PATCH", {
     items: baseItems.map((item, index) => ({
-      id: item.id,  // Keep the media/widget ID reference
+      id: item.id,
       priority: index + 1,
       duration: item.duration || 10,
       type: item.type,
@@ -796,18 +807,30 @@ export async function addAdsToScreenPlaylist(
     return { ok: true, adsAdded: 0, finalCount: currentItems.length, actualMediaIds: currentItems.map(i => i.id), missingMediaIds: [] };
   }
 
-  // Build new items array: keep base items + add new ads
+  const APP_TYPES_GUARD = new Set(["widget", "layout", "playlist"]);
+  const mediaOnlyItems = currentItems.filter(item => {
+    if (APP_TYPES_GUARD.has(item.type)) {
+      console.warn(`${LOG_PREFIX} [APP_GUARD] Removing app/widget from screen playlist during ad-add: name="${item.name}" id=${item.id} type=${item.type}`);
+      return false;
+    }
+    return true;
+  });
+
+  if (currentItems.length !== mediaOnlyItems.length) {
+    console.log(`${LOG_PREFIX} [APP_GUARD] Stripped ${currentItems.length - mediaOnlyItems.length} app/widget items from playlist ${screenPlaylistId}`);
+  }
+
   const newItems = [
-    ...currentItems.map((item, index) => ({
+    ...mediaOnlyItems.map((item, index) => ({
       id: item.id,
       priority: index + 1,
       duration: item.duration || 10,
       type: item.type,
     })),
     ...newAdIds.map((mediaId, index) => ({
-      id: mediaId,  // Media ID to add
-      priority: currentItems.length + index + 1,
-      duration: 15,  // Default ad duration
+      id: mediaId,
+      priority: mediaOnlyItems.length + index + 1,
+      duration: 15,
       type: "media" as const,
     })),
   ];
