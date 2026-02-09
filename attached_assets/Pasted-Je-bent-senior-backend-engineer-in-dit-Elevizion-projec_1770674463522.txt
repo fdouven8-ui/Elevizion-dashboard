@@ -1,0 +1,93 @@
+Je bent senior backend engineer in dit Elevizion project. Doel: maak een nieuwe, betrouwbare “AI_DUMP v2” generator die in één run de actuele situatie vastlegt (ground truth) en print als één JSON + menselijk leesbare secties. Dit moet up-to-date zijn met de huidige productie/test omgeving.
+
+BELANGRIJK
+- Geen grote refactor. Voeg alleen een nieuwe route + service toe (en evt. kleine helpers).
+- De dump moet “self-contained” zijn: alles wat nodig is om issues te debuggen (playlist, push, local media, mapping) zit erin.
+- Data moet komen uit: onze DB (screens, locations, advertisers, placements, assets, contracts), en live uit Yodeck API (players, current playlist, playlist items, media details/status), en storage (R2) waar relevant.
+- Output moet deterministic en copy-pastebaar zijn: 1 endpoint response, en ook gelogd in server logs.
+- Voeg correlationId en timestamps toe.
+
+WAT JE MOET BOUWEN
+1) Nieuwe admin endpoint:
+   - POST /api/admin/ai-dump-v2
+   - Body opties:
+     {
+       "includeYodeck": true,
+       "includePlaylists": true,
+       "includePlaylistItems": true,
+       "includeMediaDetails": true,
+       "includeNowPlaying": true,
+       "includeStorageChecks": true,
+       "yodeckPlayerIds": [591895, 591896],   // optional filter
+       "screenIds": ["..."],                  // optional filter
+       "maxPlaylistItemsPerPlaylist": 200,
+       "maxMediaDetails": 200
+     }
+
+2) Service: buildAiDumpV2(options) die 4 lagen bouwt:
+   A) ENV & BUILD CONTEXT
+      - appVersion (/api/version intern of package.json), git/commit als aanwezig
+      - NODE_ENV, TEST_MODE, CONTENT_PIPELINE_MODE
+      - storage provider config (R2/keys aanwezig, bucket/endpoint masked)
+      - yodeck config health (api key aanwezig masked, org/account id indien bekend)
+
+   B) DB SNAPSHOT (huidige staat)
+      - screens: id, name, locationId, yodeckPlayerId, playlistId (DB), status flags
+      - locations: id, naam, stad
+      - mappings: screen->location->playlist (zoals in oude dump) MAAR ook met “source of truth” velden:
+        * dbPlaylistId
+        * yodeckReportedPlaylistId (van device status / now playing)
+        * mismatch boolean
+      - advertisers: id, bedrijfsnaam, contracts count, mediaId, asset status
+      - placements: per screen, welke ads verwacht, status (proposed/approved/published), timestamps
+      - upload/review queue status (aantal pending/failed), retry counters
+
+   C) YODECK LIVE SNAPSHOT (ground truth)
+      - Per player:
+        * online/offline, lastSeen, current content source (playlist/app), current playlist id+name
+        * “expected playlist” volgens DB en “actual playlist” volgens Yodeck
+      - Playlists:
+        * voor alle relevante playlists: id, name, itemCount
+        * items (max N): item type, mediaId, title, duration, isApp/rss, url fields
+      - Media details (max N media IDs):
+        * id, title, status (initialized/ready/etc), fileSize, origin fields
+        * play_from_url, download_from_url, buffering settings (alle relevante velden)
+        * indicator “LOCAL_OK”: true als het media object géén streaming-only afhankelijkheid heeft en klaar/gedownload lijkt (definieer expliciet)
+      - Flags voor bekende issues:
+        * SHARED_PLAYLIST_DETECTED (zelfde playlistId aan meerdere screens gekoppeld)
+        * CONNECTION_ERROR_RISK (playlist bevat items met play_from_url/download_from_url die wij via R2 aanbieden en die niet “ready/local” lijken)
+        * PUSH_NOT_VERIFIED (DB verwacht publish/push maar Yodeck now playing wijkt af)
+
+   D) VERIFICATIE & SAMENVATTING
+      - Top 10 mismatches + concrete regels “wat klopt niet”
+      - 1 compacte “Quick Facts” blok:
+        * #screens online, #screens met mismatch, #shared playlist, #ads published, #media not-ready
+      - Aanbevolen “next action” hints (alleen op basis van data)
+
+3) Implementatie details / constraints
+- Gebruik bestaande yodeck client/service(s). Voeg alleen calls toe; geen behavior wijzigen.
+- Voeg caching/limieten toe zodat dit endpoint niet explodeert (max items, max media).
+- Mask secrets: api keys, tokens, endpoints met credentials.
+- Zorg dat de dump ook werkt als Yodeck down is: dan includeYodeck false of errors per sectie, maar endpoint blijft 200 met error list.
+
+4) Output formaat
+- Response JSON met deze top-level keys:
+  {
+    "meta": { "correlationId": "...", "generatedAt": "...", "durationMs": 1234, "filters": {...} },
+    "env": {...},
+    "db": {...},
+    "yodeck": {...},
+    "checks": {...},
+    "summary": {...},
+    "errors": [...]
+  }
+- Daarnaast log je exact dezelfde JSON (stringified) in server logs met prefix: [AI_DUMP_V2]
+
+5) Voeg ook een helper toe voor mij (Frank) om snel te runnen:
+- In de UI/browser console moet ik kunnen doen:
+  fetch("/api/admin/ai-dump-v2", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({includeYodeck:true, includePlaylistItems:true, includeMediaDetails:true, includeNowPlaying:true, includeStorageChecks:true})}).then(r=>r.json()).then(console.log)
+
+OPLEVEREN
+- Toon exact welke files je hebt aangepast/gevoegd.
+- Geef de volledige code van nieuwe route + service + types.
+- Zorg dat het compileert en dat de endpoint direct werkt.
