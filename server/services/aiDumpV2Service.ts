@@ -22,6 +22,16 @@ interface AiDumpV2Options {
   maxMediaDetails?: number;
 }
 
+interface DumpError {
+  layer: string;
+  message: string;
+  detail?: string;
+  statusCode?: number;
+  playlistId?: number;
+  playerId?: number;
+  correlationId?: string;
+}
+
 interface AiDumpV2Result {
   meta: {
     correlationId: string;
@@ -34,7 +44,7 @@ interface AiDumpV2Result {
   yodeck: Record<string, any>;
   checks: Record<string, any>;
   summary: Record<string, any>;
-  errors: Array<{ layer: string; message: string; detail?: string }>;
+  errors: DumpError[];
 }
 
 function maskSecret(val: string | undefined | null, showChars = 4): string {
@@ -43,13 +53,35 @@ function maskSecret(val: string | undefined | null, showChars = 4): string {
   return val.substring(0, showChars) + "****";
 }
 
+function truncateRaw(obj: any, maxBytes = 2048): any {
+  try {
+    const str = JSON.stringify(obj);
+    if (str.length <= maxBytes) return obj;
+    return JSON.parse(str.substring(0, maxBytes) + '..."truncated"}');
+  } catch {
+    return { _truncated: true };
+  }
+}
+
 export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2Result> {
   const startTime = Date.now();
   const correlationId = `dump-${crypto.randomUUID().substring(0, 8)}`;
-  const errors: AiDumpV2Result["errors"] = [];
+  const errors: DumpError[] = [];
 
   const maxPlaylistItems = options.maxPlaylistItemsPerPlaylist || 200;
   const maxMedia = options.maxMediaDetails || 200;
+
+  function pushError(layer: string, err: any, extra?: Partial<DumpError>): void {
+    const entry: DumpError = {
+      layer,
+      message: err?.message || String(err),
+      correlationId,
+      ...extra,
+    };
+    if (err?.status) entry.statusCode = err.status;
+    errors.push(entry);
+    console.error(`${LOG_PREFIX} [${correlationId}] ERROR [${layer}]: ${entry.message}`, extra || "");
+  }
 
   console.log(`${LOG_PREFIX} [${correlationId}] Starting AI Dump V2 build...`);
 
@@ -215,10 +247,19 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
     try {
       const client = await YodeckClient.create();
       if (!client) {
-        errors.push({ layer: "yodeck", message: "YodeckClient could not be created (token missing or invalid)" });
+        pushError("yodeck", { message: "YodeckClient could not be created (token missing or invalid)" });
         yodeckLayer = { enabled: true, available: false };
       } else {
-        yodeckLayer = { enabled: true, available: true, players: [], playlists: [], mediaDetails: [] };
+        yodeckLayer = {
+          enabled: true,
+          available: true,
+          players: [],
+          playlists: [],
+          playlistItemsByPlaylistId: {},
+          playlistItemErrors: [],
+          mediaDetails: [],
+          sharedPlaylistsDetected: [],
+        };
 
         const screensForYodeck = (dbLayer.screens || []) as any[];
         const playerIds = options.yodeckPlayerIds?.length
@@ -232,17 +273,20 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
         const allPlaylistIds = new Set<number>();
         const allMediaIds = new Set<number>();
 
+        // ── Players ──
         for (const playerId of playerIds) {
           try {
             const screenResult = await yodeckRequest<any>(`/screens/${playerId}/`);
             if (!screenResult.ok) {
               playerSnapshots.push({ playerId, error: screenResult.error, online: null });
+              pushError("yodeck.players", screenResult, { playerId, statusCode: screenResult.status });
               continue;
             }
             const data = screenResult.data;
-            const sc = data?.screen_content || data?.screencontent;
+            const sc = data?.screen_content || data?.screencontent || {};
             const sourceType = sc?.source_type || sc?.sourcetype || null;
             const sourceId = sc?.source_id || sc?.sourceid || null;
+            const sourceName = sc?.source_name || sc?.sourcename || null;
 
             const dbScreen = screensForYodeck.find((s: any) => String(s.yodeckPlayerId) === String(playerId));
             const expectedPlaylistId = dbScreen?.dbPlaylistId ? parseInt(dbScreen.dbPlaylistId, 10) : null;
@@ -252,66 +296,113 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
             if (actualPlaylistId) allPlaylistIds.add(actualPlaylistId);
             if (expectedPlaylistId) allPlaylistIds.add(expectedPlaylistId);
 
-            playerSnapshots.push({
+            const playerEntry: any = {
               playerId,
               name: data.name || null,
               online: data.status === "online" || data.is_online === true,
-              lastSeen: data.last_seen || data.lastSeen || null,
+              lastSeen: data.last_seen || data.lastSeen || data.updated_at || data.last_online || null,
               currentSourceType: sourceType,
               currentSourceId: sourceId,
-              currentSourceName: data.screen_content?.source_name || null,
+              currentSourceName: sourceName,
+              currentPlaylistId: actualPlaylistId,
+              currentPlaylistName: sourceType === "playlist" ? sourceName : null,
               expectedPlaylistId,
               actualPlaylistId,
               mismatch,
               dbScreenId: dbScreen?.screenId || null,
-            });
+            };
+
+            if (options.includeNowPlaying) {
+              const rawSafe = { ...data };
+              delete rawSafe.api_key;
+              delete rawSafe.token;
+              delete rawSafe.auth;
+              playerEntry.rawStatus = truncateRaw(rawSafe, 2048);
+            }
+
+            playerSnapshots.push(playerEntry);
           } catch (e: any) {
             playerSnapshots.push({ playerId, error: e.message, online: null });
-            errors.push({ layer: "yodeck", message: `Player ${playerId}: ${e.message}` });
+            pushError("yodeck.players", e, { playerId });
           }
         }
         yodeckLayer.players = playerSnapshots;
 
-        // Playlists
+        // Also collect playlist IDs from DB screens
+        for (const s of screensForYodeck) {
+          if (s.dbPlaylistId) {
+            const pid = parseInt(s.dbPlaylistId, 10);
+            if (!isNaN(pid)) allPlaylistIds.add(pid);
+          }
+          if (s.combinedPlaylistId) {
+            const pid = parseInt(s.combinedPlaylistId, 10);
+            if (!isNaN(pid)) allPlaylistIds.add(pid);
+          }
+        }
+
+        // ── Playlists + Items ──
         if (options.includePlaylists !== false && allPlaylistIds.size > 0) {
           const playlistSnapshots: any[] = [];
+          const playlistItemsByPlaylistId: Record<string, any[] | null> = {};
+          const playlistItemErrors: any[] = [];
+
           for (const plId of Array.from(allPlaylistIds)) {
             try {
+              console.log(`${LOG_PREFIX} [${correlationId}] Fetching playlist ${plId}...`);
               const plResult = await yodeckRequest<any>(`/playlists/${plId}/`);
               if (!plResult.ok) {
                 playlistSnapshots.push({ id: plId, error: plResult.error });
+                if (options.includePlaylistItems) {
+                  playlistItemsByPlaylistId[String(plId)] = null;
+                  const itemErr = { playlistId: plId, message: plResult.error || `Failed to fetch playlist ${plId}`, statusCode: plResult.status, correlationId };
+                  playlistItemErrors.push(itemErr);
+                  pushError("yodeck.playlistItems", { message: plResult.error }, { playlistId: plId, statusCode: plResult.status });
+                }
                 continue;
               }
               const plData = plResult.data;
-              const items = plData.items || [];
-              const limitedItems = options.includePlaylistItems
-                ? items.slice(0, maxPlaylistItems).map((item: any) => {
-                    if (item.id) allMediaIds.add(item.id);
-                    return {
-                      id: item.id,
-                      name: item.name || item.title || null,
-                      type: item.type || "media",
-                      duration: item.duration || null,
-                      mediaId: item.id,
-                    };
-                  })
-                : undefined;
+              const rawItems = plData.items || plData.playlist_items || [];
+              console.log(`${LOG_PREFIX} [${correlationId}] Playlist ${plId} "${plData.name}": ${rawItems.length} raw items`);
 
               playlistSnapshots.push({
                 id: plId,
                 name: plData.name,
-                itemCount: items.length,
-                items: limitedItems,
+                itemCount: rawItems.length,
               });
+
+              if (options.includePlaylistItems) {
+                const normalizedItems = rawItems.slice(0, maxPlaylistItems).map((item: any) => {
+                  const mediaId = item.media_id || item.mediaId || item.media?.id || item.id || null;
+                  if (mediaId && typeof mediaId === "number") allMediaIds.add(mediaId);
+                  return {
+                    type: item.type || item.item_type || item.kind || "media",
+                    title: item.title || item.name || null,
+                    mediaId,
+                    duration: item.duration || null,
+                    play_from_url: item.play_from_url || item.arguments?.play_from_url || null,
+                    download_from_url: item.download_from_url || item.arguments?.download_from_url || null,
+                    raw: item,
+                  };
+                });
+                playlistItemsByPlaylistId[String(plId)] = normalizedItems;
+              }
             } catch (e: any) {
               playlistSnapshots.push({ id: plId, error: e.message });
-              errors.push({ layer: "yodeck", message: `Playlist ${plId}: ${e.message}` });
+              if (options.includePlaylistItems) {
+                playlistItemsByPlaylistId[String(plId)] = null;
+                playlistItemErrors.push({ playlistId: plId, message: e.message, correlationId });
+              }
+              pushError("yodeck.playlists", e, { playlistId: plId });
             }
           }
           yodeckLayer.playlists = playlistSnapshots;
+          if (options.includePlaylistItems) {
+            yodeckLayer.playlistItemsByPlaylistId = playlistItemsByPlaylistId;
+            yodeckLayer.playlistItemErrors = playlistItemErrors;
+          }
         }
 
-        // Media details
+        // ── Media details ──
         if (options.includeMediaDetails && allMediaIds.size > 0) {
           const mediaSnapshots: any[] = [];
           const mediaIdsToCheck = Array.from(allMediaIds).slice(0, maxMedia);
@@ -342,12 +433,13 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
               });
             } catch (e: any) {
               mediaSnapshots.push({ id: mediaId, error: e.message });
+              pushError("yodeck.media", e, { detail: `mediaId=${mediaId}` });
             }
           }
           yodeckLayer.mediaDetails = mediaSnapshots;
         }
 
-        // Shared playlist detection
+        // ── Shared playlist detection ──
         const playlistOwnership = new Map<number, string[]>();
         for (const ps of playerSnapshots) {
           if (ps.actualPlaylistId) {
@@ -365,8 +457,8 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
         yodeckLayer.sharedPlaylistsDetected = sharedPlaylists;
       }
     } catch (e: any) {
-      errors.push({ layer: "yodeck", message: e.message, detail: e.stack?.substring(0, 300) });
-      yodeckLayer = { enabled: true, available: false, error: e.message };
+      pushError("yodeck", e, { detail: e.stack?.substring(0, 300) });
+      yodeckLayer = { enabled: true, available: false, error: e.message, playlistItemsByPlaylistId: {}, playlistItemErrors: [] };
     }
   }
 

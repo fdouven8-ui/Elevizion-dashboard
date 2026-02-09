@@ -1,0 +1,95 @@
+Je bent senior backend engineer in dit Elevizion project.
+
+PROBLEEM (bewezen):
+POST /api/admin/ai-dump-v2 werkt, maar ook met includePlaylistItems:true komen er GEEN playlist items terug.
+In de response zitten yodeck keys: ["enabled","available","players","playlists","mediaDetails","sharedPlaylistsDetected"].
+playlistItemsByPlaylistId / playlistItems / itemsByPlaylistId bestaan niet (undefined), en errors is leeg.
+We moeten playlist items + nowPlaying velden betrouwbaar toevoegen en errors niet “stil” laten verdwijnen.
+
+DOEL (kleine gerichte patch):
+1) Zorg dat buildAiDumpV2(options) de opties echt respecteert:
+   - includePlaylists: playlists ophalen
+   - includePlaylistItems: voor elke relevante playlist de items ophalen en in response zetten
+   - includeNowPlaying: players status / lastSeen / currentPlaylistId+name correct vullen (niet null als data er is)
+2) Voeg yodeck.playlistItemsByPlaylistId toe aan output:
+   yodeck: {
+     ...,
+     playlists: [...],
+     playlistItemsByPlaylistId: { "<playlistId>": [ {type,title,mediaId,duration,play_from_url,download_from_url,raw...}, ... ] }
+   }
+3) Errors moeten zichtbaar zijn:
+   - Als een playlist items call faalt: push een entry in top-level errors[] én in yodeck.playlistItemErrors[] met playlistId + message + status code (indien beschikbaar) + correlationId.
+   - NOOIT stil slagen met lege arrays als de call faalt. Liever errors + playlistItemsByPlaylistId[pid]=null.
+
+IMPLEMENTATIE-INSTRUCTIES (geen grote refactor):
+A) Zoek de files die je eerder hebt toegevoegd voor ai-dump-v2:
+   - server/routes.ts (of vergelijkbaar) waar /api/admin/ai-dump-v2 staat
+   - server/services/aiDumpV2.ts (of vergelijkbaar) buildAiDumpV2
+   - server/services/yodeckClient.ts (of yodeck service wrapper)
+
+B) Fix in buildAiDumpV2:
+   - Parse request body options (default false/true zoals nu) maar zorg dat includePlaylistItems echt een codepad triggert.
+   - Als includePlaylists true: haal playlists op (doe je al).
+   - Als includePlaylistItems true:
+     1) Bepaal relevante playlistIds:
+        - eerst uit DB screens (dbPlaylistId per screen)
+        - PLUS uit yodeck.playlists (als aanwezig)
+        - dedupe en filter null.
+     2) Voor elke playlistId: fetch playlist items via Yodeck API.
+        Gebruik een bestaande yodeckClient functie als die bestaat. Zo niet: voeg er één toe:
+          yodeckClient.getPlaylistItems(playlistId)
+        Deze moet de echte Yodeck endpoint gebruiken die al in project bestaat voor playlists (zoek naar eerdere playlist detail calls).
+        Let op: we willen ITEMS, niet alleen itemCount.
+     3) Normaliseer items naar een compact schema (maar bewaar raw onder raw):
+        {
+          type: item.type || item.item_type || item.kind,
+          title: item.title || item.name,
+          mediaId: item.media_id || item.mediaId || item.media?.id,
+          duration: item.duration,
+          play_from_url: item.play_from_url,
+          download_from_url: item.download_from_url,
+          raw: item
+        }
+     4) Respecteer maxPlaylistItemsPerPlaylist (slice)
+     5) Zet in yodeck.playlistItemsByPlaylistId[String(pid)] = items
+
+C) Fix includeNowPlaying mapping:
+   - In yodeck.players output moeten velden zitten:
+     { playerId, name, online, lastSeen, currentSourceType, currentPlaylistId, currentPlaylistName }
+   - Als je nu online:false/lastSeen:null krijgt, voeg logging + error capture toe:
+     - log de raw response van de yodeck device status call (gemaskeerd) OF in ai-dump set player.rawStatus = raw.
+   - Als Yodeck API geen lastSeen geeft, zet dan expliciet lastSeen = raw.last_seen || raw.lastSeen || raw.updated_at || null zodat we niet onnodig null krijgen.
+
+D) Error handling (cruciaal):
+   - Voeg helper pushError(section, err, extra) die:
+     - maakt { section, message, statusCode?, playlistId?, playerId?, correlationId }
+     - pusht naar top-level errors[]
+   - Voor playlist items fetch errors:
+     - zet yodeck.playlistItemsByPlaylistId[pid] = null
+     - push error entry
+     - voeg ook yodeck.playlistItemErrors[] toe
+
+E) Output keys MUST bevatten:
+   - yodeck.playlistItemsByPlaylistId (als includePlaylistItems true, zelfs als leeg object)
+   - yodeck.playlistItemErrors (altijd array)
+   - yodeck.players rawStatus optional voor debug (max 1-2KB per player, geen secrets)
+
+F) Afmaken:
+   - Update /api/admin/ai-dump-v2 response zodat yodeck keys nu OOK playlistItemsByPlaylistId bevatten.
+   - Zorg dat errors[] gevuld wordt als calls falen.
+
+VALIDATIE (belangrijk):
+Na je wijziging moet deze console check werken:
+fetch("/api/admin/ai-dump-v2",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({includeYodeck:true,includePlaylists:true,includePlaylistItems:true,maxPlaylistItemsPerPlaylist:50})})
+.then(r=>r.json()).then(d=>{
+  console.log("YODECK_KEYS", Object.keys(d.yodeck||{}));
+  console.log("HAS_ITEMS_KEY", !!d.yodeck.playlistItemsByPlaylistId);
+  console.log("PLAYLIST_IDS", Object.keys(d.yodeck.playlistItemsByPlaylistId||{}));
+  console.log("ITEMS_SAMPLE", d.yodeck.playlistItemsByPlaylistId[Object.keys(d.yodeck.playlistItemsByPlaylistId||{})[0]]?.slice(0,3));
+  console.log("ERRORS", d.errors);
+}).catch(console.error);
+
+OPLEVEREN:
+- Toon exact welke files aangepast zijn.
+- Plak de volledige code diff/inhoud voor de aangepaste functies.
+- Zorg dat het compileert en endpoint direct werkt.
