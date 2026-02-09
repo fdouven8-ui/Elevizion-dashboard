@@ -803,8 +803,15 @@ export class YodeckClient {
     }
   }
 
-  async fetchMediaRaw(mediaId: number): Promise<{ ok: boolean; data?: any; error?: string }> {
+  async fetchMediaRaw(mediaId: number): Promise<{ ok: boolean; data?: any; error?: string; status?: number }> {
+    const url = `${YODECK_BASE_URL}/media/${mediaId}/`;
+    console.log(`[YODECK_GET_MEDIA] url=${url} mediaId=${mediaId}`);
     const result = await this.request<any>(`/media/${mediaId}`);
+    if (!result.ok) {
+      console.error(`[YODECK_GET_MEDIA] FAILED mediaId=${mediaId} status=${result.status} error=${result.error}`);
+    } else {
+      console.log(`[YODECK_GET_MEDIA] OK mediaId=${mediaId} name=${result.data?.name || "?"} status=${result.data?.status || "?"}`);
+    }
     return result;
   }
 

@@ -1,0 +1,49 @@
+Je bent senior backend engineer in dit Elevizion project.
+
+PROBLEEM (hard bewezen):
+- We hebben advertiser mediaId = 29881729 in DB (plannedMediaIds)
+- yodeckClient.getMediaById(29881729) geeft HTTP 404 err_1004
+=> DB verwijst naar een mediaId die Yodeck niet kan vinden, OF we gebruiken verkeerde API route/base.
+
+DOEL:
+1) Gebruik de juiste Yodeck v2 endpoints voor media:
+   - GET /api/v2/media/{id}
+   - GET /api/v2/media/{id}/upload
+   - PUT /api/v2/media/{id}/complete (of de “Complete Media upload” endpoint volgens docs)
+2) Zorg dat we na Create Media altijd de returned media.id opslaan als enige bron van waarheid.
+3) Voeg self-heal toe: als getMediaById 404 geeft voor een advertiser mediaId, markeer als stale en (optioneel) recreate + reupload.
+
+AANPASSINGEN (klein, gericht):
+A) yodeckClient:
+- Centraliseer baseUrl = "https://app.yodeck.com/api/v2"
+- Voeg/fix functies:
+  - getMediaById(id): GET `${baseUrl}/media/${id}`
+  - getMediaUploadUrl(id): GET `${baseUrl}/media/${id}/upload`
+  - completeMediaUpload(id, upload_url): gebruik juiste v2 endpoint uit docs
+- Voeg logging toe:
+  [YODECK_GET_MEDIA] url=... id=...
+  [YODECK_GET_MEDIA] status=...
+
+B) Upload pipeline:
+- Waar media wordt aangemaakt:
+  - gebruik createMedia response.id als yodeckMediaId en sla direct op in DB.
+  - gebruik vanaf dat punt ALLEEN die id.
+- Maak een guard:
+  - als er al een mediaId staat, doe eerst getMediaById(mediaId):
+    - 200 => ok, ga door
+    - 404 => set mediaId=null en ga door met create+upload opnieuw
+
+C) AI_DUMP v2:
+- mediaDetails moet echte media objecten bevatten (niet alleen errors)
+- als getMediaById 404 => laat zien in failed[] (bestaat al)
+
+VALIDATIE:
+- Run /api/admin/ai-dump-v2 includeMediaDetails:true
+- plannedMediaIds bevat advertiser mediaId
+- getMediaById werkt (geen 404)
+- mediaOrigin/source laat zien of het local is of url import.
+
+OPLEVEREN:
+- Toon gewijzigde files
+- Geef code van yodeckClient wijzigingen en pipeline guard
+- Zorg dat het compileert en werkt

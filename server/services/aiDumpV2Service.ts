@@ -466,6 +466,22 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
             }
           }
 
+          const staleAdvertiserMedia: Array<{ advertiserId: string; companyName: string; mediaId: number; error: string }> = [];
+          for (const adv of allAdvertisersDb) {
+            if (adv.yodeckMediaIdCanonical && typeof adv.yodeckMediaIdCanonical === "number") {
+              const found = mediaSnapshots.find((m: any) => m.id === adv.yodeckMediaIdCanonical);
+              if (found && found.error) {
+                staleAdvertiserMedia.push({
+                  advertiserId: adv.id,
+                  companyName: adv.companyName,
+                  mediaId: adv.yodeckMediaIdCanonical,
+                  error: found.error,
+                });
+                console.warn(`${LOG_PREFIX} [${correlationId}] STALE_MEDIA: advertiser "${adv.companyName}" (${adv.id}) has mediaId=${adv.yodeckMediaIdCanonical} which returned error: ${found.error}`);
+              }
+            }
+          }
+
           yodeckLayer.mediaDetails = mediaSnapshots;
           yodeckLayer.mediaDetailRequest = {
             plannedMediaIds,
@@ -475,6 +491,7 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
             },
             fetched: mediaSnapshots.filter((m: any) => !m.error).length,
             failed: failedMedia,
+            staleAdvertiserMedia,
           };
         }
 
