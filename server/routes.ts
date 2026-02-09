@@ -23766,6 +23766,39 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  /**
+   * POST /api/admin/ai-dump-v2
+   * Comprehensive system diagnostics: ENV, DB, Yodeck live state, verification checks
+   */
+  app.post("/api/admin/ai-dump-v2", requireAdminAccess, async (req, res) => {
+    res.setHeader("Content-Type", "application/json");
+
+    try {
+      const { buildAiDumpV2 } = await import("./services/aiDumpV2Service");
+
+      const options = {
+        includeYodeck: req.body.includeYodeck ?? true,
+        includePlaylists: req.body.includePlaylists ?? true,
+        includePlaylistItems: req.body.includePlaylistItems ?? false,
+        includeMediaDetails: req.body.includeMediaDetails ?? false,
+        includeNowPlaying: req.body.includeNowPlaying ?? false,
+        includeStorageChecks: req.body.includeStorageChecks ?? false,
+        yodeckPlayerIds: req.body.yodeckPlayerIds || undefined,
+        screenIds: req.body.screenIds || undefined,
+        maxPlaylistItemsPerPlaylist: req.body.maxPlaylistItemsPerPlaylist || 200,
+        maxMediaDetails: req.body.maxMediaDetails || 200,
+      };
+
+      console.log(`[AI-Dump-V2] Admin request with options:`, JSON.stringify(options));
+
+      const result = await buildAiDumpV2(options);
+      return res.json(result);
+    } catch (error: any) {
+      console.error(`[AI-Dump-V2] Error:`, error);
+      return res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   // ============================================================================
   // API 404 CATCH-ALL - Must be LAST before Vite/Static middleware
   // ============================================================================
