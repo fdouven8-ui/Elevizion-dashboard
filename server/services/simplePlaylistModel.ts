@@ -606,42 +606,28 @@ export async function syncScreenPlaylistFromBase(screenPlaylistId: number): Prom
     };
   }
 
-  const allBaseItems = basePlaylistResult.data.items || [];
+  const baseItems = basePlaylistResult.data.items || [];
+  const baseMediaIds = baseItems.map(item => item.id);
 
-  const APP_TYPES = new Set(["widget", "layout", "playlist"]);
-  const baseItems = allBaseItems.filter(item => {
-    if (APP_TYPES.has(item.type)) {
-      console.warn(`${LOG_PREFIX} [APP_GUARD] BLOCKED app/widget from ads playlist: name="${item.name}" id=${item.id} type=${item.type}`);
-      return false;
-    }
-    return true;
-  });
+  console.log(`${LOG_PREFIX} [syncFromBase] Base playlist has ${baseItems.length} items: ${baseItems.map(i => `${i.name}(id=${i.id},type=${i.type})`).join(", ")}`);
 
-  if (allBaseItems.length !== baseItems.length) {
-    console.log(`${LOG_PREFIX} [APP_GUARD] Filtered ${allBaseItems.length - baseItems.length} non-media items from base playlist (${allBaseItems.length} total → ${baseItems.length} media-only)`);
+  if (baseItems.length === 0) {
+    console.warn(`${LOG_PREFIX} [syncFromBase] WARNING: Base playlist is EMPTY (0 items). Screen playlist ${screenPlaylistId} will be cleared.`);
   }
 
-  const baseMediaIds = baseItems.map(item => item.id);
-  
-  console.log(`${LOG_PREFIX} Base playlist has ${baseItems.length} media items: ${baseItems.map(i => `${i.name}(${i.id})`).join(", ")}`);
+  const patchPayload = baseItems.map((item, index) => ({
+    id: item.id,
+    priority: index + 1,
+    duration: item.duration || 10,
+    type: item.type,
+  }));
 
-  // 3. Get current screen playlist
-  const currentPlaylistResult = await yodeckRequest<PlaylistResponse>(
-    `/playlists/${screenPlaylistId}/`
-  );
-
-  // 4. Replace screen playlist items with base items (media only, no apps/widgets)
   const patchResult = await yodeckRequest(`/playlists/${screenPlaylistId}/`, "PATCH", {
-    items: baseItems.map((item, index) => ({
-      id: item.id,
-      priority: index + 1,
-      duration: item.duration || 10,
-      type: item.type,
-    })),
+    items: patchPayload,
   });
 
   if (!patchResult.ok) {
-    console.error(`${LOG_PREFIX} Failed to patch playlist items: ${patchResult.error}`);
+    console.error(`${LOG_PREFIX} [syncFromBase] FAILED to patch playlist ${screenPlaylistId}: ${patchResult.error}`);
     return { 
       ok: false, 
       baseMediaIds: [], 
@@ -650,7 +636,7 @@ export async function syncScreenPlaylistFromBase(screenPlaylistId: number): Prom
     };
   }
 
-  console.log(`${LOG_PREFIX} Replaced items in playlist ${screenPlaylistId} with ${baseItems.length} base items`);
+  console.log(`${LOG_PREFIX} [syncFromBase] SUCCESS: Copied ${baseItems.length} items from base → screen playlist ${screenPlaylistId}`);
   
   return { 
     ok: true, 
@@ -807,21 +793,10 @@ export async function addAdsToScreenPlaylist(
     return { ok: true, adsAdded: 0, finalCount: currentItems.length, actualMediaIds: currentItems.map(i => i.id), missingMediaIds: [] };
   }
 
-  const APP_TYPES_GUARD = new Set(["widget", "layout", "playlist"]);
-  const mediaOnlyItems = currentItems.filter(item => {
-    if (APP_TYPES_GUARD.has(item.type)) {
-      console.warn(`${LOG_PREFIX} [APP_GUARD] Removing app/widget from screen playlist during ad-add: name="${item.name}" id=${item.id} type=${item.type}`);
-      return false;
-    }
-    return true;
-  });
-
-  if (currentItems.length !== mediaOnlyItems.length) {
-    console.log(`${LOG_PREFIX} [APP_GUARD] Stripped ${currentItems.length - mediaOnlyItems.length} app/widget items from playlist ${screenPlaylistId}`);
-  }
+  console.log(`${LOG_PREFIX} [addAds] Keeping all ${currentItems.length} existing items (base playlist content), appending ${newAdIds.length} new ads`);
 
   const newItems = [
-    ...mediaOnlyItems.map((item, index) => ({
+    ...currentItems.map((item, index) => ({
       id: item.id,
       priority: index + 1,
       duration: item.duration || 10,
@@ -829,7 +804,7 @@ export async function addAdsToScreenPlaylist(
     })),
     ...newAdIds.map((mediaId, index) => ({
       id: mediaId,
-      priority: mediaOnlyItems.length + index + 1,
+      priority: currentItems.length + index + 1,
       duration: 15,
       type: "media" as const,
     })),
@@ -1109,7 +1084,8 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       screenPlaylist: { existed: !ensureResult.wasCreated, created: ensureResult.wasCreated, screenPlaylistId: ensureResult.screenPlaylistId, screenPlaylistName },
     });
   }
-  actions.push(`Copied ${syncResult.baseMediaIds.length} base items`);
+  actions.push(`Copied ${syncResult.baseMediaIds.length} base items (ids: ${syncResult.baseMediaIds.join(",")})`);
+  console.log(`${LOG_PREFIX} [${correlationId}] SYNC RESULT: ${syncResult.itemsReplaced} base items copied to screen playlist ${ensureResult.screenPlaylistId}`);
 
   // 5. Collect ad media IDs for this screen using TARGETING (not placements)
   actions.push(`Step 5: Collecting ads via targeting...`);
