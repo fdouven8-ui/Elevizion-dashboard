@@ -600,7 +600,11 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
     const adsPublished = advertisersDb.filter((a: any) => a.assetStatus === "live").length;
     const mediaNotReady = mediaDetails.filter((m: any) => !m.LOCAL_OK && m.status !== "ready").length;
 
+    const staleMedia = (yodeckLayer.mediaDetailRequest as any)?.staleAdvertiserMedia || [];
+    const staleMediaCount = staleMedia.length;
+
     const nextActions: string[] = [];
+    if (staleMediaCount > 0) nextActions.push(`SELF-HEAL NEEDED: ${staleMediaCount} advertiser(s) have stale/404 mediaIds - run rebuild-playlist to auto-repair`);
     if (sharedPlaylists.length > 0) nextActions.push("Run fix-shared-playlists to resolve shared playlist conflicts");
     if (mismatchCount > 0) nextActions.push(`Rebuild playlists for ${mismatchCount} mismatched screen(s)`);
     if (connectionRisks.length > 0) nextActions.push(`Investigate ${connectionRisks.length} media item(s) with connection risk`);
@@ -615,6 +619,7 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
         sharedPlaylists: sharedPlaylists.length,
         adsPublished,
         mediaNotReady,
+        staleAdvertiserMediaCount: staleMediaCount,
         uploadsPending: (dbLayer.uploadQueue as any)?.pending || 0,
         uploadsFailed: (dbLayer.uploadQueue as any)?.failed || 0,
       },

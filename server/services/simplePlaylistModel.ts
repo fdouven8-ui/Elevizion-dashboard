@@ -1198,25 +1198,28 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       continue;
     }
 
-    // CRITICAL: Verify media exists and is ready in Yodeck before adding
-    // Use ensureAdvertiserMediaIsValid to also CLEAR invalid canonical IDs
+    // CRITICAL: Verify media exists in Yodeck - SELF-HEALING: auto re-uploads if 404
     const { ensureAdvertiserMediaIsValid } = await import("./transactionalUploadService");
-    const validationResult = await ensureAdvertiserMediaIsValid(advertiser.id);
+    const validationResult = await ensureAdvertiserMediaIsValid(advertiser.id, { autoHeal: true });
+    
+    if (validationResult.healed) {
+      const healAction = `SELF-HEALED ${advertiser.companyName}: oldMediaId=${validationResult.oldMediaId || "null"} -> newMediaId=${validationResult.mediaId}`;
+      actions.push(healAction);
+      console.log(`${LOG_PREFIX} [${correlationId}] ${healAction}`);
+    }
     
     if (!validationResult.ok || !validationResult.mediaId) {
       skippedAds.push({ 
         reason: "media_not_found_in_yodeck", 
         advertiserId: advertiser.id, 
-        detail: `mediaId=${mediaId}: ${validationResult.reason || 'not found'} - canonical ID CLEARED` 
+        detail: `mediaId=${mediaId}: ${validationResult.reason || 'not found'}${validationResult.healed === false ? ' (self-heal attempted but failed)' : ''}` 
       });
-      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} not found in Yodeck - canonical ID cleared (reason: ${validationResult.reason})`);
+      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} invalid (reason: ${validationResult.reason})`);
       continue;
     }
     
-    // Use the validated mediaId (should be same as advertiser.yodeckMediaIdCanonical)
     mediaId = validationResult.mediaId;
     
-    // Check readiness from the same API call (no duplicate request)
     if (!validationResult.isReady) {
       skippedAds.push({ 
         reason: "media_not_ready", 

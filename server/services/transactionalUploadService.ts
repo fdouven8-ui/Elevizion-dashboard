@@ -1250,10 +1250,12 @@ function makeFailResult(
 }
 
 export async function ensureAdvertiserMediaIsValid(
-  advertiserId: string
-): Promise<{ ok: boolean; mediaId: number | null; reason?: string; status?: string; isReady?: boolean }> {
+  advertiserId: string,
+  options?: { autoHeal?: boolean }
+): Promise<{ ok: boolean; mediaId: number | null; reason?: string; status?: string; isReady?: boolean; healed?: boolean; oldMediaId?: number | null }> {
   const LOG = "[EnsureMediaValid]";
   const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished"];
+  const autoHeal = options?.autoHeal ?? true;
   
   const advertiser = await db.query.advertisers.findFirst({
     where: eq(advertisers.id, advertiserId),
@@ -1264,79 +1266,118 @@ export async function ensureAdvertiserMediaIsValid(
   }
 
   const existingMediaId = advertiser.yodeckMediaIdCanonical;
+  let needsReupload = false;
+  let invalidReason = "";
 
   if (existingMediaId) {
-    console.log(`${LOG} Checking if mediaId=${existingMediaId} exists in Yodeck...`);
+    console.log(`[YODECK_MEDIA_CHECK] id=${existingMediaId} advertiser=${advertiserId}`);
     
     try {
       const response = await fetch(`${YODECK_API_BASE}/media/${existingMediaId}/`, {
         headers: { "Authorization": `Token ${YODECK_TOKEN}` },
       });
 
-      if (response.status === 404) {
-        console.log(`${LOG} Media ${existingMediaId} NOT FOUND in Yodeck - clearing canonical`);
-        await db.update(advertisers)
-          .set({
-            assetStatus: "ready_for_yodeck",
-            yodeckMediaIdCanonical: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(advertisers.id, advertiserId));
-        return { ok: false, mediaId: null, reason: "MEDIA_MISSING_IN_YODECK" };
-      }
+      console.log(`[YODECK_MEDIA_CHECK] id=${existingMediaId} status=${response.status}`);
 
-      if (!response.ok) {
+      if (response.status === 404) {
+        console.error(`[YODECK_MEDIA_INVALID] mediaId=${existingMediaId} HTTP 404 - media does not exist in Yodeck, clearing canonical`);
+        needsReupload = true;
+        invalidReason = "MEDIA_MISSING_IN_YODECK";
+      } else if (!response.ok) {
         console.warn(`${LOG} Media ${existingMediaId} check returned ${response.status}`);
         return { ok: false, mediaId: null, reason: `MEDIA_CHECK_ERROR_${response.status}` };
-      }
+      } else {
+        const data = await response.json();
+        if (!data.id) {
+          console.warn(`${LOG} Media ${existingMediaId} response missing id field`);
+          needsReupload = true;
+          invalidReason = "MEDIA_INVALID_RESPONSE";
+        } else {
+          const status = (data.status || "").toLowerCase();
+          const isReady = READY_STATUSES.includes(status);
+          const fileObj = data.file;
+          const fileSize = fileObj?.size || fileObj?.file_size || data.filesize || data.file_size || 0;
+          const hasFile = fileObj != null && fileSize > 0;
+          
+          console.log(`[YODECK_MEDIA_CHECK] id=${existingMediaId} status=${status} isReady=${isReady} fileSize=${fileSize} hasFile=${hasFile}`);
 
-      const data = await response.json();
-      if (!data.id) {
-        console.warn(`${LOG} Media ${existingMediaId} response missing id field`);
-        return { ok: false, mediaId: null, reason: "MEDIA_INVALID_RESPONSE" };
+          if (isReady && !hasFile) {
+            console.warn(`[YODECK_MEDIA_INVALID] mediaId=${existingMediaId} status=${status} but file=null/size=0 - BROKEN media`);
+            needsReupload = true;
+            invalidReason = "MEDIA_FILE_MISSING";
+          } else {
+            const ENCODING_STATUSES = ["encoding", "processing", "uploading", "initialized"];
+            if (!isReady && !ENCODING_STATUSES.includes(status)) {
+              console.warn(`[YODECK_MEDIA_INVALID] mediaId=${existingMediaId} status="${status}" is stuck/invalid`);
+              needsReupload = true;
+              invalidReason = `MEDIA_NOT_PLAYABLE_STATUS_${status}`;
+            } else {
+              return { ok: true, mediaId: existingMediaId, status, isReady };
+            }
+          }
+        }
       }
-
-      const status = (data.status || "").toLowerCase();
-      const isReady = READY_STATUSES.includes(status);
-      const fileObj = data.file;
-      const fileSize = fileObj?.size || fileObj?.file_size || data.filesize || data.file_size || 0;
-      const hasFile = fileObj != null && fileSize > 0;
-      
-      console.log(`${LOG} Media ${existingMediaId} VERIFIED EXISTS in Yodeck (status=${status}, isReady=${isReady}, fileSize=${fileSize}, hasFile=${hasFile})`);
-
-      // File must be present for media to be considered valid
-      if (isReady && !hasFile) {
-        console.warn(`${LOG} Media ${existingMediaId} status=${status} but file=null or size=0 - BROKEN_URL_MEDIA, clearing for re-upload`);
-        await db.update(advertisers)
-          .set({
-            assetStatus: "ready_for_yodeck",
-            yodeckMediaIdCanonical: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(advertisers.id, advertiserId));
-        return { ok: false, mediaId: null, reason: "MEDIA_FILE_MISSING", status, isReady: false };
-      }
-      
-      // If media exists but is NOT ready and NOT encoding, it's stuck - clear it for retry
-      const ENCODING_STATUSES = ["encoding", "processing", "uploading", "initialized"];
-      if (!isReady && !ENCODING_STATUSES.includes(status)) {
-        console.warn(`${LOG} Media ${existingMediaId} exists but status="${status}" is not ready/encoding - clearing canonical for retry`);
-        await db.update(advertisers)
-          .set({
-            assetStatus: "ready_for_yodeck",
-            yodeckMediaIdCanonical: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(advertisers.id, advertiserId));
-        return { ok: false, mediaId: null, reason: `MEDIA_NOT_PLAYABLE_STATUS_${status}`, status, isReady: false };
-      }
-      
-      return { ok: true, mediaId: existingMediaId, status, isReady };
-
     } catch (error: any) {
-      console.error(`${LOG} Error checking media:`, error);
+      console.error(`${LOG} Error checking media ${existingMediaId}:`, error.message);
       return { ok: false, mediaId: null, reason: "MEDIA_CHECK_EXCEPTION" };
     }
+  } else {
+    needsReupload = true;
+    invalidReason = "NO_CANONICAL_MEDIA_ID";
+  }
+
+  if (needsReupload) {
+    console.log(`[YODECK_MEDIA_INVALID] advertiser=${advertiserId} oldMediaId=${existingMediaId || "null"} reason=${invalidReason}`);
+
+    await db.update(advertisers)
+      .set({
+        assetStatus: "ready_for_yodeck",
+        yodeckMediaIdCanonical: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(advertisers.id, advertiserId));
+
+    if (!autoHeal) {
+      return { ok: false, mediaId: null, reason: invalidReason, oldMediaId: existingMediaId };
+    }
+
+    console.log(`[YODECK_MEDIA_REUPLOAD] starting self-heal for advertiser=${advertiserId} oldMediaId=${existingMediaId || "null"}`);
+
+    const { ensureAdvertiserMediaUploaded } = await import("./simplePlaylistModel");
+    const uploadResult = await ensureAdvertiserMediaUploaded(advertiserId);
+
+    if (!uploadResult.ok || !uploadResult.mediaId) {
+      console.error(`[YODECK_MEDIA_REUPLOAD] FAILED for advertiser=${advertiserId}: ${uploadResult.error}`);
+      return { ok: false, mediaId: null, reason: `SELF_HEAL_UPLOAD_FAILED: ${uploadResult.error}`, oldMediaId: existingMediaId, healed: false };
+    }
+
+    const newMediaId = uploadResult.mediaId;
+    console.log(`[YODECK_MEDIA_REUPLOAD] oldId=${existingMediaId || "null"} newId=${newMediaId} advertiser=${advertiserId}`);
+
+    const verifyResp = await fetch(`${YODECK_API_BASE}/media/${newMediaId}/`, {
+      headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+    });
+
+    if (!verifyResp.ok) {
+      console.error(`[YODECK_MEDIA_REUPLOAD] VERIFY FAILED: new mediaId=${newMediaId} returned ${verifyResp.status}`);
+      return { ok: false, mediaId: null, reason: `SELF_HEAL_VERIFY_FAILED_${verifyResp.status}`, oldMediaId: existingMediaId, healed: false };
+    }
+
+    const verifyData = await verifyResp.json();
+    const newStatus = (verifyData.status || "").toLowerCase();
+    const newIsReady = READY_STATUSES.includes(newStatus);
+
+    console.log(`[YODECK_MEDIA_READY] id=${newMediaId} status=${newStatus} isReady=${newIsReady}`);
+
+    return {
+      ok: newIsReady,
+      mediaId: newMediaId,
+      status: newStatus,
+      isReady: newIsReady,
+      healed: true,
+      oldMediaId: existingMediaId,
+      reason: newIsReady ? undefined : `SELF_HEAL_NOT_READY_${newStatus}`,
+    };
   }
 
   return { ok: false, mediaId: null, reason: "NO_CANONICAL_MEDIA_ID" };
