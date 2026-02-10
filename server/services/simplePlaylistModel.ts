@@ -4,7 +4,6 @@ import { eq, and, desc } from "drizzle-orm";
 import { storage } from "../storage";
 import { yodeckPublishService } from "./yodeckPublishService";
 import { ObjectStorageService } from "../objectStorage";
-import { uploadVideoToYodeckTransactional } from "./transactionalUploadService";
 
 const LOG_PREFIX = "[SimplePlaylist]";
 const YODECK_BASE_URL = "https://app.yodeck.com/api/v2";
@@ -670,89 +669,14 @@ export async function ensureAdvertiserMediaUploaded(advertiserId: string): Promi
     const { ensureCanonicalYodeckMedia } = await import("./canonicalMediaService");
     const canonicalResult = await ensureCanonicalYodeckMedia(advertiserId);
     if (canonicalResult.ok && canonicalResult.mediaId) {
-      console.log(`${LOG_PREFIX} Canonical resolution found mediaId=${canonicalResult.mediaId} via ${canonicalResult.source} - skipping upload`);
-      return { ok: true, advertiserId, mediaId: canonicalResult.mediaId, wasAlreadyUploaded: canonicalResult.source !== "upload" };
+      console.log(`${LOG_PREFIX} Canonical resolution found mediaId=${canonicalResult.mediaId} via ${canonicalResult.source}`);
+      return { ok: true, advertiserId, mediaId: canonicalResult.mediaId, wasAlreadyUploaded: true };
     }
-    console.log(`${LOG_PREFIX} Canonical resolution exhausted (source=${canonicalResult.source}), proceeding with direct upload`);
+    console.error(`${LOG_PREFIX} UPLOAD_HARD_STOP: Canonical resolution failed for ${advertiserId} - NO upload allowed. Source=${canonicalResult.source}`);
+    return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: "UPLOAD_HARD_STOP: Geen bestaande Yodeck media gevonden - upload geblokkeerd" };
   } catch (err: any) {
-    console.warn(`${LOG_PREFIX} Canonical resolution error: ${err.message} - falling back to direct upload`);
-  }
-  
-  // Find approved ad asset for this advertiser
-  const [asset] = await db
-    .select()
-    .from(adAssets)
-    .where(
-      and(
-        eq(adAssets.advertiserId, advertiserId),
-        eq(adAssets.approvalStatus, "APPROVED"),
-        eq(adAssets.isSuperseded, false)
-      )
-    )
-    .orderBy(desc(adAssets.createdAt))
-    .limit(1);
-  
-  if (!asset) {
-    return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: "No approved ad asset found" };
-  }
-  
-  // Get the file path (prefer normalized/converted, fall back to original)
-  const storagePath = asset.normalizedStoragePath || asset.convertedStoragePath || asset.storagePath;
-  if (!storagePath) {
-    return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: "No storage path for ad asset" };
-  }
-  
-  console.log(`${LOG_PREFIX} Found approved asset: id=${asset.id}, path=${storagePath}`);
-  
-  try {
-    // Get file size from asset or estimate
-    const fileSize = asset.sizeBytes || asset.convertedSizeBytes || 0;
-    
-    // Use media name based on advertiser
-    const mediaName = advertiser.linkKey 
-      ? `${advertiser.linkKey}.mp4`
-      : `ADV-${advertiserId.substring(0, 8)}.mp4`;
-    
-    console.log(`${LOG_PREFIX} Starting TRANSACTIONAL upload for ${mediaName} (${fileSize} bytes from ${storagePath})`);
-    
-    // USE TRANSACTIONAL UPLOAD SERVICE - the single source of truth for uploads
-    const uploadResult = await uploadVideoToYodeckTransactional(
-      advertiserId,
-      storagePath,
-      mediaName,
-      fileSize
-    );
-    
-    if (!uploadResult.ok || !uploadResult.yodeckMediaId) {
-      console.error(`${LOG_PREFIX} Transactional upload failed for advertiser ${advertiserId}: ${uploadResult.errorCode}`);
-      // transactionalUploadService already clears canonical ID and updates assetStatus on failure
-      return { 
-        ok: false, 
-        advertiserId, 
-        mediaId: null, 
-        wasAlreadyUploaded: false, 
-        error: `${uploadResult.errorCode}: ${JSON.stringify(uploadResult.errorDetails)}` 
-      };
-    }
-    
-    const yodeckMediaId = uploadResult.yodeckMediaId;
-    console.log(`${LOG_PREFIX} Transactional upload SUCCESS: mediaId=${yodeckMediaId}, finalState=${uploadResult.finalState}`);
-    
-    // Update ad asset with Yodeck info (advertiser already updated by transactional service)
-    await db.update(adAssets)
-      .set({
-        yodeckMediaId: yodeckMediaId,
-        yodeckUploadedAt: new Date(),
-        approvalStatus: "PUBLISHED",
-      })
-      .where(eq(adAssets.id, asset.id));
-    
-    console.log(`${LOG_PREFIX} Updated asset ${asset.id} with yodeckMediaId=${yodeckMediaId}`);
-    
-    return { ok: true, advertiserId, mediaId: yodeckMediaId, wasAlreadyUploaded: false };
-  } catch (err: any) {
-    console.error(`${LOG_PREFIX} Error in transactional upload for advertiser ${advertiserId}:`, err);
-    return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: err.message };
+    console.error(`${LOG_PREFIX} UPLOAD_HARD_STOP: Canonical resolution error for ${advertiserId}: ${err.message}`);
+    return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: `UPLOAD_HARD_STOP: ${err.message}` };
   }
 }
 
@@ -1208,23 +1132,17 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       continue;
     }
 
-    // CRITICAL: Verify media exists in Yodeck - SELF-HEALING: auto re-uploads if 404
+    // VERIFY media exists in Yodeck (read-only check, NO auto-heal, NO re-upload, NO migration)
     const { ensureAdvertiserMediaIsValid } = await import("./transactionalUploadService");
-    const validationResult = await ensureAdvertiserMediaIsValid(advertiser.id, { autoHeal: true });
-    
-    if (validationResult.healed) {
-      const healAction = `SELF-HEALED ${advertiser.companyName}: oldMediaId=${validationResult.oldMediaId || "null"} -> newMediaId=${validationResult.mediaId}`;
-      actions.push(healAction);
-      console.log(`${LOG_PREFIX} [${correlationId}] ${healAction}`);
-    }
+    const validationResult = await ensureAdvertiserMediaIsValid(advertiser.id, { autoHeal: false });
     
     if (!validationResult.ok || !validationResult.mediaId) {
       skippedAds.push({ 
         reason: "media_not_found_in_yodeck", 
         advertiserId: advertiser.id, 
-        detail: `mediaId=${mediaId}: ${validationResult.reason || 'not found'}${validationResult.healed === false ? ' (self-heal attempted but failed)' : ''}` 
+        detail: `mediaId=${mediaId}: ${validationResult.reason || 'not found'}` 
       });
-      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} invalid (reason: ${validationResult.reason})`);
+      actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} invalid (reason: ${validationResult.reason}) - NO auto-heal allowed`);
       continue;
     }
     
@@ -1238,64 +1156,6 @@ export async function rebuildScreenPlaylist(screenId: string): Promise<RebuildPl
       });
       actions.push(`SKIPPED ${advertiser.companyName}: media ${mediaId} not ready (status=${validationResult.status})`);
       continue;
-    }
-
-    // MIGRATION GUARD: Ensure media is local+playable (not url-based)
-    // If source="url", re-upload as source="local" so screens don't need network for ads
-    const { ensureMediaIsLocalPlayable } = await import("./yodeckMediaMigrationService");
-    
-    // Get fallback storage key from approved adAsset
-    let fallbackStorageKey: string | null = null;
-    try {
-      const approvedAsset = await db.select({ 
-        storagePath: adAssets.storagePath,
-        convertedStoragePath: adAssets.convertedStoragePath,
-      })
-        .from(adAssets)
-        .where(and(
-          eq(adAssets.advertiserId, advertiser.id),
-          eq(adAssets.approvalStatus, "APPROVED"),
-        ))
-        .orderBy(desc(adAssets.createdAt))
-        .limit(1);
-      fallbackStorageKey = approvedAsset[0]?.convertedStoragePath || approvedAsset[0]?.storagePath || null;
-    } catch {}
-
-    const migrationResult = await ensureMediaIsLocalPlayable({
-      mediaId,
-      fallbackStorageKey,
-    });
-    
-    if (!migrationResult.ok) {
-      migrationSkipped.push({ mediaId, advertiserId: advertiser.id, reason: migrationResult.reason || "UNKNOWN" });
-      actions.push(`MIGRATION_SKIP ${advertiser.companyName}: mediaId=${mediaId} reason=${migrationResult.reason} - using original`);
-      // Still include the ad even if migration failed - it works, just might be slow
-      adMediaIds.push(mediaId);
-      adsAdded.push({ 
-        advertiserId: advertiser.id, 
-        mediaId, 
-        companyName: advertiser.companyName || advertiser.id 
-      });
-      actions.push(`Including ad from ${advertiser.companyName}: mediaId=${mediaId} (${matchReason}) [migration skipped]`);
-      continue;
-    }
-    
-    if (migrationResult.migrated && migrationResult.newMediaId && migrationResult.newMediaId !== mediaId) {
-      const oldId = mediaId;
-      mediaId = migrationResult.newMediaId;
-      
-      // Update DB: canonical mediaId = new local one
-      await db.update(advertisers)
-        .set({ 
-          yodeckMediaIdCanonical: mediaId,
-          yodeckMediaIdCanonicalUpdatedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(advertisers.id, advertiser.id));
-      
-      migrations.push({ oldMediaId: oldId, newMediaId: mediaId, advertiserId: advertiser.id, companyName: advertiser.companyName || advertiser.id });
-      actions.push(`MIGRATED ${advertiser.companyName}: old=${oldId} -> new=${mediaId} (url->local)`);
-      console.log(`${LOG_PREFIX} [${correlationId}] MIGRATED_MEDIA_ID advertiser=${advertiser.id} old=${oldId} new=${mediaId}`);
     }
 
     adMediaIds.push(mediaId);

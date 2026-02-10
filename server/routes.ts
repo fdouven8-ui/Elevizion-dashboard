@@ -23012,7 +23012,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         });
       }
 
-      const { rebuildScreenPlaylist, ensureScreenPlaylist, addAdsToScreenPlaylist, applyPlayerSourceAndPush } = await import("./services/simplePlaylistModel");
+      const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
       
       const rebuildResults: Array<{ screenId: string; ok: boolean; candidates?: number; included?: number; method?: string; error?: string; actions?: string[] }> = [];
       
@@ -23023,69 +23023,15 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           const included = (result as any).ads?.included || 0;
           const candidates = (result as any).ads?.candidates || 0;
           
-          // Check if the specific advertiser's media was included in the rebuild
-          const adsAdded = (result as any).ads?.adsAdded || [];
-          const advertiserIncluded = adsAdded.some((a: any) => String(a.mediaId) === String(mediaId) || a.advertiserId === advertiserId);
-          
-          if (result.ok && !advertiserIncluded && included === 0 && mediaId) {
-            // Rebuild succeeded but added 0 ads - fresh_insert fallback
-            // NOTE: mediaId is guaranteed present by guard at top of endpoint (422 if missing)
-            console.warn(`[PublishNow] ${correlationId} Rebuild for ${screenId} added 0 ads (candidates=${candidates}). Falling back to fresh_insert for advertiser ${advertiserId} mediaId=${mediaId}`);
-            
-            const screen = await storage.getScreen(screenId);
-            if (!screen || !screen.yodeckPlayerId) {
-              rebuildResults.push({ screenId, ok: false, method: "fresh_insert_failed", error: "Screen heeft geen yodeckPlayerId" });
-              continue;
-            }
-            
-            const ensureResult = await ensureScreenPlaylist(screen);
-            if (!ensureResult.ok || !ensureResult.screenPlaylistId) {
-              rebuildResults.push({ screenId, ok: false, method: "fresh_insert_failed", error: `Kan screen playlist niet aanmaken: ${ensureResult.error}` });
-              continue;
-            }
-            
-            const freshActions: string[] = [];
-            freshActions.push(`fresh_insert: rebuild had 0 ads, directly adding mediaId=${mediaId} for advertiser ${advertiserId}`);
-            
-            const numericMediaId = Number(mediaId);
-            if (isNaN(numericMediaId)) {
-              freshActions.push(`fresh_insert FAILED: mediaId "${mediaId}" is niet numeriek`);
-              rebuildResults.push({ screenId, ok: false, method: "fresh_insert", candidates, included: 0, error: `Invalid mediaId: ${mediaId}`, actions: freshActions });
-              continue;
-            }
-            
-            const addResult = await addAdsToScreenPlaylist(ensureResult.screenPlaylistId, [numericMediaId]);
-            if (!addResult.ok) {
-              freshActions.push(`fresh_insert FAILED: ${addResult.error}`);
-              rebuildResults.push({ screenId, ok: false, method: "fresh_insert", candidates, included: 0, error: addResult.error, actions: freshActions });
-              continue;
-            }
-            
-            freshActions.push(`fresh_insert: added ${addResult.adsAdded} ads, playlist now has ${addResult.finalCount} items`);
-            
-            const pushResult = await applyPlayerSourceAndPush(screen.yodeckPlayerId, ensureResult.screenPlaylistId);
-            freshActions.push(`push: ok=${pushResult.ok} sourceType=${pushResult.actualSourceType} sourceId=${pushResult.actualSourceId}`);
-            
-            rebuildResults.push({
-              screenId,
-              ok: pushResult.ok,
-              method: "fresh_insert",
-              candidates,
-              included: addResult.adsAdded,
-              actions: freshActions,
-            });
-            console.log(`[PublishNow] ${correlationId} fresh_insert ${screenId}: ok=${pushResult.ok} adsAdded=${addResult.adsAdded}`);
-          } else {
-            rebuildResults.push({
-              screenId,
-              ok: result.ok,
-              method: "rebuild",
-              candidates,
-              included,
-              error: result.ok ? undefined : ((result as any).error?.message || "Unknown error"),
-            });
-            console.log(`[PublishNow] ${correlationId} Rebuild ${screenId}: ok=${result.ok} candidates=${candidates} included=${included}`);
-          }
+          rebuildResults.push({
+            screenId,
+            ok: result.ok,
+            method: "rebuild",
+            candidates,
+            included,
+            error: result.ok ? undefined : ((result as any).error?.message || "Unknown error"),
+          });
+          console.log(`[PublishNow] ${correlationId} Rebuild ${screenId}: ok=${result.ok} candidates=${candidates} included=${included}`);
         } catch (err: any) {
           rebuildResults.push({ screenId, ok: false, error: err.message });
           console.error(`[PublishNow] ${correlationId} Rebuild FAILED for ${screenId}: ${err.message}`);
@@ -23095,8 +23041,6 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       const successCount = rebuildResults.filter(r => r.ok).length;
       const failedCount = rebuildResults.filter(r => !r.ok).length;
       const totalIncluded = rebuildResults.reduce((sum, r) => sum + (r.included || 0), 0);
-      const freshInsertCount = rebuildResults.filter(r => r.method === "fresh_insert").length;
-
       res.json({
         ok: successCount > 0,
         correlationId,
@@ -23111,7 +23055,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           successCount,
           failedCount,
           totalAdsIncluded: totalIncluded,
-          freshInsertFallbacks: freshInsertCount,
+          freshInsertFallbacks: 0,
         },
         rebuilds: rebuildResults,
       });

@@ -3,7 +3,6 @@ import { advertisers, adAssets } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { yodeckRequest } from "./simplePlaylistModel";
 import { inspectMedia, type YodeckMediaInfo } from "./yodeckMediaMigrationService";
-import { uploadVideoToYodeckTransactional } from "./transactionalUploadService";
 
 const LOG_PREFIX = "[CanonicalMedia]";
 const READY_STATUSES = ["finished", "ready", "done", "encoded", "active", "ok", "completed"];
@@ -11,7 +10,7 @@ const READY_STATUSES = ["finished", "ready", "done", "encoded", "active", "ok", 
 export interface EnsureCanonicalResult {
   ok: boolean;
   mediaId: number | null;
-  source: "existing_canonical" | "yodeck_search" | "upload" | "url_clone" | "none";
+  source: "existing_canonical" | "yodeck_search" | "none";
   diagnostics: Record<string, any>;
   error?: string;
 }
@@ -233,109 +232,11 @@ export async function ensureCanonicalYodeckMedia(advertiserId: string): Promise<
     diagnostics.steps.push({ step: "yodeck_search_no_valid_candidates" });
   }
   
-  const bestAsset = assets
-    .filter(a => a.storagePath || a.convertedStoragePath || a.storageUrl)
-    .sort((a, b) => {
-      const aScore = (a.validationStatus === "valid" ? 10 : 0) + (a.approvalStatus === "APPROVED" ? 5 : 0);
-      const bScore = (b.validationStatus === "valid" ? 10 : 0) + (b.approvalStatus === "APPROVED" ? 5 : 0);
-      if (aScore !== bScore) return bScore - aScore;
-      return (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0);
-    })[0];
-  
-  if (bestAsset) {
-    const storagePath = bestAsset.convertedStoragePath || bestAsset.storagePath;
-    const filename = bestAsset.storedFilename || bestAsset.originalFileName || `EVZ-AD-${advertiserId.substring(0, 8)}.mp4`;
-    const fileSize = bestAsset.convertedSizeBytes || bestAsset.sizeBytes || 0;
-    
-    if (storagePath) {
-      diagnostics.steps.push({ step: "upload_attempt", assetId: bestAsset.id, storagePath, filename, fileSize });
-      console.log(`${LOG_PREFIX} [${correlationId}] Attempting upload: asset=${bestAsset.id} path=${storagePath} size=${fileSize}`);
-      
-      try {
-        const uploadResult = await uploadVideoToYodeckTransactional(advertiserId, storagePath, filename, fileSize);
-        
-        if (uploadResult.ok && uploadResult.yodeckMediaId) {
-          console.log(`${LOG_PREFIX} [${correlationId}] Upload SUCCESS: mediaId=${uploadResult.yodeckMediaId}`);
-          diagnostics.steps.push({ step: "upload_success", mediaId: uploadResult.yodeckMediaId, jobId: uploadResult.jobId });
-          
-          await db.update(advertisers)
-            .set({
-              yodeckMediaIdCanonical: uploadResult.yodeckMediaId,
-              yodeckMediaIdCanonicalUpdatedAt: new Date(),
-              assetStatus: "live",
-              publishErrorCode: null,
-              publishErrorMessage: null,
-              updatedAt: new Date(),
-            })
-            .where(eq(advertisers.id, advertiserId));
-          
-          return { ok: true, mediaId: uploadResult.yodeckMediaId, source: "upload", diagnostics };
-        }
-        
-        diagnostics.steps.push({
-          step: "upload_failed",
-          errorCode: uploadResult.errorCode,
-          finalState: uploadResult.finalState,
-          details: uploadResult.errorDetails,
-        });
-        console.warn(`${LOG_PREFIX} [${correlationId}] Upload FAILED: ${uploadResult.errorCode} finalState=${uploadResult.finalState}`);
-      } catch (err: any) {
-        diagnostics.steps.push({ step: "upload_error", error: err.message });
-        console.error(`${LOG_PREFIX} [${correlationId}] Upload ERROR: ${err.message}`);
-      }
-    }
-    
-    const downloadUrl = bestAsset.storageUrl || bestAsset.convertedStorageUrl;
-    if (downloadUrl) {
-      diagnostics.steps.push({ step: "url_clone_attempt", url: downloadUrl.substring(0, 80) });
-      console.log(`${LOG_PREFIX} [${correlationId}] Attempting URL-clone from ${downloadUrl.substring(0, 80)}...`);
-      
-      try {
-        const cloneName = filename.replace(/\.(mp4|mov)$/i, "") + ".mp4";
-        const createResult = await yodeckRequest<any>("/media/", "POST", {
-          name: cloneName,
-          media_origin: { type: "video", source: "url", format: null },
-          arguments: { download_from_url: downloadUrl },
-        });
-        
-        if (createResult.ok && createResult.data?.id) {
-          const cloneMediaId = createResult.data.id;
-          console.log(`${LOG_PREFIX} [${correlationId}] URL-clone created mediaId=${cloneMediaId}, polling...`);
-          
-          const pollResult = await pollMediaReady(cloneMediaId, 120000);
-          if (pollResult.ready) {
-            console.log(`${LOG_PREFIX} [${correlationId}] URL-clone READY: mediaId=${cloneMediaId}`);
-            
-            await db.update(advertisers)
-              .set({
-                yodeckMediaIdCanonical: cloneMediaId,
-                yodeckMediaIdCanonicalUpdatedAt: new Date(),
-                assetStatus: "live",
-                publishErrorCode: null,
-                publishErrorMessage: null,
-                updatedAt: new Date(),
-              })
-              .where(eq(advertisers.id, advertiserId));
-            
-            diagnostics.steps.push({ step: "url_clone_success", mediaId: cloneMediaId });
-            return { ok: true, mediaId: cloneMediaId, source: "url_clone", diagnostics };
-          }
-          
-          diagnostics.steps.push({ step: "url_clone_not_ready", mediaId: cloneMediaId, lastStatus: pollResult.lastStatus });
-        } else {
-          diagnostics.steps.push({ step: "url_clone_create_failed", error: createResult.error });
-        }
-      } catch (err: any) {
-        diagnostics.steps.push({ step: "url_clone_error", error: err.message });
-        console.error(`${LOG_PREFIX} [${correlationId}] URL-clone ERROR: ${err.message}`);
-      }
-    }
-  } else {
-    diagnostics.steps.push({ step: "no_uploadable_assets" });
-  }
+  diagnostics.steps.push({ step: "upload_clone_blocked", reason: "UPLOAD_BLOCKED: canonical resolution must find existing Yodeck media, never create new" });
+  console.log(`${LOG_PREFIX} [${correlationId}] UPLOAD/CLONE BLOCKED by hard-stop policy - only yodeck_search allowed`);
   
   if (patterns.length > 0) {
-    console.log(`${LOG_PREFIX} [${correlationId}] POST_FAILURE_SEARCH: Re-checking Yodeck after upload/clone failure`);
+    console.log(`${LOG_PREFIX} [${correlationId}] POST_FAILURE_SEARCH: Final re-check of Yodeck for any missed media`);
     diagnostics.steps.push({ step: "post_failure_yodeck_search" });
     
     try {

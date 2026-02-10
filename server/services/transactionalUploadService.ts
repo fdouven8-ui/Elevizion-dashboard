@@ -129,6 +129,13 @@ export async function uploadVideoToYodeckTransactional(
   desiredFilename: string,
   fileSize: number
 ): Promise<TransactionalUploadResult> {
+  const [advCheck] = await db.select({ canonical: advertisers.yodeckMediaIdCanonical }).from(advertisers).where(eq(advertisers.id, advertiserId));
+  if (advCheck?.canonical) {
+    const msg = `UPLOAD_BLOCKED_CANONICAL_MEDIA_PRESENT: advertiser ${advertiserId} already has canonical mediaId=${advCheck.canonical} - upload refused`;
+    console.error(`${LOG_PREFIX} ${msg}`);
+    throw new Error(msg);
+  }
+
   const existingResult = await findExistingUploadJob(advertiserId, assetPath);
   if (existingResult) {
     return existingResult;
@@ -1419,10 +1426,11 @@ export async function ensureAdvertiserMediaIsValid(
             
             console.log(`[YODECK_MEDIA_CHECK] id=${existingMediaId} status=${status} isReady=${isReady} fileSize=${fileSize} hasFile=${hasFile}`);
 
-            if (isReady && !hasFile) {
-              console.warn(`[YODECK_MEDIA_INVALID] mediaId=${existingMediaId} status=${status} but file=null/size=0 - BROKEN media`);
-              needsReupload = true;
-              invalidReason = "MEDIA_FILE_MISSING";
+            if (isReady) {
+              if (!hasFile) {
+                console.log(`[YODECK_MEDIA_CHECK] id=${existingMediaId} status=${status} file=null/size=0 - Yodeck metadata incomplete but media is READY, accepting as valid`);
+              }
+              return { ok: true, mediaId: existingMediaId, status, isReady: true };
             } else {
               const ENCODING_STATUSES = ["encoding", "processing", "uploading", "initialized"];
               if (!isReady && !ENCODING_STATUSES.includes(status)) {
@@ -1446,7 +1454,11 @@ export async function ensureAdvertiserMediaIsValid(
   }
 
   if (needsReupload) {
-    console.log(`[YODECK_MEDIA_INVALID] advertiser=${advertiserId} oldMediaId=${existingMediaId || "null"} reason=${invalidReason}`);
+    console.log(`[YODECK_MEDIA_INVALID] advertiser=${advertiserId} oldMediaId=${existingMediaId || "null"} reason=${invalidReason} autoHeal=${autoHeal}`);
+
+    if (!autoHeal) {
+      return { ok: false, mediaId: null, reason: invalidReason, oldMediaId: existingMediaId };
+    }
 
     await db.update(advertisers)
       .set({
@@ -1455,10 +1467,6 @@ export async function ensureAdvertiserMediaIsValid(
         updatedAt: new Date(),
       })
       .where(eq(advertisers.id, advertiserId));
-
-    if (!autoHeal) {
-      return { ok: false, mediaId: null, reason: invalidReason, oldMediaId: existingMediaId };
-    }
 
     console.log(`[YODECK_MEDIA_REUPLOAD] starting self-heal for advertiser=${advertiserId} oldMediaId=${existingMediaId || "null"}`);
 
