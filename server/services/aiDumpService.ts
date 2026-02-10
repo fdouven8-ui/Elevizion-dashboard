@@ -4,6 +4,8 @@ import { storage } from "../storage";
 import { db } from "../db";
 import * as schema from "@shared/schema";
 import { desc } from "drizzle-orm";
+import { YodeckClient, getYodeckConfigStatus } from "./yodeckClient";
+import { yodeckRequest } from "./simplePlaylistModel";
 
 const REDACTED = "***REDACTED***";
 const REDACTED_URL = "***REDACTED_URL***";
@@ -633,6 +635,106 @@ interface Section {
   content: string;
   priority: "critical" | "high" | "medium" | "low";
   category: string;
+  generatedAt: string;
+  source: "db" | "file" | "runtime" | "yodeck" | "mixed";
+}
+
+async function collectYodeckLiveData(): Promise<string> {
+  let result = "";
+  const ts = new Date().toISOString();
+
+  try {
+    const configStatus = await getYodeckConfigStatus().catch(() => null);
+    result += `Yodeck Config Status (${ts}):\n`;
+    if (!configStatus || !configStatus.ok) {
+      result += `  Configured: false\n`;
+      result += `  Reason: ${configStatus?.formatError || "Token not set or invalid"}\n`;
+      return result;
+    }
+    result += `  Configured: true\n`;
+    result += `  Token configured via: env\n`;
+    result += `  Token format valid: ${configStatus.tokenFormatValid}\n\n`;
+  } catch (e: any) {
+    result += `  Config check error: ${e.message}\n\n`;
+  }
+
+  const allScreens = await storage.getScreens().catch(() => []);
+  const playerIds = allScreens
+    .filter((s: any) => s.yodeckPlayerId)
+    .map((s: any) => ({ screenId: s.screenId || s.id, playerId: s.yodeckPlayerId }));
+
+  if (playerIds.length === 0) {
+    result += "No screens with Yodeck player IDs found.\n";
+    return result;
+  }
+
+  result += `--- YODECK PLAYERS (${playerIds.length}) ---\n`;
+
+  for (const { screenId, playerId } of playerIds.slice(0, 20)) {
+    try {
+      const playerResult = await yodeckRequest<any>(`/screens/${playerId}/`);
+      if (!playerResult.ok) {
+        result += `  Player ${playerId} (Screen ${screenId}): ERROR ${playerResult.status || "?"} - ${playerResult.error || "unknown"}\n`;
+        continue;
+      }
+      const data = playerResult.data;
+      const sc = data?.screen_content || data?.screencontent || {};
+      const sourceType = sc?.source_type || sc?.sourcetype || "?";
+      const sourceId = sc?.source_id || sc?.sourceid || "?";
+      const sourceName = sc?.source_name || sc?.sourcename || "?";
+      const online = data?.is_online ?? data?.online ?? "?";
+      result += `  Player ${playerId} (Screen ${screenId}): online=${online} | source=${sourceType}:${sourceId} "${sourceName}"\n`;
+    } catch (e: any) {
+      result += `  Player ${playerId} (Screen ${screenId}): FETCH ERROR - ${e.message}\n`;
+    }
+  }
+
+  const advertisers = await storage.getAdvertisers().catch(() => []);
+  const mediaIds = new Set<string>();
+  for (const adv of advertisers) {
+    if (adv.yodeckMediaIdCanonical) mediaIds.add(String(adv.yodeckMediaIdCanonical));
+  }
+
+  try {
+    const adAssetRows = await db.select({
+      yodeckMediaId: schema.adAssets.yodeckMediaId,
+    }).from(schema.adAssets);
+    for (const row of adAssetRows) {
+      if (row.yodeckMediaId) mediaIds.add(String(row.yodeckMediaId));
+    }
+  } catch {}
+
+  if (mediaIds.size > 0) {
+    result += `\n--- YODECK MEDIA VALIDATION (${mediaIds.size} IDs) ---\n`;
+    const idsToCheck = Array.from(mediaIds).slice(0, 30);
+    let validCount = 0;
+    let staleCount = 0;
+    let errorCount = 0;
+
+    for (const mediaId of idsToCheck) {
+      try {
+        const mediaResult = await yodeckRequest<any>(`/media/${mediaId}/`);
+        if (!mediaResult.ok) {
+          result += `  Media ${mediaId}: STALE (${mediaResult.status || "404"})\n`;
+          staleCount++;
+          continue;
+        }
+        const media = mediaResult.data;
+        const mediaType = media?.media_origin?.type || media?.type || "?";
+        const status = media?.status || "?";
+        const name = media?.name || "?";
+        result += `  Media ${mediaId}: OK | type=${mediaType} | status=${status} | name="${name}"\n`;
+        validCount++;
+      } catch (e: any) {
+        result += `  Media ${mediaId}: ERROR - ${e.message}\n`;
+        errorCount++;
+      }
+    }
+
+    result += `  Summary: ${validCount} valid, ${staleCount} stale, ${errorCount} errors (checked ${idsToCheck.length}/${mediaIds.size})\n`;
+  }
+
+  return result;
 }
 
 function generateManifestContent(manifest: ManifestInfo): string {
@@ -683,57 +785,100 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
   let fileCount = 0;
   
   // CRITICAL: System overview and recent issues (all modes)
+  let sectionTs = new Date().toISOString();
   const snapshot = await collectRuntimeSnapshot();
   sections.push({
     title: "SYSTEM OVERVIEW",
-    content: `=== SYSTEM OVERVIEW ===\n${snapshot}`,
+    content: `=== SYSTEM OVERVIEW === [generatedAt: ${sectionTs}] [source: runtime+db]\n${snapshot}`,
     priority: "critical",
-    category: "overview"
+    category: "overview",
+    generatedAt: sectionTs,
+    source: "mixed"
   });
   
+  sectionTs = new Date().toISOString();
   const recentErrors = await collectRecentErrors();
   const uploadJobs = await collectRecentUploadJobs(mode === "full" ? 30 : 15);
   sections.push({
     title: "RECENT ISSUES & JOBS",
-    content: `=== RECENT ISSUES ===\n${recentErrors}\n=== RECENT UPLOAD JOBS ===\n${uploadJobs}`,
+    content: `=== RECENT ISSUES === [generatedAt: ${sectionTs}] [source: db]\n${recentErrors}\n=== RECENT UPLOAD JOBS ===\n${uploadJobs}`,
     priority: "critical",
-    category: "issues"
+    category: "issues",
+    generatedAt: sectionTs,
+    source: "db"
   });
+
+  // CRITICAL: Live Yodeck data (all modes)
+  sectionTs = new Date().toISOString();
+  try {
+    const yodeckLiveRaw = await collectYodeckLiveData();
+    const yodeckLive = sanitizeText(yodeckLiveRaw);
+    sections.push({
+      title: "YODECK LIVE STATUS",
+      content: `=== YODECK LIVE STATUS === [generatedAt: ${sectionTs}] [source: yodeck-api-live]\n${yodeckLive}`,
+      priority: "critical",
+      category: "yodeck",
+      generatedAt: sectionTs,
+      source: "yodeck"
+    });
+  } catch (e: any) {
+    const safeMsg = sanitizeText(e.message || "unknown error");
+    sections.push({
+      title: "YODECK LIVE STATUS",
+      content: `=== YODECK LIVE STATUS === [generatedAt: ${sectionTs}] [source: yodeck-api-live]\nError fetching live Yodeck data: ${safeMsg}\n`,
+      priority: "critical",
+      category: "yodeck",
+      generatedAt: sectionTs,
+      source: "yodeck"
+    });
+  }
   
   // HIGH: Mappings and relationships (all modes)
+  sectionTs = new Date().toISOString();
   const screenMappings = await collectScreenMappings();
   const advertiserMappings = await collectAdvertiserMappings();
   sections.push({
     title: "SYSTEM MAPPINGS",
-    content: `=== SCREEN MAPPINGS ===\n${screenMappings}\n=== ADVERTISER MAPPINGS ===\n${advertiserMappings}`,
+    content: `=== SCREEN MAPPINGS === [generatedAt: ${sectionTs}] [source: db]\n${screenMappings}\n=== ADVERTISER MAPPINGS ===\n${advertiserMappings}`,
     priority: "high",
-    category: "mappings"
+    category: "mappings",
+    generatedAt: sectionTs,
+    source: "db"
   });
   
+  sectionTs = new Date().toISOString();
   const flowMap = await collectFlowMap();
   sections.push({
     title: "API ROUTES",
-    content: `=== API ROUTES ===\n${flowMap}`,
+    content: `=== API ROUTES === [generatedAt: ${sectionTs}] [source: file]\n${flowMap}`,
     priority: "high",
-    category: "routes"
+    category: "routes",
+    generatedAt: sectionTs,
+    source: "file"
   });
   
   // MEDIUM: Schema and sample data (all modes except minimal essentials)
   if (mode === "pipeline" || mode === "full") {
+    sectionTs = new Date().toISOString();
     const schemaContent = await collectDbSchema();
     sections.push({
       title: "DATABASE SCHEMA",
-      content: `=== DATABASE SCHEMA (shared/schema.ts) ===\n${schemaContent}`,
+      content: `=== DATABASE SCHEMA (shared/schema.ts) === [generatedAt: ${sectionTs}] [source: file]\n${schemaContent}`,
       priority: "medium",
-      category: "schema"
+      category: "schema",
+      generatedAt: sectionTs,
+      source: "file"
     });
     
+    sectionTs = new Date().toISOString();
     const sampleData = await collectSampleData(options.sampleRowsPerTable);
     sections.push({
       title: "SAMPLE DATA",
-      content: `=== SAMPLE DATA ===\n${sampleData}`,
+      content: `=== SAMPLE DATA === [generatedAt: ${sectionTs}] [source: db]\n${sampleData}`,
       priority: "medium",
-      category: "data"
+      category: "data",
+      generatedAt: sectionTs,
+      source: "db"
     });
   }
   
@@ -748,44 +893,48 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
   const lowFiles = files.filter(f => f.priority === "low");
   
   // Add critical files
+  sectionTs = new Date().toISOString();
   if (criticalFiles.length > 0) {
-    let content = "=== CRITICAL CODE FILES ===\n";
+    let content = `=== CRITICAL CODE FILES === [generatedAt: ${sectionTs}] [source: file]\n`;
     for (const file of criticalFiles) {
       content += `\n---FILE: ${file.path} (bytes=${file.bytes})---\n`;
       content += file.content + "\n";
     }
-    sections.push({ title: "CRITICAL CODE", content, priority: "critical", category: "code" });
+    sections.push({ title: "CRITICAL CODE", content, priority: "critical", category: "code", generatedAt: sectionTs, source: "file" });
   }
   
   // Add high priority files
+  sectionTs = new Date().toISOString();
   if (highFiles.length > 0) {
-    let content = "=== HIGH PRIORITY CODE FILES ===\n";
+    let content = `=== HIGH PRIORITY CODE FILES === [generatedAt: ${sectionTs}] [source: file]\n`;
     for (const file of highFiles) {
       content += `\n---FILE: ${file.path} (bytes=${file.bytes})---\n`;
       content += file.content + "\n";
     }
-    sections.push({ title: "HIGH PRIORITY CODE", content, priority: "high", category: "code" });
+    sections.push({ title: "HIGH PRIORITY CODE", content, priority: "high", category: "code", generatedAt: sectionTs, source: "file" });
   }
   
   // Add medium/low only for pipeline and full modes
   if (mode === "pipeline" || mode === "full") {
+    sectionTs = new Date().toISOString();
     if (mediumFiles.length > 0) {
-      let content = "=== MEDIUM PRIORITY CODE FILES ===\n";
+      let content = `=== MEDIUM PRIORITY CODE FILES === [generatedAt: ${sectionTs}] [source: file]\n`;
       for (const file of mediumFiles) {
         content += `\n---FILE: ${file.path} (bytes=${file.bytes})---\n`;
         content += file.content + "\n";
       }
-      sections.push({ title: "MEDIUM CODE", content, priority: "medium", category: "code" });
+      sections.push({ title: "MEDIUM CODE", content, priority: "medium", category: "code", generatedAt: sectionTs, source: "file" });
     }
   }
   
+  sectionTs = new Date().toISOString();
   if (mode === "full" && lowFiles.length > 0) {
-    let content = "=== OTHER CODE FILES ===\n";
+    let content = `=== OTHER CODE FILES === [generatedAt: ${sectionTs}] [source: file]\n`;
     for (const file of lowFiles) {
       content += `\n---FILE: ${file.path} (bytes=${file.bytes})---\n`;
       content += file.content + "\n";
     }
-    sections.push({ title: "OTHER CODE", content, priority: "low", category: "code" });
+    sections.push({ title: "OTHER CODE", content, priority: "low", category: "code", generatedAt: sectionTs, source: "file" });
   }
   
   // Generate chunks with priority ordering
@@ -802,7 +951,7 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
     const sectionBytes = Buffer.byteLength(section.content, "utf-8");
     
     if (sectionBytes <= maxBytes) {
-      const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} ===\n\n`;
+      const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} | generatedAt=${section.generatedAt} | source=${section.source} ===\n\n`;
       chunks.push({
         index: chunkIndex,
         total: 0,
@@ -813,7 +962,6 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
       });
       chunkIndex++;
     } else {
-      // Split large section
       const lines = section.content.split("\n");
       let currentChunk = "";
       let subIndex = 1;
@@ -823,7 +971,7 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
         const currentBytes = Buffer.byteLength(currentChunk, "utf-8");
         
         if (currentBytes + lineBytes > maxBytes && currentChunk.length > 0) {
-          const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} (part ${subIndex}) ===\n\n`;
+          const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} (part ${subIndex}) | generatedAt=${section.generatedAt} | source=${section.source} ===\n\n`;
           chunks.push({
             index: chunkIndex,
             total: 0,
@@ -841,7 +989,7 @@ export async function generateAiDump(options: AiDumpOptions): Promise<AiDumpResu
       }
       
       if (currentChunk.length > 0) {
-        const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} (part ${subIndex}) ===\n\n`;
+        const header = `=== AI_DUMP CHUNK ${chunkIndex}/? | bundleId=${bundleId} | ${section.priority.toUpperCase()} | ${section.category} (part ${subIndex}) | generatedAt=${section.generatedAt} | source=${section.source} ===\n\n`;
         chunks.push({
           index: chunkIndex,
           total: 0,
