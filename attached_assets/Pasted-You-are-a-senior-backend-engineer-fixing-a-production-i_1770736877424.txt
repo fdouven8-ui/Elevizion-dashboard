@@ -1,0 +1,71 @@
+You are a senior backend engineer fixing a production issue.
+
+GOAL:
+Make the Yodeck publish pipeline deterministic and duplicate-safe.
+
+PROBLEM SUMMARY:
+- Multiple uploads of identical videos create duplicate Yodeck media.
+- Some uploads get stuck in "initialized" or timeout.
+- Canonical asset becomes REJECTED even though a working Yodeck video already exists.
+- Publishing only succeeds via yodeck_search fallback, not by design.
+
+REQUIRED CHANGES (MANDATORY):
+
+1. CANONICAL MEDIA RESOLUTION (BEFORE UPLOAD)
+   - Before ANY upload to Yodeck:
+     - Search existing Yodeck media by:
+       a) original filename
+       b) stored filename
+       c) optional checksum if available
+   - If a FINISHED video exists:
+     - Reuse its yodeckMediaId
+     - Mark it as canonical
+     - DO NOT upload again
+
+2. UPLOAD GUARD
+   - Prevent multiple uploads for the same advertiser + video
+   - Use an idempotency key based on:
+     advertiserId + assetId
+   - If upload is already in progress or completed → reuse result
+
+3. CANONICAL STATE RULES
+   - canonical.mediaId must ALWAYS point to:
+     a FINISHED Yodeck video
+   - If upload fails BUT a working Yodeck video exists:
+     - Switch canonicalSource to "yodeck_search"
+     - Set status to READY, not REJECTED
+
+4. PUBLISH PIPELINE
+   - publish-now must:
+     - ALWAYS resolve canonical media first
+     - NEVER depend on upload success if media already exists
+   - Use resolved mediaId for all placements
+
+5. DUPLICATE CLEANUP (SAFE)
+   - Detect duplicate Yodeck media:
+     same advertiser + same filename
+   - Keep:
+     - the FINISHED one with playlists attached
+   - Mark others as:
+     duplicate_unused (do NOT delete automatically)
+
+FILES TO UPDATE:
+- server/services/yodeckClient.ts
+- server/services/transactionalUploadService.ts
+- server/services/yodeckPayloadBuilder.ts
+- server/services/screenPlaylistService.ts
+
+DELIVERABLES:
+- Deterministic publish (no random success/failure)
+- Zero duplicate uploads
+- Stable canonical media per advertiser
+- publish-now always works if 1 valid Yodeck video exists
+
+DO NOT:
+- Change UI
+- Change database schema unless strictly necessary
+- Remove existing functionality
+
+Return:
+- Exact code changes
+- Clear comments explaining the logic

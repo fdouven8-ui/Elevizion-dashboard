@@ -18378,6 +18378,16 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.get("/api/admin/advertisers/:id/detect-duplicates", requireAdminAccess, async (req, res) => {
+    try {
+      const { detectAndMarkYodeckDuplicates } = await import("./services/canonicalMediaService");
+      const result = await detectAndMarkYodeckDuplicates(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   /**
    * GET /api/admin/yodeck/media/:id/inspect
    * Inspect a Yodeck media item - returns details + status + validation

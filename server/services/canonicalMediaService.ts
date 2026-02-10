@@ -334,6 +334,41 @@ export async function ensureCanonicalYodeckMedia(advertiserId: string): Promise<
     diagnostics.steps.push({ step: "no_uploadable_assets" });
   }
   
+  if (patterns.length > 0) {
+    console.log(`${LOG_PREFIX} [${correlationId}] POST_FAILURE_SEARCH: Re-checking Yodeck after upload/clone failure`);
+    diagnostics.steps.push({ step: "post_failure_yodeck_search" });
+    
+    try {
+      const retryResults = await searchYodeckMediaByPatterns(patterns);
+      const retryScored = scoreCandidates(retryResults, patterns);
+      
+      for (const candidate of retryScored) {
+        const validation = await validateMediaInYodeck(candidate.id);
+        if (validation.valid) {
+          console.log(`${LOG_PREFIX} [${correlationId}] POST_FAILURE_SEARCH found valid media: id=${candidate.id} name="${candidate.name}" score=${candidate.score}`);
+          
+          await db.update(advertisers)
+            .set({
+              yodeckMediaIdCanonical: candidate.id,
+              yodeckMediaIdCanonicalUpdatedAt: new Date(),
+              assetStatus: "live",
+              publishErrorCode: null,
+              publishErrorMessage: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(advertisers.id, advertiserId));
+          
+          diagnostics.steps.push({ step: "post_failure_search_found", mediaId: candidate.id, name: candidate.name, score: candidate.score });
+          return { ok: true, mediaId: candidate.id, source: "yodeck_search", diagnostics };
+        }
+      }
+      
+      diagnostics.steps.push({ step: "post_failure_search_no_valid" });
+    } catch (err: any) {
+      diagnostics.steps.push({ step: "post_failure_search_error", error: err.message });
+    }
+  }
+  
   await db.update(advertisers)
     .set({
       assetStatus: "publish_failed",
@@ -463,4 +498,89 @@ export async function cleanupDuplicateAssets(advertiserId: string): Promise<{
   console.log(`${LOG_PREFIX} cleanupDuplicateAssets: kept=${keptList.length} archived=${archivedList.length}`);
   
   return { ok: true, keptCount: keptList.length, archivedCount: archivedList.length, keptList, archivedList };
+}
+
+export interface YodeckDuplicateResult {
+  ok: boolean;
+  advertiserId: string;
+  totalFound: number;
+  groups: Array<{
+    filename: string;
+    kept: { id: number; name: string; status: string; inPlaylists: boolean };
+    duplicates: Array<{ id: number; name: string; status: string; markedAs: string }>;
+  }>;
+}
+
+export async function detectAndMarkYodeckDuplicates(advertiserId: string): Promise<YodeckDuplicateResult> {
+  console.log(`${LOG_PREFIX} detectAndMarkYodeckDuplicates START advertiserId=${advertiserId}`);
+  
+  const [advertiser] = await db.select().from(advertisers).where(eq(advertisers.id, advertiserId));
+  if (!advertiser) {
+    return { ok: false, advertiserId, totalFound: 0, groups: [] };
+  }
+  
+  const assets = await db.select().from(adAssets).where(eq(adAssets.advertiserId, advertiserId));
+  const patterns = buildSearchPatterns(advertiser, assets);
+  
+  if (patterns.length === 0) {
+    return { ok: true, advertiserId, totalFound: 0, groups: [] };
+  }
+  
+  const searchResults = await searchYodeckMediaByPatterns(patterns);
+  const videoMedia = searchResults.filter(m => isVideoMedia(m));
+  
+  if (videoMedia.length <= 1) {
+    return { ok: true, advertiserId, totalFound: videoMedia.length, groups: [] };
+  }
+  
+  const nameGroups = new Map<string, YodeckMediaSearchResult[]>();
+  for (const m of videoMedia) {
+    const key = (m.name || "").toLowerCase().replace(/\.(mp4|mov|avi|webm)$/i, "").trim();
+    if (!key) continue;
+    const group = nameGroups.get(key) || [];
+    group.push(m);
+    nameGroups.set(key, group);
+  }
+  
+  const canonicalMediaId = advertiser.yodeckMediaIdCanonical;
+  const resultGroups: YodeckDuplicateResult["groups"] = [];
+  
+  for (const [filename, group] of Array.from(nameGroups)) {
+    if (group.length <= 1) continue;
+    
+    const scored = group.map(m => {
+      let score = 0;
+      if (isReadyStatus(m.status)) score += 50;
+      if ((m.filesize || 0) > 0) score += 20;
+      if (m.id === canonicalMediaId) score += 100;
+      return { ...m, score };
+    }).sort((a, b) => b.score - a.score);
+    
+    const [best, ...rest] = scored;
+    
+    resultGroups.push({
+      filename,
+      kept: {
+        id: best.id,
+        name: best.name,
+        status: best.status || "unknown",
+        inPlaylists: best.id === canonicalMediaId,
+      },
+      duplicates: rest.map(d => ({
+        id: d.id,
+        name: d.name,
+        status: d.status || "unknown",
+        markedAs: "duplicate_unused",
+      })),
+    });
+  }
+  
+  console.log(`${LOG_PREFIX} detectAndMarkYodeckDuplicates: found ${resultGroups.length} groups with duplicates across ${videoMedia.length} total media`);
+  
+  return {
+    ok: true,
+    advertiserId,
+    totalFound: videoMedia.length,
+    groups: resultGroups,
+  };
 }

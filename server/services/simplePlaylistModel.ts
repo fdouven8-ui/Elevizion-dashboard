@@ -656,16 +656,26 @@ export interface EnsureMediaUploadResult {
 export async function ensureAdvertiserMediaUploaded(advertiserId: string): Promise<EnsureMediaUploadResult> {
   console.log(`${LOG_PREFIX} Ensuring media uploaded for advertiser ${advertiserId}...`);
   
-  // Get advertiser
   const advertiser = await storage.getAdvertiser(advertiserId);
   if (!advertiser) {
     return { ok: false, advertiserId, mediaId: null, wasAlreadyUploaded: false, error: "Advertiser not found" };
   }
   
-  // If already has canonical media ID, we're done
   if (advertiser.yodeckMediaIdCanonical) {
     console.log(`${LOG_PREFIX} Advertiser ${advertiserId} already has mediaId=${advertiser.yodeckMediaIdCanonical}`);
     return { ok: true, advertiserId, mediaId: advertiser.yodeckMediaIdCanonical, wasAlreadyUploaded: true };
+  }
+  
+  try {
+    const { ensureCanonicalYodeckMedia } = await import("./canonicalMediaService");
+    const canonicalResult = await ensureCanonicalYodeckMedia(advertiserId);
+    if (canonicalResult.ok && canonicalResult.mediaId) {
+      console.log(`${LOG_PREFIX} Canonical resolution found mediaId=${canonicalResult.mediaId} via ${canonicalResult.source} - skipping upload`);
+      return { ok: true, advertiserId, mediaId: canonicalResult.mediaId, wasAlreadyUploaded: canonicalResult.source !== "upload" };
+    }
+    console.log(`${LOG_PREFIX} Canonical resolution exhausted (source=${canonicalResult.source}), proceeding with direct upload`);
+  } catch (err: any) {
+    console.warn(`${LOG_PREFIX} Canonical resolution error: ${err.message} - falling back to direct upload`);
   }
   
   // Find approved ad asset for this advertiser

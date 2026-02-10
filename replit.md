@@ -37,9 +37,15 @@ Authentication uses username/password with bcrypt hashing and session data store
 - **System Health & Self-Heal Endpoints**: Tools for monitoring system configuration, fixing common issues like shared playlists, and performing smoke checks.
 - **Screen Status Endpoints**: Provides real-time playback and device status information for screens.
 - **Debug Endpoints**: A suite of read-only and diagnostic endpoints for Yodeck integration, storage inspection, and end-to-end testing.
-- **Canonical Media Service**: Automatically resolves and ensures the validity of Yodeck media for advertisers, including search, upload, and URL-cloning strategies, and deduplication of assets.
+- **Canonical Media Service**: Automatically resolves and ensures the validity of Yodeck media for advertisers, including search, upload, and URL-cloning strategies, and deduplication of assets. Features:
+  - Post-failure Yodeck search: after upload/clone failure, re-searches Yodeck before marking REJECTED (ensures upload that created media but timed out still gets found)
+  - Duplicate detection: `detectAndMarkYodeckDuplicates()` finds duplicate Yodeck media per advertiser, keeps best FINISHED one, marks others as `duplicate_unused`
+  - `GET /api/admin/advertisers/:id/detect-duplicates`: Server-side duplicate detection endpoint
 - **Media Migration Service**: Ensures all media is locally playable by migrating URL-based Yodeck media to local uploads, improving reliability and performance.
-- **Transactional Upload Service**: Implements a robust multi-step process for media uploads to Yodeck, including presigned URLs, binary transfer, and status polling, with comprehensive tracking and failure handling.
+- **Transactional Upload Service**: Implements a robust multi-step process for media uploads to Yodeck, including presigned URLs, binary transfer, and status polling, with comprehensive tracking and failure handling. Features:
+  - Upload idempotency guard: checks for existing completed/in-progress upload jobs before starting new ones (prevents duplicate Yodeck media)
+  - Canonical state protection: terminal failures verify existing canonical media in Yodeck before clearing (prevents REJECTED when valid video exists)
+- **Deterministic Publish Pipeline**: `ensureAdvertiserMediaUploaded()` always runs canonical resolution FIRST (validate existing → Yodeck search → upload → URL-clone), never depends solely on upload success.
 - **API Routing Safety**: Enforces JSON-only responses for API routes and prevents HTML fallback for unknown API paths.
 - **Environment Flags**: Utilizes flags like `TEST_MODE` and `ADS_REQUIRE_CONTRACT` to control system behavior and feature access.
 

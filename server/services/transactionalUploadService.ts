@@ -1,6 +1,6 @@
 import { db } from "../db";
 import { uploadJobs, advertisers, adAssets, UPLOAD_JOB_STATUS, UPLOAD_FINAL_STATE } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, and, or, desc } from "drizzle-orm";
 import { Client } from "@replit/object-storage";
 import { buildYodeckCreateMediaPayload, buildYodeckUrlMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 import { getYodeckClient } from "./yodeckClient";
@@ -12,6 +12,72 @@ const LOG_PREFIX = "[TransactionalUpload]";
 
 const POLL_TIMEOUT_MS = 300000; // 5 minutes max polling (videos may take time to encode)
 const POLL_INTERVALS_MS = [2000, 3000, 5000, 8000, 10000, 15000, 15000, 15000, 15000, 15000]; // Exponential backoff to 15s
+
+const STALE_JOB_MS = 30 * 60 * 1000;
+
+async function findExistingUploadJob(
+  advertiserId: string,
+  assetPath: string
+): Promise<TransactionalUploadResult | null> {
+  const recentJobs = await db.select().from(uploadJobs)
+    .where(
+      and(
+        eq(uploadJobs.advertiserId, advertiserId),
+        eq(uploadJobs.localAssetPath, assetPath),
+        or(
+          eq(uploadJobs.status, UPLOAD_JOB_STATUS.READY),
+          eq(uploadJobs.status, UPLOAD_JOB_STATUS.UPLOADING),
+          eq(uploadJobs.status, UPLOAD_JOB_STATUS.POLLING)
+        )
+      )
+    )
+    .orderBy(desc(uploadJobs.createdAt))
+    .limit(5);
+
+  for (const job of recentJobs) {
+    if (job.status === UPLOAD_JOB_STATUS.READY && job.yodeckMediaId) {
+      const mediaCheck = await fetch(`${YODECK_API_BASE}/media/${job.yodeckMediaId}/`, {
+        headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+      });
+      if (mediaCheck.ok) {
+        const data = await mediaCheck.json();
+        const status = (data.status || "").toLowerCase();
+        const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished"];
+        if (READY_STATUSES.includes(status)) {
+          console.log(`${LOG_PREFIX} IDEMPOTENCY_HIT: Reusing completed job=${job.id} mediaId=${job.yodeckMediaId} (status=${status})`);
+          return {
+            ok: true,
+            jobId: job.id,
+            advertiserId,
+            yodeckMediaId: job.yodeckMediaId,
+            finalState: UPLOAD_FINAL_STATE.READY,
+          };
+        }
+      }
+    }
+
+    if ((job.status === UPLOAD_JOB_STATUS.UPLOADING || job.status === UPLOAD_JOB_STATUS.POLLING) && job.yodeckMediaId) {
+      const jobAge = Date.now() - (job.createdAt?.getTime() || 0);
+      if (jobAge < STALE_JOB_MS) {
+        console.log(`${LOG_PREFIX} IDEMPOTENCY_SKIP: Upload already in progress job=${job.id} mediaId=${job.yodeckMediaId} age=${Math.round(jobAge/1000)}s`);
+        return {
+          ok: false,
+          jobId: job.id,
+          advertiserId,
+          yodeckMediaId: job.yodeckMediaId,
+          finalState: "IN_PROGRESS",
+          errorCode: "UPLOAD_ALREADY_IN_PROGRESS",
+          errorDetails: { existingJobId: job.id, mediaId: job.yodeckMediaId, ageMs: jobAge },
+        };
+      } else {
+        console.warn(`${LOG_PREFIX} IDEMPOTENCY_STALE: Ignoring stale in-progress job=${job.id} age=${Math.round(jobAge/1000)}s - allowing new upload`);
+        await updateJob(job.id, { status: UPLOAD_JOB_STATUS.PERMANENT_FAIL, finalState: UPLOAD_FINAL_STATE.FAILED, lastError: "Marked stale by idempotency guard" });
+      }
+    }
+  }
+
+  return null;
+}
 
 export interface TransactionalUploadResult {
   ok: boolean;
@@ -63,6 +129,11 @@ export async function uploadVideoToYodeckTransactional(
   desiredFilename: string,
   fileSize: number
 ): Promise<TransactionalUploadResult> {
+  const existingResult = await findExistingUploadJob(advertiserId, assetPath);
+  if (existingResult) {
+    return existingResult;
+  }
+
   const usePresigned = process.env.YODECK_UPLOAD_MODE === "presigned";
   if (!usePresigned) {
     console.log(`[TransactionalUpload] Using URL-based upload via CDN proxy (set YODECK_UPLOAD_MODE=presigned for S3 PUT)`);
@@ -1186,12 +1257,46 @@ async function markAdvertiserPublishFailed(
   
   const current = await db.query.advertisers.findFirst({
     where: eq(advertisers.id, advertiserId),
-    columns: { publishRetryCount: true },
+    columns: { publishRetryCount: true, yodeckMediaIdCanonical: true },
   });
   
-  // Terminal failures: media is unusable, clear canonical ID to force fresh upload on retry
   const TERMINAL_ERRORS = ["FAILED_INIT_STUCK", "POLL_TIMEOUT", "POLL_404", "VERIFY_404", "FINAL_VERIFY_404"];
-  const shouldClearCanonical = TERMINAL_ERRORS.includes(errorCode);
+  const isTerminal = TERMINAL_ERRORS.includes(errorCode);
+  
+  let shouldClearCanonical = false;
+  
+  if (isTerminal && current?.yodeckMediaIdCanonical) {
+    try {
+      const checkResp = await fetch(`${YODECK_API_BASE}/media/${current.yodeckMediaIdCanonical}/`, {
+        headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+      });
+      if (checkResp.ok) {
+        const data = await checkResp.json();
+        const status = (data.status || "").toLowerCase();
+        const READY_STATUSES = ["ready", "done", "encoded", "active", "ok", "completed", "finished"];
+        const ext = (data.file_extension || data.name || "").toLowerCase();
+        const isVideo = (data.media_origin?.type === "video") || ext.endsWith(".mp4") || ext.endsWith(".mov") || ext.endsWith(".avi") || ext.endsWith(".webm");
+        if (READY_STATUSES.includes(status) && isVideo) {
+          console.log(`${LOG_PREFIX} [${correlationId}] TERMINAL_BUT_MEDIA_OK: canonical ${current.yodeckMediaIdCanonical} is still valid (${status}, video=${isVideo}) - keeping canonical, setting status=live`);
+          await db.update(advertisers)
+            .set({
+              assetStatus: "live",
+              publishErrorCode: errorCode,
+              publishErrorMessage: `Upload failed but existing media ${current.yodeckMediaIdCanonical} is valid`,
+              publishRetryCount: (current?.publishRetryCount || 0) + 1,
+              updatedAt: new Date(),
+            })
+            .where(eq(advertisers.id, advertiserId));
+          return;
+        }
+      }
+      shouldClearCanonical = true;
+    } catch {
+      shouldClearCanonical = true;
+    }
+  } else if (isTerminal) {
+    shouldClearCanonical = true;
+  }
   
   const updates: any = {
     assetStatus: shouldClearCanonical ? "ready_for_yodeck" : "publish_failed",
