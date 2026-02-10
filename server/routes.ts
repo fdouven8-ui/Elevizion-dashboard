@@ -23856,10 +23856,11 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     try {
       const { ensureAdvertiserMediaIsValid } = await import("./services/transactionalUploadService");
 
-      async function pickMediaId(advId: string, advRow: any): Promise<{ mediaId: number | null; source: string | null }> {
-        if (advRow.yodeckMediaIdCanonical && typeof advRow.yodeckMediaIdCanonical === "number") {
-          return { mediaId: advRow.yodeckMediaIdCanonical, source: "advertiser.yodeckMediaIdCanonical" };
-        }
+      type CandidateMedia = { id: number; source: string };
+
+      async function collectCandidateMediaIds(advId: string, advRow: any): Promise<CandidateMedia[]> {
+        const seen = new Set<number>();
+        const result: CandidateMedia[] = [];
 
         const assetRows = await db.select({
           yodeckMediaId: adAssets.yodeckMediaId,
@@ -23868,16 +23869,25 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           .from(adAssets)
           .where(eq(adAssets.advertiserId, advId))
           .orderBy(desc(adAssets.createdAt))
-          .limit(5);
+          .limit(10);
 
         for (const asset of assetRows) {
-          if (asset.yodeckMediaId && typeof asset.yodeckMediaId === "number") {
-            return { mediaId: asset.yodeckMediaId, source: `adAsset.yodeckMediaId (approval=${asset.approvalStatus})` };
+          if (asset.yodeckMediaId && typeof asset.yodeckMediaId === "number" && !seen.has(asset.yodeckMediaId)) {
+            seen.add(asset.yodeckMediaId);
+            result.push({ id: asset.yodeckMediaId, source: `adAsset.yodeckMediaId (approval=${asset.approvalStatus})` });
           }
         }
 
-        return { mediaId: null, source: null };
+        if (advRow.yodeckMediaIdCanonical && typeof advRow.yodeckMediaIdCanonical === "number" && !seen.has(advRow.yodeckMediaIdCanonical)) {
+          seen.add(advRow.yodeckMediaIdCanonical);
+          result.push({ id: advRow.yodeckMediaIdCanonical, source: "advertiser.yodeckMediaIdCanonical" });
+        }
+
+        return result;
       }
+
+      const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
+      const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN?.trim() || "";
 
       const allAdvertisers = await db.select({
         id: advertisers.id,
@@ -23908,135 +23918,170 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
       for (const adv of candidates) {
         const advLog = `${LOG} advertiser=${adv.id} (${adv.companyName})`;
-        const picked = await pickMediaId(adv.id, adv);
-        const oldMediaId = picked.mediaId;
-        const mediaIdSource = picked.source;
-
-        if (!oldMediaId) {
-          console.log(`${advLog} step=CHECK result=NO_MEDIA_ID (checked: yodeckMediaIdCanonical, adAssets.yodeckMediaId)`);
-          details.push({
-            advertiserId: adv.id,
-            companyName: adv.companyName,
-            oldMediaId: null,
-            newMediaId: null,
-            mediaIdSource: null,
-            status: "skipped",
-            message: "No mediaId found in any source (yodeckMediaIdCanonical, adAssets.yodeckMediaId)",
-          });
-          skipped++;
-          continue;
-        }
-
-        console.log(`${advLog} step=VALIDATE mediaId=${oldMediaId} source=${mediaIdSource}`);
 
         try {
-          const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
-          const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+          const candidateMediaIds = await collectCandidateMediaIds(adv.id, adv);
 
-          const checkResp = await fetch(`${YODECK_API_BASE}/media/${oldMediaId}/`, {
-            headers: { "Authorization": `Token ${YODECK_TOKEN}` },
-          });
-          console.log(`${advLog} step=YODECK_CHECK mediaId=${oldMediaId} httpStatus=${checkResp.status}`);
-
-          if (checkResp.ok) {
+          if (candidateMediaIds.length === 0) {
+            console.log(`${advLog} step=CHECK result=NO_MEDIA_ID (checked: adAssets.yodeckMediaId, yodeckMediaIdCanonical)`);
             details.push({
               advertiserId: adv.id,
               companyName: adv.companyName,
-              oldMediaId,
-              newMediaId: oldMediaId,
-              mediaIdSource,
+              candidateMediaIds: [],
+              validMediaId: null,
+              staleCandidates: [],
               status: "skipped",
-              message: `Media ${oldMediaId} valid in Yodeck (HTTP 200)`,
+              message: "No mediaId found in any source",
             });
             skipped++;
             continue;
           }
 
-          if (checkResp.status !== 404) {
+          console.log(`${advLog} step=VALIDATE candidates=${JSON.stringify(candidateMediaIds)}`);
+
+          const validCandidates: CandidateMedia[] = [];
+          const staleCandidates: (CandidateMedia & { httpStatus: number })[] = [];
+          const errorCandidates: (CandidateMedia & { httpStatus: number })[] = [];
+
+          for (const c of candidateMediaIds) {
+            const resp = await fetch(`${YODECK_API_BASE}/media/${c.id}/`, {
+              headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+            });
+            console.log(`${advLog} step=YODECK_CHECK mediaId=${c.id} source=${c.source} httpStatus=${resp.status}`);
+
+            if (resp.ok) {
+              validCandidates.push(c);
+            } else if (resp.status === 404) {
+              staleCandidates.push({ ...c, httpStatus: 404 });
+            } else {
+              errorCandidates.push({ ...c, httpStatus: resp.status });
+            }
+          }
+
+          if (staleCandidates.length === 0 && errorCandidates.length === 0) {
+            const canonical = validCandidates[0];
+            if (canonical && adv.yodeckMediaIdCanonical !== canonical.id) {
+              if (!dryRun) {
+                await db.update(advertisers)
+                  .set({ yodeckMediaIdCanonical: canonical.id, updatedAt: new Date() })
+                  .where(eq(advertisers.id, adv.id));
+              }
+            }
             details.push({
               advertiserId: adv.id,
               companyName: adv.companyName,
-              oldMediaId,
-              newMediaId: null,
-              mediaIdSource,
-              status: "error",
-              message: `Unexpected HTTP ${checkResp.status} checking media ${oldMediaId}`,
+              candidateMediaIds,
+              validMediaId: canonical?.id || null,
+              staleCandidates: [],
+              status: "ok",
+              message: `All ${validCandidates.length} candidate(s) valid` +
+                (canonical && adv.yodeckMediaIdCanonical !== canonical.id
+                  ? ` — ${dryRun ? "would sync" : "synced"} canonical to ${canonical.id} (${canonical.source})`
+                  : ""),
             });
-            errors.push({ advertiserId: adv.id, error: `HTTP ${checkResp.status}` });
+            skipped++;
             continue;
           }
 
           staleFound++;
-          console.log(`${advLog} step=STALE_DETECTED mediaId=${oldMediaId} source=${mediaIdSource} => 404`);
+          console.log(`${advLog} step=STALE_FOUND valid=${validCandidates.length} stale=${staleCandidates.length} error=${errorCandidates.length}`);
 
           if (dryRun) {
             details.push({
               advertiserId: adv.id,
               companyName: adv.companyName,
-              oldMediaId,
-              newMediaId: null,
-              mediaIdSource,
+              candidateMediaIds,
+              validMediaId: validCandidates[0]?.id || null,
+              staleCandidates: staleCandidates.map(s => ({ id: s.id, source: s.source })),
               status: "dryRun",
-              message: `Would repair: mediaId ${oldMediaId} returns 404 (source: ${mediaIdSource})`,
+              message: `Stale: [${staleCandidates.map(s => s.id).join(",")}] (404). ` +
+                (validCandidates.length > 0
+                  ? `Would set canonical=${validCandidates[0].id} (${validCandidates[0].source})`
+                  : `Would reupload from R2`),
             });
             continue;
           }
 
-          console.log(`${advLog} step=SELF_HEAL_START oldMediaId=${oldMediaId}`);
+          console.log(`${advLog} step=REPAIR_START`);
 
-          await db.update(advertisers)
-            .set({
-              yodeckMediaIdCanonical: null,
-              assetStatus: "ready_for_yodeck",
-              updatedAt: new Date(),
-            })
-            .where(eq(advertisers.id, adv.id));
-
-          if (mediaIdSource?.startsWith("adAsset.")) {
-            await db.update(adAssets)
-              .set({ yodeckMediaId: null })
-              .where(and(
-                eq(adAssets.advertiserId, adv.id),
-                eq(adAssets.yodeckMediaId, oldMediaId),
-              ));
+          for (const stale of staleCandidates) {
+            if (stale.source.startsWith("adAsset.")) {
+              await db.update(adAssets)
+                .set({ yodeckMediaId: null })
+                .where(and(
+                  eq(adAssets.advertiserId, adv.id),
+                  eq(adAssets.yodeckMediaId, stale.id),
+                ));
+            }
           }
-          console.log(`${advLog} step=CLEARED_STALE_IDS`);
 
-          const healResult = await ensureAdvertiserMediaIsValid(adv.id, { autoHeal: true });
+          if (validCandidates.length > 0) {
+            const chosen = validCandidates[0];
+            await db.update(advertisers)
+              .set({
+                yodeckMediaIdCanonical: chosen.id,
+                assetStatus: "live",
+                updatedAt: new Date(),
+              })
+              .where(eq(advertisers.id, adv.id));
 
-          if (healResult.ok && healResult.mediaId) {
             repaired++;
-            console.log(`${advLog} step=SELF_HEAL_OK newMediaId=${healResult.mediaId}`);
+            console.log(`${advLog} step=REPAIR_SYNC_CANONICAL canonicalId=${chosen.id} source=${chosen.source}`);
             details.push({
               advertiserId: adv.id,
               companyName: adv.companyName,
-              oldMediaId,
-              newMediaId: healResult.mediaId,
-              mediaIdSource,
+              candidateMediaIds,
+              validMediaId: chosen.id,
+              staleCandidates: staleCandidates.map(s => ({ id: s.id, source: s.source })),
               status: "repaired",
-              message: `Repaired: ${oldMediaId} -> ${healResult.mediaId} (source: ${mediaIdSource})`,
+              message: `Cleared ${staleCandidates.length} stale ID(s), synced canonical=${chosen.id} (${chosen.source})`,
             });
           } else {
-            console.error(`${advLog} step=SELF_HEAL_FAILED reason=${healResult.reason}`);
-            details.push({
-              advertiserId: adv.id,
-              companyName: adv.companyName,
-              oldMediaId,
-              newMediaId: null,
-              mediaIdSource,
-              status: "error",
-              message: `Self-heal failed: ${healResult.reason}`,
-            });
-            errors.push({ advertiserId: adv.id, error: healResult.reason });
+            await db.update(advertisers)
+              .set({
+                yodeckMediaIdCanonical: null,
+                assetStatus: "ready_for_yodeck",
+                updatedAt: new Date(),
+              })
+              .where(eq(advertisers.id, adv.id));
+            console.log(`${advLog} step=CLEARED_ALL_STALE, attempting reupload`);
+
+            const healResult = await ensureAdvertiserMediaIsValid(adv.id, { autoHeal: true });
+
+            if (healResult.ok && healResult.mediaId) {
+              repaired++;
+              console.log(`${advLog} step=REUPLOAD_OK newMediaId=${healResult.mediaId}`);
+              details.push({
+                advertiserId: adv.id,
+                companyName: adv.companyName,
+                candidateMediaIds,
+                validMediaId: healResult.mediaId,
+                staleCandidates: staleCandidates.map(s => ({ id: s.id, source: s.source })),
+                status: "repaired",
+                message: `All candidates stale. Reuploaded from R2: newMediaId=${healResult.mediaId}`,
+              });
+            } else {
+              console.error(`${advLog} step=REUPLOAD_FAILED reason=${healResult.reason}`);
+              details.push({
+                advertiserId: adv.id,
+                companyName: adv.companyName,
+                candidateMediaIds,
+                validMediaId: null,
+                staleCandidates: staleCandidates.map(s => ({ id: s.id, source: s.source })),
+                status: "error",
+                message: `All candidates stale. Reupload failed: ${healResult.reason}`,
+              });
+              errors.push({ advertiserId: adv.id, error: healResult.reason });
+            }
           }
         } catch (e: any) {
           console.error(`${advLog} step=ERROR error=${e.message}`);
           details.push({
             advertiserId: adv.id,
             companyName: adv.companyName,
-            oldMediaId,
-            newMediaId: null,
-            mediaIdSource,
+            candidateMediaIds: [],
+            validMediaId: null,
+            staleCandidates: [],
             status: "error",
             message: e.message,
           });
