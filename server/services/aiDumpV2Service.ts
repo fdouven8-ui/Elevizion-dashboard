@@ -412,28 +412,40 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
 
         // ── Media details ──
         if (options.includeMediaDetails) {
-          const fromAdvertisers: number[] = [];
           const fromPlaylistsFallback: number[] = [];
+          const plannedMediaIdSources: Array<{ advertiserId: string; companyName: string; mediaId: number; source: string }> = [];
 
-          const fromAdAssets: number[] = [];
           const allAdvertisersDb = (dbLayer.advertisers || []) as any[];
-          for (const adv of allAdvertisersDb) {
-            if (adv.yodeckMediaIdCanonical && typeof adv.yodeckMediaIdCanonical === "number") {
-              fromAdvertisers.push(adv.yodeckMediaIdCanonical);
-              allMediaIds.add(adv.yodeckMediaIdCanonical);
-            }
-          }
-
           const allAssetsDb = (dbLayer.adAssets || []) as any[];
-          for (const asset of allAssetsDb) {
-            if (asset.yodeckMediaId && typeof asset.yodeckMediaId === "number" && !allMediaIds.has(asset.yodeckMediaId)) {
-              fromAdAssets.push(asset.yodeckMediaId);
-              allMediaIds.add(asset.yodeckMediaId);
+
+          for (const adv of allAdvertisersDb) {
+            const advAssets = allAssetsDb.filter((a: any) => a.advertiserId === adv.id);
+            let picked: { mediaId: number; source: string } | null = null;
+
+            for (const asset of advAssets) {
+              if (asset.yodeckMediaId && typeof asset.yodeckMediaId === "number") {
+                picked = { mediaId: asset.yodeckMediaId, source: `adAsset.yodeckMediaId (approval=${asset.approvalStatus})` };
+                break;
+              }
+            }
+
+            if (!picked && adv.yodeckMediaIdCanonical && typeof adv.yodeckMediaIdCanonical === "number") {
+              picked = { mediaId: adv.yodeckMediaIdCanonical, source: "advertiser.yodeckMediaIdCanonical" };
+            }
+
+            if (picked && !allMediaIds.has(picked.mediaId)) {
+              allMediaIds.add(picked.mediaId);
+              plannedMediaIdSources.push({
+                advertiserId: adv.id,
+                companyName: adv.companyName || adv.company_name || "?",
+                mediaId: picked.mediaId,
+                source: picked.source,
+              });
             }
           }
 
           for (const mid of Array.from(allMediaIds)) {
-            if (!fromAdvertisers.includes(mid) && !fromAdAssets.includes(mid)) {
+            if (!plannedMediaIdSources.some(s => s.mediaId === mid)) {
               fromPlaylistsFallback.push(mid);
             }
           }
@@ -443,7 +455,7 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
           const mediaSnapshots: any[] = [];
           const failedMedia: Array<{ mediaId: number; message: string; statusCode?: number }> = [];
 
-          console.log(`${LOG_PREFIX} [${correlationId}] Media details: ${plannedMediaIds.length} planned (${fromAdvertisers.length} from advertisers, ${fromAdAssets.length} from adAssets, ${fromPlaylistsFallback.length} from playlists)`);
+          console.log(`${LOG_PREFIX} [${correlationId}] Media details: ${plannedMediaIds.length} planned (${plannedMediaIdSources.length} from advertisers/assets, ${fromPlaylistsFallback.length} from playlists)`);
 
           for (const mediaId of mediaIdsToCheck) {
             try {
@@ -483,28 +495,28 @@ export async function buildAiDumpV2(options: AiDumpV2Options): Promise<AiDumpV2R
             }
           }
 
-          const staleAdvertiserMedia: Array<{ advertiserId: string; companyName: string; mediaId: number; error: string }> = [];
-          for (const adv of allAdvertisersDb) {
-            if (adv.yodeckMediaIdCanonical && typeof adv.yodeckMediaIdCanonical === "number") {
-              const found = mediaSnapshots.find((m: any) => m.id === adv.yodeckMediaIdCanonical);
-              if (found && found.error) {
-                staleAdvertiserMedia.push({
-                  advertiserId: adv.id,
-                  companyName: adv.companyName,
-                  mediaId: adv.yodeckMediaIdCanonical,
-                  error: found.error,
-                });
-                console.warn(`${LOG_PREFIX} [${correlationId}] STALE_MEDIA: advertiser "${adv.companyName}" (${adv.id}) has mediaId=${adv.yodeckMediaIdCanonical} which returned error: ${found.error}`);
-              }
+          const staleAdvertiserMedia: Array<{ advertiserId: string; companyName: string; mediaId: number; source: string; error: string }> = [];
+          for (const src of plannedMediaIdSources) {
+            const found = mediaSnapshots.find((m: any) => m.id === src.mediaId);
+            if (found && found.error) {
+              staleAdvertiserMedia.push({
+                advertiserId: src.advertiserId,
+                companyName: src.companyName,
+                mediaId: src.mediaId,
+                source: src.source,
+                error: found.error,
+              });
+              console.warn(`${LOG_PREFIX} [${correlationId}] STALE_MEDIA: advertiser "${src.companyName}" (${src.advertiserId}) has mediaId=${src.mediaId} source=${src.source} error: ${found.error}`);
             }
           }
 
           yodeckLayer.mediaDetails = mediaSnapshots;
           yodeckLayer.mediaDetailRequest = {
             plannedMediaIds,
+            plannedMediaIdSources,
             sources: {
-              fromAdvertisers,
-              fromPlaylistsFallback,
+              fromAdvertisersOrAssets: plannedMediaIdSources.length,
+              fromPlaylistsFallback: fromPlaylistsFallback.length,
             },
             fetched: mediaSnapshots.filter((m: any) => !m.error).length,
             failed: failedMedia,
