@@ -19110,6 +19110,112 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.get("/api/admin/yodeck/playlists/:playlistId/items", requireAdminAccess, async (req, res) => {
+    const LOG = "[YodeckPlaylistItems]";
+    try {
+      const { playlistId } = req.params;
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+      const url = `https://app.yodeck.com/api/v2/playlists/${playlistId}/`;
+      console.log(`${LOG} GET playlist=${playlistId}`);
+
+      const resp = await fetch(url, {
+        headers: { "Authorization": `Token ${token}` },
+      });
+
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        console.error(`${LOG} Yodeck error: ${resp.status} ${body.substring(0, 200)}`);
+        return res.status(resp.status).json({ ok: false, status: resp.status, error: body.substring(0, 500) });
+      }
+
+      const data = await resp.json();
+      const items = data.items || data.results || [];
+      res.json({ ok: true, playlistId: Number(playlistId), itemCount: items.length, items, raw: data });
+    } catch (error: any) {
+      console.error(`${LOG} Error:`, error.message);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/admin/yodeck/playlists/:playlistId/items", requireAdminAccess, async (req, res) => {
+    const LOG = "[YodeckPlaylistAddItem]";
+    try {
+      const { playlistId } = req.params;
+      const { mediaId, duration } = req.body || {};
+
+      if (!mediaId || typeof mediaId !== "number") {
+        return res.status(400).json({ ok: false, error: "mediaId (number) is required" });
+      }
+
+      const token = process.env.YODECK_AUTH_TOKEN?.trim() || "";
+
+      const getResp = await fetch(`https://app.yodeck.com/api/v2/playlists/${playlistId}/`, {
+        headers: { "Authorization": `Token ${token}` },
+      });
+
+      if (!getResp.ok) {
+        const body = await getResp.text().catch(() => "");
+        console.error(`${LOG} Failed to fetch playlist ${playlistId}: ${getResp.status}`);
+        return res.status(getResp.status).json({ ok: false, error: `Failed to fetch playlist: ${body.substring(0, 500)}` });
+      }
+
+      const playlistData = await getResp.json();
+      const existingItems: any[] = playlistData.items || [];
+
+      const alreadyExists = existingItems.some((item: any) => {
+        const itemMediaId = item.media?.id || item.media_id || item.id;
+        return itemMediaId === mediaId;
+      });
+
+      if (alreadyExists) {
+        console.log(`${LOG} mediaId=${mediaId} already in playlist ${playlistId}, skipping`);
+        return res.json({ ok: true, alreadyExists: true, message: `Media ${mediaId} already in playlist`, itemCount: existingItems.length });
+      }
+
+      const newItem: any = { media: mediaId };
+      if (duration && typeof duration === "number") {
+        newItem.duration = duration;
+      }
+      const updatedItems = [...existingItems.map((item: any) => {
+        const mapped: any = { media: item.media?.id || item.media_id || item.id };
+        if (item.duration) mapped.duration = item.duration;
+        return mapped;
+      }), newItem];
+
+      console.log(`${LOG} PATCH playlist=${playlistId} adding mediaId=${mediaId} totalItems=${updatedItems.length}`);
+
+      const patchResp = await fetch(`https://app.yodeck.com/api/v2/playlists/${playlistId}/`, {
+        method: "PATCH",
+        headers: {
+          "Authorization": `Token ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ items: updatedItems }),
+      });
+
+      const patchBody = await patchResp.text();
+      console.log(`${LOG} PATCH response: ${patchResp.status} ${patchBody.substring(0, 300)}`);
+
+      if (!patchResp.ok) {
+        return res.status(patchResp.status).json({ ok: false, status: patchResp.status, error: patchBody.substring(0, 500) });
+      }
+
+      let patchData: any = {};
+      try { patchData = JSON.parse(patchBody); } catch {}
+
+      res.json({
+        ok: true,
+        playlistId: Number(playlistId),
+        mediaIdAdded: mediaId,
+        itemCount: patchData.items?.length || updatedItems.length,
+        yodeckResponse: patchData,
+      });
+    } catch (error: any) {
+      console.error(`${LOG} Error:`, error.message);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   // =========================================================================
   // AUTOPILOT CONFIG ENDPOINTS
   // =========================================================================

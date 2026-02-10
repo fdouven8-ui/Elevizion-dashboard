@@ -1,0 +1,54 @@
+DOEL
+Ik wil vanuit het Elevizion dashboard (zelfde origin) een bestaande Yodeck media (bv. mediaId=2989353) kunnen toevoegen aan een Yodeck playlist (bv. playlistId=30461663), zonder CORS. Dit moet via onze backend met de bestaande Yodeck API key.
+
+CONTEXT
+- /api/admin/screens/push werkt al (POST).
+- In de browser krijg ik CORS als ik direct naar https://app.yodeck.com/api/... fetch.
+- Veel /api/admin/yodeck/* routes geven nu 404, dus we moeten minimaal 2 routes toevoegen onder dezelfde admin router als screens/push.
+
+WAT JE MOET IMPLEMENTEREN
+1) Voeg in server/routes.ts (of waar de admin routes staan) twee endpoints toe:
+
+A) GET /api/admin/yodeck/playlists/:playlistId/items
+- Proxy naar Yodeck: GET /api/v2/playlists/{playlistId}/items
+- Return JSON 1-op-1 (plus ok:true)
+
+B) POST /api/admin/yodeck/playlists/:playlistId/items
+- Body: { "mediaId": number, "duration": number }
+- Proxy naar Yodeck: POST /api/v2/playlists/{playlistId}/items
+- Yodeck payload: { "media_id": <mediaId>, "duration": <duration> }
+- Return JSON met ok:true en de yodeckResponse
+
+2) Gebruik de bestaande yodeckClient of maak een kleine helper in server/services/yodeckClient.ts:
+- function yodeckRequest(method, path, body?)
+- Base url: https://app.yodeck.com
+- Header: Authorization: ApiKey <YODECK_API_KEY>
+- Content-Type: application/json
+- Log correlationId + request/response status
+- Proper error handling: als non-2xx -> return { ok:false, status, error, yodeckBody }
+
+3) Zorg dat deze routes NIET 404’en:
+- Ze moeten onder dezelfde router/mount vallen als /api/admin/screens/push
+- Dus zelfde prefix /api/admin
+
+ACCEPTATIE / TEST
+Na republish kan ik in browser console dit doen:
+
+fetch("/api/admin/yodeck/playlists/30461663/items", { method:"GET" })
+  .then(r=>r.json()).then(console.log).catch(console.error);
+
+fetch("/api/admin/yodeck/playlists/30461663/items", {
+  method:"POST",
+  headers:{ "Content-Type":"application/json" },
+  body: JSON.stringify({ mediaId: 2989353, duration: 15 })
+}).then(r=>r.json()).then(console.log).catch(console.error);
+
+Als POST ok:true is, doe ik daarna weer:
+fetch("/api/admin/screens/push", {
+  method:"POST",
+  headers:{ "Content-Type":"application/json" },
+  body: JSON.stringify({ yodeckPlayerIds:[591895], force:true })
+}).then(r=>r.json()).then(console.log).catch(console.error);
+
+BELANGRIJK
+Verander zo min mogelijk aan de rest van de app. Alleen deze routes + minimale yodeckClient helper.
