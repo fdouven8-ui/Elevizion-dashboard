@@ -18287,6 +18287,97 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.get("/api/admin/yodeck/players", requireAdminAccess, async (req, res) => {
+    try {
+      const { yodeckRequest } = await import("./services/simplePlaylistModel");
+      const result = await yodeckRequest<{ count: number; results: any[] }>("/screens/?limit=100");
+      if (!result.ok) return res.status(502).json({ ok: false, error: result.error });
+      const players = (result.data?.results || []).map((s: any) => ({
+        id: s.id, name: s.name, uuid: s.uuid,
+        online: s.state?.online ?? null,
+        lastSeen: s.state?.last_seen ?? null,
+        sourceType: s.screen_content?.source_type ?? null,
+        sourceId: s.screen_content?.source_id ?? null,
+        sourceName: s.screen_content?.source_name ?? null,
+      }));
+      res.json({ ok: true, count: players.length, players });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get("/api/admin/yodeck/media", requireAdminAccess, async (req, res) => {
+    try {
+      const q = (req.query.q as string) || "";
+      const { yodeckRequest } = await import("./services/simplePlaylistModel");
+      const endpoint = q ? `/media/?search=${encodeURIComponent(q)}&limit=50` : "/media/?limit=50";
+      const result = await yodeckRequest<{ count: number; results: any[] }>(endpoint);
+      if (!result.ok) return res.status(502).json({ ok: false, error: result.error });
+      const media = (result.data?.results || []).map((m: any) => ({
+        id: m.id, name: m.name, status: m.status,
+        media_origin: m.media_origin ?? null,
+        file_extension: m.file_extension ?? null,
+        filesize: m.filesize || m.file_size || 0,
+      }));
+      res.json({ ok: true, count: media.length, totalInYodeck: result.data?.count || 0, query: q || null, media });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get("/api/admin/yodeck/playlists", requireAdminAccess, async (req, res) => {
+    try {
+      const q = (req.query.q as string) || "";
+      const { yodeckRequest } = await import("./services/simplePlaylistModel");
+      const endpoint = q ? `/playlists/?search=${encodeURIComponent(q)}&limit=50` : "/playlists/?limit=50";
+      const result = await yodeckRequest<{ count: number; results: any[] }>(endpoint);
+      if (!result.ok) return res.status(502).json({ ok: false, error: result.error });
+      const playlists = (result.data?.results || []).map((p: any) => ({
+        id: p.id, name: p.name, itemCount: (p.items || []).length,
+      }));
+      res.json({ ok: true, count: playlists.length, totalInYodeck: result.data?.count || 0, query: q || null, playlists });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get("/api/admin/yodeck/playlists/:id/items", requireAdminAccess, async (req, res) => {
+    try {
+      const playlistId = parseInt(req.params.id, 10);
+      if (isNaN(playlistId)) return res.status(400).json({ ok: false, error: "Invalid playlist ID" });
+      const { yodeckRequest } = await import("./services/simplePlaylistModel");
+      const result = await yodeckRequest<any>(`/playlists/${playlistId}/`);
+      if (!result.ok) return res.status(result.status === 404 ? 404 : 502).json({ ok: false, error: result.error });
+      const playlist = result.data;
+      const items = (playlist?.items || []).map((item: any) => ({
+        id: item.id, name: item.name, type: item.type, duration: item.duration, priority: item.priority,
+      }));
+      res.json({ ok: true, playlistId, playlistName: playlist?.name, itemCount: items.length, items });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/admin/advertisers/:id/ensure-canonical", requireAdminAccess, async (req, res) => {
+    try {
+      const { ensureCanonicalYodeckMedia } = await import("./services/canonicalMediaService");
+      const result = await ensureCanonicalYodeckMedia(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/admin/advertisers/:id/cleanup-assets", requireAdminAccess, async (req, res) => {
+    try {
+      const { cleanupDuplicateAssets } = await import("./services/canonicalMediaService");
+      const result = await cleanupDuplicateAssets(req.params.id);
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   /**
    * GET /api/admin/yodeck/media/:id/inspect
    * Inspect a Yodeck media item - returns details + status + validation
@@ -22774,15 +22865,27 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         return res.status(404).json({ ok: false, error: "Advertiser niet gevonden", correlationId });
       }
 
-      const mediaId = advertiser.yodeckMediaIdCanonical;
+      let mediaId = advertiser.yodeckMediaIdCanonical;
+      let canonicalResult: any = null;
+      
       if (!mediaId) {
-        return res.status(422).json({ 
-          ok: false, 
-          error: "Geen Yodeck media ID - upload eerst een video", 
-          correlationId,
-          advertiserStatus: advertiser.assetStatus,
-          hint: "Gebruik eerst validate-media-now of retry-publish om media te uploaden",
-        });
+        console.log(`[PublishNow] ${correlationId} No canonical mediaId, running ensureCanonicalYodeckMedia...`);
+        const { ensureCanonicalYodeckMedia } = await import("./services/canonicalMediaService");
+        canonicalResult = await ensureCanonicalYodeckMedia(advertiserId);
+        
+        if (canonicalResult.ok && canonicalResult.mediaId) {
+          mediaId = canonicalResult.mediaId;
+          console.log(`[PublishNow] ${correlationId} Canonical resolved: mediaId=${mediaId} source=${canonicalResult.source}`);
+        } else {
+          return res.status(422).json({ 
+            ok: false, 
+            error: "Geen Yodeck media ID - automatisch herstel gefaald", 
+            correlationId,
+            advertiserStatus: advertiser.assetStatus,
+            canonicalResult,
+            hint: "Upload een video via het upload portaal of gebruik /api/admin/advertisers/:id/ensure-canonical",
+          });
+        }
       }
 
       let targetScreenIds: string[] = [];
@@ -22989,6 +23092,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         correlationId,
         advertiserId,
         mediaId,
+        canonicalSource: canonicalResult?.source || "existing_canonical",
         placementMethod,
         placementMethodReason,
         summary: {

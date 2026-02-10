@@ -1,0 +1,81 @@
+Je bent senior engineer in mijn bestaande Node/TS app. DOEL: ad publishing moet volledig automatisch werken zonder handmatig Yodeck gedoe. Probleem nu: advertiser heeft veel duplicate assets en canonical status is REJECTED omdat Yodeck upload timeout geeft (“Timeout waiting for Yodeck media to become ready”). Daardoor blijft canonical yodeckMediaId leeg en publish voegt 0 items toe.
+
+CONTEXT (actueel):
+- AdvertiserId: 9a99d555-8676-49d3-9862-f65859bdcfb1 (Bouwservice Douven)
+- /api/admin/advertisers/:id/media geeft 16 assets
+- canonical = { assetId:"26abe1a6-050a-4ccd-842c-9eb0a89a4359", status:"REJECTED", reason:"Yodeck upload failed: Timeout waiting for Yodeck media to become ready" }
+- Yodeck LIVE status check toont werkende video media: 29889127 (EVZ-AD-3941d02f.mp4) en in Yodeck UI zie ik ook werkende media IDs zoals 29893553 (EVZ-PURE-298935461.mp4) enz.
+- CORS maakt directe browser calls naar app.yodeck.com onmogelijk; alles moet server-side.
+
+WAT JE MOET BOUWEN (zonder de hele app om te gooien):
+
+A) Canonical media normalisatie + fallback
+1) Maak een service-functie ensureCanonicalYodeckMedia(advertiserId) die:
+   - Haalt advertiser + assets op.
+   - Als canonical status != LIVE of canonical yodeckMediaId ontbreekt -> probeer canonical te herstellen.
+2) Herstelstrategie (in deze volgorde), alles server-side:
+   i) Zoek in Yodeck naar bestaande media die MATCHT met 1 van de assets (storedFileName of originele file naam):
+      - Gebruik Yodeck API server-side: GET /media met query filter q= (of lijst ophalen en lokaal filteren als API geen q heeft)
+      - Match op name exact/contains: storedFileName, of prefix "ADV-BOUWSERVICEDOUVEN", of bekende yodeck bestandsnamen "EVZ-AD-*.mp4", "EVZ-PURE-*.mp4"
+      - Neem de BESTE kandidaat: type=video, status=finished, niet stale (geen 404)
+      - Als gevonden: schrijf deze yodeckMediaId weg als canonical mapping in DB (nieuw veld of bestaande plek waar yodeckMediaIdCanonical hoort). Zet canonical status LIVE.
+   ii) Als niet gevonden: voer upload uit via bestaande upload pipeline, maar FIX de timeout:
+      - Polling voor “ready/finished” moet robuust: max 10 minuten, exponential backoff (bv 2s->5s->10s->20s->30s cap), en bij elke poll log correlationId + mediaId + status + fileSize.
+      - Als status blijft “initialized” of fileSize=0 na X polls: markeer upload FAILED met duidelijke reason, en ga door naar iii.
+   iii) Als upload eindigt met timeout/initialized:
+      - Probeer server-side “clone from existing media url” ONLY als we een geldige play_from_url of download_from_url hebben en Yodeck accepteert het.
+      - Anders: zet canonical status "REJECTED" maar met actionable reason + adviseer cleanup.
+
+Belangrijk: canonical status mag nooit “REJECTED” blijven zonder dat publish een fallback heeft. Publish moet dan alsnog de beste bestaande werkende yodeck media kunnen pakken via (i).
+
+B) Duplicate assets opruimen (DB-level)
+1) Voeg admin endpoint toe:
+   POST /api/admin/advertisers/:id/cleanup-assets
+   - Houd 1 “best” asset over per originalFileName (of per storedFileName prefix) en archiveer/deactiveer de rest.
+   - Best asset selectie: nieuwste succesvolle (ready_for_yodeck of LIVE), of anders nieuwste createdAt.
+   - Result: retourneer {keptAssetId, archivedCount, keptList, archivedList}
+2) Zorg dat toekomstige uploads idempotent zijn:
+   - Als er al een asset bestaat met hetzelfde file hash (indien beschikbaar) of dezelfde storedFileName -> hergebruik in plaats van nieuwe rij maken.
+   - Als hash niet bestaat: gebruik deterministic storedFileName (bv ADV-{advertiserSlug}-{yyyyMMddHHmmss} is juist NIET deterministic). Maak liever: ADV-{advertiserSlug}-{sha1(filebytes)}.ext
+
+C) Publish flow moet ALTIJD item in playlist zetten (geen “0 wouldSucceed” meer)
+1) In publish logic (routes/services die /api/admin/advertisers/:id/publish-now gebruikt):
+   - Vóór placement: roep ensureCanonicalYodeckMedia(advertiserId) aan.
+   - Als canonical yodeckMediaId nog steeds ontbreekt -> return 422 met reason + diagnostics.
+2) Playlist targeting:
+   - Gebruik bestaande placements of screen mappings, maar zorg dat je daadwerkelijk de JUISTE Yodeck playlist IDs gebruikt.
+   - We hebben nu inconsistentie: DB mapping noemt playlist 30461663, maar Yodeck LIVE status noemt playlists 30590180 en 30590872 per player.
+   - Implementeer server-side “resolveScreenPlaylist(playerId)” die:
+     - Via Yodeck API de auto-playlist voor die player ophaalt (of via screen->playlist relation indien Yodeck API dat geeft).
+     - Als gevonden: gebruik die playlistId voor inserts.
+     - Update DB mapping automatisch als hij afwijkt (safe migration) zodat future runs correct zijn.
+3) Insert:
+   - Voeg item toe via server-side Yodeck API: POST /playlists/{playlistId}/items met payload:
+     { media_id: <canonicalYodeckMediaId>, duration: 15 }
+   - Check response; als fail -> log + return in publishReport.
+4) Idempotency:
+   - Voor je toevoegt: check playlist items (server-side) of media_id al bestaat -> skip (no duplicates).
+   - Als duplicates bestaan: houd 1, verwijder de rest (optioneel via nieuw cleanup endpoint).
+
+D) Push to screens moet triggered worden na succesvolle inserts
+- Na inserts, call bestaande push routine (zoals /api/admin/screens/push) per yodeckPlayerId.
+- Return publishReport met: inserts[], skippedAlreadyPresent[], pushResults[].
+
+E) Debug endpoints voor snelle verificatie (geen UI nodig)
+Voeg toe (admin protected):
+1) GET /api/admin/yodeck/players  -> lijst players
+2) GET /api/admin/yodeck/media?q=... -> server-side search
+3) GET /api/admin/yodeck/playlists?q=... -> server-side search
+4) GET /api/admin/yodeck/playlists/:id/items -> server-side items list
+5) POST /api/admin/advertisers/:id/ensure-canonical -> draait ensureCanonicalYodeckMedia en geeft diagnostics
+
+Let op: eerder in browser zagen we 404 op /api/admin/yodeck/* omdat routes niet bestonden. Deze endpoints moeten nu echt gemaakt worden.
+
+ACCEPTANCE CRITERIA (must):
+1) Voor advertiser 9a99d555-... kan publish-now 2 playlists vullen met de ad (1 item per playlist) zonder handmatige stappen.
+2) Geen extra duplicates in DB assets en geen extra duplicates in Yodeck playlist items na herhaald publishen.
+3) Als Yodeck upload timeout geeft, pakt het systeem automatisch een bestaande finished video in Yodeck die matcht op naam/prefix en zet die als canonical.
+4) Na publish wordt push uitgevoerd en zichtbaar als yodeckStatus completed.
+
+Lever: code changes + korte notities waar te testen (fetch calls).
+Geen grote refactor; werk binnen bestaande services: yodeckClient.ts, playlist services, publish routes.
