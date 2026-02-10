@@ -23950,7 +23950,14 @@ KvK: 90982541 | BTW: NL004857473B37</p>
             console.log(`${advLog} step=YODECK_CHECK mediaId=${c.id} source=${c.source} httpStatus=${resp.status}`);
 
             if (resp.ok) {
-              validCandidates.push(c);
+              const mediaData = await resp.json().catch(() => ({}));
+              const mediaOriginType = mediaData.media_origin?.type || mediaData.mediaOrigin?.type || null;
+              if (mediaOriginType && mediaOriginType !== "video") {
+                console.error(`${advLog} [INVALID_AD_MEDIA] mediaId=${c.id} mediaOrigin.type="${mediaOriginType}" name="${mediaData.name}" — NOT a video`);
+                staleCandidates.push({ ...c, httpStatus: 200, reason: `wrong_type:${mediaOriginType}` } as any);
+              } else {
+                validCandidates.push(c);
+              }
             } else if (resp.status === 404) {
               staleCandidates.push({ ...c, httpStatus: 404 });
             } else {

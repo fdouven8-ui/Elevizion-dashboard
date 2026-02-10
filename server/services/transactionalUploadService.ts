@@ -1,5 +1,5 @@
 import { db } from "../db";
-import { uploadJobs, advertisers, UPLOAD_JOB_STATUS, UPLOAD_FINAL_STATE } from "@shared/schema";
+import { uploadJobs, advertisers, adAssets, UPLOAD_JOB_STATUS, UPLOAD_FINAL_STATE } from "@shared/schema";
 import { eq } from "drizzle-orm";
 import { Client } from "@replit/object-storage";
 import { buildYodeckCreateMediaPayload, buildYodeckUrlMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
@@ -1293,26 +1293,40 @@ export async function ensureAdvertiserMediaIsValid(
           needsReupload = true;
           invalidReason = "MEDIA_INVALID_RESPONSE";
         } else {
-          const status = (data.status || "").toLowerCase();
-          const isReady = READY_STATUSES.includes(status);
-          const fileObj = data.file;
-          const fileSize = fileObj?.size || fileObj?.file_size || data.filesize || data.file_size || 0;
-          const hasFile = fileObj != null && fileSize > 0;
-          
-          console.log(`[YODECK_MEDIA_CHECK] id=${existingMediaId} status=${status} isReady=${isReady} fileSize=${fileSize} hasFile=${hasFile}`);
+          const mediaOriginType = data.media_origin?.type || data.mediaOrigin?.type || null;
+          const mediaName = data.name || "";
+          console.log(`[YODECK_MEDIA_CHECK] id=${existingMediaId} mediaOrigin.type=${mediaOriginType} name="${mediaName}"`);
 
-          if (isReady && !hasFile) {
-            console.warn(`[YODECK_MEDIA_INVALID] mediaId=${existingMediaId} status=${status} but file=null/size=0 - BROKEN media`);
+          if (mediaOriginType && mediaOriginType !== "video") {
+            console.error(`[INVALID_AD_MEDIA] mediaId=${existingMediaId} mediaOrigin.type="${mediaOriginType}" name="${mediaName}" — NOT a video, clearing`);
             needsReupload = true;
-            invalidReason = "MEDIA_FILE_MISSING";
+            invalidReason = `WRONG_MEDIA_TYPE_${mediaOriginType}`;
+
+            await db.update(adAssets)
+              .set({ yodeckMediaId: null })
+              .where(eq(adAssets.yodeckMediaId, existingMediaId));
           } else {
-            const ENCODING_STATUSES = ["encoding", "processing", "uploading", "initialized"];
-            if (!isReady && !ENCODING_STATUSES.includes(status)) {
-              console.warn(`[YODECK_MEDIA_INVALID] mediaId=${existingMediaId} status="${status}" is stuck/invalid`);
+            const status = (data.status || "").toLowerCase();
+            const isReady = READY_STATUSES.includes(status);
+            const fileObj = data.file;
+            const fileSize = fileObj?.size || fileObj?.file_size || data.filesize || data.file_size || 0;
+            const hasFile = fileObj != null && fileSize > 0;
+            
+            console.log(`[YODECK_MEDIA_CHECK] id=${existingMediaId} status=${status} isReady=${isReady} fileSize=${fileSize} hasFile=${hasFile}`);
+
+            if (isReady && !hasFile) {
+              console.warn(`[YODECK_MEDIA_INVALID] mediaId=${existingMediaId} status=${status} but file=null/size=0 - BROKEN media`);
               needsReupload = true;
-              invalidReason = `MEDIA_NOT_PLAYABLE_STATUS_${status}`;
+              invalidReason = "MEDIA_FILE_MISSING";
             } else {
-              return { ok: true, mediaId: existingMediaId, status, isReady };
+              const ENCODING_STATUSES = ["encoding", "processing", "uploading", "initialized"];
+              if (!isReady && !ENCODING_STATUSES.includes(status)) {
+                console.warn(`[YODECK_MEDIA_INVALID] mediaId=${existingMediaId} status="${status}" is stuck/invalid`);
+                needsReupload = true;
+                invalidReason = `MEDIA_NOT_PLAYABLE_STATUS_${status}`;
+              } else {
+                return { ok: true, mediaId: existingMediaId, status, isReady };
+              }
             }
           }
         }
