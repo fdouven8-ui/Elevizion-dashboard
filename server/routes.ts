@@ -23014,7 +23014,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
       const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
       
-      const rebuildResults: Array<{ screenId: string; ok: boolean; candidates?: number; included?: number; method?: string; error?: string; actions?: string[] }> = [];
+      const rebuildResults: Array<{ screenId: string; ok: boolean; candidates?: number; included?: number; method?: string; playlistId?: number | null; pushed?: boolean; verified?: boolean; error?: string }> = [];
       
       for (const screenId of targetScreenIds) {
         try {
@@ -23022,6 +23022,9 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           const result = await rebuildScreenPlaylist(screenId);
           const included = (result as any).ads?.included || 0;
           const candidates = (result as any).ads?.candidates || 0;
+          const playlistId = (result as any).screenPlaylist?.screenPlaylistId || null;
+          const pushed = (result as any).push?.ok || false;
+          const verified = (result as any).verify?.ok || false;
           
           rebuildResults.push({
             screenId,
@@ -23029,9 +23032,12 @@ KvK: 90982541 | BTW: NL004857473B37</p>
             method: "rebuild",
             candidates,
             included,
+            playlistId,
+            pushed,
+            verified,
             error: result.ok ? undefined : ((result as any).error?.message || "Unknown error"),
           });
-          console.log(`[PublishNow] ${correlationId} Rebuild ${screenId}: ok=${result.ok} candidates=${candidates} included=${included}`);
+          console.log(`[PublishNow] ${correlationId} Rebuild ${screenId}: ok=${result.ok} candidates=${candidates} included=${included} playlistId=${playlistId} pushed=${pushed} verified=${verified}`);
         } catch (err: any) {
           rebuildResults.push({ screenId, ok: false, error: err.message });
           console.error(`[PublishNow] ${correlationId} Rebuild FAILED for ${screenId}: ${err.message}`);
@@ -23041,6 +23047,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       const successCount = rebuildResults.filter(r => r.ok).length;
       const failedCount = rebuildResults.filter(r => !r.ok).length;
       const totalIncluded = rebuildResults.reduce((sum, r) => sum + (r.included || 0), 0);
+      const targetPlaylistIds = rebuildResults.filter(r => r.playlistId).map(r => r.playlistId);
       res.json({
         ok: successCount > 0,
         correlationId,
@@ -23049,6 +23056,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         canonicalSource: canonicalResult?.source || "existing_canonical",
         placementMethod,
         placementMethodReason,
+        targetPlaylistIds,
         summary: {
           targetsResolved: targetScreenIds.length,
           publishAttempts: rebuildResults.length,
@@ -23066,6 +23074,56 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         error: error.message,
         correlationId,
       });
+    }
+  });
+
+  /**
+   * POST /api/admin/yodeck/sync-playlist-mappings
+   * Sync DB playlist IDs from live Yodeck player assignments
+   */
+  app.post("/api/admin/yodeck/sync-playlist-mappings", requireAdminAccess, async (req, res) => {
+    try {
+      const { syncPlaylistMappings } = await import("./services/yodeckAdminService");
+      const result = await syncPlaylistMappings();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[SyncPlaylistMappings] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/autopilot/ensure-baseline-playlist
+   * Ensure baseline playlist exists in Yodeck and env vars are set
+   */
+  app.post("/api/admin/autopilot/ensure-baseline-playlist", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId } = req.body || {};
+      const { ensureBaselinePlaylist } = await import("./services/yodeckAdminService");
+      const result = await ensureBaselinePlaylist(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[EnsureBaseline] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/yodeck/cleanup-duplicates
+   * Safe duplicate media cleanup for an advertiser
+   */
+  app.post("/api/admin/yodeck/cleanup-duplicates", requireAdminAccess, async (req, res) => {
+    try {
+      const { advertiserId, dryRun } = req.body || {};
+      if (!advertiserId) {
+        return res.status(400).json({ ok: false, error: "advertiserId is required" });
+      }
+      const { cleanupDuplicates } = await import("./services/yodeckAdminService");
+      const result = await cleanupDuplicates(advertiserId, dryRun !== false);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[CleanupDuplicates] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
     }
   });
 
@@ -23346,17 +23404,14 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * GET /api/admin/advertisers/:id/mapping-health
-   * Check mapping health for an advertiser's assets
+   * Enhanced mapping health: playlist IDs, live names, baseline status, media validation
    */
   app.get("/api/admin/advertisers/:id/mapping-health", requireAdminAccess, async (req, res) => {
     try {
       const { id: advertiserId } = req.params;
-      
-      const { checkMappingHealth } = await import("./services/publishNowService");
-      
-      const result = await checkMappingHealth(advertiserId);
-      
-      res.json({ ok: result.mappingHealth === "OK", ...result });
+      const { checkEnhancedMappingHealth } = await import("./services/yodeckAdminService");
+      const result = await checkEnhancedMappingHealth(advertiserId);
+      res.json(result);
     } catch (error: any) {
       console.error("[MappingHealth] Error:", error);
       res.status(500).json({ ok: false, error: error.message });

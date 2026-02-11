@@ -38,7 +38,7 @@ function isReadyStatus(status: string | undefined): boolean {
   return READY_STATUSES.includes(status.toLowerCase());
 }
 
-function buildSearchPatterns(advertiser: any, assets: any[]): string[] {
+export function buildSearchPatterns(advertiser: any, assets: any[]): string[] {
   const patterns: string[] = [];
   
   for (const asset of assets) {

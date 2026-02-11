@@ -1,0 +1,59 @@
+You are working on the Elevizion Node/TS app (production). Goal: make ad publishing deterministic and stop Yodeck duplicates. Current state is inconsistent:
+
+- DB screen mappings show both screens mapped to playlist 30461663.
+- Live Yodeck status shows per-player playlists:
+  - player 591896 -> playlist 30590180 ("EVZ | SCREEN | 591896(auto-playlist-30590180-crop)")
+  - player 591895 -> playlist 30590872 ("EVZ | SCREEN | 591895(auto-playlist-30590872-crop)")
+- Baseline Playlist configured: false (manifest).
+- Advertiser 9a99d555... is ready_for_yodeck. /api/admin/advertisers/:id/publish-now returns ok with mediaId=29881336 and rebuilds ok, but real placement is unreliable because playlist mapping is wrong.
+- Yodeck library contains many duplicates; only 1 ad media should exist (canonical), and only 3 playlists should exist (1 baseline + 2 screen playlists).
+
+Implement the following, minimal-change, no rewrites:
+
+A) Add a Yodeck->DB sync that establishes a single source of truth for playlist IDs
+1. Create admin endpoint: POST /api/admin/yodeck/sync-playlist-mappings (auth admin).
+2. For each Screen row with yodeckPlayerId:
+   - Fetch the Yodeck playlist that belongs to this player.
+     Prefer: search playlists by name exact prefix "EVZ | SCREEN | {playerId}" (the UI shows these exist).
+     If multiple, pick the one that is currently assigned/most recently modified; log decision.
+   - Update DB field that stores the screen playlist id (screen.yodeckPlaylistId or equivalent) to THIS Yodeck playlist ID.
+   - Return a summary table: playerId, yodeckPlaylistId(old->new), playlistName.
+
+B) Baseline playlist: ensure configured and used
+1. Add admin endpoint: POST /api/admin/autopilot/ensure-baseline-playlist { locationId }.
+2. If baseline playlist does not exist:
+   - Create it in Yodeck, name: "EVZ | BASE | {locationId}" (or "EVZ | BASE | Bouwservice Douven" if you already have naming conventions).
+   - Populate with the required baseline items (news/weather/apps) using existing baseline logic (see server/services/simplePlaylistModel.ts, screenPlaylistService.ts).
+3. Store baseline playlist id in DB/config (where baseline-status reads from). After this, /api/admin/autopilot/baseline-status must show configured=true.
+
+C) Publishing must always target the correct playlists and avoid duplicates
+1. In publish flow (/api/admin/advertisers/:id/publish-now and normalize-and-publish):
+   - Resolve canonical media deterministically:
+     a) If advertiser has existing canonical Yodeck media id and it validates (status finished, not 404), reuse it.
+     b) Else perform Yodeck search by filename prefix for the advertiser canonical naming and choose ONE best candidate (status finished, correct type).
+     c) Only if not found/invalid -> upload once, wait until finished. Never create clones as a default path.
+   - After resolving mediaId, insert it into the correct playlist(s):
+     - Use the DB screen.yodeckPlaylistId values synced in step A.
+     - Do NOT use stale playlist id 30461663 if it doesn’t match the per-player playlists.
+2. After playlist update, trigger push automatically:
+   - Call the existing push logic used by /api/admin/screens/push for the affected playerIds.
+   - Return response including: chosenMediaId, targetPlaylistIds, push results.
+
+D) Safe duplicate cleanup (optional but implement)
+1. Add admin endpoint: POST /api/admin/yodeck/cleanup-duplicates { advertiserId, dryRun:boolean }
+2. Implementation:
+   - List Yodeck media matching advertiser’s canonical filename pattern.
+   - Keep the chosen canonical mediaId.
+   - For the rest, delete ONLY if they are not used in ANY playlist (use Yodeck “where used” / playlist items scan). Never delete used media.
+   - Support dryRun that returns what would be deleted.
+
+E) Logging + verification
+- Every endpoint returns correlationId.
+- Add “mapping health” report: GET /api/admin/advertisers/:id/mapping-health should include:
+  screen.yodeckPlaylistId, live yodeck playlist name, baseline configured, and whether the ad mediaId exists and is finished.
+
+After implementing, provide 3 copy-paste console commands to verify:
+1) POST /api/admin/yodeck/sync-playlist-mappings
+2) POST /api/admin/autopilot/ensure-baseline-playlist with the active locationId
+3) POST /api/admin/advertisers/9a99d555-8676-49d3-9862-f65859bdcfb1/publish-now
+and show expected JSON fields in success.

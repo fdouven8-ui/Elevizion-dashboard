@@ -33,7 +33,12 @@ Authentication uses username/password with bcrypt hashing and session data store
 - **Ad Publishing Workflow**: Includes video upload portals, validation, object storage integration, transcoding, and an admin review workflow for approval.
 - **Simple Playlist Model**: Manages playlists with a "Basis playlist" and one screen playlist per screen, ensuring synchronization and ad delivery. It includes robust verification steps for media inclusion and playback state, and intelligent ad selection based on targeting.
 - **Shared Playlist Guard**: Automatically detects and fixes instances where playlists are shared between screens, ensuring unique playlist assignments.
-- **Admin Endpoints**: Provides various administrative functionalities including playlist rebuilds, Yodeck integration status, media inspection, and advertiser asset management.
+- **Admin Endpoints**: Provides various administrative functionalities including playlist rebuilds, Yodeck integration status, media inspection, and advertiser asset management. Key admin endpoints:
+  - `POST /api/admin/yodeck/sync-playlist-mappings`: Syncs DB playlist IDs from live Yodeck player assignments
+  - `POST /api/admin/autopilot/ensure-baseline-playlist`: Ensures baseline playlist exists in Yodeck
+  - `POST /api/admin/yodeck/cleanup-duplicates`: Safe duplicate media cleanup (supports dryRun)
+  - `GET /api/admin/advertisers/:id/mapping-health`: Enhanced health check with playlist IDs, live names, baseline status, media validation
+- **Yodeck Admin Service** (`server/services/yodeckAdminService.ts`): Centralized admin operations for playlist sync, baseline management, duplicate cleanup, and mapping health checks.
 - **System Health & Self-Heal Endpoints**: Tools for monitoring system configuration, fixing common issues like shared playlists, and performing smoke checks.
 - **Screen Status Endpoints**: Provides real-time playback and device status information for screens.
 - **Debug Endpoints**: A suite of read-only and diagnostic endpoints for Yodeck integration, storage inspection, and end-to-end testing.
