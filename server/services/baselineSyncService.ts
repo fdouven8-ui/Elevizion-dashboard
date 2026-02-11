@@ -8,6 +8,7 @@ import {
   ensureScreenPlaylist,
   applyPlayerSourceAndPush,
   getScreenNowPlayingSimple,
+  collectAdsForScreen,
 } from "./simplePlaylistModel";
 
 const LOG = "[BaselineSync]";
@@ -264,7 +265,7 @@ export async function syncPlaylists(locationId?: string, push: boolean = false):
   }
 
   const baselineItems = basePl.items;
-  console.log(`${LOG} [${correlationId}] Baseline: ${baselineItems.length} items`);
+  console.log(`${LOG} [${correlationId}] Baseline: ${baselineItems.length} items [${baselineItems.map(i => `${i.id}(${i.name || i.type})`).join(", ")}]`);
 
   const targetScreens = await getScreensForLocation(locationId);
   const proofs: ScreenSyncProof[] = [];
@@ -286,14 +287,23 @@ export async function syncPlaylists(locationId?: string, push: boolean = false):
 
       const screenPlaylistId = ensureResult.screenPlaylistId;
 
-      let extraItems: PlaylistItem[] = [];
-      const existingPl = await getPlaylistItems(screenPlaylistId);
-      if (existingPl.ok) {
-        const baselineIds = new Set(baselineItems.map(i => i.id));
-        extraItems = existingPl.items.filter(i => !baselineIds.has(i.id));
-      }
+      const beforePl = await getPlaylistItems(screenPlaylistId);
+      const beforeKeys = beforePl.ok ? beforePl.items.map(i => `${i.type || "media"}:${i.id}`) : [];
+      console.log(`${LOG} [${correlationId}] Screen ${playerId} playlist=${screenPlaylistId} BEFORE: ${beforeKeys.length} items [${beforeKeys.join(", ")}]`);
 
-      const desiredItems = buildScreenPlaylistItems({ baselineItems, extraItems });
+      const adsResult = await collectAdsForScreen(screen);
+      console.log(`${LOG} [${correlationId}] Screen ${playerId} ads: ${adsResult.adMediaIds.length} selected (candidates=${adsResult.stats.candidates}, targeting=${adsResult.stats.targetingMatches})`);
+
+      const adItems: PlaylistItem[] = adsResult.adMediaIds.map(id => ({
+        id,
+        type: "media",
+        duration: 15,
+      }));
+
+      const desiredItems = buildScreenPlaylistItems({ baselineItems, extraItems: adItems });
+
+      const desiredKeys = desiredItems.map(i => `${i.type}:${i.id}`);
+      console.log(`${LOG} [${correlationId}] Screen ${playerId} DESIRED: ${desiredKeys.length} items [${desiredKeys.join(", ")}] (${baselineItems.length} baseline + ${adsResult.adMediaIds.length} ads)`);
 
       const updateResult = await replacePlaylistItems(screenPlaylistId, desiredItems);
       if (!updateResult.ok) {
@@ -306,7 +316,29 @@ export async function syncPlaylists(locationId?: string, push: boolean = false):
         continue;
       }
 
-      console.log(`${LOG} [${correlationId}] Screen ${playerId}: set ${desiredItems.length} items (${baselineItems.length} baseline + ${extraItems.length} extra)`);
+      const afterPl = await getPlaylistItems(screenPlaylistId);
+      const afterKeys = afterPl.ok ? afterPl.items.map(i => `${i.type || "media"}:${i.id}`) : [];
+      console.log(`${LOG} [${correlationId}] Screen ${playerId} AFTER: ${afterKeys.length} items [${afterKeys.join(", ")}]`);
+
+      const desiredKeySet = new Set(desiredKeys);
+      const afterKeySet = new Set(afterKeys);
+      const missingFromPlaylist = desiredKeys.filter(k => !afterKeySet.has(k));
+      const unexpectedInPlaylist = afterKeys.filter(k => !desiredKeySet.has(k));
+
+      if (missingFromPlaylist.length > 0 || unexpectedInPlaylist.length > 0) {
+        const mismatchMsg = `VERIFICATION MISMATCH: missing=[${missingFromPlaylist.join(",")}] unexpected=[${unexpectedInPlaylist.join(",")}]`;
+        console.error(`${LOG} [${correlationId}] Screen ${playerId} ${mismatchMsg}`);
+        errors.push(`Screen ${playerId}: ${mismatchMsg}`);
+        proofs.push({
+          screenId: screen.id, yodeckPlayerId: playerId, screenPlaylistId,
+          itemsSet: desiredItems.length, pushed: false, verified: true, isCorrect: false,
+          expectedPlaylistId: screenPlaylistId, actualSourceId: null,
+          error: mismatchMsg,
+        });
+        continue;
+      }
+
+      console.log(`${LOG} [${correlationId}] Screen ${playerId} VERIFIED OK: ${afterKeys.length} items match desired`);
 
       let pushed = false;
       if (push) {

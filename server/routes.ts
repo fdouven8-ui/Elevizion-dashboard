@@ -18364,6 +18364,25 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.get("/api/admin/yodeck/playlists/:id", requireAdminAccess, async (req, res) => {
+    try {
+      const playlistId = parseInt(req.params.id, 10);
+      if (isNaN(playlistId)) return res.status(400).json({ ok: false, error: "Invalid playlist ID" });
+      const { yodeckRequest } = await import("./services/simplePlaylistModel");
+      const result = await yodeckRequest<any>(`/playlists/${playlistId}/`);
+      if (!result.ok) return res.status(result.status === 404 ? 404 : 502).json({ ok: false, error: result.error });
+      const playlist = result.data;
+      const items = (playlist?.items || []).map((item: any) => ({
+        id: item.id, name: item.name, type: item.type, duration: item.duration, priority: item.priority,
+      }));
+      const typeIdKeys = items.map((i: any) => `${i.type}:${i.id}`);
+      const duplicates = typeIdKeys.filter((k: string, idx: number) => typeIdKeys.indexOf(k) !== idx);
+      res.json({ ok: true, id: playlistId, name: playlist?.name, itemCount: items.length, items, typeIdKeys, duplicates });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   app.get("/api/admin/yodeck/playlists/:id/items", requireAdminAccess, async (req, res) => {
     try {
       const playlistId = parseInt(req.params.id, 10);

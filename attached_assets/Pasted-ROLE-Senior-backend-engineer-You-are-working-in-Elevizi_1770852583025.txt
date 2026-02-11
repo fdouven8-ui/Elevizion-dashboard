@@ -1,0 +1,45 @@
+ROLE: Senior backend engineer. You are working in Elevizion Dashboard (Node/Express/TS). Goal: enforce "one truth" for Yodeck playlists and eliminate leftover/duplicate items (e.g., L1 app 10s, duplicate ad entries). Current state:
+- Baseline playlist exists in Yodeck: id=27644453 ("Basis playlist"), itemCount=4
+- Screen playlists: 30590872 (player 591895) and 30590180 (player 591896)
+- /api/admin/playlists/sync?push=true&locationId=... reports pushed:true and itemsSet:6 per screen, but Yodeck UI still shows leftover item (L1 app 10s) and duplicate ad entry.
+- Duplicate detector for advertiser (9a99d555-8676-49d3-9862-f65859bdcfb1) returns totalFound:3 but groups:[] so duplicates are not detected as duplicates.
+We need deterministic rebuild: screen playlist items MUST be exactly (baseline items + selected ads) with no extra items, and no duplicate media IDs in playlist.
+
+IMPLEMENT:
+1) In the baseline->screen sync service (server/services/baselineSyncService.ts and/or server/services/screenPlaylistService.ts / simplePlaylistModel.ts), change update strategy to REPLACE, not MERGE:
+   - Compute desiredItems array (baseline items in order + ad items in order).
+   - Normalize each desired item as {type:"media", id:<mediaId>, duration:<seconds>, priority:<index>} (or the structure your builder uses).
+   - Dedupe desiredItems by (type + id). Keep the FIRST occurrence, drop subsequent duplicates. Also dedupe apps/widgets if they appear (use type+id key).
+2) When applying to Yodeck, overwrite playlist.items to desiredItems exactly:
+   - Do NOT append/add-missing.
+   - Do NOT keep existing playlist items.
+   - Use Yodeck PATCH/PUT playlist endpoint via existing yodeckClient method (updatePlaylist/patchPlaylist). Ensure request payload includes "items" field and replaces the full items list.
+3) Add a safety verification step after updating playlist:
+   - Fetch playlist by ID from Yodeck (or via existing truth service cache) and compare resulting item keys to desired keys (order-insensitive comparison is OK, but log both).
+   - If mismatch, return error with correlationId and both item sets.
+4) Add logging (info level) that prints:
+   - correlationId, screenId, playlistId
+   - desiredItemKeys length + list of keys
+   - beforeItemKeys length + list of keys (fetch before patch if feasible)
+   - afterItemKeys length + list of keys
+5) Expose a debug endpoint to read live playlist items (needed for future triage):
+   - GET /api/admin/yodeck/playlists/:id
+   - Returns playlist {id,name,items[]} from Yodeck.
+   - Guard behind requireRole("admin") and JSON-only response.
+6) After implementation, run and verify with this call:
+   POST /api/admin/playlists/sync?push=true&locationId=3321f9c7-4a76-4abd-9cc1-9472d6473d80
+   Then call:
+   GET /api/admin/yodeck/playlists/30590180
+   GET /api/admin/yodeck/playlists/30590872
+   Confirm:
+   - No L1 item (10s app) unless it exists in baseline.
+   - No duplicate media id entries.
+   - Items count matches expected (baseline 4 + ads X).
+CONSTRAINTS:
+- Do not change working upload pipeline.
+- Keep existing naming conventions and current endpoints.
+- Make minimal code changes, focused only on playlist sync/apply logic and the debug endpoint.
+
+Deliverables:
+- Code changes + new endpoint.
+- Brief notes in console logs showing before/after for the playlist with correlationId.

@@ -644,6 +644,111 @@ export async function syncScreenPlaylistFromBase(screenPlaylistId: number): Prom
   };
 }
 
+export interface CollectAdsResult {
+  adMediaIds: number[];
+  adsIncluded: Array<{ advertiserId: string; mediaId: number; companyName: string }>;
+  skipped: Array<{ reason: string; advertiserId: string; detail?: string }>;
+  stats: { candidates: number; targetingMatches: number; uploadAttempts: number; uploadSuccesses: number };
+}
+
+export async function collectAdsForScreen(screen: {
+  id: string;
+  locationId?: string | null;
+}): Promise<CollectAdsResult> {
+  const MAX_ADS_PER_SCREEN = 20;
+  const adMediaIds: number[] = [];
+  const adsIncluded: Array<{ advertiserId: string; mediaId: number; companyName: string }> = [];
+  const skipped: Array<{ reason: string; advertiserId: string; detail?: string }> = [];
+
+  const location = screen.locationId ? await storage.getLocation(screen.locationId) : null;
+  const screenCity = (location?.city || "").toLowerCase().trim();
+  const screenRegion = ((location as any)?.region || (location as any)?.regionCode || "").toLowerCase().trim();
+
+  const allAdvertisers = await storage.getAdvertisers();
+
+  let advertisersWithActiveContracts: Set<string> = new Set();
+  if (!BYPASS_CONTRACT_GATING) {
+    const activeContractRows = await db.select({ advertiserId: contracts.advertiserId })
+      .from(contracts)
+      .where(eq(contracts.status, "active"));
+    advertisersWithActiveContracts = new Set(activeContractRows.map(r => r.advertiserId));
+  }
+
+  let candidates = 0;
+  let uploadAttempts = 0;
+  let uploadSuccesses = 0;
+  let targetingMatches = 0;
+
+  for (const advertiser of allAdvertisers) {
+    if (advertiser.status !== "active") continue;
+
+    const assetStatus = advertiser.assetStatus || "";
+    if (!["approved", "ready_for_yodeck", "ready_for_publish", "live", "uploaded"].includes(assetStatus)) continue;
+
+    if (!BYPASS_CONTRACT_GATING && !advertisersWithActiveContracts.has(advertiser.id)) {
+      skipped.push({ reason: "no_active_contract", advertiserId: advertiser.id });
+      continue;
+    }
+
+    candidates++;
+
+    const targetRegions = Array.isArray(advertiser.targetRegionCodes)
+      ? advertiser.targetRegionCodes.map(r => normalizeForTargeting(r))
+      : [];
+    const targetCitiesList = parseTargetCities(advertiser.targetCities);
+    const targetCheck = checkTargetingMatch(screenCity, screenRegion, targetRegions, targetCitiesList);
+
+    if (!targetCheck.match) {
+      skipped.push({ reason: targetCheck.reason === "screen_no_location" ? "screen_no_location" : "targeting_mismatch", advertiserId: advertiser.id });
+      continue;
+    }
+
+    targetingMatches++;
+
+    if (adMediaIds.length >= MAX_ADS_PER_SCREEN) {
+      skipped.push({ reason: "capacity_limit", advertiserId: advertiser.id });
+      continue;
+    }
+
+    let mediaId = advertiser.yodeckMediaIdCanonical;
+
+    if (!mediaId && ["ready_for_yodeck", "approved", "uploaded"].includes(assetStatus)) {
+      uploadAttempts++;
+      const uploadResult = await ensureAdvertiserMediaUploaded(advertiser.id);
+      if (uploadResult.ok && uploadResult.mediaId) {
+        mediaId = uploadResult.mediaId;
+        uploadSuccesses++;
+      } else {
+        skipped.push({ reason: "upload_failed", advertiserId: advertiser.id, detail: uploadResult.error });
+        continue;
+      }
+    } else if (!mediaId) {
+      skipped.push({ reason: "no_yodeck_media_id", advertiserId: advertiser.id });
+      continue;
+    }
+
+    const { ensureAdvertiserMediaIsValid } = await import("./transactionalUploadService");
+    const validationResult = await ensureAdvertiserMediaIsValid(advertiser.id, { autoHeal: false });
+
+    if (!validationResult.ok || !validationResult.mediaId) {
+      skipped.push({ reason: "media_not_found_in_yodeck", advertiserId: advertiser.id, detail: `mediaId=${mediaId}: ${validationResult.reason || 'not found'}` });
+      continue;
+    }
+
+    mediaId = validationResult.mediaId;
+
+    if (!validationResult.isReady) {
+      skipped.push({ reason: "media_not_ready", advertiserId: advertiser.id, detail: `mediaId=${mediaId}: status=${validationResult.status}` });
+      continue;
+    }
+
+    adMediaIds.push(mediaId);
+    adsIncluded.push({ advertiserId: advertiser.id, mediaId, companyName: advertiser.companyName || advertiser.id });
+  }
+
+  return { adMediaIds, adsIncluded, skipped, stats: { candidates, targetingMatches, uploadAttempts, uploadSuccesses } };
+}
+
 export interface EnsureMediaUploadResult {
   ok: boolean;
   advertiserId: string;
