@@ -1158,6 +1158,103 @@ export class YodeckClient {
     };
   }
 
+  async deleteMedia(mediaId: number): Promise<{ ok: boolean; status?: number; error?: string }> {
+    await semaphore.acquire();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/media/${mediaId}/`, {
+          method: "DELETE",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (response.status === 429) {
+          return { ok: false, status: 429, error: "Rate limited" };
+        }
+        if (!response.ok && response.status !== 204) {
+          const text = await response.text().catch(() => "");
+          return { ok: false, status: response.status, error: `HTTP ${response.status}: ${text.substring(0, 200)}` };
+        }
+        return { ok: true, status: response.status };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        return { ok: false, error: err.name === "AbortError" ? "timeout" : err.message };
+      }
+    } finally {
+      semaphore.release();
+    }
+  }
+
+  async deletePlaylist(playlistId: number): Promise<{ ok: boolean; status?: number; error?: string }> {
+    await semaphore.acquire();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/playlists/${playlistId}/`, {
+          method: "DELETE",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (response.status === 429) {
+          return { ok: false, status: 429, error: "Rate limited" };
+        }
+        if (!response.ok && response.status !== 204) {
+          const text = await response.text().catch(() => "");
+          return { ok: false, status: response.status, error: `HTTP ${response.status}: ${text.substring(0, 200)}` };
+        }
+        return { ok: true, status: response.status };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        return { ok: false, error: err.name === "AbortError" ? "timeout" : err.message };
+      }
+    } finally {
+      semaphore.release();
+    }
+  }
+
+  async updatePlaylist(playlistId: number, payload: Record<string, any>): Promise<{ ok: boolean; data?: YodeckPlaylist; error?: string; status?: number }> {
+    await semaphore.acquire();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/playlists/${playlistId}/`, {
+          method: "PUT",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          return { ok: false, status: response.status, error: `HTTP ${response.status}: ${text.substring(0, 200)}` };
+        }
+        const data = await response.json() as YodeckPlaylist;
+        this.playlistCache.clear();
+        return { ok: true, data, status: response.status };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        return { ok: false, error: err.name === "AbortError" ? "timeout" : err.message };
+      }
+    } finally {
+      semaphore.release();
+    }
+  }
+
   async pushScreen(screenIdOrPlayerId: number, opts?: { use_download_timeslots?: boolean }): Promise<{ ok: boolean; data?: any; error?: string; status?: number }> {
     await semaphore.acquire();
     try {

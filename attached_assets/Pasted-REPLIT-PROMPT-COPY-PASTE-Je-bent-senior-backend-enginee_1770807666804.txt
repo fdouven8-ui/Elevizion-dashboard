@@ -1,0 +1,225 @@
+REPLIT PROMPT (COPY/PASTE)
+
+Je bent senior backend engineer. Pas de bestaande Elevizion codebase aan zonder grote refactor. Doel: Yodeck volledig “single source of truth” + opschonen van alle ongebruikte kopieën. Er mag uiteindelijk maar 1 advertentie-video overblijven (de canonieke media die daadwerkelijk in de playlists zit). Alles wat niet gebruikt wordt is ruis en moet weg.
+
+DEFINITIES (HARD)
+
+“In use” = mediaId komt voor in:
+
+baseline playlist items
+
+screen playlists items (voor alle actieve screens)
+
+canonical media id per advertiser (als die bestaat in DB)
+
+Alles wat NIET “in use” is, is delete-kandidaat, ongeacht naam/prefix.
+
+Er zijn 3 playlists die moeten bestaan:
+
+1 baseline playlist (DB of fallback id)
+
+2 screen playlists (uit DB screen mappings)
+
+Elke wijziging aan baseline moet met 1 endpoint:
+
+baseline → sync naar beide screen playlists (merge baseline + ads)
+
+daarna push naar screens
+
+en verificatie doen (now-playing moet kloppen)
+
+TE BOUWEN: YODECK “TRUTH” SERVICE
+
+Maak een service server/services/yodeckTruthService.ts met functies:
+
+collectTruth(locationId)
+
+Haal uit DB:
+
+alle actieve screens voor location met yodeckPlayerId en hun screen playlist id (yodeck)
+
+baseline playlist id (per location config; als niet bestaat: fallback naar bestaande baseline die jullie al gebruiken in code, of via yodeck search “Basis playlist” exact match; als ook niet: throw duidelijke error)
+
+canonical media ids per advertiser (als field bestaat; anders leeg)
+
+Haal live uit Yodeck API:
+
+baseline playlist (incl items)
+
+elke screen playlist (incl items)
+
+Bouw sets:
+
+keepPlaylistIds = {baselinePlaylistId} ∪ {screenPlaylistIds}
+
+keepMediaIds = alle media_id uit items van keepPlaylistIds ∪ canonicalMediaIds
+
+Return JSON:
+
+baseline: {id, itemCount, mediaIds[]}
+
+screens: [{screenId, playerId, playlistId, itemCount, mediaIds[]}]
+
+keep: {playlistIds[], mediaIds[]}
+
+cleanupYodeck(locationId, {dryRun})
+
+Roept collectTruth.
+
+Haal live volledige lijsten op uit Yodeck:
+
+alle media (paginatie)
+
+alle playlists (paginatie)
+
+Bepaal delete candidates:
+
+deleteMediaIds = alle mediaIds in account MIN keepMediaIds
+
+deletePlaylistIds = alle playlistIds in account MIN keepPlaylistIds
+
+SAFETY GUARDS:
+
+Nooit playlists verwijderen die in keepPlaylistIds zitten.
+
+Nooit media verwijderen die in keepMediaIds zitten.
+
+Als deleteMediaIds > 500 of deletePlaylistsIds > 200: stop en return error “too many deletes, require allowLarge=true”.
+
+Als dryRun=true: return counts + lijsten (max 200 ids per lijst, rest als “truncated:true”).
+
+Als dryRun=false: voer deletes uit met rate limiting:
+
+delete playlists eerst? Nee: eerst media die niet gebruikt wordt kan ook door playlists worden gerefereerd; daarom:
+
+delete playlists die niet keep zijn (veilig)
+
+daarna delete media die niet keep is
+
+Voor elke delete: log {type, id, ok, status, error}
+
+Return correlationId + summary + arrays deletedMedia, deletedPlaylists, failed.
+
+syncBaselineToScreens(locationId, {push})
+
+Roept collectTruth.
+
+Haal baseline items live op (van Yodeck).
+
+Voor elke screen playlist:
+
+Haal huidige items live op.
+
+Split items in:
+
+baseline-part (exact de baseline items zoals live)
+
+ads-part (alles wat “niet baseline” is, maar wél door Elevizion geplaatst wordt)
+
+BELANGRIJK: maak één “merge” pad:
+
+newItems = baselineItems + adItemsResolvedForThisScreen
+
+Update playlist via Yodeck PUT/UPDATE playlist endpoint (met volledige items array, niet “add item”)
+
+Als push=true:
+
+call bestaande endpoint /api/admin/screens/push met alle yodeckPlayerIds in location, force:true
+
+Daarna verificatie:
+
+call interne now-playing voor elk screen (de endpoint die jij al werkend hebt: /api/screens/:screenId/now-playing)
+
+Check isCorrect===true én expectedPlaylistId===actualSourceId
+
+Return: per screen {playlistId, updatedItemCount, pushed, nowPlayingOk, topItems} + correlationId
+
+NIEUWE API ROUTES (ADMIN)
+
+Voeg toe in server/routes.ts (admin auth verplicht):
+
+GET /api/admin/yodeck/truth?locationId=...
+
+return collectTruth(locationId)
+
+POST /api/admin/yodeck/cleanup
+
+body: { locationId, dryRun: true|false, allowLarge?: boolean }
+
+call cleanupYodeck
+
+POST /api/admin/yodeck/baseline/sync
+
+body: { locationId, push: true|false }
+
+call syncBaselineToScreens
+
+WIJZIG PUBLISH FLOW (1 WAARHEID)
+
+Zorg dat bestaande flows (publish-now, retry-publish, normalize/publish) NIET meer op meerdere manieren playlists aanpassen.
+
+Laat ze na het bepalen van de canonical media altijd eindigen met:
+
+syncBaselineToScreens(locationId, {push:true})
+
+Verwijder/disable oude “baseline-status” legacy pad dat 410 geeft. Alles moet via truth + now-playing verification.
+
+YODECK CLIENT HELPERS
+
+In server/services/yodeckClient.ts (of waar het nu zit) voeg toe:
+
+listAllMedia() met pagination
+
+listAllPlaylists() met pagination
+
+getPlaylistById(id) incl items
+
+updatePlaylistById(id, payload) (PUT) incl items
+
+deleteMediaById(id)
+
+deletePlaylistById(id)
+Alle calls moeten consistente error parsing hebben (code/message/details) + correlationId.
+
+ACCEPTATIECRITERIA
+
+Als ik dryRun cleanup doe, zie ik exact wat weg kan.
+
+Na execute cleanup zie ik in Yodeck vrijwel geen duplicaten meer: alleen media die echt in playlists gebruikt wordt blijft.
+
+Na baseline/sync:
+
+beide screens now-playing isCorrect true
+
+topItems bevat baseline items + 1 ad item
+
+Baseline aanpassen in Yodeck en daarna baseline/sync draaien → wijzigingen verschijnen op beide screens zonder handwerk.
+
+NA IMPLEMENTATIE: 3 BROWSER CONSOLE CALLS (MOETEN WERKEN)
+
+Gebruik locationId: 3321f9c7-4a76-4abd-9cc1-9472d6473d80
+
+Truth:
+fetch("/api/admin/yodeck/truth?locationId=3321f9c7-4a76-4abd-9cc1-9472d6473d80").then(r=>r.json()).then(console.log).catch(console.error);
+
+Cleanup dry run:
+fetch("/api/admin/yodeck/cleanup",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({locationId:"3321f9c7-4a76-4abd-9cc1-9472d6473d80",dryRun:true})}).then(r=>r.json()).then(console.log).catch(console.error);
+
+Baseline sync + push:
+fetch("/api/admin/yodeck/baseline/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({locationId:"3321f9c7-4a76-4abd-9cc1-9472d6473d80",push:true})}).then(r=>r.json()).then(console.log).catch(console.error);
+
+(Optioneel check):
+Promise.all([
+fetch("/api/screens/d7e9a5b2-0ded-44b6-951b-01ac743e7d78/now-playing").then(r=>r.json()),
+fetch("/api/screens/241377ce-a25e-4744-9ea7-cd9359515d07/now-playing").then(r=>r.json()),
+]).then(console.log).catch(console.error);
+
+LET OP
+
+Gebruik geen naamfilters of prefixes voor delete.
+
+Alleen “in use” telt.
+
+Zorg dat cleanup nooit per ongeluk baseline/screen playlists of hun media delete.
+
+Alles moet idempotent zijn: 2x draaien geeft dezelfde uitkomst.

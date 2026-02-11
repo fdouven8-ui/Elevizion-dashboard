@@ -23174,6 +23174,57 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * GET /api/admin/yodeck/truth
+   * Full Yodeck truth: baseline, screen playlists, keep sets, canonical media
+   */
+  app.get("/api/admin/yodeck/truth", requireAdminAccess, async (req, res) => {
+    try {
+      const locationId = req.query.locationId as string | undefined;
+      const { collectTruth } = await import("./services/yodeckTruthService");
+      const result = await collectTruth(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[YodeckTruth] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/yodeck/cleanup
+   * Clean up unused media and playlists from Yodeck
+   */
+  app.post("/api/admin/yodeck/cleanup", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId, dryRun, allowLarge } = req.body || {};
+      if (dryRun === undefined) {
+        return res.status(400).json({ ok: false, error: "dryRun (true/false) is required" });
+      }
+      const { cleanupYodeck } = await import("./services/yodeckTruthService");
+      const result = await cleanupYodeck(locationId, { dryRun: Boolean(dryRun), allowLarge: Boolean(allowLarge) });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[YodeckCleanup] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/yodeck/baseline/sync
+   * Sync baseline to all screen playlists with push + now-playing verification
+   */
+  app.post("/api/admin/yodeck/baseline/sync", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId, push } = req.body || {};
+      const { syncBaselineToScreens } = await import("./services/yodeckTruthService");
+      const result = await syncBaselineToScreens(locationId, { push: Boolean(push) });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[YodeckBaselineSync] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/admin/truth/verify
    * Single source of truth: screens, baseline, canonical media, push proof, online status
    */

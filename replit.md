@@ -41,6 +41,10 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/admin/truth/verify?locationId=...`: Deterministic single-source-of-truth verification (screens, baseline, canonicalMedia, pushProof, online)
   - `POST /api/admin/baseline/add-item`: Add media to baseline playlist, rebuild all screen playlists, push players, return proof
 - **Yodeck Admin Service** (`server/services/yodeckAdminService.ts`): Centralized admin operations for playlist sync, baseline management, duplicate cleanup, truth verification, and mapping health checks.
+- **Yodeck Truth Service** (`server/services/yodeckTruthService.ts`): Single source of truth for Yodeck account state, cleanup, and baseline sync. Key endpoints:
+  - `GET /api/admin/yodeck/truth?locationId=...`: Full truth - baseline, screen playlists, keep sets (playlistIds + mediaIds), canonical media
+  - `POST /api/admin/yodeck/cleanup`: Delete unused media/playlists with safety guards (dryRun, allowLarge, max 500 media / 200 playlists)
+  - `POST /api/admin/yodeck/baseline/sync`: Deterministic baseline→screen sync with push and now-playing verification
 - **Baseline Sync Service** (`server/services/baselineSyncService.ts`): Deterministic baseline-to-screen playlist synchronization with now-playing verification. Key endpoints:
   - `GET /api/admin/playlists/truth?locationId=...`: Single source of truth - baseline, screen playlists, mismatches, duplicates
   - `POST /api/admin/playlists/sync?push=true&locationId=...`: Sync baseline→screens, push players, verify now-playing
