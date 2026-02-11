@@ -23078,6 +23078,41 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * GET /api/admin/truth/verify
+   * Single source of truth: screens, baseline, canonical media, push proof, online status
+   */
+  app.get("/api/admin/truth/verify", requireAdminAccess, async (req, res) => {
+    try {
+      const locationId = req.query.locationId as string | undefined;
+      const { verifyTruth } = await import("./services/yodeckAdminService");
+      const result = await verifyTruth(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[TruthVerify] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/baseline/add-item
+   * Add item to baseline playlist, rebuild screen playlists, push players
+   */
+  app.post("/api/admin/baseline/add-item", requireAdminAccess, async (req, res) => {
+    try {
+      const { locationId, yodeckMediaId, duration } = req.body || {};
+      if (!yodeckMediaId || !duration) {
+        return res.status(400).json({ ok: false, error: "yodeckMediaId and duration are required" });
+      }
+      const { addBaselineItem } = await import("./services/yodeckAdminService");
+      const result = await addBaselineItem(locationId, Number(yodeckMediaId), Number(duration));
+      res.json(result);
+    } catch (error: any) {
+      console.error("[BaselineAddItem] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/yodeck/sync-playlist-mappings
    * Sync DB playlist IDs from live Yodeck player assignments
    */

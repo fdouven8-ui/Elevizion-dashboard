@@ -478,3 +478,301 @@ export async function checkEnhancedMappingHealth(advertiserId: string): Promise<
     baselinePlaylistName: baseResult.basePlaylistName || null,
   };
 }
+
+export async function verifyTruth(locationId?: string): Promise<{
+  ok: boolean;
+  correlationId: string;
+  locationId: string | null;
+  screens: Array<{
+    screenId: string;
+    yodeckPlayerId: string;
+    dbPlaylistId: string | null;
+    livePlaylistId: number | null;
+    livePlaylistName: string | null;
+    playlistMatch: boolean;
+  }>;
+  baseline: {
+    configured: boolean;
+    baselinePlaylistId: number | null;
+    itemCount: number;
+  };
+  canonicalMedia: Array<{
+    advertiserId: string;
+    advertiserName: string | null;
+    canonicalMediaId: number | null;
+    statusFinished: boolean;
+    stale404: boolean;
+    duplicatesFound: number;
+    duplicatesUsedCount: number;
+  }>;
+  pushProof: Array<{
+    yodeckPlayerId: string;
+    screenId: string;
+    lastPushAt: string | null;
+    lastPushStatus: string | null;
+    httpStatus: string | null;
+    yodeckStatus: string | null;
+  }>;
+  online: Array<{
+    yodeckPlayerId: string;
+    screenId: string;
+    online: boolean;
+    lastSeen: string | null;
+  }>;
+}> {
+  const correlationId = `truth-${Date.now().toString(16)}`;
+  console.log(`${LOG} [${correlationId}] Truth verify${locationId ? ` for location ${locationId}` : " (all screens)"}...`);
+
+  let allScreenRows = await db.select()
+    .from(screens)
+    .where(isNotNull(screens.yodeckPlayerId));
+
+  if (locationId) {
+    allScreenRows = allScreenRows.filter(s => s.locationId === locationId);
+  }
+
+  const screenResults: Array<{
+    screenId: string; yodeckPlayerId: string; dbPlaylistId: string | null;
+    livePlaylistId: number | null; livePlaylistName: string | null; playlistMatch: boolean;
+  }> = [];
+
+  const pushProof: Array<{
+    yodeckPlayerId: string; screenId: string; lastPushAt: string | null;
+    lastPushStatus: string | null; httpStatus: string | null; yodeckStatus: string | null;
+  }> = [];
+
+  const onlineResults: Array<{
+    yodeckPlayerId: string; screenId: string; online: boolean; lastSeen: string | null;
+  }> = [];
+
+  for (const screen of allScreenRows) {
+    const playerId = screen.yodeckPlayerId!;
+    const dbPlaylistId = screen.playlistId;
+    let livePlaylistId: number | null = null;
+    let livePlaylistName: string | null = null;
+    let playerOnline = false;
+    let playerLastSeen: string | null = null;
+    let yodeckStatus: string | null = null;
+
+    const playerResult = await yodeckRequest<{
+      id: number;
+      status?: string;
+      is_online?: boolean;
+      last_seen?: string;
+      screen_content?: { source_type: string | null; source_id: number | null; source_name: string | null };
+    }>(`/screens/${playerId}/`);
+
+    if (playerResult.ok && playerResult.data) {
+      if (playerResult.data.screen_content?.source_type === "playlist") {
+        livePlaylistId = playerResult.data.screen_content.source_id;
+        livePlaylistName = playerResult.data.screen_content.source_name || null;
+      }
+      playerOnline = playerResult.data.is_online ?? false;
+      playerLastSeen = playerResult.data.last_seen || null;
+      yodeckStatus = playerResult.data.status || null;
+    }
+
+    const playlistMatch = dbPlaylistId != null && livePlaylistId != null && String(livePlaylistId) === dbPlaylistId;
+
+    screenResults.push({ screenId: screen.id, yodeckPlayerId: playerId, dbPlaylistId, livePlaylistId, livePlaylistName, playlistMatch });
+
+    pushProof.push({
+      yodeckPlayerId: playerId,
+      screenId: screen.id,
+      lastPushAt: screen.lastPushAt ? screen.lastPushAt.toISOString() : null,
+      lastPushStatus: screen.lastPushResult || null,
+      httpStatus: playerResult.status ? String(playerResult.status) : null,
+      yodeckStatus,
+    });
+
+    onlineResults.push({
+      yodeckPlayerId: playerId,
+      screenId: screen.id,
+      online: playerOnline,
+      lastSeen: playerLastSeen || (screen.lastSeenAt ? screen.lastSeenAt.toISOString() : null),
+    });
+  }
+
+  const { getBasePlaylistId } = await import("./simplePlaylistModel");
+  const baseResult = await getBasePlaylistId();
+  const baseline = {
+    configured: baseResult.ok && !!baseResult.basePlaylistId,
+    baselinePlaylistId: baseResult.basePlaylistId,
+    itemCount: baseResult.itemCount || 0,
+  };
+
+  const advertiserRows = await db.select()
+    .from(advertisers)
+    .where(isNotNull(advertisers.yodeckMediaIdCanonical));
+
+  const allPlaylists = await yodeckRequest<{ count: number; results: Array<{ id: number; items: Array<{ id: number }> }> }>(`/playlists/`);
+  const playlistMediaMap = new Map<number, number[]>();
+  if (allPlaylists.ok && allPlaylists.data?.results) {
+    for (const pl of allPlaylists.data.results) {
+      for (const item of (pl.items || [])) {
+        const existing = playlistMediaMap.get(item.id) || [];
+        existing.push(pl.id);
+        playlistMediaMap.set(item.id, existing);
+      }
+    }
+  }
+
+  const canonicalMedia: Array<{
+    advertiserId: string; advertiserName: string | null; canonicalMediaId: number | null;
+    statusFinished: boolean; stale404: boolean; duplicatesFound: number; duplicatesUsedCount: number;
+  }> = [];
+
+  for (const adv of advertiserRows) {
+    const mediaId = adv.yodeckMediaIdCanonical!;
+    let statusFinished = false;
+    let stale404 = false;
+
+    const mediaResult = await yodeckRequest<{ id: number; status: string }>(`/media/${mediaId}/`);
+    if (mediaResult.ok && mediaResult.data) {
+      statusFinished = (mediaResult.data.status || "").toLowerCase() === "finished";
+    } else if (mediaResult.status === 404) {
+      stale404 = true;
+    }
+
+    const { buildSearchPatterns } = await import("./canonicalMediaService");
+    const assets = await db.select().from(adAssets).where(eq(adAssets.advertiserId, adv.id));
+    const patterns = buildSearchPatterns(adv, assets);
+    let duplicatesFound = 0;
+    let duplicatesUsedCount = 0;
+    const seenIds = new Set<number>();
+
+    for (const pattern of patterns.slice(0, 3)) {
+      const base = pattern.replace(/\.(mp4|mov|avi|webm)$/i, "").substring(0, 50);
+      if (base.length < 3) continue;
+      const searchResult = await yodeckRequest<{ count: number; results: Array<{ id: number; name: string }> }>(
+        `/media/?search=${encodeURIComponent(base)}`
+      );
+      if (searchResult.ok && searchResult.data?.results) {
+        for (const m of searchResult.data.results) {
+          if (!seenIds.has(m.id) && m.id !== mediaId) {
+            seenIds.add(m.id);
+            duplicatesFound++;
+            const usedIn = playlistMediaMap.get(m.id) || [];
+            if (usedIn.length > 0) {
+              duplicatesUsedCount++;
+            }
+          }
+        }
+      }
+    }
+
+    canonicalMedia.push({
+      advertiserId: adv.id,
+      advertiserName: adv.companyName || null,
+      canonicalMediaId: mediaId,
+      statusFinished,
+      stale404,
+      duplicatesFound,
+      duplicatesUsedCount,
+    });
+  }
+
+  const allOk = baseline.configured &&
+    screenResults.every(s => s.playlistMatch) &&
+    canonicalMedia.every(c => c.statusFinished && !c.stale404);
+
+  return { ok: allOk, correlationId, locationId: locationId || null, screens: screenResults, baseline, canonicalMedia, pushProof, online: onlineResults };
+}
+
+export async function addBaselineItem(
+  locationId: string | undefined,
+  yodeckMediaId: number,
+  duration: number
+): Promise<{
+  ok: boolean;
+  correlationId: string;
+  baselinePlaylistId: number | null;
+  itemAdded: boolean;
+  rebuilds: Array<{
+    screenId: string;
+    playerId: string;
+    playlistId: number | null;
+    rebuilt: boolean;
+    pushed: boolean;
+    verified: boolean;
+    error?: string;
+  }>;
+  error?: string;
+}> {
+  const correlationId = `bl-add-${Date.now().toString(16)}`;
+  console.log(`${LOG} [${correlationId}] Adding media ${yodeckMediaId} (duration=${duration}s) to baseline...`);
+
+  const { getBasePlaylistId, rebuildScreenPlaylist } = await import("./simplePlaylistModel");
+  const baseResult = await getBasePlaylistId();
+
+  if (!baseResult.ok || !baseResult.basePlaylistId) {
+    return { ok: false, correlationId, baselinePlaylistId: null, itemAdded: false, rebuilds: [], error: "Baseline playlist not found" };
+  }
+
+  const baselinePlaylistId = baseResult.basePlaylistId;
+
+  const plDetail = await yodeckRequest<{ id: number; items: Array<{ id: number; duration?: number; type?: string; priority?: number }> }>(
+    `/playlists/${baselinePlaylistId}/`
+  );
+
+  if (!plDetail.ok || !plDetail.data) {
+    return { ok: false, correlationId, baselinePlaylistId, itemAdded: false, rebuilds: [], error: `Failed to fetch baseline playlist: ${plDetail.error}` };
+  }
+
+  const existingItems = plDetail.data.items || [];
+  const alreadyPresent = existingItems.some(i => i.id === yodeckMediaId);
+
+  if (!alreadyPresent) {
+    const newItems = [...existingItems.map((item, idx) => ({
+      id: item.id,
+      priority: idx + 1,
+      duration: item.duration || 10,
+      type: "media" as const,
+    })), {
+      id: yodeckMediaId,
+      priority: existingItems.length + 1,
+      duration,
+      type: "media" as const,
+    }];
+
+    const patchResult = await yodeckRequest(`/playlists/${baselinePlaylistId}/`, "PATCH", { items: newItems });
+    if (!patchResult.ok) {
+      return { ok: false, correlationId, baselinePlaylistId, itemAdded: false, rebuilds: [], error: `Failed to add item to baseline: ${patchResult.error}` };
+    }
+    console.log(`${LOG} [${correlationId}] Added media ${yodeckMediaId} to baseline playlist ${baselinePlaylistId}`);
+  } else {
+    console.log(`${LOG} [${correlationId}] Media ${yodeckMediaId} already in baseline playlist`);
+  }
+
+  let targetScreens = await db.select()
+    .from(screens)
+    .where(isNotNull(screens.yodeckPlayerId));
+
+  if (locationId) {
+    targetScreens = targetScreens.filter(s => s.locationId === locationId);
+  }
+
+  const rebuilds: Array<{
+    screenId: string; playerId: string; playlistId: number | null;
+    rebuilt: boolean; pushed: boolean; verified: boolean; error?: string;
+  }> = [];
+
+  for (const screen of targetScreens) {
+    const playerId = screen.yodeckPlayerId!;
+    try {
+      const result = await rebuildScreenPlaylist(screen.id);
+      const playlistId = (result as any).screenPlaylist?.screenPlaylistId || null;
+      const pushed = (result as any).push?.ok || false;
+      const verified = (result as any).verify?.ok || false;
+
+      rebuilds.push({ screenId: screen.id, playerId, playlistId, rebuilt: result.ok, pushed, verified });
+      console.log(`${LOG} [${correlationId}] Rebuild ${screen.id}: ok=${result.ok} pushed=${pushed} verified=${verified}`);
+    } catch (err: any) {
+      rebuilds.push({ screenId: screen.id, playerId, playlistId: null, rebuilt: false, pushed: false, verified: false, error: err.message });
+      console.error(`${LOG} [${correlationId}] Rebuild FAILED for ${screen.id}: ${err.message}`);
+    }
+  }
+
+  const allOk = rebuilds.every(r => r.rebuilt && r.pushed);
+  return { ok: allOk, correlationId, baselinePlaylistId, itemAdded: !alreadyPresent, rebuilds };
+}

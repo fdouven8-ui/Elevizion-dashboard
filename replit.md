@@ -38,7 +38,9 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `POST /api/admin/autopilot/ensure-baseline-playlist`: Ensures baseline playlist exists in Yodeck
   - `POST /api/admin/yodeck/cleanup-duplicates`: Safe duplicate media cleanup (supports dryRun)
   - `GET /api/admin/advertisers/:id/mapping-health`: Enhanced health check with playlist IDs, live names, baseline status, media validation
-- **Yodeck Admin Service** (`server/services/yodeckAdminService.ts`): Centralized admin operations for playlist sync, baseline management, duplicate cleanup, and mapping health checks.
+  - `GET /api/admin/truth/verify?locationId=...`: Deterministic single-source-of-truth verification (screens, baseline, canonicalMedia, pushProof, online)
+  - `POST /api/admin/baseline/add-item`: Add media to baseline playlist, rebuild all screen playlists, push players, return proof
+- **Yodeck Admin Service** (`server/services/yodeckAdminService.ts`): Centralized admin operations for playlist sync, baseline management, duplicate cleanup, truth verification, and mapping health checks.
 - **System Health & Self-Heal Endpoints**: Tools for monitoring system configuration, fixing common issues like shared playlists, and performing smoke checks.
 - **Screen Status Endpoints**: Provides real-time playback and device status information for screens.
 - **Debug Endpoints**: A suite of read-only and diagnostic endpoints for Yodeck integration, storage inspection, and end-to-end testing.
