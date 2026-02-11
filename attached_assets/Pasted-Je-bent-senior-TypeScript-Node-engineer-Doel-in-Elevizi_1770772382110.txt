@@ -1,0 +1,74 @@
+Je bent senior TypeScript/Node engineer. Doel: in Elevizion 1 single source of truth flow afdwingen voor playlists, met een echte Yodeck basis-playlist die automatisch doorwerkt naar alle screen-playlists.
+
+HUIDIGE SITUATIE (feitelijk):
+- Yodeck players: 591895 en 591896.
+- Screen playlists in Yodeck: 30590872 (player 591895) en 30590180 (player 591896).
+- DB mapping (legacy) noemt playlistId 30461663 maar dat is NIET de daadwerkelijke Yodeck screen playlists; die draaien nu correct op 30590872/30590180.
+- /api/screens/:screenId/now-playing bestaat en werkt en bewijst expected vs actual playlist match (isCorrect:true).
+- Legacy baseline systeem is gedeprecate en moet niet meer gebruikt worden.
+
+WAT MOET ER KOMEN (één consistente manier):
+1) DEFINITIE “TRUTH”
+   - canonical baselinePlaylistId is een echte Yodeck playlist (config/DB).
+   - screenPlaylistId is per screen een echte Yodeck playlist.
+   - De enige live-verificatie is: GET /api/screens/:screenId/now-playing (op screen UUID, niet playerId).
+   - Alle publish/push acties moeten na afloop now-playing checken en pas “OK” retourneren als isCorrect true.
+
+2) BASIS-PLAYLIST SYNC MODEL
+   - SCREEN playlist content = baseline playlist items + location-specific items (ads, apps, etc).
+   - Updates aan baseline playlist moeten automatisch doorgevoerd worden naar alle screens van een location (of globaal als baseline globaal is).
+   - Dit gebeurt idempotent: meerdere runs leveren exact dezelfde volgorde en inhoud.
+
+3) DUPLICATE / ROMMEL PREVENTIE
+   - Stop met “clone” playlists onnodig; gebruik update playlist items via Yodeck API en werk met deterministische item-keys.
+   - Voor media: gebruik canonicalMediaId in DB per advertiser (1 waarheid). Geen nieuwe uploads als dezelfde storedFileName al een finished Yodeck media heeft.
+   - Implement “cleanup duplicates” alleen als expliciete admin actie, niet in de normale publish flow.
+
+4) ROUTES / ADMIN TOOLS (minimaal, maar compleet)
+   Voeg deze routes toe/maak ze werkend:
+   - GET  /api/admin/playlists/truth?locationId=...
+     -> returns: baselinePlaylistId, screenPlaylistIds (from DB + from Yodeck), mismatches, duplicates detected
+   - POST /api/admin/playlists/sync?locationId=...&push=true
+     -> doet: fetch baseline items (Yodeck), bouw gewenste screen items, update screen playlists, push screens, verify now-playing, return proof
+   - POST /api/admin/playlists/baseline/add-item  (body: { baselinePlaylistId, mediaId, duration, position? })
+     -> voegt item toe aan baseline playlist (Yodeck), daarna triggert sync voor alle screens die baseline volgen
+   - POST /api/admin/screens/push (bestaat) -> uitbreiden zodat hij na push ook verify kan doen (optioneel verify=true)
+
+5) IMPLEMENTATIE DETAILS (belangrijk)
+   - Gebruik de Yodeck API server-side (niet browser) i.v.m. CORS.
+   - Maak in server/services/yodeckClient.ts helpers:
+     * getPlaylist(id) / listPlaylistItems(id)
+     * replacePlaylistItems(id, items) of updatePlaylistById volgens docs
+     * pushToScreen(playerId)
+   - Maak een pure function:
+     buildScreenPlaylistItems({ baselineItems, extraItems }) -> items[]
+     waarbij items deterministisch en deduped zijn (zelfde media_id + type + duration = één item).
+   - Store mapping in DB:
+     Location: baselineYodeckPlaylistId
+     Screen: yodeckPlaylistId (screen playlist)
+     (en verwijder/ignore legacy playlistId=30461663)
+   - Verificatie:
+     na sync + push -> call internal function verifyScreenNowPlaying(screenId) die gebruikt /api/screens/:screenId/now-playing logic.
+     Return “pushProof” per screen: expectedPlaylistId, actualSourceId, isCorrect, topItems.
+
+6) MIGRATIE / FIX VAN HUIDIGE MISMATCH
+   - Voeg een admin migration script toe dat:
+     a) Voor alle screens: lees live now-playing en pak expectedPlaylistId die daadwerkelijk draait.
+     b) Zet Screen.yodeckPlaylistId in DB op die live playlistId (30590872 / 30590180).
+     c) Zet Location.baselineYodeckPlaylistId op een bestaande of nieuw aangemaakte baseline playlist (configurable).
+   - Daarna moet /api/admin/playlists/sync werken op basis van deze mappings.
+
+7) ACCEPTANCE CRITERIA
+   - Ik kan in Yodeck een item aan de baseline playlist toevoegen of via /baseline/add-item.
+   - Vervolgens run ik /api/admin/playlists/sync?locationId=...&push=true
+   - Beide scherm-playlists krijgen direct baseline+extra items (zelfde itemCount verwachte), push gebeurt, en /api/screens/:screenId/now-playing geeft isCorrect true en topItems bevatten het nieuwe baseline item.
+   - Geen extra duplicate media in Yodeck door normale flows.
+
+Lever:
+- exacte code changes per bestand (diff-achtig)
+- nieuwe/gewijzigde routes in server/routes.ts
+- nieuwe service: server/services/baselineSyncService.ts
+- logging met correlationId
+- veilige guards: als baselinePlaylistId ontbreekt -> duidelijke error met instructie.
+
+GA NU IMPLEMENTEREN.

@@ -12289,7 +12289,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   app.post("/api/admin/screens/push", requireAdminAccess, async (req, res) => {
     res.setHeader("Content-Type", "application/json");
     try {
-      const { yodeckPlayerIds, use_download_timeslots = true } = req.body || {};
+      const { yodeckPlayerIds, use_download_timeslots = true, verify = false } = req.body || {};
       if (!Array.isArray(yodeckPlayerIds) || yodeckPlayerIds.length === 0) {
         return res.status(400).json({ ok: false, error: "yodeckPlayerIds (number[]) is required" });
       }
@@ -12300,8 +12300,16 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       }
 
       const yodeckBaseUrl = "https://app.yodeck.com/api/v2";
-      const pushed: { screenId: number; httpStatus: number; yodeckStatus: string }[] = [];
+      const pushed: { screenId: number; httpStatus: number; yodeckStatus: string; verification?: { isCorrect: boolean; expectedPlaylistId: string | null; actualSourceId: number | null; topItems?: string[] } }[] = [];
       const failed: { screenId: number; httpStatus?: number; error: string }[] = [];
+
+      const playerToDbScreenMap = new Map<string, string>();
+      if (verify) {
+        const allScreenRows = await db.select({ id: screens.id, yodeckPlayerId: screens.yodeckPlayerId }).from(screens).where(isNotNull(screens.yodeckPlayerId));
+        for (const s of allScreenRows) {
+          if (s.yodeckPlayerId) playerToDbScreenMap.set(s.yodeckPlayerId, s.id);
+        }
+      }
 
       for (const playerId of yodeckPlayerIds) {
         const screenId = typeof playerId === "number" ? playerId : parseInt(playerId);
@@ -12330,7 +12338,22 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           console.log(`[PushScreen] screen=${screenId} http=${httpStatus} yodeck=${yodeckStatus} ok=${pushResp.ok}`);
 
           if (pushResp.ok) {
-            pushed.push({ screenId, httpStatus, yodeckStatus });
+            let verification: { isCorrect: boolean; expectedPlaylistId: string | null; actualSourceId: number | null; topItems?: string[] } | undefined;
+            if (verify) {
+              const dbScreenId = playerToDbScreenMap.get(String(screenId));
+              if (dbScreenId) {
+                await new Promise(r => setTimeout(r, 1000));
+                const { getScreenNowPlayingSimple } = await import("./services/simplePlaylistModel");
+                const np = await getScreenNowPlayingSimple(dbScreenId);
+                verification = {
+                  isCorrect: np.isCorrect,
+                  expectedPlaylistId: np.expectedPlaylistId,
+                  actualSourceId: np.actualSourceId,
+                  topItems: np.topItems,
+                };
+              }
+            }
+            pushed.push({ screenId, httpStatus, yodeckStatus, verification });
           } else {
             console.error(`[PushScreen] screen=${screenId} error body: ${respText.substring(0, 300)}`);
             failed.push({ screenId, httpStatus, error: respText.substring(0, 300) });
@@ -23074,6 +23097,79 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         error: error.message,
         correlationId,
       });
+    }
+  });
+
+  /**
+   * GET /api/admin/playlists/truth
+   * Single source of truth for playlists: baseline, screen playlists, mismatches, duplicates
+   */
+  app.get("/api/admin/playlists/truth", requireAdminAccess, async (req, res) => {
+    try {
+      const locationId = req.query.locationId as string | undefined;
+      const { playlistTruth } = await import("./services/baselineSyncService");
+      const result = await playlistTruth(locationId);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PlaylistTruth] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/playlists/sync
+   * Sync baseline to all screen playlists, optionally push and verify
+   */
+  app.post("/api/admin/playlists/sync", requireAdminAccess, async (req, res) => {
+    try {
+      const locationId = (req.query.locationId || req.body?.locationId) as string | undefined;
+      const push = req.query.push === "true" || req.body?.push === true;
+      const { syncPlaylists } = await import("./services/baselineSyncService");
+      const result = await syncPlaylists(locationId, push);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[PlaylistSync] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/playlists/baseline/add-item
+   * Add item to baseline playlist, then sync to all screen playlists, push, and verify
+   */
+  app.post("/api/admin/playlists/baseline/add-item", requireAdminAccess, async (req, res) => {
+    try {
+      const { baselinePlaylistId, mediaId, duration, position, locationId } = req.body || {};
+      if (!mediaId || !duration) {
+        return res.status(400).json({ ok: false, error: "mediaId and duration are required" });
+      }
+      const { addBaselineItemAndSync } = await import("./services/baselineSyncService");
+      const result = await addBaselineItemAndSync({
+        baselinePlaylistId: baselinePlaylistId ? Number(baselinePlaylistId) : undefined,
+        mediaId: Number(mediaId),
+        duration: Number(duration),
+        position: position != null ? Number(position) : undefined,
+        locationId,
+      });
+      res.json(result);
+    } catch (error: any) {
+      console.error("[BaselineAddItem] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/admin/playlists/migrate-live
+   * Migration: fix DB playlistId to match actual live Yodeck screen playlists
+   */
+  app.post("/api/admin/playlists/migrate-live", requireAdminAccess, async (req, res) => {
+    try {
+      const { migrateLivePlaylistMappings } = await import("./services/baselineSyncService");
+      const result = await migrateLivePlaylistMappings();
+      res.json(result);
+    } catch (error: any) {
+      console.error("[MigrateLive] Error:", error);
+      res.status(500).json({ ok: false, error: error.message });
     }
   });
 

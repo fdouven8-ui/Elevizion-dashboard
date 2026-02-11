@@ -41,6 +41,14 @@ Authentication uses username/password with bcrypt hashing and session data store
   - `GET /api/admin/truth/verify?locationId=...`: Deterministic single-source-of-truth verification (screens, baseline, canonicalMedia, pushProof, online)
   - `POST /api/admin/baseline/add-item`: Add media to baseline playlist, rebuild all screen playlists, push players, return proof
 - **Yodeck Admin Service** (`server/services/yodeckAdminService.ts`): Centralized admin operations for playlist sync, baseline management, duplicate cleanup, truth verification, and mapping health checks.
+- **Baseline Sync Service** (`server/services/baselineSyncService.ts`): Deterministic baseline-to-screen playlist synchronization with now-playing verification. Key endpoints:
+  - `GET /api/admin/playlists/truth?locationId=...`: Single source of truth - baseline, screen playlists, mismatches, duplicates
+  - `POST /api/admin/playlists/sync?push=true&locationId=...`: Sync baseline→screens, push players, verify now-playing
+  - `POST /api/admin/playlists/baseline/add-item`: Add media to baseline, auto-sync all screens, push, verify
+  - `POST /api/admin/playlists/migrate-live`: Fix DB playlistId from live Yodeck assignments
+- **Shared Playlist Guard**: Automatically detects and fixes instances where playlists are shared between screens, ensuring unique playlist assignments.
+- **Simple Playlist Model**: Manages playlists with a "Basis playlist" and one screen playlist per screen, ensuring synchronization and ad delivery. It includes robust verification steps for media inclusion and playback state, and intelligent ad selection based on targeting.
+  - `playlistId` is the ACTIVE field used by all playlist operations (20+ references). `combinedPlaylistId` exists in schema but has 0 references in code.
 - **System Health & Self-Heal Endpoints**: Tools for monitoring system configuration, fixing common issues like shared playlists, and performing smoke checks.
 - **Screen Status Endpoints**: Provides real-time playback and device status information for screens.
 - **Debug Endpoints**: A suite of read-only and diagnostic endpoints for Yodeck integration, storage inspection, and end-to-end testing.
