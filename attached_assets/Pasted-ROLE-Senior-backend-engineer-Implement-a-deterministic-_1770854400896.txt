@@ -1,0 +1,65 @@
+ROLE: Senior backend engineer. Implement a deterministic "Single Source of Truth" for Yodeck playlists in Elevizion Dashboard (Node/Express/TS). Goal: after ANY change (new screen, new approved upload, placement change), the system must converge to one correct state with zero drift.
+
+CURRENT TRUTH MODEL (must be enforced):
+- Exactly 1 baseline playlist in Yodeck (Basis playlist) containing baseline items only.
+- For each Screen (with yodeckPlayerId) exactly 1 screen-playlist in Yodeck named "EVZ | SCREEN | <playerId>" and mapped in DB.
+- Each screen-playlist items MUST EQUAL: baselineItems (in order) + selectedAdsForThatScreen (in order), with dedupe by (type+id).
+- No other items may remain in screen-playlists (REPLACE, not MERGE).
+- Only ads that are targeted/selected for that screen/location may be included.
+
+IMPLEMENT (minimal changes, reuse existing services):
+1) Create a single reconcile function as the ONLY writer of playlist truth:
+   - file: server/services/truthReconciler.ts
+   - export: reconcileLocationTruth({ locationId, push=true, reason, correlationId? })
+   - steps:
+     a) Ensure baseline exists (call existing ensure-baseline service). Fetch baseline items (mediaIds).
+     b) For each screen in location:
+        - Ensure screen has unique screenPlaylistId in DB (fix via existing migrate-live or create-if-missing).
+        - Build desiredItems = baselineItems + ads selected for this screen (from placements/targeting logic already used by playlist builder).
+        - Dedupe desiredItems by key `${type}:${id}` keep first.
+        - APPLY via Yodeck in REPLACE mode: playlist.items = desiredItems exactly.
+     c) If push=true: push each player and store pushProof.
+     d) Return a compact report: baselineId, screen reports {screenId, playerId, playlistId, desiredCount, pushed, errors[]}.
+
+2) Wire reconcile into ALL mutation flows (idempotent):
+   - On new screen created / yodeckPlayerId assigned / location activated:
+     -> call reconcileLocationTruth({locationId, push:false, reason:"screen-created"})
+   - On placement change (ads selected/unselected) OR publish-now of advertiser:
+     -> call reconcileLocationTruth({locationId, push:true, reason:"placements-changed"})
+   - On admin baseline add/remove item:
+     -> call reconcileLocationTruth({locationId, push:true, reason:"baseline-changed"})
+   NOTE: Do NOT touch upload pipeline logic; only call reconcile after success/approval steps.
+
+3) Add a hard safety guard: shared playlist must never happen:
+   - If two screens map to same dbPlaylistId, auto-fix by cloning/creating a new playlist for one screen and updating DB mapping.
+   - Log loudly with correlationId.
+
+4) Add a recurring self-heal job:
+   - In server/workers/autopilotWorker.ts (or capacityWorker), add a reconcile sweep:
+     - every 10 minutes: for each active location, run reconcileLocationTruth({push:false, reason:"scheduled-selfheal"})
+     - rate limit to avoid Yodeck API spikes (reuse existing limiter).
+   - The sweep must be safe/idempotent and skip if no yodeckConfigured.
+
+5) Add a deterministic verify endpoint that does NOT mutate:
+   - GET /api/admin/truth/verify?locationId=...
+   - Must include: baselineId + baselineMediaIds, per screen: dbPlaylistId, livePlaylistId, match bool, screenMediaIds (from stored desired set), and last pushProof.
+   - If fetching live playlist items from Yodeck is expensive/unavailable, include at least desiredMediaIds and playlist ids; but prefer adding Yodeck playlist read helper and expose GET /api/admin/yodeck/playlists/:id (admin).
+
+6) Logging & metrics:
+   - Every reconcile returns correlationId and logs:
+     - baselineMediaIds
+     - per screen: desired keys, before keys (if fetched), after keys (if fetched)
+     - pushes results
+
+CONSTRAINTS:
+- Keep existing endpoints working.
+- Minimal refactor: concentrate all playlist writes into reconcileLocationTruth and make other code call it.
+- Ensure REPLACE semantics when writing playlist items (no merge).
+- Keep JSON-only API behavior.
+
+DELIVERABLES:
+- New truthReconciler.ts
+- Wiring in routes/services for screen create + placement change + baseline edits
+- Scheduled self-heal reconcile
+- Updated verify endpoint + optional playlist read endpoint
+- Short notes in code comments where reconcile is called.

@@ -5670,6 +5670,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
     try {
       const data = insertScreenSchema.parse(req.body);
       const screen = await storage.createScreen(data);
+      // Reconcile: new screen may need playlist setup
+      if (screen.yodeckPlayerId && screen.locationId) {
+        const { reconcileAfterMutation } = await import("./services/truthReconciler");
+        reconcileAfterMutation({ locationId: screen.locationId, reason: "screen-created", push: false });
+      }
       res.status(201).json(screen);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -5822,6 +5827,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
 
       const screen = await storage.createScreen(screenData);
 
+      // Reconcile: new screen with yodeck device needs playlist setup
+      if (screen.yodeckPlayerId && screen.locationId) {
+        const { reconcileAfterMutation } = await import("./services/truthReconciler");
+        reconcileAfterMutation({ locationId: screen.locationId, reason: "screen-created-with-moneybird", push: false });
+      }
+
       res.status(201).json({
         success: true,
         screen,
@@ -5836,6 +5847,13 @@ Sitemap: ${SITE_URL}/sitemap.xml
   app.patch("/api/screens/:id", async (req, res) => {
     const screen = await storage.updateScreen(req.params.id, req.body);
     if (!screen) return res.status(404).json({ message: "Screen not found" });
+    // Reconcile: if yodeckPlayerId or locationId changed, playlist may need update
+    if (req.body.yodeckPlayerId !== undefined || req.body.locationId !== undefined) {
+      if (screen.yodeckPlayerId && screen.locationId) {
+        const { reconcileAfterMutation } = await import("./services/truthReconciler");
+        reconcileAfterMutation({ locationId: screen.locationId, reason: "screen-updated", push: false });
+      }
+    }
     res.json(screen);
   });
 
@@ -6267,6 +6285,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
     try {
       const data = insertPlacementSchema.parse(req.body);
       const placement = await storage.createPlacement(data);
+      // Reconcile: placement change affects screen playlist content
+      const screen = await storage.getScreen(placement.screenId);
+      if (screen?.yodeckPlayerId) {
+        const { reconcileAfterMutation } = await import("./services/truthReconciler");
+        reconcileAfterMutation({ locationId: screen.locationId, reason: "placement-created", push: true });
+      }
       res.status(201).json(placement);
     } catch (error: any) {
       res.status(400).json({ message: error.message });
@@ -6274,7 +6298,18 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   app.delete("/api/placements/:id", async (req, res) => {
+    // Fetch placement before deletion to know which screen to reconcile
+    const allPlacements = await storage.listPlacements();
+    const placement = allPlacements.find(p => p.id === req.params.id);
     await storage.deletePlacement(req.params.id);
+    // Reconcile: removed placement changes screen playlist content
+    if (placement) {
+      const screen = await storage.getScreen(placement.screenId);
+      if (screen?.yodeckPlayerId) {
+        const { reconcileAfterMutation } = await import("./services/truthReconciler");
+        reconcileAfterMutation({ locationId: screen.locationId, reason: "placement-deleted", push: true });
+      }
+    }
     res.status(204).send();
   });
 
@@ -6293,6 +6328,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const placement = await storage.updatePlacement(req.params.id, updateData);
       if (!placement) {
         return res.status(404).json({ message: "Placement not found" });
+      }
+      // Reconcile: placement update changes screen playlist content
+      const screen = await storage.getScreen(placement.screenId);
+      if (screen?.yodeckPlayerId) {
+        const { reconcileAfterMutation } = await import("./services/truthReconciler");
+        reconcileAfterMutation({ locationId: screen.locationId, reason: "placement-updated", push: true });
       }
       res.json(placement);
     } catch (error: any) {
@@ -23054,60 +23095,60 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         });
       }
 
-      const { rebuildScreenPlaylist } = await import("./services/simplePlaylistModel");
+      // Reconcile: use truthReconciler for deterministic playlist sync
+      const { reconcileLocationTruth } = await import("./services/truthReconciler");
       
-      const rebuildResults: Array<{ screenId: string; ok: boolean; candidates?: number; included?: number; method?: string; playlistId?: number | null; pushed?: boolean; verified?: boolean; error?: string }> = [];
-      
+      // Collect unique locationIds for targeted screens
+      const locationIds = new Set<string>();
       for (const screenId of targetScreenIds) {
-        try {
-          console.log(`[PublishNow] ${correlationId} Rebuilding playlist for screen ${screenId}...`);
-          const result = await rebuildScreenPlaylist(screenId);
-          const included = (result as any).ads?.included || 0;
-          const candidates = (result as any).ads?.candidates || 0;
-          const playlistId = (result as any).screenPlaylist?.screenPlaylistId || null;
-          const pushed = (result as any).push?.ok || false;
-          const verified = (result as any).verify?.ok || false;
-          
-          rebuildResults.push({
-            screenId,
-            ok: result.ok,
-            method: "rebuild",
-            candidates,
-            included,
-            playlistId,
-            pushed,
-            verified,
-            error: result.ok ? undefined : ((result as any).error?.message || "Unknown error"),
+        const screen = await storage.getScreen(screenId);
+        if (screen?.locationId) locationIds.add(screen.locationId);
+      }
+      
+      const reconcileResults: Array<{ locationId: string | null; ok: boolean; screens: number; errors: string[] }> = [];
+      
+      if (locationIds.size > 0) {
+        for (const locId of Array.from(locationIds)) {
+          const result = await reconcileLocationTruth({
+            locationId: locId,
+            push: true,
+            reason: "publish-now",
+            correlationId: `${correlationId}-loc-${locId.substring(0, 8)}`,
           });
-          console.log(`[PublishNow] ${correlationId} Rebuild ${screenId}: ok=${result.ok} candidates=${candidates} included=${included} playlistId=${playlistId} pushed=${pushed} verified=${verified}`);
-        } catch (err: any) {
-          rebuildResults.push({ screenId, ok: false, error: err.message });
-          console.error(`[PublishNow] ${correlationId} Rebuild FAILED for ${screenId}: ${err.message}`);
+          reconcileResults.push({ locationId: locId, ok: result.ok, screens: result.screens.length, errors: result.errors });
         }
+      } else {
+        // No location context, reconcile all screens
+        const result = await reconcileLocationTruth({
+          push: true,
+          reason: "publish-now",
+          correlationId,
+        });
+        reconcileResults.push({ locationId: null, ok: result.ok, screens: result.screens.length, errors: result.errors });
       }
 
-      const successCount = rebuildResults.filter(r => r.ok).length;
-      const failedCount = rebuildResults.filter(r => !r.ok).length;
-      const totalIncluded = rebuildResults.reduce((sum, r) => sum + (r.included || 0), 0);
-      const targetPlaylistIds = rebuildResults.filter(r => r.playlistId).map(r => r.playlistId);
+      const successCount = reconcileResults.filter(r => r.ok).length;
+      const failedCount = reconcileResults.filter(r => !r.ok).length;
+      const totalScreens = reconcileResults.reduce((sum, r) => sum + r.screens, 0);
+      const allErrors = reconcileResults.flatMap(r => r.errors);
+      
       res.json({
-        ok: successCount > 0,
+        ok: failedCount === 0,
         correlationId,
         advertiserId,
         mediaId,
         canonicalSource: canonicalResult?.source || "existing_canonical",
         placementMethod,
         placementMethodReason,
-        targetPlaylistIds,
         summary: {
           targetsResolved: targetScreenIds.length,
-          publishAttempts: rebuildResults.length,
+          locationsReconciled: reconcileResults.length,
+          totalScreensSynced: totalScreens,
           successCount,
           failedCount,
-          totalAdsIncluded: totalIncluded,
-          freshInsertFallbacks: 0,
         },
-        rebuilds: rebuildResults,
+        reconcileResults,
+        errors: allErrors,
       });
     } catch (error: any) {
       console.error(`[PublishNow] ${correlationId} Error:`, error);
@@ -23138,13 +23179,16 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   /**
    * POST /api/admin/playlists/sync
    * Sync baseline to all screen playlists, optionally push and verify
+   * Uses truthReconciler as the single writer of playlist truth
    */
   app.post("/api/admin/playlists/sync", requireAdminAccess, async (req, res) => {
     try {
       const locationId = (req.query.locationId || req.body?.locationId) as string | undefined;
       const push = req.query.push === "true" || req.body?.push === true;
-      const { syncPlaylists } = await import("./services/baselineSyncService");
-      const result = await syncPlaylists(locationId, push);
+      const { reconcileLocationTruth } = await import("./services/truthReconciler");
+      const result = await reconcileLocationTruth({
+        locationId, push, reason: "admin-sync",
+      });
       res.json(result);
     } catch (error: any) {
       console.error("[PlaylistSync] Error:", error);
@@ -23245,13 +23289,14 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   /**
    * GET /api/admin/truth/verify
-   * Single source of truth: screens, baseline, canonical media, push proof, online status
+   * Deterministic read-only verify: computes desired state from DB and compares with live Yodeck.
+   * Does NOT mutate any playlists or push players.
    */
   app.get("/api/admin/truth/verify", requireAdminAccess, async (req, res) => {
     try {
       const locationId = req.query.locationId as string | undefined;
-      const { verifyTruth } = await import("./services/yodeckAdminService");
-      const result = await verifyTruth(locationId);
+      const { verifyLocationTruth } = await import("./services/truthReconciler");
+      const result = await verifyLocationTruth(locationId);
       res.json(result);
     } catch (error: any) {
       console.error("[TruthVerify] Error:", error);
