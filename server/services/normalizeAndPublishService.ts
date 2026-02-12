@@ -518,9 +518,10 @@ export async function normalizeAndPublish(
       const ffmpegCmd = `ffmpeg -y -i "${originalLocalPath}" \
         -c:v libx264 -preset medium -crf 23 \
         -pix_fmt yuv420p \
+        -r 25 -g 50 -keyint_min 25 \
         -vf "scale=min(1920\\,iw):min(1080\\,ih):force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2" \
         -movflags +faststart \
-        -c:a aac -b:a 128k \
+        -an \
         -t 15 \
         "${normalizedLocalPath}" 2>&1`;
 

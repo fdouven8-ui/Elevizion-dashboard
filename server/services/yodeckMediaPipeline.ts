@@ -421,7 +421,7 @@ const localFfmpegProvider: NormalizerProvider = {
       
       // Transcode to Yodeck-safe format
       // H.264 yuv420p, AAC audio, faststart, max 1920x1080
-      const cmd = `ffmpeg -i "${inputPath}" -c:v libx264 -pix_fmt yuv420p -vf "scale='min(1920,iw)':min'(1080,ih)':force_original_aspect_ratio=decrease" -c:a aac -movflags +faststart -y "${outputPath}"`;
+      const cmd = `ffmpeg -i "${inputPath}" -c:v libx264 -pix_fmt yuv420p -r 25 -g 50 -keyint_min 25 -vf "scale='min(1920,iw)':min'(1080,ih)':force_original_aspect_ratio=decrease" -an -movflags +faststart -y "${outputPath}"`;
       
       await execAsync(cmd, { timeout: 300000 }); // 5 minute timeout
       

@@ -2472,6 +2472,16 @@ class YodeckPublishService {
         throw new Error("Asset not found or no storage path");
       }
 
+      const effectiveStoragePath = asset.normalizedStoragePath || asset.convertedStoragePath || asset.storagePath;
+      console.log(`[YodeckPublish] Using storage path: ${effectiveStoragePath} (normalized=${!!asset.normalizedStoragePath}, converted=${!!asset.convertedStoragePath})`);
+
+      if (asset.yodeckReadinessStatus && asset.yodeckReadinessStatus !== 'READY_FOR_YODECK' && asset.yodeckReadinessStatus !== 'PENDING') {
+        const meta = asset.yodeckMetadataJson as any;
+        if (meta && meta.isYodeckCompatible === false) {
+          throw new Error(`Asset not Yodeck-compatible: ${(meta.compatibilityReasons || []).join(', ')}. Normalize first.`);
+        }
+      }
+
       // Update plan to PUBLISHING
       await db.update(placementPlans)
         .set({ status: "PUBLISHING" })
@@ -2489,7 +2499,7 @@ class YodeckPublishService {
 
       // Step 1: Upload media to Yodeck (validates source URL first, tries URL import then presigned PUT fallback)
       const uploadResult = await this.uploadMediaFromStorage(
-        asset.storagePath,
+        effectiveStoragePath,
         `${plan.linkKey}_${asset.originalFileName || "video"}`,
         uploadIdempotencyKey,
         plan.advertiserId,

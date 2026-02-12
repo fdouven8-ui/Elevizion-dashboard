@@ -110,6 +110,9 @@ export async function transcodeVideo(inputPath: string): Promise<TranscodeResult
       '-pix_fmt', 'yuv420p',
       '-profile:v', 'high',
       '-level', '4.0',
+      '-r', '25',
+      '-g', '50',
+      '-keyint_min', '25',
       '-movflags', '+faststart',
       '-an',
       `"${outputPath}"`,
@@ -386,4 +389,277 @@ export async function retryFailedTranscode(assetId: string): Promise<ProcessAndU
     .where(eq(adAssets.id, assetId));
   
   return await transcodeAndUpload(assetId, asset.storagePath);
+}
+
+export interface YodeckNormalizationResult {
+  success: boolean;
+  normalizedStoragePath?: string;
+  normalizedStorageUrl?: string;
+  yodeckMetadata?: {
+    container: string;
+    videoCodec: string;
+    audioCodec: string | null;
+    pixelFormat: string;
+    width: number;
+    height: number;
+    durationSeconds: number;
+    bitrate: number;
+    hasVideoStream: boolean;
+    hasAudioStream: boolean;
+    moovAtStart: boolean;
+    isYodeckCompatible: boolean;
+    compatibilityReasons: string[];
+    fileSizeBytes: number;
+    framerate: number;
+  };
+  error?: string;
+}
+
+async function checkMoovAtStart(filePath: string): Promise<boolean> {
+  try {
+    const fd = await fs.promises.open(filePath, 'r');
+    const headerSize = 8192;
+    const header = Buffer.alloc(headerSize);
+    await fd.read(header, 0, headerSize, 0);
+    await fd.close();
+
+    let offset = 0;
+    let moovOffset = -1;
+    let mdatOffset = -1;
+
+    while (offset + 8 <= headerSize) {
+      const boxSize = header.readUInt32BE(offset);
+      const boxType = header.toString('ascii', offset + 4, offset + 8);
+      if (boxSize === 0) break;
+      if (boxType === 'moov') moovOffset = offset;
+      else if (boxType === 'mdat') mdatOffset = offset;
+      if (moovOffset !== -1 && mdatOffset !== -1) return moovOffset < mdatOffset;
+      offset += boxSize;
+      if (boxSize > headerSize) break;
+    }
+    return moovOffset !== -1 && moovOffset < 8192;
+  } catch {
+    return false;
+  }
+}
+
+function needsYodeckNormalization(metadata: VideoMetadata, moovAtStart: boolean): { needed: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const codec = (metadata.codec || '').toLowerCase();
+  const pixFmt = (metadata.pixelFormat || '').toLowerCase();
+
+  if (codec !== 'h264') reasons.push(`codec ${metadata.codec} → h264`);
+  if (pixFmt !== 'yuv420p') reasons.push(`pixel_format ${metadata.pixelFormat} → yuv420p`);
+  if (!moovAtStart) reasons.push('moov atom not at start → faststart');
+  if (metadata.hasAudio) reasons.push('has audio → strip audio');
+
+  const fr = metadata.framerate;
+  if (!fr || Math.abs(fr - 25) > 0.5) reasons.push(`framerate ${fr?.toFixed(1) ?? 'unknown'} → 25fps CFR`);
+
+  return { needed: reasons.length > 0, reasons };
+}
+
+async function extractDetailedProbe(filePath: string): Promise<{
+  codec: string; pixFmt: string; width: number; height: number;
+  durationSeconds: number; bitrate: number; hasAudio: boolean;
+  framerate: number; container: string; fileSizeBytes: number;
+} | null> {
+  try {
+    const cmd = `ffprobe -v quiet -print_format json -show_format -show_streams "${filePath}"`;
+    const { stdout } = await execAsync(cmd, { timeout: 30000 });
+    const data = JSON.parse(stdout);
+    const vs = data.streams?.find((s: any) => s.codec_type === 'video');
+    const as_ = data.streams?.find((s: any) => s.codec_type === 'audio');
+    if (!vs) return null;
+    const frParts = (vs.avg_frame_rate || '0/1').split('/');
+    const framerate = parseInt(frParts[0]) / (parseInt(frParts[1]) || 1);
+    return {
+      codec: vs.codec_name || 'unknown',
+      pixFmt: vs.pix_fmt || 'unknown',
+      width: vs.width || 0,
+      height: vs.height || 0,
+      durationSeconds: parseFloat(data.format?.duration || '0'),
+      bitrate: parseInt(data.format?.bit_rate || '0'),
+      hasAudio: !!as_,
+      framerate,
+      container: data.format?.format_name || 'unknown',
+      fileSizeBytes: parseInt(data.format?.size || '0') || fs.statSync(filePath).size,
+    };
+  } catch (err: any) {
+    console.error('[NormalizeYodeck] ffprobe failed:', err.message);
+    return null;
+  }
+}
+
+export async function normalizeForYodeck(assetId: string, force = false): Promise<YodeckNormalizationResult> {
+  console.log(`[NormalizeYodeck] Starting for asset ${assetId} force=${force}`);
+  logMemory('normalize-start');
+
+  const asset = await db.query.adAssets.findFirst({ where: eq(adAssets.id, assetId) });
+  if (!asset?.storagePath) {
+    return { success: false, error: 'Asset not found or no storage path' };
+  }
+
+  if (!force && asset.yodeckReadinessStatus === 'READY_FOR_YODECK' && asset.normalizedStoragePath) {
+    console.log(`[NormalizeYodeck] ${assetId} already READY_FOR_YODECK, skipping (use force=true to re-normalize)`);
+    return { success: true, normalizedStoragePath: asset.normalizedStoragePath, normalizedStorageUrl: asset.normalizedStorageUrl || undefined };
+  }
+
+  if (!force && (asset.yodeckReadinessStatus === 'NORMALIZING' || asset.yodeckReadinessStatus === 'VALIDATING')) {
+    console.log(`[NormalizeYodeck] ${assetId} already in progress (${asset.yodeckReadinessStatus}), skipping`);
+    return { success: false, error: `Already in progress: ${asset.yodeckReadinessStatus}` };
+  }
+
+  await db.update(adAssets)
+    .set({ yodeckReadinessStatus: 'VALIDATING', normalizationError: null })
+    .where(eq(adAssets.id, assetId));
+
+  const inputPath = generateTempPath('elevizion-norm-input');
+  let outputPath: string | null = null;
+
+  try {
+    logMemory('before-download');
+    await objectStorage.downloadFileToPath(asset.storagePath, inputPath);
+    logMemory('after-download');
+
+    const probe = await extractDetailedProbe(inputPath);
+    if (!probe) {
+      await db.update(adAssets)
+        .set({ yodeckReadinessStatus: 'REJECTED', yodeckRejectReason: 'ffprobe failed on source file' })
+        .where(eq(adAssets.id, assetId));
+      return { success: false, error: 'Could not probe source video' };
+    }
+
+    const moovOk = await checkMoovAtStart(inputPath);
+    const meta: VideoMetadata = {
+      durationSeconds: probe.durationSeconds,
+      width: probe.width, height: probe.height,
+      aspectRatio: `${probe.width}:${probe.height}`,
+      codec: probe.codec, pixelFormat: probe.pixFmt,
+      hasAudio: probe.hasAudio, fileSize: probe.fileSizeBytes,
+      mimeType: 'video/mp4', framerate: probe.framerate,
+    };
+
+    const check = needsYodeckNormalization(meta, moovOk);
+    console.log(`[NormalizeYodeck] ${assetId} needsNormalization=${check.needed} reasons=${check.reasons.join(', ') || 'none'}`);
+
+    let normalizedPath: string;
+    let normalizedUrl: string;
+
+    if (!check.needed) {
+      normalizedPath = asset.storagePath;
+      normalizedUrl = asset.storageUrl || '';
+      console.log(`[NormalizeYodeck] ${assetId} already compliant, using original`);
+    } else {
+      await db.update(adAssets)
+        .set({ yodeckReadinessStatus: 'NORMALIZING', normalizationStartedAt: new Date(), normalizationProvider: 'ffmpeg' })
+        .where(eq(adAssets.id, assetId));
+
+      outputPath = generateTempPath('elevizion-norm-output');
+      const ffmpegCmd = [
+        'ffmpeg', '-y',
+        '-i', `"${inputPath}"`,
+        '-c:v', 'libx264',
+        '-preset', 'medium',
+        '-crf', '23',
+        '-pix_fmt', 'yuv420p',
+        '-profile:v', 'high',
+        '-level', '4.0',
+        '-r', '25',
+        '-g', '50',
+        '-keyint_min', '25',
+        '-movflags', '+faststart',
+        '-an',
+        `"${outputPath}"`,
+      ].join(' ');
+
+      logMemory('before-ffmpeg-normalize');
+      await execAsync(ffmpegCmd, { timeout: 300000 });
+      logMemory('after-ffmpeg-normalize');
+
+      if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
+        throw new Error('FFmpeg normalization produced no output');
+      }
+
+      const normStoragePath = `normalized/${assetId}-normalized.mp4`;
+      logMemory('before-norm-upload');
+      normalizedUrl = await objectStorage.uploadFileFromPath(outputPath, normStoragePath, 'video/mp4');
+      logMemory('after-norm-upload');
+
+      normalizedPath = normStoragePath;
+      console.log(`[NormalizeYodeck] ${assetId} normalized and uploaded to ${normStoragePath}`);
+    }
+
+    const probeFile = outputPath && fs.existsSync(outputPath) ? outputPath : inputPath;
+    const finalProbe = outputPath && fs.existsSync(outputPath)
+      ? await extractDetailedProbe(outputPath)
+      : probe;
+    const finalMoov = await checkMoovAtStart(probeFile);
+
+    if (!finalProbe) {
+      throw new Error('Could not probe normalized file');
+    }
+
+    const yodeckMeta = {
+      container: 'mp4',
+      videoCodec: finalProbe.codec,
+      audioCodec: finalProbe.hasAudio ? 'aac' : null,
+      pixelFormat: finalProbe.pixFmt,
+      width: finalProbe.width,
+      height: finalProbe.height,
+      durationSeconds: finalProbe.durationSeconds,
+      bitrate: finalProbe.bitrate,
+      hasVideoStream: true,
+      hasAudioStream: finalProbe.hasAudio,
+      moovAtStart: finalMoov,
+      isYodeckCompatible: true,
+      compatibilityReasons: [],
+      fileSizeBytes: finalProbe.fileSizeBytes,
+      framerate: finalProbe.framerate,
+    };
+
+    const warnings: string[] = [];
+    if (!finalMoov) { yodeckMeta.isYodeckCompatible = false; warnings.push('moov atom not at start after normalization'); }
+    if (finalProbe.codec !== 'h264') { yodeckMeta.isYodeckCompatible = false; warnings.push(`codec still ${finalProbe.codec}`); }
+    if (finalProbe.pixFmt !== 'yuv420p') { yodeckMeta.isYodeckCompatible = false; warnings.push(`pix_fmt still ${finalProbe.pixFmt}`); }
+    yodeckMeta.compatibilityReasons = warnings;
+
+    const readinessStatus = yodeckMeta.isYodeckCompatible ? 'READY_FOR_YODECK' : 'REJECTED';
+    const rejectReason = yodeckMeta.isYodeckCompatible ? null : warnings.join('; ');
+
+    await db.update(adAssets)
+      .set({
+        normalizedStoragePath: normalizedPath,
+        normalizedStorageUrl: normalizedUrl,
+        normalizationCompletedAt: new Date(),
+        yodeckReadinessStatus: readinessStatus,
+        yodeckRejectReason: rejectReason,
+        yodeckMetadataJson: yodeckMeta,
+        validationWarnings: warnings.length > 0 ? warnings : [],
+      })
+      .where(eq(adAssets.id, assetId));
+
+    console.log(`[NormalizeYodeck] ${assetId} complete: status=${readinessStatus} path=${normalizedPath}`);
+
+    return {
+      success: true,
+      normalizedStoragePath: normalizedPath,
+      normalizedStorageUrl: normalizedUrl,
+      yodeckMetadata: yodeckMeta as any,
+    };
+  } catch (error: any) {
+    console.error(`[NormalizeYodeck] ${assetId} failed:`, error.message);
+    await db.update(adAssets)
+      .set({
+        yodeckReadinessStatus: 'REJECTED',
+        yodeckRejectReason: `Normalization failed: ${error.message}`,
+        normalizationError: error.message,
+      })
+      .where(eq(adAssets.id, assetId));
+    return { success: false, error: error.message };
+  } finally {
+    try { if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath); } catch {}
+    try { if (outputPath && fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
+    logMemory('normalize-end');
+  }
 }

@@ -13,7 +13,7 @@ import {
   VideoErrorDetails,
   DEFAULT_VIDEO_DURATION_SECONDS,
 } from './videoMetadataService';
-import { checkTranscodeRequired, startTranscodeJob } from './videoTranscodeService';
+import { checkTranscodeRequired, startTranscodeJob, normalizeForYodeck } from './videoTranscodeService';
 import { ObjectStorageService } from '../objectStorage';
 import { dispatchMailEvent } from './mailEventService';
 import { logAudit } from './auditService';
@@ -406,6 +406,13 @@ export async function processAdAssetUpload(
   if (validation.isValid && transcodeCheck.needsTranscode && asset.id) {
     console.log('[AdAssetUpload] Starting background transcode job for:', asset.id);
     startTranscodeJob(asset.id);
+  }
+  
+  if (validation.isValid && asset.id) {
+    console.log('[AdAssetUpload] Starting background Yodeck normalization for:', asset.id);
+    normalizeForYodeck(asset.id).catch(err => {
+      console.error('[AdAssetUpload] Background normalization failed:', asset.id, err.message);
+    });
   }
   
   if (validation.isValid) {

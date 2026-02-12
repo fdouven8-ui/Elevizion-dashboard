@@ -24095,6 +24095,18 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.post("/api/admin/media/:assetId/normalize-yodeck", requireAdminAccess, async (req, res) => {
+    try {
+      const { normalizeForYodeck } = await import("./services/videoTranscodeService");
+      const force = req.body?.force === true || req.query.force === 'true';
+      const result = await normalizeForYodeck(req.params.assetId, force);
+      res.json(result);
+    } catch (error: any) {
+      console.error("[NormalizeYodeck] Error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   /**
    * POST /api/admin/media/:assetId/validate
    * Trigger validation for a media asset
