@@ -1,0 +1,50 @@
+We have confirmed the root cause with live debug output:
+
+- lastDebug.outcome = R2_HEAD_FAILED
+- headStatus = 403
+- storagePath = ad-assets/.../ADV-...mp4
+- r2SourceUrl is a presigned R2 URL (r2.cloudflarestorage.com + X-Amz-...)
+- contentType is "text/plain; charset=UTF-8" (error response), contentLength null
+
+CONCLUSION: The publish pipeline MUST NOT use r2SourceUrl nor do public HEAD/Range validation on it. Instead it must access R2 using authenticated AWS SDK (S3-compatible) by storagePath, then upload bytes to Yodeck as LOCAL media upload.
+
+TASK
+Implement authenticated R2 streaming + Yodeck local upload, minimal impact.
+
+1) Add/ensure server/services/r2Client.ts using AWS SDK v3 S3Client for Cloudflare R2.
+   - Use existing env vars already in project (R2_ENDPOINT / R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET, etc).
+   - Provide:
+     - headR2(storagePath) -> { contentLength, contentType, etag }
+     - getR2Stream(storagePath) -> { stream, contentLength, contentType }
+
+2) In the publish flow (retry publish / placement-plan publish), replace the current "two-step" validation that does HEAD against r2SourceUrl.
+   - DO NOT call fetch(url, {method:"HEAD"}) on r2SourceUrl anymore.
+   - Instead call headR2(storagePath). If ok, use getR2Stream(storagePath) for upload.
+
+3) Yodeck upload must be LOCAL upload (like manual):
+   a) POST /media with media_origin.source="local" and type="video"
+   b) GET /media/{id}/upload to retrieve upload_url (and the complete upload_url expected by Yodeck)
+   c) PUT to upload_url streaming the R2 stream (do not buffer whole file)
+      - Set Content-Type from R2 head (fallback "video/mp4" if missing)
+      - Set Content-Length from R2 head (required if available)
+   d) PUT /media/{id}/upload/complete with { upload_url } (per Yodeck docs)
+   e) Poll /media/{id} until status != "initialized" (ready/finished). If stuck > N polls, fail and retry once with fresh media.
+
+4) Update publish-debug output so lastDebug always includes:
+   - storagePath
+   - r2HeadOk (bool)
+   - r2HeadStatus (if available)
+   - r2ContentType (from authenticated head)
+   - r2ContentLength (from authenticated head)
+   - yodeckMediaId
+   - yodeckUploadPutStatus
+   - pollStates[]
+
+5) Ensure this change does NOT affect baseline playlist logic, review UI, or existing endpoints besides making publish succeed.
+
+EXTRA SAFETY
+- If headR2 fails, log the exact AWS error code/message.
+- If PUT to Yodeck upload_url fails, retry with exponential backoff (max 3).
+- Keep idempotency: if a yodeckMediaId exists for this plan attempt and status is recoverable, reuse; else create new.
+
+After implementation, I will test by retrying the same planId again and expecting publish success, yodeckMediaId not null, and lastDebug outcome success.
