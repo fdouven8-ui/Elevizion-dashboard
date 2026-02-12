@@ -1701,57 +1701,65 @@ class YodeckPublishService {
       .where(eq(integrationOutbox.id, upsertResult.job.id));
 
     try {
-      const publicBase = process.env.PUBLIC_BASE_URL || "https://elevizion.nl";
-      let cdnUrl: string;
-      if (assetId) {
-        cdnUrl = `${publicBase}/api/ad-assets/${assetId}/stream`;
-      } else {
-        const { getR2PresignedUrl } = await import("../objectStorage");
-        cdnUrl = await getR2PresignedUrl(storagePath, 7200);
+      const { getR2PresignedUrl } = await import("../objectStorage");
+      const r2SourceUrl = await getR2PresignedUrl(storagePath, 21600);
+      lastDebug.r2SourceUrl = r2SourceUrl;
+      lastDebug.cdnUrlType = "r2_direct";
+      console.log(`[YodeckPublish][${corrId}] R2 direct source URL for Yodeck: ${r2SourceUrl.substring(0, 100)}...`);
+
+      console.log(`[YodeckPublish][${corrId}] Server-side HEAD check on R2 URL...`);
+      let headStatus: number | null = null;
+      let headContentType: string | null = null;
+      let headContentLength: number | null = null;
+      let headAcceptRanges: string | null = null;
+      try {
+        const headResp = await fetch(r2SourceUrl, {
+          method: "HEAD",
+          redirect: "follow",
+          signal: AbortSignal.timeout(15000),
+        });
+        headStatus = headResp.status;
+        headContentType = headResp.headers.get("content-type");
+        const clHeader = headResp.headers.get("content-length");
+        headContentLength = clHeader ? parseInt(clHeader, 10) : null;
+        headAcceptRanges = headResp.headers.get("accept-ranges");
+        console.log(`[YodeckPublish][${corrId}] HEAD result: status=${headStatus} content-type=${headContentType} content-length=${headContentLength} accept-ranges=${headAcceptRanges}`);
+      } catch (headErr: any) {
+        console.error(`[YodeckPublish][${corrId}] HEAD error: ${headErr.message}`);
+        headStatus = -1;
       }
-      lastDebug.yodeckSourceUrl = cdnUrl;
-      lastDebug.cdnUrl = cdnUrl;
-      lastDebug.cdnUrlType = assetId ? "public_stream" : "r2_presigned";
-      console.log(`[YodeckPublish][${corrId}] Yodeck source URL: ${cdnUrl}`);
 
-      const { validateVideoSource } = await import("./videoSourceValidator");
-      const sourceCheck = await validateVideoSource(cdnUrl, corrId);
-      lastDebug.sourceCheck = {
-        valid: sourceCheck.valid,
-        headStatus: sourceCheck.headStatus,
-        contentType: sourceCheck.contentType,
-        contentLength: sourceCheck.contentLength,
-        acceptRanges: sourceCheck.acceptRanges,
-        rangeStatus: sourceCheck.rangeStatus,
-        contentRange: sourceCheck.rangeContentRange,
-        hasFtyp: sourceCheck.hasFtyp,
-        ftypOffset: sourceCheck.ftypOffset,
-        errorCode: sourceCheck.errorCode,
-        errorMessage: sourceCheck.errorMessage,
-        durationMs: sourceCheck.durationMs,
-      };
+      lastDebug.headStatus = headStatus;
+      lastDebug.contentType = headContentType;
+      lastDebug.contentLength = headContentLength;
+      lastDebug.acceptRanges = headAcceptRanges;
 
-      if (!sourceCheck.valid) {
-        console.error(`[YodeckPublish][${corrId}] INVALID_SOURCE: ${sourceCheck.errorCode} - ${sourceCheck.errorMessage}`);
-        lastDebug.outcome = "INVALID_SOURCE";
-        
+      if (headStatus !== 200 && headStatus !== 206) {
+        const errMsg = headStatus === -1
+          ? "R2 HEAD timed out or network error — source URL not accessible"
+          : `R2 HEAD returned ${headStatus} — expected 200 or 206`;
+        console.error(`[YodeckPublish][${corrId}] ${errMsg}`);
+        lastDebug.outcome = "R2_HEAD_FAILED";
+
         await db.update(integrationOutbox)
-          .set({ 
+          .set({
             status: "failed",
-            lastError: JSON.stringify({ code: sourceCheck.errorCode, message: sourceCheck.errorMessage, debug: lastDebug }),
+            lastError: JSON.stringify({ code: "R2_HEAD_FAILED", status: headStatus, debug: lastDebug }),
             processedAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
-        
-        return { 
-          ok: false, 
-          error: sourceCheck.errorMessage || "Source URL validation failed", 
-          errorCode: sourceCheck.errorCode || "INVALID_SOURCE",
+
+        return {
+          ok: false,
+          error: errMsg,
+          errorCode: "R2_HEAD_FAILED",
           errorDetails: lastDebug,
           lastDebug,
         };
       }
+
+      const cdnUrl = r2SourceUrl;
 
       console.log(`[YodeckPublish][${corrId}] Source validated OK. Trying URL-based import first...`);
 

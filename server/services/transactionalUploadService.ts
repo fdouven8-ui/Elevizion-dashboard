@@ -393,14 +393,8 @@ export async function uploadVideoToYodeckViaUrl(
   console.log(`${LOG_PREFIX} [${correlationId}] Created URL-upload job=${jobId}`);
 
   try {
-    const publicBase = process.env.PUBLIC_BASE_URL || "https://elevizion.nl";
-    let cdnUrl: string;
-    if (assetId) {
-      cdnUrl = `${publicBase}/api/ad-assets/${assetId}/stream`;
-    } else {
-      cdnUrl = await getR2PresignedUrl(assetPath, 86400);
-    }
-    console.log(`${LOG_PREFIX} [${correlationId}] Yodeck source URL: ${cdnUrl}`);
+    const cdnUrl = await getR2PresignedUrl(assetPath, 21600);
+    console.log(`${LOG_PREFIX} [${correlationId}] R2 direct source URL for Yodeck: ${cdnUrl.substring(0, 100)}...`);
 
     console.log(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT: Checking CDN URL returns valid MP4...`);
     const preflightResp = await fetch(cdnUrl, { method: "GET", headers: { "Range": "bytes=0-31" } });
