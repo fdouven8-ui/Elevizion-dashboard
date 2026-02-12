@@ -2570,11 +2570,13 @@ Sitemap: ${SITE_URL}/sitemap.xml
   // VIDEO REVIEW QUEUE (ADMIN APPROVAL WORKFLOW)
   // ============================================================================
 
-  // Get pending video review queue (ADMIN ONLY)
+  // Get video review queue with bucket filter (ADMIN ONLY)
   app.get("/api/admin/video-review", requireAdminAccess, async (req: any, res) => {
     try {
-      const { getPendingReviewAssets } = await import("./services/adAssetUploadService");
-      const queue = await getPendingReviewAssets();
+      const validBuckets = ['pending-review', 'approved-pending', 'failed', 'rejected', 'published', 'all'] as const;
+      const bucket = validBuckets.includes(req.query.bucket as any) ? req.query.bucket : 'pending-review';
+      const { getReviewAssets } = await import("./services/adAssetUploadService");
+      const queue = await getReviewAssets(bucket);
       res.json(queue);
     } catch (error: any) {
       res.status(500).json({ message: error.message });

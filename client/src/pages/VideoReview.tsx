@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -136,9 +136,21 @@ const REJECTION_REASONS: Record<string, string> = {
   other: "Anders",
 };
 
+type ReviewBucket = 'pending-review' | 'approved-pending' | 'failed' | 'rejected' | 'published' | 'all';
+
+const BUCKET_LABELS: Record<ReviewBucket, string> = {
+  'pending-review': 'Te beoordelen',
+  'approved-pending': 'Goedgekeurd (wacht)',
+  'failed': 'Publicatie mislukt',
+  'rejected': 'Afgekeurd',
+  'published': 'Gepubliceerd',
+  'all': 'Alles',
+};
+
 export default function VideoReview() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [bucket, setBucket] = useState<ReviewBucket>('pending-review');
   const [previewAsset, setPreviewAsset] = useState<ReviewQueueItem | null>(null);
   const [rejectAsset, setRejectAsset] = useState<ReviewQueueItem | null>(null);
   const [rejectReason, setRejectReason] = useState<string>("");
@@ -182,7 +194,12 @@ export default function VideoReview() {
   const canApprove = !proposalLoading && (proposalError || hasMatches);
 
   const { data: queue = [], isLoading } = useQuery<ReviewQueueItem[]>({
-    queryKey: ["/api/admin/video-review"],
+    queryKey: ["/api/admin/video-review", bucket],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/video-review?bucket=${bucket}`);
+      if (!res.ok) throw new Error("Fout bij laden review items");
+      return res.json();
+    },
   });
 
   const approveMutation = useMutation({
@@ -408,6 +425,7 @@ export default function VideoReview() {
   
   const isApprovedPending = (item: ReviewQueueItem) => item.asset.approvalStatus === 'APPROVED_PENDING_PUBLISH' || item.asset.approvalStatus === 'APPROVED';
   const isLive = (item: ReviewQueueItem) => item.asset.approvalStatus === 'LIVE';
+  const isPublished = (item: ReviewQueueItem) => item.asset.approvalStatus === 'LIVE' || item.asset.publishStatus === 'PUBLISHED';
   const isPublishFailed = (item: ReviewQueueItem) => item.asset.publishStatus === 'PUBLISH_FAILED';
   const isPublishPending = (item: ReviewQueueItem) => item.asset.publishStatus === 'PENDING';
   const canRetryPublish = (item: ReviewQueueItem) => isApprovedPending(item) && (isPublishFailed(item) || item.asset.publishStatus === null);
@@ -439,8 +457,22 @@ export default function VideoReview() {
           <p className="text-muted-foreground">Beoordeel geüploade advertentievideo's</p>
         </div>
         <Badge variant={queue.length > 0 ? "destructive" : "secondary"} className="text-lg px-3 py-1">
-          {queue.length} wachtend
+          {queue.length} {bucket === 'pending-review' ? 'wachtend' : 'items'}
         </Badge>
+      </div>
+
+      <div className="flex gap-1 flex-wrap border-b pb-2" data-testid="bucket-tabs">
+        {(Object.keys(BUCKET_LABELS) as ReviewBucket[]).map((b) => (
+          <Button
+            key={b}
+            size="sm"
+            variant={bucket === b ? "default" : "ghost"}
+            onClick={() => setBucket(b)}
+            data-testid={`bucket-tab-${b}`}
+          >
+            {BUCKET_LABELS[b]}
+          </Button>
+        ))}
       </div>
 
       {isLoading ? (
@@ -449,8 +481,10 @@ export default function VideoReview() {
         <Card>
           <CardContent className="py-12 text-center">
             <CheckCircle className="h-12 w-12 mx-auto text-green-500 mb-4" />
-            <p className="text-lg font-medium">Geen video's te beoordelen</p>
-            <p className="text-muted-foreground">Alle geüploade video's zijn beoordeeld</p>
+            <p className="text-lg font-medium">Geen items in "{BUCKET_LABELS[bucket]}"</p>
+            <p className="text-muted-foreground">
+              {bucket === 'pending-review' ? 'Alle geüploade video\'s zijn beoordeeld' : `Geen items met deze status gevonden`}
+            </p>
           </CardContent>
         </Card>
       ) : (
@@ -527,7 +561,7 @@ export default function VideoReview() {
                     </div>
                   </div>
                   
-                  <div className="flex gap-2 items-center">
+                  <div className="flex gap-2 items-center flex-wrap">
                     <Button
                       size="sm"
                       variant="outline"
@@ -537,86 +571,186 @@ export default function VideoReview() {
                       <Eye className="h-4 w-4 mr-1" />
                       Bekijk
                     </Button>
-                    {canRetryPublish(item) ? (
-                      <Button
-                        size="sm"
-                        variant="default"
-                        className="bg-blue-600 hover:bg-blue-700"
-                        onClick={() => handleApprove(item)}
-                        disabled={retryPublishMutation.isPending}
-                        data-testid={`retry-publish-btn-${item.asset.id}`}
-                      >
-                        <RefreshCw className={`h-4 w-4 mr-1 ${retryPublishMutation.isPending ? 'animate-spin' : ''}`} />
-                        Opnieuw publiceren
-                      </Button>
-                    ) : isPublishPending(item) ? (
+                    {bucket === 'pending-review' && (
+                      <>
+                        {canApproveItem(item) && (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="bg-green-600 hover:bg-green-700"
+                            onClick={() => handleApprove(item)}
+                            disabled={approveMutation.isPending}
+                            data-testid={`approve-btn-${item.asset.id}`}
+                          >
+                            <CheckCircle className="h-4 w-4 mr-1" />
+                            Goedkeuren
+                          </Button>
+                        )}
+                        {canReject(item) && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => setRejectAsset(item)}
+                            data-testid={`reject-btn-${item.asset.id}`}
+                          >
+                            <XCircle className="h-4 w-4 mr-1" />
+                            Afkeuren
+                          </Button>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => markReviewedMutation.mutate({ assetId: item.asset.id })}
+                          disabled={markReviewedMutation.isPending}
+                          data-testid={`mark-reviewed-btn-${item.asset.id}`}
+                        >
+                          <CheckSquare className="h-4 w-4 mr-1" />
+                          Beoordeeld
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-red-600 hover:text-red-700"
+                          onClick={() => {
+                            if (confirm("Weet je zeker dat je dit item wilt verwijderen?")) {
+                              deleteMutation.mutate({ assetId: item.asset.id });
+                            }
+                          }}
+                          disabled={deleteMutation.isPending}
+                          data-testid={`delete-btn-${item.asset.id}`}
+                        >
+                          <Trash2 className="h-4 w-4 mr-1" />
+                          Verwijderen
+                        </Button>
+                      </>
+                    )}
+                    {(bucket === 'approved-pending' || bucket === 'failed') && (
+                      <>
+                        {canRetryPublish(item) && (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="bg-blue-600 hover:bg-blue-700"
+                            onClick={() => handleApprove(item)}
+                            disabled={retryPublishMutation.isPending}
+                            data-testid={`retry-publish-btn-${item.asset.id}`}
+                          >
+                            <RefreshCw className={`h-4 w-4 mr-1 ${retryPublishMutation.isPending ? 'animate-spin' : ''}`} />
+                            Opnieuw publiceren
+                          </Button>
+                        )}
+                        {isPublishPending(item) && (
+                          <Button size="sm" variant="outline" disabled data-testid={`publish-pending-btn-${item.asset.id}`}>
+                            <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                            Bezig met publiceren...
+                          </Button>
+                        )}
+                        {bucket === 'failed' && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-red-600 hover:text-red-700"
+                            onClick={() => {
+                              if (confirm("Weet je zeker dat je dit item wilt verwijderen?")) {
+                                deleteMutation.mutate({ assetId: item.asset.id });
+                              }
+                            }}
+                            disabled={deleteMutation.isPending}
+                            data-testid={`delete-btn-${item.asset.id}`}
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Verwijderen
+                          </Button>
+                        )}
+                      </>
+                    )}
+                    {bucket === 'rejected' && (
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled
-                        data-testid={`publish-pending-btn-${item.asset.id}`}
+                        className="text-red-600 hover:text-red-700"
+                        onClick={() => {
+                          if (confirm("Weet je zeker dat je dit item wilt verwijderen?")) {
+                            deleteMutation.mutate({ assetId: item.asset.id });
+                          }
+                        }}
+                        disabled={deleteMutation.isPending}
+                        data-testid={`delete-btn-${item.asset.id}`}
                       >
-                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                        Bezig met publiceren...
-                      </Button>
-                    ) : canApproveItem(item) ? (
-                      <Button
-                        size="sm"
-                        variant="default"
-                        className="bg-green-600 hover:bg-green-700"
-                        onClick={() => handleApprove(item)}
-                        disabled={approveMutation.isPending}
-                        data-testid={`approve-btn-${item.asset.id}`}
-                      >
-                        <CheckCircle className="h-4 w-4 mr-1" />
-                        Goedkeuren
-                      </Button>
-                    ) : null}
-                    {canReject(item) && (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => setRejectAsset(item)}
-                        data-testid={`reject-btn-${item.asset.id}`}
-                      >
-                        <XCircle className="h-4 w-4 mr-1" />
-                        Afkeuren
+                        <Trash2 className="h-4 w-4 mr-1" />
+                        Verwijderen
                       </Button>
                     )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => markReviewedMutation.mutate({ assetId: item.asset.id })}
-                      disabled={markReviewedMutation.isPending}
-                      data-testid={`mark-reviewed-btn-${item.asset.id}`}
-                    >
-                      <CheckSquare className="h-4 w-4 mr-1" />
-                      Beoordeeld
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => archiveMutation.mutate({ assetId: item.asset.id })}
-                      disabled={archiveMutation.isPending}
-                      data-testid={`archive-btn-${item.asset.id}`}
-                    >
-                      Archiveren
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-red-600 hover:text-red-700"
-                      onClick={() => {
-                        if (confirm("Weet je zeker dat je dit item wilt verwijderen?")) {
-                          deleteMutation.mutate({ assetId: item.asset.id });
-                        }
-                      }}
-                      disabled={deleteMutation.isPending}
-                      data-testid={`delete-btn-${item.asset.id}`}
-                    >
-                      <Trash2 className="h-4 w-4 mr-1" />
-                      Verwijderen
-                    </Button>
+                    {bucket === 'all' && (
+                      <>
+                        {canApproveItem(item) && (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="bg-green-600 hover:bg-green-700"
+                            onClick={() => handleApprove(item)}
+                            disabled={approveMutation.isPending}
+                            data-testid={`approve-btn-${item.asset.id}`}
+                          >
+                            <CheckCircle className="h-4 w-4 mr-1" />
+                            Goedkeuren
+                          </Button>
+                        )}
+                        {canRetryPublish(item) && (
+                          <Button
+                            size="sm"
+                            variant="default"
+                            className="bg-blue-600 hover:bg-blue-700"
+                            onClick={() => handleApprove(item)}
+                            disabled={retryPublishMutation.isPending}
+                            data-testid={`retry-publish-btn-${item.asset.id}`}
+                          >
+                            <RefreshCw className={`h-4 w-4 mr-1 ${retryPublishMutation.isPending ? 'animate-spin' : ''}`} />
+                            Opnieuw publiceren
+                          </Button>
+                        )}
+                        {canReject(item) && (
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            onClick={() => setRejectAsset(item)}
+                            data-testid={`reject-btn-${item.asset.id}`}
+                          >
+                            <XCircle className="h-4 w-4 mr-1" />
+                            Afkeuren
+                          </Button>
+                        )}
+                        {canApproveItem(item) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => markReviewedMutation.mutate({ assetId: item.asset.id })}
+                            disabled={markReviewedMutation.isPending}
+                            data-testid={`mark-reviewed-btn-${item.asset.id}`}
+                          >
+                            <CheckSquare className="h-4 w-4 mr-1" />
+                            Beoordeeld
+                          </Button>
+                        )}
+                        {!isPublished(item) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-red-600 hover:text-red-700"
+                            onClick={() => {
+                              if (confirm("Weet je zeker dat je dit item wilt verwijderen?")) {
+                                deleteMutation.mutate({ assetId: item.asset.id });
+                              }
+                            }}
+                            disabled={deleteMutation.isPending}
+                            data-testid={`delete-btn-${item.asset.id}`}
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Verwijderen
+                          </Button>
+                        )}
+                      </>
+                    )}
                     {isPublishFailed(item) && (
                       <Badge variant="destructive" className="ml-2" data-testid={`publish-failed-badge-${item.asset.id}`}>
                         <AlertTriangle className="h-3 w-3 mr-1" />

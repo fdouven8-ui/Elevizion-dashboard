@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { adAssets, advertisers, portalTokens } from '@shared/schema';
-import { eq, and, or, isNull } from 'drizzle-orm';
+import { eq, and, or, isNull, isNotNull, ne, SQL } from 'drizzle-orm';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -567,26 +567,80 @@ export interface ReviewQueueItem {
   };
 }
 
-export async function getPendingReviewAssets(): Promise<ReviewQueueItem[]> {
-  const pendingAssets = await db.query.adAssets.findMany({
-    where: and(
-      eq(adAssets.validationStatus, 'valid'),
-      or(
-        eq(adAssets.approvalStatus, 'UPLOADED'),
-        eq(adAssets.approvalStatus, 'IN_REVIEW'),
-        eq(adAssets.approvalStatus, 'PENDING_REVIEW'),
-        eq(adAssets.approvalStatus, 'APPROVED_PENDING_PUBLISH'),
-        eq(adAssets.approvalStatus, 'LIVE'),
-        and(
-          eq(adAssets.approvalStatus, 'APPROVED'),
-          or(
-            eq(adAssets.publishStatus, 'PENDING'),
-            eq(adAssets.publishStatus, 'PUBLISH_FAILED'),
-            isNull(adAssets.publishStatus)
+export type ReviewBucket = 'pending-review' | 'approved-pending' | 'failed' | 'rejected' | 'published' | 'all';
+
+function getBucketFilter(bucket: ReviewBucket): SQL | undefined {
+  const notDeleted = ne(adAssets.approvalStatus, 'DELETED');
+  const notArchived = ne(adAssets.approvalStatus, 'ARCHIVED');
+  const notReviewed = ne(adAssets.approvalStatus, 'REVIEWED');
+  const baseExclusions = and(notDeleted, notArchived);
+
+  switch (bucket) {
+    case 'pending-review':
+      return and(
+        baseExclusions,
+        notReviewed,
+        or(
+          eq(adAssets.approvalStatus, 'UPLOADED'),
+          eq(adAssets.approvalStatus, 'IN_REVIEW'),
+          eq(adAssets.approvalStatus, 'PENDING_REVIEW'),
+        )
+      );
+    case 'approved-pending':
+      return and(
+        baseExclusions,
+        or(
+          eq(adAssets.approvalStatus, 'APPROVED_PENDING_PUBLISH'),
+          and(
+            eq(adAssets.approvalStatus, 'APPROVED'),
+            or(
+              eq(adAssets.publishStatus, 'PENDING'),
+              isNull(adAssets.publishStatus)
+            )
           )
         )
-      )
-    ),
+      );
+    case 'failed':
+      return and(
+        baseExclusions,
+        or(
+          and(
+            eq(adAssets.approvalStatus, 'APPROVED_PENDING_PUBLISH'),
+            eq(adAssets.publishStatus, 'PUBLISH_FAILED'),
+          ),
+          and(
+            eq(adAssets.approvalStatus, 'APPROVED'),
+            eq(adAssets.publishStatus, 'PUBLISH_FAILED'),
+          )
+        )
+      );
+    case 'rejected':
+      return and(
+        baseExclusions,
+        eq(adAssets.approvalStatus, 'REJECTED'),
+      );
+    case 'published':
+      return and(
+        baseExclusions,
+        or(
+          eq(adAssets.approvalStatus, 'LIVE'),
+          and(
+            eq(adAssets.approvalStatus, 'APPROVED'),
+            eq(adAssets.publishStatus, 'PUBLISHED'),
+          )
+        )
+      );
+    case 'all':
+      return baseExclusions;
+    default:
+      return baseExclusions;
+  }
+}
+
+export async function getReviewAssets(bucket: ReviewBucket = 'pending-review'): Promise<ReviewQueueItem[]> {
+  const filter = getBucketFilter(bucket);
+  const pendingAssets = await db.query.adAssets.findMany({
+    where: filter,
     orderBy: (adAssets, { desc }) => [desc(adAssets.uploadedAt)],
   });
   
@@ -609,6 +663,10 @@ export async function getPendingReviewAssets(): Promise<ReviewQueueItem[]> {
     }
   }
   return results;
+}
+
+export async function getPendingReviewAssets(): Promise<ReviewQueueItem[]> {
+  return getReviewAssets('pending-review');
 }
 
 export interface ApproveResult {
