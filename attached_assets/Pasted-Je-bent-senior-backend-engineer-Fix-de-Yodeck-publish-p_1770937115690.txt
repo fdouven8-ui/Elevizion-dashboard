@@ -1,0 +1,49 @@
+Je bent senior backend engineer. Fix de Yodeck publish pipeline zodat Yodeck nooit meer een directe R2 (r2.cloudflarestorage.com) URL krijgt, maar altijd een eigen publieke CDN/proxy URL op elevizion.nl die HEAD=200 en Range=206 ondersteunt.
+
+Context:
+- Publish faalt met: R2_HEAD_FAILED / HEAD 403.
+- r2SourceUrl is van vorm:
+  https://elevizion-assets.<accountid>.r2.cloudflarestorage.com/<key>?response-content-type=video%2Fmp4&x-amz-checksum-mode=ENABLED&x-id=GetObject
+- Yodeck moet import-from-URL doen en verwacht dat de URL publiek bereikbaar is en byte-range requests ondersteunt.
+- We hebben al debug endpoints zoals /api/admin/yodeck/publish-debug/:planId en /api/admin/debug/head-range?url=...
+
+Doel:
+1) Introduceer een stabiele URL die we aan Yodeck geven:
+   https://elevizion.nl/api/media-cdn/<signedToken>
+   Waar signedToken encodeert: storagePath/key + mime + originele naam + exp timestamp.
+2) Implement /api/media-cdn/:token als streaming proxy naar R2 met volledige ondersteuning:
+   - GET met Range header -> respond 206 met Content-Range + juiste Content-Type + Content-Length
+   - GET zonder Range -> 200 met Content-Length
+   - HEAD -> 200 met Content-Length + Accept-Ranges: bytes + Content-Type
+   - Zet Cache-Control: public, max-age=31536000 (of minstens 1 dag) voor GET; voor HEAD max-age kort.
+3) Token validatie:
+   - HMAC SHA256 met env MEDIA_CDN_SIGNING_SECRET
+   - exp verplicht (bv 7 dagen)
+   - reject invalid/expired met 403
+4) R2 fetch:
+   - Gebruik AWS SDK v3 S3Client met R2 endpoint (env R2_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET)
+   - HeadObjectCommand voor HEAD en voor GET zonder Range om length/type te bepalen
+   - GetObjectCommand met Range indien Range request
+5) Update publish flow:
+   - Waar we nu r2SourceUrl gebruiken voor Yodeck “import from URL” (download_from_url), vervang dat door de nieuwe cdnUrl (media-cdn endpoint).
+   - Bewaar in publish-debug lastDebug expliciet:
+     cdnUrl (de nieuwe), r2Key/storagePath, contentType, contentLength, headStatus, rangeStatus, acceptRanges
+6) Add een interne helper die voor publish eerst valideert dat cdnUrl voldoet:
+   - Server-side HEAD op cdnUrl moet 200 geven
+   - Server-side Range bytes=0-1 moet 206 geven
+   Als dit faalt, markeer publish outcome als CDN_NOT_READY met duidelijke error.
+
+7) Voeg een debug route toe:
+   GET /api/admin/debug/cdn-check?planId=<id>
+   -> haalt cdnUrl uit publish-debug of berekent hem uit asset storagePath, en geeft JSON:
+      { head:{status,headers}, range:{status,headers}, url }
+   Geen auth issues; dit is admin only zoals andere admin endpoints.
+
+Belangrijk:
+- Geen changes aan upload/baseline playlist logic behalve het vervangen van de URL die naar Yodeck gaat.
+- Geen breaking changes in bestaande API responses.
+- Voeg duidelijke logs toe met correlationId, planId, assetId.
+
+Na implementatie:
+- Print in logs bij publish: "CDN CHECK OK head=200 range=206 length=..."
+- Update retry publish zodat hij niet meer stukloopt op R2 HEAD 403.

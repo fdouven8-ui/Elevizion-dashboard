@@ -1965,70 +1965,170 @@ class YodeckPublishService {
       .where(eq(integrationOutbox.id, upsertResult.job.id));
 
     try {
-      console.log(`[YodeckPublish][${corrId}] Using authenticated R2 local upload (no presigned URL HEAD)`);
-      lastDebug.uploadMethod = "local_upload_from_r2";
-      lastDebug.storagePath = storagePath;
+      const { generateMediaCdnUrl } = await import("../routes/mediaCdn");
 
-      const uploadResult = await this.localUploadFromR2({
-        storagePath,
+      const cdnUrl = generateMediaCdnUrl(storagePath, {
+        ttlHours: 7 * 24,
+        mime: "video/mp4",
         name: mediaName,
-        correlationId: corrId,
       });
 
-      lastDebug.r2HeadOk = uploadResult.debug.r2HeadOk;
-      lastDebug.r2HeadStatus = uploadResult.debug.r2HeadOk ? 200 : (uploadResult.debug.r2HeadCode || 'error');
-      lastDebug.r2ContentType = uploadResult.debug.r2ContentType;
-      lastDebug.r2ContentLength = uploadResult.debug.r2ContentLength;
-      lastDebug.yodeckMediaId = uploadResult.debug.yodeckMediaId;
-      lastDebug.yodeckUploadPutStatus = uploadResult.debug.yodeckUploadPutStatus;
-      lastDebug.pollStates = uploadResult.debug.pollStates;
-      lastDebug.localUploadDebug = uploadResult.debug;
+      lastDebug.uploadMethod = "cdn_url_import";
+      lastDebug.storagePath = storagePath;
+      lastDebug.cdnUrl = cdnUrl;
 
-      if (!uploadResult.ok || !uploadResult.mediaId) {
-        lastDebug.outcome = uploadResult.debug.r2HeadOk === false ? "R2_AUTH_HEAD_FAILED" : "LOCAL_UPLOAD_FAILED";
+      console.log(`[YodeckPublish][${corrId}] CDN URL import: validating ${cdnUrl.substring(0, 80)}...`);
+
+      const cdnCheck = await this.validateCdnUrl(cdnUrl, corrId);
+      lastDebug.cdnHeadStatus = cdnCheck.headStatus;
+      lastDebug.cdnRangeStatus = cdnCheck.rangeStatus;
+      lastDebug.cdnContentType = cdnCheck.contentType;
+      lastDebug.cdnContentLength = cdnCheck.contentLength;
+      lastDebug.cdnAcceptRanges = cdnCheck.acceptRanges;
+
+      if (!cdnCheck.ok) {
+        lastDebug.outcome = "CDN_NOT_READY";
+        lastDebug.cdnError = cdnCheck.error;
+        console.error(`[YodeckPublish][${corrId}] CDN CHECK FAILED: head=${cdnCheck.headStatus} range=${cdnCheck.rangeStatus} err=${cdnCheck.error}`);
+
+        console.log(`[YodeckPublish][${corrId}] CDN failed, falling back to local upload from R2`);
+        lastDebug.uploadMethod = "local_upload_from_r2_fallback";
+
+        const uploadResult = await this.localUploadFromR2({
+          storagePath,
+          name: mediaName,
+          correlationId: corrId,
+        });
+
+        lastDebug.r2HeadOk = uploadResult.debug.r2HeadOk;
+        lastDebug.r2ContentType = uploadResult.debug.r2ContentType;
+        lastDebug.r2ContentLength = uploadResult.debug.r2ContentLength;
+        lastDebug.yodeckMediaId = uploadResult.debug.yodeckMediaId;
+        lastDebug.yodeckUploadPutStatus = uploadResult.debug.yodeckUploadPutStatus;
+        lastDebug.pollStates = uploadResult.debug.pollStates;
+        lastDebug.localUploadDebug = uploadResult.debug;
+
+        if (!uploadResult.ok || !uploadResult.mediaId) {
+          lastDebug.outcome = "LOCAL_UPLOAD_FAILED";
+
+          await db.update(integrationOutbox)
+            .set({
+              status: "failed",
+              lastError: JSON.stringify({ code: lastDebug.outcome, debug: lastDebug }),
+              processedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+
+          return {
+            ok: false,
+            error: uploadResult.debug.error || uploadResult.debug.putError || "Local upload fallback failed",
+            errorCode: lastDebug.outcome,
+            errorDetails: lastDebug,
+            lastDebug,
+          };
+        }
+
+        const mediaId = uploadResult.mediaId;
+        lastDebug.outcome = "SUCCESS";
+        lastDebug.mediaId = mediaId;
+        lastDebug.uploadMethodUsed = "local_upload_from_r2_fallback";
+        lastDebug.completedAt = new Date().toISOString();
 
         await db.update(integrationOutbox)
           .set({
-            status: "failed",
-            lastError: JSON.stringify({
-              code: lastDebug.outcome,
-              debug: lastDebug,
-            }),
+            status: "succeeded",
+            externalId: String(mediaId),
+            responseJson: { mediaId, method: "local_upload_from_r2_fallback", debug: lastDebug },
             processedAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
 
-        return {
-          ok: false,
-          error: uploadResult.debug.error || uploadResult.debug.putError || "Local upload from R2 failed",
-          errorCode: lastDebug.outcome,
-          errorDetails: lastDebug,
-          lastDebug,
-        };
+        console.log(`[YodeckPublish][${corrId}] Upload SUCCESS via local_upload_from_r2_fallback: mediaId=${mediaId}`);
+        return { ok: true, mediaId, lastDebug };
       }
 
-      const mediaId = uploadResult.mediaId;
+      console.log(`[YodeckPublish][${corrId}] CDN CHECK OK head=${cdnCheck.headStatus} range=${cdnCheck.rangeStatus} length=${cdnCheck.contentLength}`);
+
+      const urlImportResult = await this.tryUrlImport(mediaName, cdnUrl, corrId);
+      lastDebug.urlImportDebug = urlImportResult.debug;
+
+      if (!urlImportResult.ok || !urlImportResult.mediaId) {
+        console.log(`[YodeckPublish][${corrId}] CDN URL import failed (${urlImportResult.error}), falling back to local upload`);
+        lastDebug.cdnImportError = urlImportResult.error;
+        lastDebug.uploadMethod = "local_upload_from_r2_fallback";
+
+        const uploadResult = await this.localUploadFromR2({
+          storagePath,
+          name: mediaName,
+          correlationId: corrId,
+        });
+
+        lastDebug.r2HeadOk = uploadResult.debug.r2HeadOk;
+        lastDebug.r2ContentType = uploadResult.debug.r2ContentType;
+        lastDebug.r2ContentLength = uploadResult.debug.r2ContentLength;
+        lastDebug.yodeckMediaId = uploadResult.debug.yodeckMediaId;
+        lastDebug.localUploadDebug = uploadResult.debug;
+
+        if (!uploadResult.ok || !uploadResult.mediaId) {
+          lastDebug.outcome = "ALL_METHODS_FAILED";
+
+          await db.update(integrationOutbox)
+            .set({
+              status: "failed",
+              lastError: JSON.stringify({ code: lastDebug.outcome, debug: lastDebug }),
+              processedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+
+          return {
+            ok: false,
+            error: "Both CDN import and local upload failed",
+            errorCode: lastDebug.outcome,
+            errorDetails: lastDebug,
+            lastDebug,
+          };
+        }
+
+        const mediaId = uploadResult.mediaId;
+        lastDebug.outcome = "SUCCESS";
+        lastDebug.mediaId = mediaId;
+        lastDebug.uploadMethodUsed = "local_upload_from_r2_fallback";
+        lastDebug.completedAt = new Date().toISOString();
+
+        await db.update(integrationOutbox)
+          .set({
+            status: "succeeded",
+            externalId: String(mediaId),
+            responseJson: { mediaId, method: "local_upload_from_r2_fallback", debug: lastDebug },
+            processedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+
+        console.log(`[YodeckPublish][${corrId}] Upload SUCCESS via local_upload_from_r2_fallback: mediaId=${mediaId}`);
+        return { ok: true, mediaId, lastDebug };
+      }
+
+      const mediaId = urlImportResult.mediaId;
       lastDebug.outcome = "SUCCESS";
       lastDebug.mediaId = mediaId;
-      lastDebug.uploadMethodUsed = "local_upload_from_r2";
+      lastDebug.uploadMethodUsed = "cdn_url_import";
       lastDebug.completedAt = new Date().toISOString();
 
       await db.update(integrationOutbox)
         .set({
           status: "succeeded",
           externalId: String(mediaId),
-          responseJson: {
-            mediaId,
-            method: "local_upload_from_r2",
-            debug: lastDebug,
-          },
+          responseJson: { mediaId, method: "cdn_url_import", cdnUrl, debug: lastDebug },
           processedAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
 
-      console.log(`[YodeckPublish][${corrId}] Upload SUCCESS via local_upload_from_r2: mediaId=${mediaId}`);
+      console.log(`[YodeckPublish][${corrId}] Upload SUCCESS via cdn_url_import: mediaId=${mediaId}`);
       return { ok: true, mediaId, lastDebug };
 
     } catch (err: any) {
@@ -2046,6 +2146,57 @@ class YodeckPublishService {
         .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
 
       return { ok: false, error: err.message, lastDebug };
+    }
+  }
+
+  /**
+   * Validate that a CDN URL is ready for Yodeck: HEAD=200, Range bytes=0-1 => 206
+   */
+  private async validateCdnUrl(
+    cdnUrl: string,
+    corrId: string
+  ): Promise<{
+    ok: boolean;
+    headStatus?: number;
+    rangeStatus?: number;
+    contentType?: string;
+    contentLength?: number;
+    acceptRanges?: string;
+    error?: string;
+  }> {
+    try {
+      const headResp = await axios.head(cdnUrl, {
+        timeout: 15000,
+        validateStatus: () => true,
+        maxRedirects: 0,
+      });
+
+      const headStatus = headResp.status;
+      const contentType = headResp.headers["content-type"] || undefined;
+      const contentLength = headResp.headers["content-length"] ? parseInt(headResp.headers["content-length"]) : undefined;
+      const acceptRanges = headResp.headers["accept-ranges"] || undefined;
+
+      if (headStatus !== 200) {
+        return { ok: false, headStatus, error: `HEAD returned ${headStatus}, expected 200` };
+      }
+
+      const rangeResp = await axios.get(cdnUrl, {
+        timeout: 15000,
+        headers: { Range: "bytes=0-1" },
+        validateStatus: () => true,
+        maxRedirects: 0,
+        responseType: "arraybuffer",
+      });
+
+      const rangeStatus = rangeResp.status;
+      if (rangeStatus !== 206) {
+        return { ok: false, headStatus, rangeStatus, contentType, contentLength, acceptRanges, error: `Range returned ${rangeStatus}, expected 206` };
+      }
+
+      console.log(`[YodeckPublish][${corrId}] CDN CHECK OK head=${headStatus} range=${rangeStatus} length=${contentLength} type=${contentType}`);
+      return { ok: true, headStatus, rangeStatus, contentType, contentLength, acceptRanges };
+    } catch (err: any) {
+      return { ok: false, error: `CDN validation error: ${err.message}` };
     }
   }
 

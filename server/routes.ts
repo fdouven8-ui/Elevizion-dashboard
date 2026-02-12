@@ -24149,6 +24149,79 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * GET /api/admin/debug/cdn-check?planId=<id>
+   * Check if CDN proxy URL works for a plan's asset: HEAD=200, Range=206
+   */
+  app.get("/api/admin/debug/cdn-check", requireAdminAccess, async (req, res) => {
+    const planId = req.query.planId as string;
+    if (!planId) {
+      return res.status(400).json({ error: "planId query parameter required" });
+    }
+
+    try {
+      const plan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+      if (!plan) {
+        return res.status(404).json({ error: "Plan not found" });
+      }
+
+      const asset = plan.adAssetId
+        ? await db.query.adAssets.findFirst({ where: eq(adAssets.id, plan.adAssetId) })
+        : null;
+
+      if (!asset) {
+        return res.status(404).json({ error: "No asset linked to plan" });
+      }
+
+      const storagePath = (asset as any).normalizedStoragePath || (asset as any).convertedStoragePath || (asset as any).storagePath;
+      if (!storagePath) {
+        return res.status(404).json({ error: "Asset has no storagePath" });
+      }
+
+      const { generateMediaCdnUrl } = await import("./routes/mediaCdn");
+      const cdnUrl = generateMediaCdnUrl(storagePath, {
+        ttlHours: 7 * 24,
+        mime: "video/mp4",
+        name: asset.originalFilename || "video.mp4",
+      });
+
+      const pickHeaders = (h: any) => {
+        const keys = ["content-type", "content-length", "accept-ranges", "content-range", "cache-control"];
+        const out: Record<string, string> = {};
+        for (const k of keys) {
+          const v = typeof h.get === "function" ? h.get(k) : h[k];
+          if (v) out[k] = String(v);
+        }
+        return out;
+      };
+
+      const headRes = await fetch(cdnUrl, { method: "HEAD", redirect: "manual" });
+      const headResult = { status: headRes.status, headers: pickHeaders(headRes.headers) };
+
+      const rangeRes = await fetch(cdnUrl, {
+        method: "GET",
+        headers: { Range: "bytes=0-1" },
+        redirect: "manual",
+      });
+      const rangeResult = { status: rangeRes.status, headers: pickHeaders(rangeRes.headers) };
+      await rangeRes.arrayBuffer();
+
+      res.json({
+        planId,
+        assetId: asset.id,
+        storagePath,
+        url: cdnUrl,
+        head: headResult,
+        range: rangeResult,
+      });
+    } catch (error: any) {
+      console.error("[CdnCheck] Error:", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/media/:assetId/validate
    * Trigger validation for a media asset
    */
