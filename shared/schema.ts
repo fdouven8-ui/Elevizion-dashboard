@@ -129,9 +129,56 @@ export const advertisers = pgTable("advertisers", {
   // Canonical Yodeck media (deduplicated, single source of truth)
   yodeckMediaIdCanonical: integer("yodeck_media_id_canonical"), // The ONE usable Yodeck media ID
   yodeckMediaIdCanonicalUpdatedAt: timestamp("yodeck_media_id_canonical_updated_at"),
+  planId: varchar("plan_id").references(() => plans.id),
+  onboardingComplete: boolean("onboarding_complete").default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
+
+// ============================================================================
+// PORTAL: Plans, Accounts, Portal Placements
+// ============================================================================
+
+export const PORTAL_PLACEMENT_STATUS = {
+  SELECTED: "selected",
+  QUEUED: "queued",
+  LIVE: "live",
+  PAUSED: "paused",
+  REMOVED: "removed",
+} as const;
+export type PortalPlacementStatus = typeof PORTAL_PLACEMENT_STATUS[keyof typeof PORTAL_PLACEMENT_STATUS];
+
+export const plans = pgTable("plans", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  code: text("code").notNull().unique(),
+  name: text("name").notNull(),
+  maxScreens: integer("max_screens").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const advertiserAccounts = pgTable("advertiser_accounts", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().unique().references(() => advertisers.id, { onDelete: "cascade" }),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+export const portalPlacements = pgTable("portal_placements", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),
+  screenId: varchar("screen_id").notNull().references(() => screens.id, { onDelete: "cascade" }),
+  status: text("status").notNull().default("selected"),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  approvedAt: timestamp("approved_at"),
+  liveAt: timestamp("live_at"),
+  pausedAt: timestamp("paused_at"),
+  removedAt: timestamp("removed_at"),
+  lastReason: text("last_reason"),
+}, (table) => [
+  uniqueIndex("portal_placements_advertiser_screen_idx").on(table.advertiserId, table.screenId),
+]);
 
 /**
  * Portal Tokens - Secure tokens for advertiser self-service portal
@@ -1644,6 +1691,9 @@ export const insertContractSchema = createInsertSchema(contracts).omit({ id: tru
 export const insertContractEventSchema = createInsertSchema(contractEvents).omit({ id: true, createdAt: true });
 export const insertContractFileSchema = createInsertSchema(contractFiles).omit({ id: true, createdAt: true });
 export const insertPlacementSchema = createInsertSchema(placements).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertPlanSchema = createInsertSchema(plans).omit({ id: true, createdAt: true });
+export const insertAdvertiserAccountSchema = createInsertSchema(advertiserAccounts).omit({ id: true, createdAt: true });
+export const insertPortalPlacementSchema = createInsertSchema(portalPlacements).omit({ id: true, createdAt: true, updatedAt: true });
 
 // Placement update schema - for PATCH operations, only allows specific fields
 export const placementUpdateSchema = insertPlacementSchema.pick({
@@ -1720,6 +1770,15 @@ export type InsertContract = z.infer<typeof insertContractSchema>;
 
 export type Placement = typeof placements.$inferSelect;
 export type InsertPlacement = z.infer<typeof insertPlacementSchema>;
+
+export type Plan = typeof plans.$inferSelect;
+export type InsertPlan = z.infer<typeof insertPlanSchema>;
+
+export type AdvertiserAccount = typeof advertiserAccounts.$inferSelect;
+export type InsertAdvertiserAccount = z.infer<typeof insertAdvertiserAccountSchema>;
+
+export type PortalPlacement = typeof portalPlacements.$inferSelect;
+export type InsertPortalPlacement = z.infer<typeof insertPortalPlacementSchema>;
 
 export type ScheduleSnapshot = typeof scheduleSnapshots.$inferSelect;
 export type InsertScheduleSnapshot = z.infer<typeof insertScheduleSnapshotSchema>;

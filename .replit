@@ -50,3 +50,4 @@ defaultBucketID = "replit-objstore-b54c4624-5c27-42d7-8733-ab593ef9b2c8"
 
 [userenv.shared]
 YODECK_TEMPLATE_PLAYLIST_ID = "30400683"
+PORTAL_ONLY = "true"

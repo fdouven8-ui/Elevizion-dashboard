@@ -68,6 +68,10 @@ import Werkwijze from "@/pages/marketing/Werkwijze";
 import VeelgesteldeVragen from "@/pages/marketing/VeelgesteldeVragen";
 import Contact from "@/pages/marketing/Contact";
 import Start from "@/pages/marketing/Start";
+import PortalLogin from "@/pages/portal/PortalLogin";
+import PortalSignup from "@/pages/portal/PortalSignup";
+import PortalOnboarding from "@/pages/portal/PortalOnboarding";
+import PortalStatus from "@/pages/portal/PortalStatus";
 
 function DashboardRouter() {
   return (
@@ -140,6 +144,10 @@ function Router() {
       <Route path="/veelgestelde-vragen" component={VeelgesteldeVragen} />
       <Route path="/contact" component={Contact} />
       <Route path="/start" component={Start} />
+      <Route path="/portal/login" component={PortalLogin} />
+      <Route path="/portal/signup" component={PortalSignup} />
+      <Route path="/portal/onboarding" component={PortalOnboarding} />
+      <Route path="/portal/status" component={PortalStatus} />
       <Route path="/portal/:token" component={AdvertiserPortal} />
       <Route path="/locatie-portal/:token" component={LocationPortal} />
       <Route path="/regio/limburg">{() => <LocalLanding city="limburg" />}</Route>

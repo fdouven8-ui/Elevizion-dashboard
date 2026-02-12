@@ -172,7 +172,20 @@ export async function registerRoutes(
   // Mount media CDN proxy (public, no auth - Yodeck needs to access this)
   const mediaCdnRouter = (await import("./routes/mediaCdn")).default;
   app.use("/api/media-cdn", mediaCdnRouter);
-  
+
+  // Mount portal routes (customer self-service)
+  const portalRouter = (await import("./portalRoutes")).default;
+  app.use("/api/portal", portalRouter);
+
+  // PORTAL_ONLY gate: block legacy onboarding routes when PORTAL_ONLY=true
+  if (process.env.PORTAL_ONLY === "true") {
+    const portalOnlyResponse = { ok: false, code: "PORTAL_ONLY", message: "Gebruik het klantportaal om je advertentie te beheren." };
+    app.all("/api/advertiser-onboarding/*", (_req, res) => res.status(410).json(portalOnlyResponse));
+    app.all("/api/advertiser-onboarding", (_req, res) => res.status(410).json(portalOnlyResponse));
+    app.post("/api/advertisers/:id/open-upload-portal", (_req, res) => res.status(410).json(portalOnlyResponse));
+    console.log("[BOOT] PORTAL_ONLY=true — legacy onboarding routes blocked");
+  }
+
   // ============================================================================
   // SEO & PUBLIC ROUTES (no auth required)
   // ============================================================================
@@ -24741,6 +24754,79 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         details,
         errors: [...errors, { error: error.message }],
       });
+    }
+  });
+
+  // ============================================================================
+  // ADMIN PORTAL DEBUG ENDPOINTS (read-only + attempt-live trigger)
+  // ============================================================================
+
+  app.get("/api/admin/portal/truth", requireAdminAccess, async (req, res) => {
+    try {
+      const advertiserId = req.query.advertiserId as string;
+      if (!advertiserId) return res.status(400).json({ ok: false, message: "advertiserId required" });
+      const correlationId = `portal-truth-${Date.now()}`;
+      const { portalPlacements, advertisers, plans, screens } = await import("@shared/schema");
+      const { eq, ne } = await import("drizzle-orm");
+      const [adv] = await db.select().from(advertisers).where(eq(advertisers.id, advertiserId)).limit(1);
+      if (!adv) return res.status(404).json({ ok: false, message: "Advertiser not found" });
+
+      let plan = null;
+      if (adv.planId) {
+        const [p] = await db.select().from(plans).where(eq(plans.id, adv.planId)).limit(1);
+        plan = p || null;
+      }
+
+      const pps = await db.select().from(portalPlacements)
+        .where(eq(portalPlacements.advertiserId, advertiserId));
+
+      const screenIds = [...new Set(pps.map(p => p.screenId))];
+      const screenMap: Record<string, any> = {};
+      if (screenIds.length > 0) {
+        const { inArray } = await import("drizzle-orm");
+        const scrs = await db.select({ id: screens.id, name: screens.name, locationId: screens.locationId, playlistId: screens.playlistId })
+          .from(screens).where(inArray(screens.id, screenIds));
+        for (const s of scrs) screenMap[s.id] = s;
+      }
+
+      res.json({
+        ok: true,
+        correlationId,
+        advertiser: { id: adv.id, companyName: adv.companyName, planId: adv.planId, onboardingComplete: adv.onboardingComplete },
+        plan,
+        portalPlacements: pps.map(p => ({ ...p, screen: screenMap[p.screenId] || null })),
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.get("/api/admin/portal/placements", requireAdminAccess, async (req, res) => {
+    try {
+      const advertiserId = req.query.advertiserId as string;
+      const correlationId = `portal-placements-${Date.now()}`;
+      const { portalPlacements } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+      const q = advertiserId
+        ? db.select().from(portalPlacements).where(eq(portalPlacements.advertiserId, advertiserId))
+        : db.select().from(portalPlacements);
+      const results = await q;
+      res.json({ ok: true, correlationId, count: results.length, placements: results });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post("/api/admin/portal/attempt-live", requireAdminAccess, async (req, res) => {
+    try {
+      const advertiserId = (req.query.advertiserId || req.body?.advertiserId) as string;
+      if (!advertiserId) return res.status(400).json({ ok: false, message: "advertiserId required" });
+      const correlationId = `portal-golive-${Date.now()}`;
+      const { attemptGoLiveForAdvertiser } = await import("./services/placementTruthService");
+      const result = await attemptGoLiveForAdvertiser(advertiserId);
+      res.json({ correlationId, ...result });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
     }
   });
 

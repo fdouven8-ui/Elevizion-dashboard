@@ -1,0 +1,157 @@
+Je bent senior software engineer in dit Elevizion project (Node/Express/TS + React). 
+DOEL: Portal-only klantportaal + “one truth” placements model, ZONDER de bestaande upload pipeline of Yodeck upload/playlist code te wijzigen. Houd changes klein, geïsoleerd, schoon.
+
+HARD REQUIREMENTS
+- Raak GEEN code aan in: server/services/transactionalUploadService.ts, server/services/mediaPipelineService.ts, server/services/yodeckPayloadBuilder.ts, server/services/videoTranscodeService.ts, of andere upload/transcode services. Deze moeten byte-for-byte ongemoeid blijven.
+- Yodeck playlist reconcile/baseline sync blijft leidend (de bestaande truth/sync endpoints blijven).
+- We verwijderen geen legacy code in deze stap; we blokkeren alleen legacy entrypoints met PORTAL_ONLY.
+- Alles JSON-only op /api/*, geen HTML fallbacks.
+
+STAP 1 — ENV FLAG + LEGACY BLOCK (portal-only)
+1) Voeg env flag toe: PORTAL_ONLY=true (default false indien niet gezet).
+2) In server/routes.ts, direct na app init en vóór alle route registraties:
+   - Voeg middleware toe die legacy onboarding routes blokkeert als PORTAL_ONLY=true:
+     * Blokkeer alles onder /api/advertiser-onboarding (incl. /invite, /:token, /send-otp, /verify-otp etc.)
+     * Blokkeer ook /api/advertisers/:id/open-upload-portal (voor zekerheid, ook al lijkt hij nu 404)
+   - Response: status 410 + JSON:
+     { ok:false, code:"PORTAL_ONLY", message:"Gebruik het klantportaal om je advertentie te beheren." }
+   - Zorg dat dit geen impact heeft op admin routes (/api/admin/*) en geen impact heeft op bestaande upload services.
+
+STAP 2 — DB: Plans + Portal Accounts + Placements (minimaal)
+Voeg in shared/schema.ts + migration toe:
+A) plans
+- id uuid pk
+- code text unique (PLAN_1, PLAN_3, PLAN_10)
+- name text
+- maxScreens int (1/3/10)
+- createdAt
+
+Seed 3 plans (49.99/129.99/299.99 prijzen hoeven nog NIET, Stripe later)
+
+B) advertiser_accounts
+- id uuid pk
+- advertiserId uuid unique fk advertisers.id
+- email text unique
+- passwordHash text
+- createdAt
+
+C) placements
+- id uuid pk
+- advertiserId uuid fk
+- screenId uuid fk screens.id
+- status text enum: selected | queued | live | paused | removed
+- createdAt, updatedAt
+- approvedAt nullable
+- liveAt nullable
+- pausedAt nullable
+- removedAt nullable
+- lastReason nullable
+UNIQUE(advertiserId, screenId) zodat 1 placement per screen.
+
+D) advertisers uitbreiden (minimaal)
+- planId uuid fk plans.id nullable
+- onboardingComplete boolean default false
+- portalOnly boolean default true (of niet nodig)
+- (NIET aan upload assets komen)
+
+STAP 3 — Portal API (nieuw, geïsoleerd)
+Maak een nieuwe router: server/portalRoutes.ts en mount in routes.ts onder /api/portal.
+Gebruik bestaande session auth of een eigen cookie session (eenvoudig), maar houd het gescheiden van admin auth.
+
+Endpoints:
+1) POST /api/portal/signup
+- body: { email, password, companyName? }
+- maakt advertiser + advertiser_account
+- password bcrypt
+- return { ok:true }
+
+2) POST /api/portal/login
+- body { email, password }
+- zet portal session (bijv. req.session.portalAdvertiserId)
+- return me
+
+3) POST /api/portal/logout
+
+4) GET /api/portal/me
+- return advertiser + plan + placements summary
+
+5) POST /api/portal/onboarding
+- body: { advertiserFields..., planCode }
+- set advertisers.planId, set onboardingComplete=false nog (pas na placements)
+- return ok
+
+6) GET /api/portal/cities
+- return unieke plaatsen op basis van locations (location.plaats / city)
+  (als city nog niet bestaat: maak in code mapping placeholder: location.address city parsing NIET doen; neem een veld dat al bestaat, of return lege lijst. Voeg geen ‘guessing’ toe.)
+
+7) GET /api/portal/screens?city=...
+- return actieve screens in locations met die city
+- alleen screens die “public/active” zijn (voeg eventueel screens.isPublic boolean default true)
+
+8) POST /api/portal/placements
+- body: { screenIds: uuid[] }
+- vereist: advertiser.planId bestaat
+- enforce maxScreens limiet: je mag wel meer “bekijken”, maar opslaan max = plan.maxScreens
+- maak/update placements:
+   * geselecteerde: status=selected (als nog niet live/paused)
+   * deselect: als status selected/queued -> removed (niet als live/paused; daarvoor upgrade/pause flow later)
+- als aantal gekozen > maxScreens: return 400 {ok:false, code:"PLAN_LIMIT", maxScreens }
+
+9) POST /api/portal/upload/open
+- gate: advertisers.onboardingComplete moet true zijn
+- IMPLEMENTATIE: roep geen legacy HTTP endpoint aan; gebruik intern dezelfde service/helper die upload portal tokens maakt (als die bestaat).
+- Als er geen interne helper bestaat zonder legacy route: maak een NIEUWE helper die alleen een upload token genereert, maar raak de upload pipeline bestanden niet aan. (Dus eventueel importeer bestaande functie uit dezelfde module waar vroeger open-upload-portal route hem al gebruikte, maar wijzig die module niet.)
+- Return: { ok:true, url, token } zodat frontend kan redirecten naar bestaande upload menu.
+
+OnboardingComplete logica:
+- set advertisers.onboardingComplete=true zodra:
+  - planId gezet is
+  - en placements count >=1 (selected/queued/live/paused) binnen limiet
+
+STAP 4 — “One truth” integratie met bestaande playlist sync (zonder upload code)
+We gebruiken placements als waarheid voor ads in playlists, maar we wijzigen niet de bestaande reconcile code; we triggeren enkel bestaande endpoints/services.
+
+- Maak service: server/services/placementTruthService.ts
+  Functies:
+  a) attemptGoLiveForAdvertiser(advertiserId)
+    - per placement status=selected of queued:
+      - check capacity per screen: count(live+paused) < MAX_ADS_PER_SCREEN (gebruik bestaande capacity service als die er is)
+      - als plek: status -> live, set liveAt, lastReason null
+      - anders: status -> queued, lastReason="capacity_full"
+    - na updates: trigger playlist sync voor alle betrokken locations:
+      - roep intern dezelfde function aan als /api/admin/playlists/sync?push=true&locationId=...
+      - NIET via fetch/http, direct service call
+  b) pauseAdvertiser(advertiserId) (voor later; stub)
+  c) recomputeLocationTruth(locationId) helper
+
+- Admin approve flow (bestaand): voeg alleen 1 hook toe op het moment dat een ad “approved/mark-live” wordt:
+  - call attemptGoLiveForAdvertiser(advertiserId)
+  - daarna call existing playlist sync (push=true) voor location(s)
+  Dit is de ENIGE wijziging in admin flow; upload pipeline blijft untouched.
+
+STAP 5 — Frontend Portal (minimaal, apart)
+Voeg nieuwe pages toe onder /portal/* (Wouter routes):
+- /portal/login
+- /portal/signup
+- /portal/onboarding (plan kiezen + plaats->screen selectie)
+- /portal/status (list placements per screen met status live/queued/selected)
+- /portal/upload (button die /api/portal/upload/open aanroept en redirect naar bestaande upload menu url)
+
+UI simpel, NL teksten.
+
+STAP 6 — Smoke tests + console fetch helpers
+- Voeg 3 admin-only debug endpoints toe (read-only) om waarheid te checken:
+  GET /api/admin/portal/truth?advertiserId=...
+  GET /api/admin/portal/placements?advertiserId=...
+  POST /api/admin/portal/attempt-live?advertiserId=...
+- Lever in response altijd correlationId.
+
+ACCEPTANCE CRITERIA
+1) Legacy onboarding endpoints geven 410 PORTAL_ONLY als PORTAL_ONLY=true (minstens /api/advertiser-onboarding/invite).
+2) Portal signup/login werkt, onboarding (plan + selectie) werkt, onboardingComplete gaat true.
+3) Portal upload/open geeft alleen URL/token terug, en raakt upload pipeline niet aan.
+4) Admin approve triggert placement go-live poging en daarna playlist sync/push.
+5) “One truth”: playlists bevatten baseline + alleen placements.live per screen; queued wordt niet geplaatst.
+6) Codebase blijft schoon: portal routes/services los, minimale wijzigingen in routes.ts + één admin hook.
+
+VOER DIT UIT ALS ÉÉN CONSISTENTE CHANGESET MET MIGRATIONS + TYPES + MINIMALE UI.
