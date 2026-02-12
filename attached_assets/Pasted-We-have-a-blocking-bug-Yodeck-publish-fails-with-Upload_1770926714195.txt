@@ -1,0 +1,33 @@
+We have a blocking bug: Yodeck publish fails with "Upload failed: HEAD returned 500" (two-step upload). This happens because Yodeck performs a HEAD request to the source URL and gets HTTP 500. In-browser HEAD/Range works, but Yodeck is external (no cookies), so our source URL must be truly public.
+
+GOAL:
+- Ensure Yodeck never uses internal /api/... URLs as download source.
+- Always provide a public HTTPS mp4 URL (Cloudflare R2 signed/public) for Yodeck download_from_url.
+- Add proper debug output (lastDebug) so publish-debug shows the actual sourceUrl + HEAD/RANGE results.
+- Also make /api/ad-assets/:id/stream handle HEAD safely (never 500) but this endpoint is not used by Yodeck anymore.
+
+TASKS:
+1) Find the publish flow used by /api/placement-plans/:id/publish or /retry (publishPlan + uploadMediaWithRetry). Identify where the "sourceUrl" for Yodeck is constructed.
+2) Implement getYodeckDownloadUrl(adAsset):
+   - If adAsset.storagePath exists (R2 key), generate a signed GET URL from R2 (valid 2 hours) OR use a public bucket URL if available.
+   - Must be absolute https://...
+   - Must point directly to the mp4 object (not our app route).
+3) Update Yodeck two-step upload to use ONLY that getYodeckDownloadUrl(adAsset) as download_from_url/play_from_url.
+   - Do NOT use /api/ad-assets/:id/stream for Yodeck.
+4) Add validateVideoSource(url) that does server-side HEAD + Range bytes=0-1023 and stores results in publishReport.lastDebug (or plan.lastDebug) including:
+   - sourceUrl, finalUrl, headStatus, headContentType, headContentLength, acceptRanges
+   - rangeStatus, contentRange
+   - mp4SignatureFound (true if "ftyp" appears within first 64 bytes)
+   - If headStatus >= 400 or content-type is text/html, abort publish with explicit error "INVALID_SOURCE_FOR_YODECK" (include lastDebug).
+5) Fix /api/ad-assets/:id/stream:
+   - Ensure HEAD returns 200 with correct headers, never 500.
+   - Ensure unauthenticated requests do not 500; return 401/403 or allow public read if safe (but still: Yodeck won't use it).
+6) Ensure publish-debug endpoint returns lastDebug reliably:
+   - GET /api/admin/yodeck/publish-debug/:planId should return plan + asset + lastDebug + publishReport.
+7) Keep existing baseline/upload/review flows intact.
+
+After implementation I must be able to run in browser:
+fetch("/api/placement-plans/<PLAN_ID>/retry",{method:"POST"}).then(r=>r.json()).then(console.log)
+fetch("/api/admin/yodeck/publish-debug/<PLAN_ID>").then(r=>r.json()).then(console.log)
+
+Implement now with minimal changes, add clear logs: [SourceCheck] and [YodeckPublish].

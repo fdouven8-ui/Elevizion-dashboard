@@ -62,6 +62,36 @@ function verifyToken(token: string): MediaCdnToken | null {
   }
 }
 
+router.head("/:token", async (req: Request, res: Response) => {
+  const token = req.params.token;
+  const payload = verifyToken(token);
+  if (!payload) return res.status(403).end();
+
+  try {
+    const { ObjectStorageService, R2_IS_CONFIGURED, s3Client, EFFECTIVE_BUCKET_NAME, resolveR2ObjectKey } = await import("../objectStorage");
+    const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
+
+    if (R2_IS_CONFIGURED && EFFECTIVE_BUCKET_NAME) {
+      const key = resolveR2ObjectKey(payload.path);
+      const headResult = await s3Client.send(new HeadObjectCommand({ Bucket: EFFECTIVE_BUCKET_NAME, Key: key }));
+      res.set({
+        "Content-Type": headResult.ContentType || "video/mp4",
+        "Content-Length": String(headResult.ContentLength || 0),
+        "Cache-Control": "public, max-age=86400",
+        "Accept-Ranges": "bytes",
+      });
+      return res.status(200).end();
+    }
+
+    res.set({ "Content-Type": "video/mp4", "Accept-Ranges": "bytes" });
+    return res.status(200).end();
+  } catch (err: any) {
+    console.error(`${LOG_PREFIX} HEAD error:`, err.message);
+    res.set({ "Content-Type": "video/mp4", "Accept-Ranges": "bytes" });
+    return res.status(200).end();
+  }
+});
+
 router.get("/:token", async (req: Request, res: Response) => {
   const token = req.params.token;
   const payload = verifyToken(token);

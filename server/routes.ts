@@ -2503,7 +2503,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(404).json({ message: "Bestand niet gevonden in storage" });
       }
       
-      console.log(`[AssetStream] assetId=${req.params.id} storagePath=${asset.storagePath} range=${req.headers.range || 'none'}`);
+      console.log(`[AssetStream] assetId=${req.params.id} storagePath=${asset.storagePath} method=${req.method} range=${req.headers.range || 'none'}`);
       
       const objectStorage = new ObjectStorageService();
       const file = await objectStorage.getFileByPath(asset.storagePath);
@@ -2518,7 +2518,48 @@ Sitemap: ${SITE_URL}/sitemap.xml
       await objectStorage.streamVideoWithRange(file, req, res);
     } catch (error: any) {
       console.error("[AssetStream] Error:", error);
-      res.status(500).json({ message: error.message });
+      if (!res.headersSent) {
+        res.status(500).json({ message: error.message });
+      }
+    }
+  });
+
+  app.head("/api/ad-assets/:id/stream", isAuthenticated, async (req, res) => {
+    try {
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const { ObjectStorageService, s3Client, EFFECTIVE_BUCKET_NAME, resolveR2ObjectKey, R2_IS_CONFIGURED } = await import("./objectStorage");
+      const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
+      
+      const asset = await getAdAssetById(req.params.id);
+      if (!asset) return res.status(404).end();
+      if (!asset.storagePath) return res.status(404).end();
+      
+      if (R2_IS_CONFIGURED && EFFECTIVE_BUCKET_NAME) {
+        const key = resolveR2ObjectKey(asset.storagePath);
+        const headResult = await s3Client.send(new HeadObjectCommand({
+          Bucket: EFFECTIVE_BUCKET_NAME,
+          Key: key,
+        }));
+        res.set({
+          "Content-Type": headResult.ContentType || "video/mp4",
+          "Content-Length": String(headResult.ContentLength || 0),
+          "Accept-Ranges": "bytes",
+        });
+        return res.status(200).end();
+      }
+
+      const objectStorage = new ObjectStorageService();
+      const file = await objectStorage.getFileByPath(asset.storagePath);
+      if (!file) return res.status(404).end();
+      
+      res.set({
+        "Content-Type": "video/mp4",
+        "Accept-Ranges": "bytes",
+      });
+      return res.status(200).end();
+    } catch (error: any) {
+      console.error("[AssetStream] HEAD error:", error.message);
+      if (!res.headersSent) res.status(200).end();
     }
   });
 

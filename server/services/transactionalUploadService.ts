@@ -4,7 +4,7 @@ import { eq, and, or, desc } from "drizzle-orm";
 import { Client } from "@replit/object-storage";
 import { buildYodeckCreateMediaPayload, buildYodeckUrlMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 import { getYodeckClient } from "./yodeckClient";
-import { generateMediaCdnUrl } from "../routes/mediaCdn";
+import { getR2PresignedUrl } from "../objectStorage";
 
 const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
 const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN?.trim() || "";
@@ -392,8 +392,8 @@ export async function uploadVideoToYodeckViaUrl(
   console.log(`${LOG_PREFIX} [${correlationId}] Created URL-upload job=${jobId}`);
 
   try {
-    const cdnUrl = generateMediaCdnUrl(assetPath, 24);
-    console.log(`${LOG_PREFIX} [${correlationId}] Generated CDN URL: ${cdnUrl.substring(0, 80)}...`);
+    const cdnUrl = await getR2PresignedUrl(assetPath, 86400);
+    console.log(`${LOG_PREFIX} [${correlationId}] Generated R2 presigned URL: ${cdnUrl.substring(0, 80)}...`);
 
     console.log(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT: Checking CDN URL returns valid MP4...`);
     const preflightResp = await fetch(cdnUrl, { method: "GET", headers: { "Range": "bytes=0-31" } });

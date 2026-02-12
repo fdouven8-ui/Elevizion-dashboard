@@ -1,4 +1,5 @@
 import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { Response } from "express";
 import { randomUUID } from "crypto";
 import { Readable } from "stream";
@@ -179,6 +180,24 @@ export const s3Client = new S3Client({
     secretAccessKey: R2_SECRET_ACCESS_KEY || "",
   },
 });
+
+export async function getR2PresignedUrl(storagePath: string, ttlSeconds: number = 7200): Promise<string> {
+  if (!R2_IS_CONFIGURED || !EFFECTIVE_BUCKET_NAME) {
+    throw new Error("[R2] Cannot generate presigned URL: R2 not configured");
+  }
+  const key = resolveR2ObjectKey(storagePath);
+  console.log(`[R2] Generating presigned GET URL: key=${key} ttl=${ttlSeconds}s`);
+
+  const command = new GetObjectCommand({
+    Bucket: EFFECTIVE_BUCKET_NAME,
+    Key: key,
+    ResponseContentType: "video/mp4",
+  });
+
+  const url = await getSignedUrl(s3Client, command, { expiresIn: ttlSeconds });
+  console.log(`[R2] Presigned URL generated: ${url.substring(0, 80)}...`);
+  return url;
+}
 
 export class ObjectNotFoundError extends Error {
   constructor() {

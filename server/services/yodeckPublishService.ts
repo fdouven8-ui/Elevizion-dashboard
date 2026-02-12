@@ -1700,10 +1700,11 @@ class YodeckPublishService {
       .where(eq(integrationOutbox.id, upsertResult.job.id));
 
     try {
-      const { generateMediaCdnUrl } = await import("../routes/mediaCdn");
-      const cdnUrl = generateMediaCdnUrl(storagePath, 4);
+      const { getR2PresignedUrl } = await import("../objectStorage");
+      const cdnUrl = await getR2PresignedUrl(storagePath, 7200);
       lastDebug.cdnUrl = cdnUrl.substring(0, 120) + "...";
-      console.log(`[YodeckPublish][${corrId}] Generated CDN URL for source validation`);
+      lastDebug.cdnUrlType = "r2_presigned";
+      console.log(`[YodeckPublish][${corrId}] Generated R2 presigned URL for Yodeck download`);
 
       const { validateVideoSource } = await import("./videoSourceValidator");
       const sourceCheck = await validateVideoSource(cdnUrl, corrId);
