@@ -1,0 +1,68 @@
+2026-02-12 17:02:26.39
+58781b64
+User
+[Moneybird Sync] Starting scheduled sync...
+2026-02-12 17:02:29.77
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 existing yodeckMediaId=30024607
+2026-02-12 17:02:29.77
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 existing yodeckMediaId=30024607
+2026-02-12 17:02:29.77
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 START assetId=5fb1613d-db79-4eaa-a17b-56cb1cc34aac actor=admin_retry:58bbe4c8-a1a3-434e-b63a-7f4f7ce6d3b3 approvalStatus=APPROVED_PENDING_PUBLISH publishStatus=PUBLISH_FAILED
+2026-02-12 17:02:29.77
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 START assetId=5fb1613d-db79-4eaa-a17b-56cb1cc34aac actor=admin_retry:58bbe4c8-a1a3-434e-b63a-7f4f7ce6d3b3 approvalStatus=APPROVED_PENDING_PUBLISH publishStatus=PUBLISH_FAILED
+2026-02-12 17:02:29.78
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 starting canonical publish yodeckMediaId=30024607
+2026-02-12 17:02:29.78
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 starting canonical publish yodeckMediaId=30024607
+2026-02-12 17:02:29.83
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 canonical publish PARTIAL_FAIL failed=0
+2026-02-12 17:02:29.83
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 canonical publish PARTIAL_FAIL failed=0
+2026-02-12 17:02:29.87
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 DONE approvalStatus=APPROVED publishStatus=PUBLISH_FAILED yodeckMediaId=30024607
+2026-02-12 17:02:29.87
+58781b64
+User
+[PublishAsset] publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685 DONE approvalStatus=APPROVED publishStatus=PUBLISH_FAILED yodeckMediaId=30024607
+2026-02-12 17:02:29.92
+58781b64
+User
+4:02:29 PM [express] POST /api/admin/video-review/5fb1613d-db79-4eaa-a17b-56cb1cc34aac/retry-publish 200 in 331ms :: {"ok":false,"message":"Publicatie mislukt: 0 locatie(s) mislukt","yodeckMediaId":30024607,"correlationId":"publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685","locationsUpdated":0}
+2026-02-12 17:02:29.92
+58781b64
+User
+4:02:29 PM [express] POST /api/admin/video-review/5fb1613d-db79-4eaa-a17b-56cb1cc34aac/retry-publish 200 in 331ms :: {"ok":false,"message":"Publicatie mislukt: 0 locatie(s) mislukt","yodeckMediaId":30024607,"correlationId":"publish-5fb1613d-db79-4eaa-a17b-56cb1cc34aac-1770912149685","locationsUpdated":0}
+2026-02-12 17:02:30.05
+58781b64
+User
+[Moneybird Sync] Completed in 3564ms: 3 contacts, 0 invoices
+2026-02-12 17:02:30.05
+58781b64
+User
+[Moneybird Sync] Completed in 3564ms: 3 contacts, 0 invoices
+2026-02-12 17:02:30.31
+58781b64
+User
+4:02:30 PM [express] GET /api/admin/video-review 200 in 231ms :: [{"asset":{"id":"5fb1613d-db79-4eaa-a17b-56cb1cc34aac","advertiserId":"d8b062dd-65c5-4b43-9209-80484a083dad","linkKey":"ADV-HOI-75BF95","originalFileName":"Testvideo 2.mp4","storedFilename":"ADV-HOI-ADV-HOI--202602121537.mp4","mimeType":"video/mp4","sizeBytes":321421,"storageUrl":"/elevizion-assets/ad-assets/d8b062dd-65c5-4b43-9209-80484a083dad/ADV-HOI-ADV-HOI--202602121537.mp4","storagePath":"ad-assets/d8b062dd-65c5-4b43-9209-80484a083dad/ADV-HOI-ADV-HOI--202602121537.mp4","durationSeconds":"12.01","width":1920,"height":1080,"aspectRatio":"16:9","codec":"h264","pixelFormat":"yuv420p","conversionStatus":"NONE","conversionStartedAt":null,"conversionCompletedAt":null,"conversionError":null,"convertedStoragePath":null,"convertedStorageUrl":null,"convertedCodec":null,"convertedPixelFormat":null,"convertedWidth":null,"convertedHeight":null,"convertedSizeBytes":null,"validationStatus":"valid","validationErrors":[],"validationWarnings":["Video bevat audio. Audio wordt niet afgespeeld op de schermen."],"requiredDurationSeconds":15,"approvalStatus":"APPROVED","reviewedByAdminAt":"2026-02-12T15:38:24.025Z","reviewedByAdminId":"58bbe4c8-a1a3-434e-b63a-7f4f7ce6d3b3","adminNotes":null,"approvedAt":"2026-02-12T15:38:24.025Z","approvedBy":"58bbe4c8-a1a3-434e-b63a-7f4f7ce6d3b3","rejectedAt":null,"rejectedBy":null,"rejectedReason":null,"rejectedDetails":null,"publishStatus":"PUBLISH_FAILED","publishError":"0 locatie(s) mislukt","publishAttempts":3,"lastPublishAttemptAt":"2026-02-12T16:02:29.731Z","yodeckMediaId":30024607,"yodeckUploadedAt":"2026-02-12T16:02:29.832Z","yodeckReadinessStatus":"pending","yodeckRejectReason":null,"yodeckMetadataJson":null,"normalizationProvider":null,"normalizationStartedAt":null,"normalizationCompletedAt":null,"normalizationError":null,"normalizedStoragePath":null,"normalizedStorageUrl":null,"isSuperseded":false,"supersededById":null,"uploadedAt":"2026-02-12T15:37:20.565Z","createdAt":"2026-02-12T15:37:20.565Z"},"advertiser":{"id":"d8b062dd-65c5-4b43-9209-80484a083dad","companyName":"hoi","packageType":null,"targetRegionCodes":null,"linkKey":"ADV-HOI-75BF95"}}]
+2026-02-12 17:02:30.31
+58781b64
+User
+4:02:30 PM [express] GET /api/admin/video-review 200 in 231ms :: [{"asset":{"id":"5fb1613d-db79-4eaa-a17b-56cb1cc34aac","advertiserId":"d8b062dd-65c5-4b43-9209-80484a083dad","linkKey":"ADV-HOI-75BF95","originalFileName":"Testvideo 2.mp4","storedFilename":"ADV-HOI-ADV-HOI--202602121537.mp4","mimeType":"video/mp4","sizeBytes":321421,"storageUrl":"/elevizion-assets/ad-assets/d8b062dd-65c5-4b43-9209-80484a083dad/ADV-HOI-ADV-HOI--202602121537.mp4","storagePath":"ad-assets/d8b062dd-65c5-4b43-9209-80484a083dad/ADV-HOI-ADV-HOI--202602121537.mp4","durationSeconds":"12.01","width":1920,"height":1080,"aspectRatio":"16:9","codec":"h264","pixelFormat":"yuv420p","conversionStatus":"NONE","conversionStartedAt":null,"conversionCompletedAt":null,"conversionError":null,"convertedStoragePath":null,"convertedStorageUrl":null,"convertedCodec":null,"convertedPixelFormat":null,"convertedWidth":null,"convertedHeight":null,"convertedSizeBytes":null,"validationStatus":"valid","validationErrors":[],"validationWarnings":["Video bevat audio. Audio wordt niet afgespeeld op de schermen."],"requiredDurationSeconds":15,"approvalStatus":"APPROVED","reviewedByAdminAt":"2026-02-12T15:38:24.025Z","reviewedByAdminId":"58bbe4c8-a1a3-434e-b63a-7f4f7ce6d3b3","adminNotes":null,"approvedAt":"2026-02-12T15:38:24.025Z","approvedBy":"58bbe4c8-a1a3-434e-b63a-7f4f7ce6d3b3","rejectedAt":null,"rejectedBy":null,"rejectedReason":null,"rejectedDetails":null,"publishStatus":"PUBLISH_FAILED","publishError":"0 locatie(s) mislukt","publishAttempts":3,"lastPublishAttemptAt":"2026-02-12T16:02:29.731Z","yodeckMediaId":30024607,"yodeckUploadedAt":"2026-02-12T16:02:29.832Z","yodeckReadinessStatus":"pending","yodeckRejectReason":null,"yodeckMetadataJson":null,"normalizationProvider":null,"normalizationStartedAt":null,"normalizationCompletedAt":null,"normalizationError":null,"normalizedStoragePath":null,"normalizedStorageUrl":null,"isSuperseded":false,"supersededById":null,"uploadedAt":"2026-02-12T15:37:20.565Z","createdAt":"2026-02-12T15:37:20.565Z"},"advertiser":{"id":"d8b062dd-65c5-4b43-9209-80484a083dad","companyName":"hoi","packageType":null,"targetRegionCodes":null,"linkKey":"ADV-HOI-75BF95"}}]

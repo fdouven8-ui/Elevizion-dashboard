@@ -565,6 +565,7 @@ export interface ReviewQueueItem {
     targetRegionCodes: string[] | null;
     linkKey: string | null;
   };
+  portalScreens?: { screenId: string; name: string; city: string | null; status: string }[];
 }
 
 export type ReviewBucket = 'pending-review' | 'approved-pending' | 'failed' | 'rejected' | 'published' | 'all';
@@ -637,12 +638,19 @@ export async function getReviewAssets(bucket: ReviewBucket = 'pending-review'): 
     orderBy: (adAssets, { desc }) => [desc(adAssets.uploadedAt)],
   });
   
+  const { getPortalPlacementScreens } = await import('./placementResolver');
+  
   const results: ReviewQueueItem[] = [];
   for (const asset of pendingAssets) {
     const advertiser = await db.query.advertisers.findFirst({
       where: eq(advertisers.id, asset.advertiserId),
     });
     if (advertiser) {
+      let portalScreens: { screenId: string; name: string; city: string | null; status: string }[] = [];
+      try {
+        portalScreens = await getPortalPlacementScreens(advertiser.id);
+      } catch {}
+      
       results.push({
         asset,
         advertiser: {
@@ -652,6 +660,7 @@ export async function getReviewAssets(bucket: ReviewBucket = 'pending-review'): 
           targetRegionCodes: advertiser.targetRegionCodes,
           linkKey: advertiser.linkKey,
         },
+        portalScreens,
       });
     }
   }
@@ -752,7 +761,9 @@ export async function approveAsset(
     });
     
     // AUTO-PLACEMENT: Create placements and publish to screens immediately
+    // Note: autoPlacement requires a contract. If no contract exists, we check portalPlacements instead.
     let autoPlacementResult: { success: boolean; placementsCreated: number; screensPublished: number; message: string } | null = null;
+    let portalPlacementCount = 0;
     try {
       const { createAutoPlacementsForAsset } = await import('./autoPlacementService');
       autoPlacementResult = await createAutoPlacementsForAsset(assetId, asset.advertiserId);
@@ -760,10 +771,22 @@ export async function approveAsset(
       if (autoPlacementResult.success) {
         console.log(`[AdminReview] Auto-placement success: ${autoPlacementResult.placementsCreated} placements, ${autoPlacementResult.screensPublished} screens`);
       } else {
-        console.warn('[AdminReview] Auto-placement failed:', autoPlacementResult.message);
+        console.warn('[AdminReview] Auto-placement failed (non-fatal):', autoPlacementResult.message);
       }
     } catch (autoPlacementError: any) {
-      console.error('[AdminReview] Auto-placement error:', autoPlacementError.message);
+      console.error('[AdminReview] Auto-placement error (non-fatal):', autoPlacementError.message);
+    }
+    
+    // Check for portal placements (customer-selected screens) as alternative targeting
+    try {
+      const { getPortalPlacementScreens } = await import('./placementResolver');
+      const portalScreens = await getPortalPlacementScreens(asset.advertiserId);
+      portalPlacementCount = portalScreens.length;
+      if (portalPlacementCount > 0) {
+        console.log(`[AdminReview] Portal placements found: ${portalPlacementCount} screens (customer-selected targeting available)`);
+      }
+    } catch (err: any) {
+      console.warn('[AdminReview] Portal placement check error:', err.message);
     }
     
     // MEDIA PIPELINE: Publish this specific asset to Yodeck (no scan/dedup)
@@ -861,12 +884,16 @@ export async function approveAsset(
       console.error('[AdminReview] Failed to send approval email:', emailError);
     }
     
-    const publishSuccess = effectiveYodeckMediaId && (canonicalPublishResult?.success || autoPlacementResult?.success);
+    const publishActioned = canonicalPublishResult?.success || autoPlacementResult?.success;
+    const publishSuccess = !!(effectiveYodeckMediaId && publishActioned);
+    const hasTargetsAvailable = portalPlacementCount > 0 || autoPlacementResult?.success;
     const publishErrorMsg = !effectiveYodeckMediaId 
       ? 'Geen Yodeck media ID verkregen'
-      : (!canonicalPublishResult?.success && !autoPlacementResult?.success)
-        ? 'Publicatie naar schermen mislukt'
-        : null;
+      : !publishActioned && hasTargetsAvailable
+        ? 'Yodeck media klaar, schermen beschikbaar maar publicatie niet uitgevoerd. Gebruik "Opnieuw proberen".'
+        : !publishActioned
+          ? 'Publicatie naar schermen mislukt (geen contract, geen portaal-selectie)'
+          : null;
     
     await db.update(adAssets)
       .set({
@@ -888,6 +915,8 @@ export async function approveAsset(
       message += ` en automatisch geplaatst op ${autoPlacementResult.placementsCreated} scherm(en)`;
     } else if (autoPlacementResult?.success && autoPlacementResult.screensPublished > 0) {
       message += ` en ${autoPlacementResult.screensPublished} scherm(en) gesynchroniseerd`;
+    } else if (portalPlacementCount > 0 && effectiveYodeckMediaId && !publishActioned) {
+      message += `. Yodeck media klaar, ${portalPlacementCount} klant-geselecteerd(e) scherm(en) beschikbaar. Gebruik "Opnieuw proberen" voor publicatie.`;
     } else if (!publishSuccess) {
       message += ` maar publicatie mislukt: ${publishErrorMsg}. Klik op "Opnieuw proberen" om te herproberen.`;
     }

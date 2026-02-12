@@ -99,6 +99,13 @@ interface ProposalResponse {
   };
 }
 
+interface PortalScreen {
+  screenId: string;
+  name: string;
+  city: string | null;
+  status: string;
+}
+
 interface ReviewQueueItem {
   asset: {
     id: string;
@@ -127,6 +134,7 @@ interface ReviewQueueItem {
     targetRegionCodes: string[] | null;
     linkKey: string | null;
   };
+  portalScreens?: PortalScreen[];
 }
 
 const REJECTION_REASONS: Record<string, string> = {
@@ -516,6 +524,30 @@ export default function VideoReview() {
                         <MapPin className="h-3.5 w-3.5" />
                         {item.advertiser.targetRegionCodes?.join(", ") || "Alle regio's"}
                       </span>
+                      {item.portalScreens && item.portalScreens.length > 0 && (
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="flex items-center gap-1 text-green-600" data-testid={`portal-screens-count-${item.asset.id}`}>
+                                <Tv className="h-3.5 w-3.5" />
+                                {item.portalScreens.length} scherm{item.portalScreens.length !== 1 ? "en" : ""} gekozen
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom" className="max-w-xs">
+                              <p className="font-medium mb-1">Klant-geselecteerde schermen:</p>
+                              {item.portalScreens.map(s => (
+                                <p key={s.screenId} className="text-xs">{s.name}{s.city ? ` (${s.city})` : ""}</p>
+                              ))}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      )}
+                      {(!item.portalScreens || item.portalScreens.length === 0) && !item.advertiser.targetRegionCodes?.length && (
+                        <span className="flex items-center gap-1 text-amber-600" data-testid={`no-screens-warning-${item.asset.id}`}>
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Geen schermen gekozen
+                        </span>
+                      )}
                     </div>
                     
                     <div className="flex flex-wrap gap-2 text-xs">
@@ -837,6 +869,35 @@ export default function VideoReview() {
                       <span className="text-sm text-destructive" data-testid="status-text-failed">Conversie mislukt: {previewAsset.asset.conversionError || "Onbekende fout"}</span>
                     </>
                   )}
+                </div>
+              )}
+
+              {/* Portal Screens - Customer-selected screens */}
+              {previewAsset?.portalScreens && previewAsset.portalScreens.length > 0 && (
+                <div className="border rounded-lg p-4 space-y-3 border-green-200 bg-green-50/50" data-testid="portal-screens-section">
+                  <div className="flex items-center gap-2">
+                    <Monitor className="h-4 w-4 text-green-600" />
+                    <span className="font-medium text-green-800">Gekozen schermen ({previewAsset.portalScreens.length})</span>
+                    <Badge variant="outline" className="text-green-700 border-green-300 text-xs">Klant selectie</Badge>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {previewAsset.portalScreens.map(s => (
+                      <div key={s.screenId} className="flex items-center gap-2 text-sm p-2 rounded bg-white border" data-testid={`portal-screen-${s.screenId}`}>
+                        <Tv className="h-3.5 w-3.5 text-green-600 flex-shrink-0" />
+                        <span className="font-medium truncate">{s.name}</span>
+                        {s.city && <span className="text-muted-foreground text-xs">({s.city})</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {previewAsset && (!previewAsset.portalScreens || previewAsset.portalScreens.length === 0) && !previewAsset.advertiser.targetRegionCodes?.length && (
+                <div className="border rounded-lg p-4 border-amber-200 bg-amber-50/50" data-testid="no-screens-section">
+                  <div className="flex items-center gap-2 text-amber-700">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span className="font-medium">Geen schermen gekozen door klant</span>
+                  </div>
+                  <p className="text-sm text-amber-600 mt-1">De klant heeft nog geen schermen geselecteerd in het portaal. Publicatie vereist handmatige schermtoewijzing of regio-targeting.</p>
                 </div>
               )}
 

@@ -1,0 +1,62 @@
+DOEL: Maak publish flow volledig werkend zónder contract. De schermselectie van de klant is leidend.
+Bij upload/aanvraag moeten placements worden opgeslagen en publish gebruikt ALTIJD placements als targets.
+
+PROBLEEM (nu):
+- AutoPlacement faalt zonder contract => 0 placements => publish doet niets (“0 locatie(s)”).
+- Klant selecteert scherm(en), maar die selectie komt niet terecht in targets die publish gebruikt.
+
+OPDRACHT:
+
+1) DATA MODEL (minimaal):
+- Zorg dat er een tabel/struct is die per asset de gekozen screens opslaat.
+  Voorkeur: bestaande "placements" tabel hergebruiken.
+  Als placements nu contract vereist, voeg veld toe: placementSource = "CUSTOMER_SELECT" | "CONTRACT" | "ADMIN".
+  Placements moeten kunnen bestaan zonder contractId.
+
+Velden die we minimaal nodig hebben per placement:
+- id
+- assetId
+- advertiserId
+- screenId (interne screen uuid)
+- yodeckPlayerId (optioneel via join screen)
+- status: "PENDING"|"PUBLISHED"|"FAILED"
+- createdAt
+
+2) CAPTURE SCREEN SELECTIE:
+Zoek de flow waar de klant scherm(en) kiest (portal upload / aanvraag).
+- Daar komt waarschijnlijk screenIds[] of regionCodes[] binnen.
+- Maak direct placements aan voor elk gekozen screenId:
+  createPlacement({assetId, advertiserId, screenId, source:"CUSTOMER_SELECT", status:"PENDING"})
+- Dit moet gebeuren vóór admin review/approve (dus targets bestaan al).
+
+3) TARGET RESOLVER (publish):
+Pas resolveTargetsForAsset(assetId) aan:
+- Eerst: haal placements op voor assetId waar deletedAt null
+- Targets = unieke screenIds uit placements
+- Als 0 placements:
+   - return NO_TARGETS (maar dit mag in Model B alleen als klant echt niets koos)
+
+4) APPROVE FLOW:
+- Op approve: start publishAsset(assetId)
+- publishAsset gebruikt placements als targets.
+- Nooit afhankelijk van contract voor targets.
+
+5) PUBLISH EXECUTION:
+- Voor elk target screen:
+  - ensure playlist item bestaat (jouw bestaande logic)
+  - push naar yodeck player/playlist
+  - update placement.status per screen (PUBLISHED/FAILED) + error
+- publishStatus op asset:
+  - PUBLISHED als alle placements PUBLISHED
+  - PARTIAL als mix
+  - FAILED als alle FAILED
+  - PUBLISHING tijdens run
+
+6) UI / ADMIN:
+- In Video Review detail: toon "Gekozen schermen" (aantal + namen)
+- In geval NO_TARGETS: toon knop "Kies schermen" (admin kan placements aanmaken)
+
+ACCEPTANCE TEST:
+- Upload in portal met 1 geselecteerd scherm -> placement record bestaat direct.
+- Admin approve -> publish start -> locationsUpdated >= 1
+- Geen “0 locatie(s) mislukt” meer als klant scherm koos.
