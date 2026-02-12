@@ -9,7 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle, XCircle, Play, Eye, Clock, Monitor, MapPin, Package, RefreshCw, AlertTriangle, Send, Rocket, Tv, Loader2, Info } from "lucide-react";
+import { CheckCircle, XCircle, Play, Eye, Clock, Monitor, MapPin, Package, RefreshCw, AlertTriangle, Send, Rocket, Tv, Loader2, Info, Trash2, CheckSquare } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { nl } from "date-fns/locale";
 import { Link } from "wouter";
@@ -352,6 +352,49 @@ export default function VideoReview() {
     },
   });
 
+  const markReviewedMutation = useMutation({
+    mutationFn: async ({ assetId }: { assetId: string }) => {
+      const res = await fetch(`/api/admin/review/${assetId}/mark-reviewed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Fout bij markeren als beoordeeld");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Beoordeeld", description: "Item is gemarkeerd als beoordeeld" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/video-review"] });
+      setPreviewAsset(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async ({ assetId }: { assetId: string }) => {
+      const res = await fetch(`/api/admin/review/${assetId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Fout bij verwijderen");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Verwijderd", description: "Item is verwijderd uit de review lijst" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/video-review"] });
+      setPreviewAsset(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
   const handleApprove = (item: ReviewQueueItem) => {
     const isApprovedPending = item.asset.approvalStatus === 'APPROVED_PENDING_PUBLISH' || item.asset.approvalStatus === 'APPROVED';
     const hasFailed = item.asset.publishStatus === 'PUBLISH_FAILED' || item.asset.publishStatus === null;
@@ -543,11 +586,36 @@ export default function VideoReview() {
                     <Button
                       size="sm"
                       variant="outline"
+                      onClick={() => markReviewedMutation.mutate({ assetId: item.asset.id })}
+                      disabled={markReviewedMutation.isPending}
+                      data-testid={`mark-reviewed-btn-${item.asset.id}`}
+                    >
+                      <CheckSquare className="h-4 w-4 mr-1" />
+                      Beoordeeld
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
                       onClick={() => archiveMutation.mutate({ assetId: item.asset.id })}
                       disabled={archiveMutation.isPending}
                       data-testid={`archive-btn-${item.asset.id}`}
                     >
                       Archiveren
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 hover:text-red-700"
+                      onClick={() => {
+                        if (confirm("Weet je zeker dat je dit item wilt verwijderen?")) {
+                          deleteMutation.mutate({ assetId: item.asset.id });
+                        }
+                      }}
+                      disabled={deleteMutation.isPending}
+                      data-testid={`delete-btn-${item.asset.id}`}
+                    >
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Verwijderen
                     </Button>
                     {isPublishFailed(item) && (
                       <Badge variant="destructive" className="ml-2" data-testid={`publish-failed-badge-${item.asset.id}`}>
@@ -889,11 +957,36 @@ export default function VideoReview() {
               size="sm"
               variant="outline"
               onClick={() => {
+                if (previewAsset) markReviewedMutation.mutate({ assetId: previewAsset.asset.id });
+              }}
+              disabled={markReviewedMutation.isPending}
+            >
+              <CheckSquare className="h-4 w-4 mr-1" />
+              Beoordeeld
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
                 if (previewAsset) archiveMutation.mutate({ assetId: previewAsset.asset.id });
               }}
               disabled={archiveMutation.isPending}
             >
               Archiveren
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-red-600 hover:text-red-700"
+              onClick={() => {
+                if (previewAsset && confirm("Weet je zeker dat je dit item wilt verwijderen?")) {
+                  deleteMutation.mutate({ assetId: previewAsset.asset.id });
+                }
+              }}
+              disabled={deleteMutation.isPending}
+            >
+              <Trash2 className="h-4 w-4 mr-1" />
+              Verwijderen
             </Button>
             {previewAsset && canReject(previewAsset) && (
               <Button

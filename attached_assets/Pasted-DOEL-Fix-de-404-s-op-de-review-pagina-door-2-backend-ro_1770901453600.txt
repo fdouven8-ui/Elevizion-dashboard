@@ -1,0 +1,64 @@
+DOEL: Fix de 404’s op de review pagina door 2 backend routes volledig te implementeren, zonder de upload/baseline/approve/publish flow te breken.
+
+CONTEXT:
+- We hebben een review pagina waar items in verschillende statussen staan (o.a. PENDING_REVIEW, APPROVED, REJECTED, PUBLISHED/FAILED etc).
+- Approve werkt al (zet status APPROVED + start publish flow).
+- Reject werkt al (alleen met geldige reason).
+- Delete en mark-reviewed bestaan in de UI/verwachting, maar server routes geven 404.
+- We willen 1 stap: alleen deze 2 routes toevoegen + minimale wiring zodat frontend niet meer faalt.
+- Let op: we willen NIET dat baseline playlist of upload pipeline geraakt wordt.
+
+OPDRACHT:
+1) Zoek in server/routes.ts (of waar routes zitten) naar bestaande review endpoints (approve/reject/retry/ list).
+2) Implementeer deze 2 routes:
+   A) POST /api/admin/review/:id/mark-reviewed
+   B) DELETE /api/admin/review/:id
+
+3) Functioneel gedrag:
+   A) mark-reviewed:
+      - Alleen toegestaan als item bestaat.
+      - Zet een veld zodat het item niet meer in “to review” lijst komt.
+      - Als er al een status is, laat status verder intact (dus NIET publish/retry triggeren).
+      - Response: { ok:true, id, status, reviewedAt, reviewedBy? }
+      - Als item al reviewed is: return ok:true (idempotent).
+
+   B) delete:
+      - Verwijdert het item uit de database (soft delete voorkeur, hard delete als DB dat nu al doet).
+      - Als item al APPROVED/PUBLISHED is: NIET de Yodeck content verwijderen (dat is een apart cleanup-proces). Alleen “review record”/asset record verwijderen of archiveren.
+      - Als item nog PENDING_REVIEW of REJECTED is: verwijderen/archiveren mag.
+      - Response: { ok:true, id, deleted:true } (idempotent: als al weg -> ok:true).
+
+4) DB/ORM:
+   - Zoek de tabel waar review items/assets staan (waarschijnlijk ads/videos/assets/uploads).
+   - Voeg velden alleen toe als ze al bestaan; als niet bestaan:
+     - Voeg minimaal toe: reviewedAt (timestamp nullable), reviewedBy (nullable), deletedAt (timestamp nullable) OF isDeleted boolean.
+   - Maak een migration (Drizzle) als velden ontbreken.
+   - Zorg dat de review-list query (server side) items met deletedAt != null niet meer teruggeeft.
+   - Zorg dat “to review” lijst reviewedAt == null blijft filteren (of equivalent).
+
+5) Auth:
+   - Gebruik dezelfde admin auth middleware/check als approve/reject endpoints.
+   - Validate :id as integer; 400 bij invalid.
+
+6) Frontend minimale fix:
+   - Zoek de calls die nu 404 geven (Review page buttons).
+   - Wire ze naar deze endpoints:
+     - Mark reviewed -> POST /api/admin/review/{id}/mark-reviewed
+     - Delete -> DELETE /api/admin/review/{id}
+   - Na succes: refresh list (refetch).
+   - Geen UI redesign nodig, alleen geen errors meer.
+
+7) Logging:
+   - Log met correlationId zoals de rest (als jullie dat patroon hebben).
+   - Log: action, id, previous state, new state.
+
+ACCEPTANCE:
+- Geen 404 meer voor delete/mark-reviewed.
+- Approve/reject/retry blijven exact werken zoals nu.
+- Review list kan items “wegklikken” met mark-reviewed of delete.
+- Deleted items komen niet meer terug in de review lijst.
+- Mark-reviewed items verdwijnen uit “to review”, maar blijven in historie/andere lijsten als die bestaan.
+
+LEVER OP:
+- Code wijzigingen in backend + eventuele migration + frontend wiring.
+- Geef me daarna de exacte fetch calls die ik in de browser console kan draaien om beide routes te testen.

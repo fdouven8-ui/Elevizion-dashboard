@@ -2729,6 +2729,53 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  // Mark-reviewed: admin has seen the item, remove from "to review" queue
+  // Sets status to REVIEWED so it exits the review queue (which only shows UPLOADED/IN_REVIEW/PENDING_REVIEW/etc)
+  app.post("/api/admin/review/:id/mark-reviewed", requireAdminAccess, async (req: any, res) => {
+    try {
+      const assetId = req.params.id;
+      const user = (req as any).user;
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const asset = await getAdAssetById(assetId);
+      if (!asset) {
+        return res.status(404).json({ ok: false, message: "Asset niet gevonden" });
+      }
+      const now = new Date();
+      await db.update(adAssets).set({
+        approvalStatus: 'REVIEWED',
+        reviewedByAdminAt: now,
+        reviewedByAdminId: user?.id || 'admin',
+      }).where(eq(adAssets.id, assetId));
+      console.log(`[VideoReview] MARK-REVIEWED assetId=${assetId} previousStatus=${asset.approvalStatus} by=${user?.id || 'admin'}`);
+      res.json({ ok: true, id: assetId, status: 'REVIEWED', reviewedAt: now.toISOString(), reviewedBy: user?.id || 'admin' });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  // Soft-delete review item: marks as DELETED, does NOT touch Yodeck content
+  app.delete("/api/admin/review/:id", requireAdminAccess, async (req: any, res) => {
+    try {
+      const assetId = req.params.id;
+      const user = (req as any).user;
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const asset = await getAdAssetById(assetId);
+      if (!asset) {
+        return res.json({ ok: true, id: assetId, deleted: true });
+      }
+      const previousStatus = asset.approvalStatus;
+      await db.update(adAssets).set({
+        approvalStatus: 'DELETED',
+        reviewedByAdminAt: new Date(),
+        reviewedByAdminId: user?.id || 'admin',
+      }).where(eq(adAssets.id, assetId));
+      console.log(`[VideoReview] DELETED assetId=${assetId} previousStatus=${previousStatus} by=${user?.id || 'admin'}`);
+      res.json({ ok: true, id: assetId, deleted: true });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
   // Get proposal/preview of screens before approval (dry-run, no DB changes)
   // Includes auto-provisioning: if screens lack playlists, attempts to create them and re-simulates
   app.get("/api/admin/assets/:assetId/proposal", requireAdminAccess, async (req: any, res) => {
