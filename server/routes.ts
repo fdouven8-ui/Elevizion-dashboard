@@ -3410,9 +3410,19 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(404).json({ error: "Plan niet gevonden" });
       }
 
+      const permanentErrorPatterns = [
+        'status=400', 'status=401', 'status=403', 'status=404',
+        'Invalid or empty authentication token',
+        'ASSET_NOT_FOUND', 'PERMANENT_FAILURE',
+      ];
+      const wasPermanent = permanentErrorPatterns.some(p =>
+        (plan.lastErrorMessage || '').includes(p) || plan.lastErrorCode === p
+      ) && plan.retryCount > 0;
+
       const previous = {
         status: plan.status,
         retryCount: plan.retryCount,
+        permanentFailure: wasPermanent,
         lastErrorCode: plan.lastErrorCode,
         lastErrorMessage: plan.lastErrorMessage,
       };
@@ -3437,6 +3447,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const current = {
         status: updatedPlan?.status,
         retryCount: updatedPlan?.retryCount,
+        permanentFailure: false,
         lastErrorCode: updatedPlan?.lastErrorCode,
         lastErrorMessage: updatedPlan?.lastErrorMessage,
       };
@@ -3459,8 +3470,52 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
-  // Retry a failed plan
+  // Debug endpoint: quick status view for a placement plan (admin only)
+  app.get("/api/admin/placement-plans/:id", requireAdminAccess, async (req: any, res) => {
+    try {
+      const plan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, req.params.id),
+      });
+      if (!plan) {
+        return res.status(404).json({ error: "Plan niet gevonden" });
+      }
+
+      const MAX_RETRIES = 5;
+      const permanentErrorPatterns = [
+        'status=400', 'status=401', 'status=403', 'status=404',
+        'Invalid or empty authentication token',
+        'ASSET_NOT_FOUND', 'PERMANENT_FAILURE',
+      ];
+      const isPermanent = permanentErrorPatterns.some(p =>
+        (plan.lastErrorMessage || '').includes(p) || plan.lastErrorCode === p
+      );
+
+      res.json({
+        id: plan.id,
+        status: plan.status,
+        retryCount: plan.retryCount,
+        maxRetries: MAX_RETRIES,
+        permanentFailure: isPermanent && plan.retryCount > 0,
+        lastErrorCode: plan.lastErrorCode,
+        lastErrorMessage: plan.lastErrorMessage,
+        lastErrorDetails: plan.lastErrorDetails,
+        lastAttemptAt: plan.lastAttemptAt,
+        advertiserId: plan.advertiserId,
+        adAssetId: plan.adAssetId,
+        updatedAt: plan.updatedAt,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Retry a failed placement plan publish
   // Returns 200 always (except 404/400/409), with success: true/false based on publish result
+  //
+  // Why force=1 exists: When a transient Yodeck or CDN error causes retryCount to hit
+  // MAX_RETRIES or triggers a permanent-error pattern, the plan becomes locked and normal
+  // retry is blocked. Admins use force=1 to reset the lock (retryCount + error fields)
+  // and re-enter the publish flow. This is the recovery path for maxRetries lock-outs.
   app.post("/api/placement-plans/:id/retry", isAuthenticated, async (req, res) => {
     try {
       const { yodeckPublishService } = await import("./services/yodeckPublishService");
@@ -3561,17 +3616,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
       }
       
       // Reset status to APPROVED for retry (publishPlan will increment retryCount on failure)
-      // Note: db/placementPlans/eq may be imported above for forceRetry, use dynamic import pattern for safety
-      const dbMod = await import("./db");
-      const schemaMod = await import("@shared/schema");
-      const ormMod = await import("drizzle-orm");
-      
-      await dbMod.db.update(schemaMod.placementPlans)
+      await db.update(placementPlans)
         .set({ 
           status: "APPROVED",
           lastAttemptAt: new Date(),
         })
-        .where(ormMod.eq(schemaMod.placementPlans.id, planId));
+        .where(eq(placementPlans.id, planId));
       
       // CDN sanity check before publish
       let cdnPreCheck: any = null;
@@ -3601,11 +3651,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
 
       // Persist CDN precheck to plan's lastErrorDetails for diagnostics
       if (cdnPreCheck) {
-        await dbMod.db.update(schemaMod.placementPlans)
+        await db.update(placementPlans)
           .set({
             lastErrorDetails: { cdnPreCheck, checkedAt: new Date().toISOString() },
           })
-          .where(ormMod.eq(schemaMod.placementPlans.id, planId));
+          .where(eq(placementPlans.id, planId));
       }
 
       // Publish (the service will update status to PUBLISHING -> PUBLISHED/FAILED and increment retryCount on failure)

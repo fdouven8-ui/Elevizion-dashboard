@@ -1,0 +1,56 @@
+Je bent senior engineer. Voeg een admin “unlock” toe voor placement plans en breid retry uit met force.
+
+Context:
+- /api/placement-plans/:planId/retry bestaat al maar blokkeert door maxRetries/permanentFailure.
+- CDN check is inmiddels OK (HEAD 200 / Range 206 via /api/media-cdn).
+- We moeten de plan lock kunnen resetten en opnieuw publishen.
+
+Taken (doe exact dit, zonder upload/baseline playlist flow te wijzigen):
+
+A) Vind bestaande routes voor placement plans
+- Zoek in server code naar "placement-plans" en de bestaande retry route.
+- Noteer waar admin routes staan (waarschijnlijk server/routes.ts).
+
+B) Voeg endpoint toe:
+POST /api/admin/placement-plans/:planId/unlock
+- Auth: alleen admin (gebruik exact dezelfde admin guard/middleware als andere /api/admin routes).
+- DB update op placement plan:
+  - retryCount = 0
+  - permanentFailure = false (als veld bestaat)
+  - lastErrorCode = null (als veld bestaat)
+  - lastErrorMessage = null (als veld bestaat)
+  - status: zet terug naar een state die publish opnieuw toestaat:
+      * als er APPROVED/READY_TO_PUBLISH bestaat: kies die
+      * anders: laat status staan maar zorg dat retry logic niet meer blokkeert
+- Log/audit: console log met correlationId + planId + actor=admin + previous/current (minimaal retryCount/permanentFailure/status).
+- Response JSON:
+  { ok:true, planId, previous:{retryCount, permanentFailure, status}, current:{retryCount, permanentFailure, status} }
+
+C) Breid bestaande retry endpoint uit:
+POST /api/placement-plans/:planId/retry?force=1
+- Als force=1:
+  - alleen admin mag dit (zelfde admin guard)
+  - negeer maxRetries gate en permanentFailure gate
+  - zet permanentFailure=false
+  - retryCount niet verhogen (of reset naar 0)
+  - trigger publish flow opnieuw (dezelfde internal functie die normal retry gebruikt)
+- Zonder force behoud huidige gedrag.
+
+D) Voeg een debug endpoint toe om snel status te zien:
+GET /api/admin/placement-plans/:planId
+- Return minimaal: id, status, retryCount, maxRetries (als bestaat), permanentFailure (als bestaat), lastErrorCode, lastErrorMessage, updatedAt.
+
+E) Let op codebase details:
+- Gebruik dezelfde DB laag als de rest (Drizzle ORM).
+- Zoek de placementPlans table/schema en gebruik die kolomnamen exact.
+- Geen migrations tenzij echt nodig; als velden ontbreken, maak het unlock endpoint “best effort”:
+  update alleen velden die bestaan, en log welke ontbreken.
+- Geen impact op upload pipeline, playlists, yodeckClient behalve dat publish opnieuw gestart wordt.
+
+Na implementatie moet ik in browser console kunnen draaien:
+
+fetch("/api/admin/placement-plans/8c059ea9-ba10-4ffa-8fb1-060cf5196073").then(r=>r.json()).then(console.log)
+fetch("/api/admin/placement-plans/8c059ea9-ba10-4ffa-8fb1-060cf5196073/unlock",{method:"POST"}).then(r=>r.json()).then(console.log)
+fetch("/api/placement-plans/8c059ea9-ba10-4ffa-8fb1-060cf5196073/retry?force=1",{method:"POST"}).then(r=>r.json()).then(console.log)
+
+Maak ook een korte notitie in code comments bij de retry gate waarom force bestaat (maxRetries lock recovery).
