@@ -333,11 +333,18 @@ async function uploadToYodeck(
       return { ok: false, error: `No upload_url in presign response: ${JSON.stringify(presignData).substring(0, 200)}` };
     }
 
-    // STEP 3: PUT binary to presigned URL
-    const fileBuffer = fs.readFileSync(filePath);
-    const fileSize = fileBuffer.length;
+    // STEP 3: PUT binary to presigned URL using streaming
+    const fileSize = fs.statSync(filePath).size;
     
-    console.log(`[MediaPipeline] PUT_BINARY: uploading ${fileSize} bytes to presigned URL`);
+    console.log(`[MediaPipeline] PUT_BINARY: uploading ${fileSize} bytes to presigned URL (url_length=${presignUrl.length})`);
+    
+    const fileStream = fs.createReadStream(filePath);
+    
+    let streamError: Error | null = null;
+    fileStream.on('error', (err) => {
+      streamError = err;
+      console.error(`[MediaPipeline] FILE_STREAM_ERROR: ${err.message}`);
+    });
     
     const uploadResp = await fetch(presignUrl, {
       method: "PUT",
@@ -345,21 +352,34 @@ async function uploadToYodeck(
         "Content-Type": mimeType,
         "Content-Length": String(fileSize),
       },
-      body: fileBuffer,
+      body: fileStream as any,
+      // @ts-ignore - duplex required for streaming body in Node.js fetch
+      duplex: "half",
     });
 
-    console.log(`[MediaPipeline] PUT_BINARY response: status=${uploadResp.status}`);
+    if (streamError) {
+      return { ok: false, error: `YODECK_UPLOAD_ABORTED: File stream error during upload: ${(streamError as Error).message}` };
+    }
+
+    let uploadRespBody = "";
+    try {
+      uploadRespBody = await uploadResp.text();
+    } catch {}
+    
+    console.log(`[MediaPipeline] PUT_BINARY response: status=${uploadResp.status} body=${uploadRespBody.substring(0, 500)}`);
 
     if (!uploadResp.ok && uploadResp.status !== 204) {
-      return { ok: false, error: `Upload to presign URL failed: ${uploadResp.status}` };
+      return { ok: false, error: `YODECK_UPLOAD_ABORTED: Upload to presign URL failed: status=${uploadResp.status} body=${uploadRespBody.substring(0, 300)}` };
     }
 
     // Poll until status is NOT "initialized" (any other status = ready for use)
-    const POLL_MAX_SECONDS = 60;
+    const POLL_MAX_SECONDS = 120;
     const startTime = Date.now();
+    let pollCount = 0;
     
     while ((Date.now() - startTime) < POLL_MAX_SECONDS * 1000) {
-      await new Promise(r => setTimeout(r, 2000));
+      await new Promise(r => setTimeout(r, 3000));
+      pollCount++;
       
       const statusResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
         headers: { "Authorization": `Token ${YODECK_TOKEN}` },
@@ -367,13 +387,18 @@ async function uploadToYodeck(
 
       if (statusResp.ok) {
         const statusData = await statusResp.json();
-        const fileSize = statusData.filesize || statusData.file_size || 0;
+        const polledFileSize = statusData.filesize || statusData.file_size || 0;
         const status = statusData.status;
+        const errorMessage = statusData.error_message || statusData.errorMessage || statusData.error || "";
         
-        console.log(`[MediaPipeline] POLL: mediaId=${mediaId} status=${status} fileSize=${fileSize}`);
+        console.log(`[MediaPipeline] POLL #${pollCount}: mediaId=${mediaId} status=${status} fileSize=${polledFileSize} error=${errorMessage}`);
+
+        if (status === "error" || (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes("abort"))) {
+          return { ok: false, error: `Yodeck upload aborted/error: status=${status} error=${errorMessage}` };
+        }
 
         // Success = any status that is NOT "initialized" + has filesize
-        if (status !== "initialized" && fileSize > 0) {
+        if (status !== "initialized" && polledFileSize > 0) {
           // STEP 5: FINAL VERIFICATION - Confirm media exists with one more GET
           console.log(`[MediaPipeline] FINAL VERIFICATION: GET /media/${mediaId} to confirm existence...`);
           const verifyResp = await fetch(`${YODECK_API_BASE}/media/${mediaId}/`, {
@@ -399,7 +424,7 @@ async function uploadToYodeck(
       }
     }
 
-    return { ok: false, error: "Timeout waiting for Yodeck media to become ready" };
+    return { ok: false, error: `Timeout waiting for Yodeck media ${mediaId} to become ready after ${pollCount} polls (${POLL_MAX_SECONDS}s)` };
   } catch (e: any) {
     return { ok: false, error: `Yodeck upload error: ${e.message}` };
   }
@@ -988,27 +1013,48 @@ export async function publishSingleAsset(opts: {
       throw new Error(`No upload_url in presign response`);
     }
 
-    // STEP 3: PUT binary to presigned URL
-    const fileBuffer = fs.readFileSync(localPath);
-    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY assetId=${assetId} bytes=${fileBuffer.length}`);
+    // STEP 3: PUT binary to presigned URL using streaming
+    const uploadFileSize = fs.statSync(localPath).size;
+    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY assetId=${assetId} bytes=${uploadFileSize} presignUrl_length=${presignUrl.length}`);
 
+    const uploadStream = fs.createReadStream(localPath);
+    
+    let streamError: Error | null = null;
+    uploadStream.on('error', (err) => {
+      streamError = err;
+      console.error(`${LOG} correlationId=${correlationId} FILE_STREAM_ERROR: ${err.message}`);
+    });
+    
     const uploadResp = await fetch(presignUrl, {
       method: "PUT",
       headers: {
         "Content-Type": "video/mp4",
-        "Content-Length": String(fileBuffer.length),
+        "Content-Length": String(uploadFileSize),
       },
-      body: fileBuffer,
+      body: uploadStream as any,
+      // @ts-ignore - duplex required for streaming body in Node.js fetch
+      duplex: "half",
     });
 
-    if (!uploadResp.ok && uploadResp.status !== 204) {
-      throw new Error(`PUT binary failed: ${uploadResp.status}`);
+    if (streamError) {
+      throw new Error(`YODECK_UPLOAD_ABORTED: File stream error during upload: ${(streamError as Error).message}`);
     }
 
-    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_OK assetId=${assetId} status=${uploadResp.status}`);
+    let uploadRespBody = "";
+    try {
+      uploadRespBody = await uploadResp.text();
+    } catch {}
 
-    // STEP 4: Poll until ready
-    const POLL_MAX_MS = 120000; // 2 minutes
+    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_RESPONSE assetId=${assetId} status=${uploadResp.status} body=${uploadRespBody.substring(0, 500)}`);
+
+    if (!uploadResp.ok && uploadResp.status !== 204) {
+      throw new Error(`YODECK_UPLOAD_ABORTED: PUT binary failed: status=${uploadResp.status} body=${uploadRespBody.substring(0, 300)}`);
+    }
+
+    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_OK assetId=${assetId} status=${uploadResp.status} uploadedBytes=${uploadFileSize}`);
+
+    // STEP 4: Poll until ready (extended to 4 minutes for large files)
+    const POLL_MAX_MS = 240000;
     const startTime = Date.now();
     let pollCount = 0;
 
@@ -1022,12 +1068,17 @@ export async function publishSingleAsset(opts: {
 
       if (statusResp.ok) {
         const statusData = await statusResp.json();
-        const fileSize = statusData.filesize || statusData.file_size || 0;
+        const polledFileSize = statusData.filesize || statusData.file_size || 0;
         const status = statusData.status;
+        const errorMessage = statusData.error_message || statusData.errorMessage || statusData.error || "";
 
-        console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${fileSize}`);
+        console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${polledFileSize} error=${errorMessage}`);
 
-        if (status !== "initialized" && fileSize > 0) {
+        if (status === "error" || (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes("abort"))) {
+          throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} status=${status} error=${errorMessage}`);
+        }
+
+        if (status !== "initialized" && polledFileSize > 0) {
           // Final verification
           const verifyResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
             headers: { "Authorization": `Token ${YODECK_TOKEN}` },
@@ -1078,7 +1129,7 @@ export async function publishSingleAsset(opts: {
 
     // Determine error code for terminal failures
     const errMsg = uploadErr.message || "";
-    const isTerminal = /FAILED_INIT_STUCK|POLL_TIMEOUT|POLL_404|VERIFY_404|FINAL_VERIFY_404/.test(errMsg);
+    const isTerminal = /FAILED_INIT_STUCK|POLL_TIMEOUT|POLL_404|VERIFY_404|FINAL_VERIFY_404|YODECK_UPLOAD_ABORTED/.test(errMsg);
 
     // For terminal failures: ALWAYS clear canonical media IDs regardless of yodeckMediaId state
     // This ensures retry always forces a fresh CREATE_MEDIA + upload cycle
