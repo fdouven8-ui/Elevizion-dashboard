@@ -2785,6 +2785,72 @@ Sitemap: ${SITE_URL}/sitemap.xml
   app.post("/api/admin/video-review/:id/mark-reviewed", requireAdminAccess, handleMarkReviewed);
   app.delete("/api/admin/video-review/:id", requireAdminAccess, handleDeleteReview);
 
+  // Bulk soft-delete
+  app.post("/api/admin/video-review/bulk-delete", requireAdminAccess, async (req: any, res) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ ok: false, message: "ids array required" });
+      }
+      const user = (req as any).user;
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const deletedIds: string[] = [];
+      const failed: { id: string; error: string }[] = [];
+      for (const id of ids) {
+        try {
+          const asset = await getAdAssetById(id);
+          if (!asset) {
+            deletedIds.push(id);
+            continue;
+          }
+          const previousStatus = asset.approvalStatus;
+          await db.update(adAssets).set({
+            approvalStatus: 'DELETED',
+            reviewedByAdminAt: new Date(),
+            reviewedByAdminId: user?.id || 'admin',
+          }).where(eq(adAssets.id, id));
+          console.log(`[VideoReview] BULK-DELETED assetId=${id} previousStatus=${previousStatus} by=${user?.id || 'admin'}`);
+          deletedIds.push(id);
+        } catch (err: any) {
+          failed.push({ id, error: err.message });
+        }
+      }
+      res.json({ ok: true, deletedIds, failed });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  // Cleanup approved-pending bucket
+  app.post("/api/admin/video-review/cleanup-approved-pending", requireAdminAccess, async (req: any, res) => {
+    try {
+      const user = (req as any).user;
+      const { getReviewAssets, getAdAssetById } = await import("./services/adAssetUploadService");
+      const items = await getReviewAssets('approved-pending');
+      const found = items.length;
+      const deletedIds: string[] = [];
+      const failed: { id: string; error: string }[] = [];
+      for (const item of items) {
+        try {
+          const id = item.asset.id;
+          const previousStatus = item.asset.approvalStatus;
+          await db.update(adAssets).set({
+            approvalStatus: 'DELETED',
+            reviewedByAdminAt: new Date(),
+            reviewedByAdminId: user?.id || 'admin',
+          }).where(eq(adAssets.id, id));
+          console.log(`[VideoReview] CLEANUP-DELETED assetId=${id} previousStatus=${previousStatus} by=${user?.id || 'admin'}`);
+          deletedIds.push(id);
+        } catch (err: any) {
+          failed.push({ id: item.asset.id, error: err.message });
+        }
+      }
+      res.json({ ok: true, found, deleted: deletedIds.length, deletedIds, failed });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
   // Get proposal/preview of screens before approval (dry-run, no DB changes)
   // Includes auto-provisioning: if screens lack playlists, attempts to create them and re-simulates
   app.get("/api/admin/assets/:assetId/proposal", requireAdminAccess, async (req: any, res) => {
