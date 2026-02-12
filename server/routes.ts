@@ -18809,6 +18809,9 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         });
       }
 
+      const resolvedMediaId = report?.yodeckMediaId ? parseInt(report.yodeckMediaId) : null;
+      const resolvedVia = report?.yodeckResolvedVia || report?.resolvedVia || null;
+
       res.json({
         ok: true,
         plan: {
@@ -18823,6 +18826,14 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           retryCount: (plan as any).retryCount || 0,
           lastErrorCode: plan.lastErrorCode,
           lastErrorMessage: plan.lastErrorMessage,
+        },
+        resolve: {
+          resolvedMediaId: resolvedMediaId && !isNaN(resolvedMediaId) ? resolvedMediaId : null,
+          resolvedVia,
+          candidateName: report?.resolveDebug?.candidateName || null,
+          findByName: report?.resolveDebug?.findByName || null,
+          createAttempt: report?.resolveDebug?.createAttempt || null,
+          findByTag: report?.resolveDebug?.findByTag || null,
         },
         asset: asset ? {
           id: asset.id,
@@ -18844,6 +18855,66 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           updatedAt: j.updatedAt,
         })),
         targetLocations,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/admin/yodeck/test-resolve/:planId", requireAdminAccess, async (req: any, res) => {
+    try {
+      const { planId } = req.params;
+      const plan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+      if (!plan) return res.status(404).json({ ok: false, error: "Plan not found" });
+
+      const asset = await db.query.adAssets.findFirst({
+        where: eq(adAssets.id, plan.adAssetId),
+      });
+      if (!asset?.storagePath) {
+        return res.status(400).json({ ok: false, error: "Asset not found or no storage path" });
+      }
+
+      const effectiveStoragePath = asset.normalizedStoragePath || asset.convertedStoragePath || asset.storagePath;
+      const mediaName = `${plan.linkKey}_${asset.originalFileName || "video"}`;
+
+      const { generateMediaCdnUrl } = await import("./routes/mediaCdn");
+      const cdnUrl = generateMediaCdnUrl(effectiveStoragePath, {
+        ttlHours: 7 * 24,
+        mime: "video/mp4",
+        name: mediaName.endsWith(".mp4") ? mediaName : `${mediaName}.mp4`,
+      });
+
+      const { yodeckPublishService } = await import("./services/yodeckPublishService");
+      const result = await yodeckPublishService.resolveYodeckMediaIdForPlan({
+        planId,
+        mediaName,
+        cdnUrl,
+        storagePath: effectiveStoragePath,
+        advertiserId: plan.advertiserId,
+        assetId: asset.id,
+      });
+
+      const updatedPlan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+      const updatedReport = updatedPlan?.publishReport as any;
+
+      res.json({
+        ok: true,
+        planId,
+        mediaName: mediaName.endsWith(".mp4") ? mediaName : `${mediaName}.mp4`,
+        cdnUrl: cdnUrl.substring(0, 100) + "...",
+        result: {
+          mediaId: result.mediaId,
+          resolvedVia: result.resolvedVia,
+        },
+        persistedInDb: {
+          yodeckMediaId: updatedReport?.yodeckMediaId,
+          yodeckResolvedVia: updatedReport?.yodeckResolvedVia,
+        },
+        debug: result.debug,
       });
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message });

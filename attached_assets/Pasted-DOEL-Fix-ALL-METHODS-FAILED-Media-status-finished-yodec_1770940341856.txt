@@ -1,0 +1,123 @@
+DOEL: Fix “ALL_METHODS_FAILED / Media status: finished / yodeckMediaId null” door publish idempotent te maken: bij elke publish altijd eerst Yodeck media ID resolven (vinden of creëren), dat ID direct persisten op de placement plan, en daarna pas playlist/push doen. Als create/import 400 geeft door “exists/finished”, zoek bestaande media op naam (of tag/linkKey) en hergebruik.
+
+CONTEXT: Stack = Express + TS + Drizzle. Yodeck API client bestaat (server/services/yodeckClient.ts). Publish debug endpoint bestaat /api/admin/yodeck/publish-debug/:planId. Placement plan retry endpoint bestaat /api/placement-plans/:id/retry.
+
+1) Voeg in server/services/yodeckClient.ts toe:
+
+listMedia(params?: { search?: string, page?: number }) (of bestaande list wrapper uitbreiden)
+
+findMediaByNameExact(name: string): Promise<Media | null>
+
+Implementeer door media list te pagineren (bijv. max 10 pages of totdat empty), match exact media.name === name.
+
+findMediaByTag(tag: string): Promise<Media | null> (optioneel maar sterk)
+
+Match media.tags bevat tag.
+
+createMediaFromUrl({ name, downloadUrl, type, tags, workspaceId?, parentFolderId? })
+
+Gebruik Yodeck “Create Media” met media_origin.source="url" + arguments.download_from_url=downloadUrl.
+
+createMediaLocal({ name, type, tags... }) + getUploadUrl(mediaId) + completeUpload(mediaId, uploadUrl) (als dit al bestaat: hergebruik)
+
+Zorg dat elke call logging heeft met correlationId + status + body parsed (max 2KB body log).
+
+2) Voeg “resolve step” toe in publish service (waar je nu two-step upload doet)
+
+Maak functie:
+
+resolveYodeckMediaIdForPlan({ planId, mediaName, cdnUrl, tags }): Promise<{ mediaId: number, resolvedVia: "db"|"tag"|"name"|"created_url"|"created_local" }>
+
+Algoritme:
+
+Als plan al yodeckMediaId heeft → return die (resolvedVia="db")
+
+Probeer bestaande media vinden op tag:
+
+Maak tag uniek per plan of per asset: bijv. elevizion:plan:<planId> en/of elevizion:asset:<assetId>
+
+findMediaByTag(...) → als gevonden: return mediaId (resolvedVia="tag")
+
+Probeer bestaande media vinden op exacte naam:
+
+findMediaByNameExact(mediaName) → als gevonden: return mediaId (resolvedVia="name")
+
+Maak nieuw media via URL import (preferred):
+
+createMediaFromUrl(...) → pak id uit response → return (resolvedVia="created_url")
+
+Als dit faalt met HTTP 400/409 (name conflict / exists): ga terug naar stap 3 en pak bestaande via name.
+
+Fallback local upload alleen als URL import faalt om andere redenen (500, timeouts):
+
+create local → get upload url → stream upload → complete → return (resolvedVia="created_local")
+
+CRUCIAAL: Zodra mediaId bekend is:
+
+update DB direct: placement_plans.yodeckMediaId = mediaId (en evt yodeckResolvedVia, yodeckMediaName, lastCorrelationId)
+
+Dit moet gebeuren voor playlist update/push, zodat failures niet meer leiden tot null.
+
+3) Update publish flow:
+
+Vervang “two-step upload” start met:
+
+const { mediaId, resolvedVia } = await resolveYodeckMediaIdForPlan(...)
+
+Daarna:
+
+Ensure media is in juiste folder/workspace (indien je dat gebruikt)
+
+Playlist placement:
+
+voeg item toe op basis van mediaId
+
+Push to screens / rebuild playlist zoals je al hebt
+
+4) Update /api/admin/yodeck/publish-debug/:planId output
+
+Laat lastDebug altijd teruggeven:
+
+resolvedMediaId (nummer of null)
+
+resolvedVia
+
+candidateName
+
+tagUsed
+
+createAttempt status (httpStatus, error snippet)
+
+findByName status (found true/false)
+
+findByTag status
+
+Zodat we nooit meer “Media status finished” zien zonder te weten welk mediaId dat was.
+
+5) Retry logic
+
+Retry endpoint moet eerst plan reloaden
+
+Als permanentFailure true of retryCount >= maxRetries → allow admin “unlock” (bestaat al) en dan retry.
+
+Maar belangrijk: retry moet NIET opnieuw proberen “create media” als yodeckMediaId inmiddels in DB staat. Dus resolve step zorgt dat hij meteen verder kan.
+
+6) Minimal impact
+
+Niet aan upload/baseline pipelines komen.
+
+Alleen publish/retry/yodeckClient en debug endpoint aanpassen.
+
+Voeg migrations toe als je extra velden opslaat (optioneel): yodeckMediaId bestaat al? Zo niet: toevoegen.
+
+7) Test (server-side)
+
+Voeg admin test endpoint toe:
+
+POST /api/admin/yodeck/test-resolve/:planId
+
+Return:
+
+{ ok:true, planId, mediaName, cdnUrl, result: { mediaId, resolvedVia } }
+
+Run dit in browser console via fetch om te zien dat het altijd een mediaId oplevert en dat het in DB opgeslagen is

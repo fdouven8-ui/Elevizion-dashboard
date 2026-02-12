@@ -281,6 +281,7 @@ export interface YodeckSchedule {
 export interface YodeckMedia {
   id: number;
   name: string;
+  status?: string;
   media_origin?: {
     type: "image" | "video" | "audio" | "document" | "webpage" | string;
     source?: string;
@@ -586,6 +587,124 @@ export class YodeckClient {
   async getMedia(id: number): Promise<YodeckMedia | null> {
     const index = await this.getMediaIndex();
     return index.get(id) || null;
+  }
+
+  async listMediaPaginated(params?: { search?: string; page?: number }): Promise<YodeckMedia[]> {
+    const maxPages = params?.page || 10;
+    const allMedia: YodeckMedia[] = [];
+    let offset = 0;
+
+    for (let page = 0; page < maxPages; page++) {
+      const queryParams: Record<string, string | number> = { limit: DEFAULT_LIMIT, offset };
+      if (params?.search) queryParams.search = params.search;
+
+      const response = await this.request<YodeckListResponse<YodeckMedia>>("/media", queryParams);
+      if (!response.ok || !response.data) break;
+
+      allMedia.push(...response.data.results);
+      if (!response.data.next) break;
+      offset += DEFAULT_LIMIT;
+    }
+
+    console.log(`[YodeckClient] listMediaPaginated: found ${allMedia.length} items (search=${params?.search || "none"})`);
+    return allMedia;
+  }
+
+  async findMediaByNameExact(name: string): Promise<YodeckMedia | null> {
+    const corrId = Math.random().toString(36).substring(2, 8);
+    console.log(`[YodeckClient][${corrId}] findMediaByNameExact: searching for "${name}"`);
+
+    const results = await this.listMediaPaginated({ search: name });
+    const exact = results.find(m => m.name === name);
+
+    if (exact) {
+      console.log(`[YodeckClient][${corrId}] findMediaByNameExact: FOUND id=${exact.id} status=${exact.status || "?"}`);
+    } else {
+      console.log(`[YodeckClient][${corrId}] findMediaByNameExact: NOT_FOUND (checked ${results.length} results)`);
+    }
+
+    return exact || null;
+  }
+
+  async findMediaByTag(tag: string): Promise<YodeckMedia | null> {
+    const corrId = Math.random().toString(36).substring(2, 8);
+    console.log(`[YodeckClient][${corrId}] findMediaByTag: searching for tag="${tag}"`);
+
+    const results = await this.listMediaPaginated();
+    const match = results.find(m => m.tags && m.tags.includes(tag));
+
+    if (match) {
+      console.log(`[YodeckClient][${corrId}] findMediaByTag: FOUND id=${match.id} name="${match.name}"`);
+    } else {
+      console.log(`[YodeckClient][${corrId}] findMediaByTag: NOT_FOUND (checked ${results.length} media items)`);
+    }
+
+    return match || null;
+  }
+
+  async createMediaFromUrl(opts: {
+    name: string;
+    downloadUrl: string;
+    type?: string;
+    tags?: string[];
+  }): Promise<{ ok: boolean; mediaId?: number; data?: any; error?: string; httpStatus?: number }> {
+    const corrId = Math.random().toString(36).substring(2, 8);
+    await semaphore.acquire();
+
+    try {
+      const body: Record<string, any> = {
+        name: opts.name,
+        media_origin: {
+          type: opts.type || "video",
+          source: "url",
+          format: null,
+        },
+        arguments: {
+          download_from_url: opts.downloadUrl,
+        },
+      };
+      if (opts.tags && opts.tags.length > 0) {
+        body.tags = opts.tags;
+      }
+
+      console.log(`[YodeckClient][${corrId}] createMediaFromUrl: name="${opts.name}" url=${opts.downloadUrl.substring(0, 80)}...`);
+      console.log(`[YodeckClient][${corrId}] createMediaFromUrl BODY:`, JSON.stringify(body, null, 2));
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 30000);
+
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/media/`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+        const respText = await response.text();
+        const respBody = respText.substring(0, 2048);
+
+        console.log(`[YodeckClient][${corrId}] createMediaFromUrl RESPONSE: status=${response.status} body=${respBody}`);
+
+        if (response.status >= 200 && response.status < 300) {
+          const data = JSON.parse(respText);
+          return { ok: true, mediaId: data.id, data, httpStatus: response.status };
+        }
+
+        return { ok: false, error: `HTTP ${response.status}: ${respBody}`, httpStatus: response.status };
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch (err: any) {
+      console.error(`[YodeckClient][${corrId}] createMediaFromUrl ERROR: ${err.message}`);
+      return { ok: false, error: err.message };
+    } finally {
+      semaphore.release();
+    }
   }
 
   /**

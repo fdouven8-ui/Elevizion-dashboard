@@ -2755,6 +2755,163 @@ class YodeckPublishService {
     }
   }
 
+  async resolveYodeckMediaIdForPlan(opts: {
+    planId: string;
+    mediaName: string;
+    cdnUrl: string;
+    storagePath: string;
+    advertiserId: string;
+    assetId?: string;
+    tags?: string[];
+  }): Promise<{ mediaId: number; resolvedVia: "db" | "outbox" | "name" | "created_url" | "created_local"; debug: Record<string, any> }> {
+    const corrId = crypto.randomUUID().substring(0, 8);
+    const debug: Record<string, any> = {
+      correlationId: corrId,
+      candidateName: opts.mediaName,
+      startedAt: new Date().toISOString(),
+    };
+
+    const plan = await db.query.placementPlans.findFirst({
+      where: eq(placementPlans.id, opts.planId),
+    });
+    if (!plan) throw new Error(`Plan ${opts.planId} not found`);
+
+    const publishReport = plan.publishReport as any;
+    const existingMediaId = publishReport?.yodeckMediaId
+      ? parseInt(publishReport.yodeckMediaId)
+      : null;
+
+    if (existingMediaId && !isNaN(existingMediaId)) {
+      const { YodeckClient } = await import("./yodeckClient");
+      const client = await YodeckClient.create();
+      if (client) {
+        const verify = await client.fetchMediaRaw(existingMediaId);
+        if (verify.ok && verify.data) {
+          console.log(`[YodeckResolve][${corrId}] RESOLVED via db: mediaId=${existingMediaId} status=${verify.data.status || "?"}`);
+          debug.resolvedVia = "db";
+          debug.mediaId = existingMediaId;
+          debug.verifiedStatus = verify.data.status;
+          await this.persistResolvedMediaId(opts.planId, existingMediaId, "db", corrId, debug);
+          return { mediaId: existingMediaId, resolvedVia: "db", debug };
+        }
+        console.log(`[YodeckResolve][${corrId}] DB mediaId=${existingMediaId} not valid in Yodeck (${verify.error}), continuing resolve`);
+        debug.dbMediaIdInvalid = { mediaId: existingMediaId, error: verify.error };
+      }
+    }
+
+    const uploadKey = crypto.createHash("sha256").update(`upload:${opts.planId}:${opts.assetId || "unknown"}`).digest("hex");
+    const outboxJob = await db.query.integrationOutbox.findFirst({
+      where: and(
+        eq(integrationOutbox.idempotencyKey, uploadKey),
+        eq(integrationOutbox.status, "succeeded")
+      ),
+    });
+    if (outboxJob?.externalId) {
+      const outboxMediaId = parseInt(outboxJob.externalId);
+      if (!isNaN(outboxMediaId)) {
+        console.log(`[YodeckResolve][${corrId}] RESOLVED via outbox: mediaId=${outboxMediaId}`);
+        debug.resolvedVia = "outbox";
+        debug.mediaId = outboxMediaId;
+        await this.persistResolvedMediaId(opts.planId, outboxMediaId, "outbox", corrId, debug);
+        return { mediaId: outboxMediaId, resolvedVia: "outbox", debug };
+      }
+    }
+
+    const { YodeckClient } = await import("./yodeckClient");
+    const client = await YodeckClient.create();
+    if (!client) throw new Error("YodeckClient not available");
+
+    const mediaNameMp4 = opts.mediaName.endsWith(".mp4") ? opts.mediaName : `${opts.mediaName}.mp4`;
+    debug.candidateName = mediaNameMp4;
+
+    const existingByName = await client.findMediaByNameExact(mediaNameMp4);
+    debug.findByName = { found: !!existingByName, mediaId: existingByName?.id, status: existingByName?.status };
+
+    if (existingByName) {
+      console.log(`[YodeckResolve][${corrId}] RESOLVED via name: mediaId=${existingByName.id} status=${existingByName.status}`);
+      debug.resolvedVia = "name";
+      debug.mediaId = existingByName.id;
+      await this.persistResolvedMediaId(opts.planId, existingByName.id, "name", corrId, debug);
+      return { mediaId: existingByName.id, resolvedVia: "name", debug };
+    }
+
+    console.log(`[YodeckResolve][${corrId}] Creating media via URL import: ${mediaNameMp4}`);
+    const createResult = await client.createMediaFromUrl({
+      name: mediaNameMp4,
+      downloadUrl: opts.cdnUrl,
+      type: "video",
+      tags: opts.tags,
+    });
+    debug.createAttempt = { ok: createResult.ok, httpStatus: createResult.httpStatus, mediaId: createResult.mediaId, error: createResult.error?.substring(0, 300) };
+
+    if (createResult.ok && createResult.mediaId) {
+      console.log(`[YodeckResolve][${corrId}] RESOLVED via created_url: mediaId=${createResult.mediaId}`);
+      debug.resolvedVia = "created_url";
+      debug.mediaId = createResult.mediaId;
+      await this.persistResolvedMediaId(opts.planId, createResult.mediaId, "created_url", corrId, debug);
+      return { mediaId: createResult.mediaId, resolvedVia: "created_url", debug };
+    }
+
+    if (createResult.httpStatus === 400 || createResult.httpStatus === 409) {
+      console.log(`[YodeckResolve][${corrId}] Create returned ${createResult.httpStatus}, re-searching by name`);
+      const retryByName = await client.findMediaByNameExact(mediaNameMp4);
+      debug.retryFindByName = { found: !!retryByName, mediaId: retryByName?.id };
+
+      if (retryByName) {
+        console.log(`[YodeckResolve][${corrId}] RESOLVED via name (post-conflict): mediaId=${retryByName.id}`);
+        debug.resolvedVia = "name";
+        debug.mediaId = retryByName.id;
+        await this.persistResolvedMediaId(opts.planId, retryByName.id, "name", corrId, debug);
+        return { mediaId: retryByName.id, resolvedVia: "name", debug };
+      }
+    }
+
+    console.log(`[YodeckResolve][${corrId}] URL import failed, falling back to local upload from R2`);
+    const uploadResult = await this.localUploadFromR2({
+      storagePath: opts.storagePath,
+      name: mediaNameMp4,
+      correlationId: corrId,
+    });
+    debug.localUpload = { ok: uploadResult.ok, mediaId: uploadResult.mediaId, error: uploadResult.debug?.error };
+
+    if (uploadResult.ok && uploadResult.mediaId) {
+      console.log(`[YodeckResolve][${corrId}] RESOLVED via created_local: mediaId=${uploadResult.mediaId}`);
+      debug.resolvedVia = "created_local";
+      debug.mediaId = uploadResult.mediaId;
+      await this.persistResolvedMediaId(opts.planId, uploadResult.mediaId, "created_local", corrId, debug);
+      return { mediaId: uploadResult.mediaId, resolvedVia: "created_local", debug };
+    }
+
+    throw new Error(`ALL_METHODS_FAILED: Could not resolve Yodeck media for plan ${opts.planId}. Debug: ${JSON.stringify(debug)}`);
+  }
+
+  private async persistResolvedMediaId(planId: string, mediaId: number, resolvedVia: string, corrId: string, resolveDebug?: Record<string, any>): Promise<void> {
+    try {
+      const plan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+      const existingReport = (plan?.publishReport as any) || {};
+
+      await db.update(placementPlans)
+        .set({
+          publishReport: {
+            ...existingReport,
+            yodeckMediaId: String(mediaId),
+            yodeckResolvedVia: resolvedVia,
+            lastCorrelationId: corrId,
+            resolvedAt: new Date().toISOString(),
+            resolveDebug: resolveDebug || existingReport.resolveDebug,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(placementPlans.id, planId));
+
+      console.log(`[YodeckResolve][${corrId}] Persisted mediaId=${mediaId} resolvedVia=${resolvedVia} to plan ${planId}`);
+    } catch (err: any) {
+      console.error(`[YodeckResolve][${corrId}] Failed to persist mediaId: ${err.message}`);
+    }
+  }
+
   /**
    * Publish an approved placement plan to Yodeck
    */
@@ -2813,34 +2970,42 @@ class YodeckPublishService {
       const approvedTargets = plan.approvedTargets as any[] || [];
       report.totalTargets = approvedTargets.length;
 
-      // Generate idempotency key for upload
-      const uploadIdempotencyKey = crypto
-        .createHash("sha256")
-        .update(`upload:${planId}:${asset.id}`)
-        .digest("hex");
+      const mediaName = `${plan.linkKey}_${asset.originalFileName || "video"}`;
 
-      // Step 1: Upload media to Yodeck (validates source URL first, tries URL import then presigned PUT fallback)
-      const uploadResult = await this.uploadMediaFromStorage(
-        effectiveStoragePath,
-        `${plan.linkKey}_${asset.originalFileName || "video"}`,
-        uploadIdempotencyKey,
-        plan.advertiserId,
-        asset.id
-      );
+      const { generateMediaCdnUrl } = await import("../routes/mediaCdn");
+      const cdnUrl = generateMediaCdnUrl(effectiveStoragePath, {
+        ttlHours: 7 * 24,
+        mime: "video/mp4",
+        name: mediaName.endsWith(".mp4") ? mediaName : `${mediaName}.mp4`,
+      });
 
-      if (uploadResult.lastDebug) {
-        (report as any).lastDebug = uploadResult.lastDebug;
-      }
-
-      if (!uploadResult.ok || !uploadResult.mediaId) {
-        const errorCode = uploadResult.errorCode || "YODECK_UPLOAD_FAILED";
-        const err = new Error(`Upload failed: ${uploadResult.error}`);
+      // Step 1: Resolve Yodeck media ID (find existing or create new)
+      // This is idempotent: if media already exists in DB/Yodeck, reuses it.
+      // Persists mediaId to publishReport BEFORE playlist operations.
+      let resolveResult: { mediaId: number; resolvedVia: string; debug: Record<string, any> };
+      try {
+        resolveResult = await this.resolveYodeckMediaIdForPlan({
+          planId,
+          mediaName,
+          cdnUrl,
+          storagePath: effectiveStoragePath,
+          advertiserId: plan.advertiserId,
+          assetId: asset.id,
+        });
+      } catch (resolveErr: any) {
+        const errorCode = "MEDIA_RESOLVE_FAILED";
+        const err = new Error(`Media resolve failed: ${resolveErr.message}`);
         (err as any).errorCode = errorCode;
-        (err as any).lastDebug = uploadResult.lastDebug;
+        (err as any).lastDebug = { resolveError: resolveErr.message };
         throw err;
       }
 
-      report.yodeckMediaId = String(uploadResult.mediaId);
+      (report as any).resolveDebug = resolveResult.debug;
+      (report as any).resolvedVia = resolveResult.resolvedVia;
+      report.yodeckMediaId = String(resolveResult.mediaId);
+      const resolvedMediaId = resolveResult.mediaId;
+
+      console.log(`[YodeckPublish] Resolved mediaId=${resolvedMediaId} via ${resolveResult.resolvedVia} for plan ${planId}`);
 
       // Step 2: Ensure tag-based playlists exist for all target locations
       const locationIds = approvedTargets.map(t => t.locationId);
@@ -2879,13 +3044,13 @@ class YodeckPublishService {
       
       const tagIdempotencyKey = crypto
         .createHash("sha256")
-        .update(`tags:${planId}:${uploadResult.mediaId}:${locationIds.join(',')}`)
+        .update(`tags:${planId}:${resolvedMediaId}:${locationIds.join(',')}`)
         .digest("hex");
       
       console.log(`[YodeckPublish] Using tag-based publishing for ${locationIds.length} locations`);
       
       const tagResult = await this.updateMediaTags(
-        uploadResult.mediaId,
+        resolvedMediaId,
         tags,
         tagIdempotencyKey,
         planId
@@ -2898,7 +3063,7 @@ class YodeckPublishService {
       // Step 4: Verify tags were applied
       let missingTags: string[] = [];
       if (tagResult.ok) {
-        const verifyResult = await this.verifyMediaTags(uploadResult.mediaId, tags);
+        const verifyResult = await this.verifyMediaTags(resolvedMediaId, tags);
         missingTags = verifyResult.missing;
         
         if (!verifyResult.ok) {
