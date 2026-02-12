@@ -1,0 +1,36 @@
+DOEL: Na approve moet publish flow altijd starten. Fix status mismatch (APPROVED_PENDING_PUBLISH vs APPROVED) waardoor publishSingleAsset/RetryPublish nu direct faalt en yodeckMediaId null blijft.
+
+BEWIJS (logs):
+- approve -> approvalStatus becomes APPROVED_PENDING_PUBLISH
+- RetryPublish logs WRONG_STATUS: approvalStatus=APPROVED_PENDING_PUBLISH (verwacht APPROVED)
+- publishSingleAsset FAILED: "moet APPROVED zijn"
+- outcome: PUBLISH_FAILED + yodeckMediaId=null
+
+OPDRACHT:
+1) Verwijder of depreceer approvalStatus=APPROVED_PENDING_PUBLISH.
+   - Bij approve: zet approvalStatus = "APPROVED" (blijft zo)
+   - Gebruik publishStatus voor het publish proces: "PUBLISH_PENDING" | "PUBLISHING" | "PUBLISHED" | "PUBLISH_FAILED"
+
+2) Pas de gates aan:
+   - RetryPublish / publishSingleAsset moet toestaan:
+     approvalStatus in ["APPROVED"] (en NIET meer blokkeren door APPROVED_PENDING_PUBLISH)
+   - Als je APPROVED_PENDING_PUBLISH toch wil laten bestaan om compat:
+     behandel het als APPROVED (alias) en log warning.
+
+3) Volgorde fix in approve handler:
+   - Update DB eerst: approvalStatus="APPROVED", publishStatus="PUBLISH_PENDING", lastPublishAttemptAt=now, publishAttempts++ (of pas bij echte attempt)
+   - Pas daarna: call publishAsset(assetId, actor="approve_new", correlationId)
+
+4) publishAsset() / publishSingleAsset() moet:
+   - Idempotent: als publishStatus == "PUBLISHED" -> return ok
+   - Als publishStatus == "PUBLISHING" en lastAttempt recent -> return ok/in-progress
+   - Anders: zet publishStatus="PUBLISHING" en start media pipeline -> verkrijg yodeckMediaId -> save -> ga door
+
+5) Error handling:
+   - Als geen yodeckMediaId verkregen -> publishStatus="PUBLISH_FAILED" + publishError met root cause.
+   - Geef in approve response een duidelijke message + correlationId.
+
+ACCEPTANCE TEST:
+- Approve van asset zonder yodeckMediaId mag NIET eindigen met WRONG_STATUS.
+- Er moet minimaal 1 publish attempt starten (logs) en bij succes yodeckMediaId gevuld worden.
+- “Opnieuw proberen” (retry) moet werken zonder status issues.

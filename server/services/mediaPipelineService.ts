@@ -783,10 +783,13 @@ export async function publishSingleAsset(opts: {
     return { ok: false, assetId, correlationId, error: "Asset niet gevonden" };
   }
 
-  // 2. Assert approvalStatus === APPROVED
-  if (asset.approvalStatus !== "APPROVED") {
+  const allowedApprovalStatuses = ["APPROVED", "APPROVED_PENDING_PUBLISH"];
+  if (!allowedApprovalStatuses.includes(asset.approvalStatus)) {
     console.error(`${LOG} correlationId=${correlationId} WRONG_STATUS assetId=${assetId} approvalStatus=${asset.approvalStatus}`);
     return { ok: false, assetId, correlationId, error: `Asset heeft status ${asset.approvalStatus}, moet APPROVED zijn` };
+  }
+  if (asset.approvalStatus === "APPROVED_PENDING_PUBLISH") {
+    console.warn(`${LOG} correlationId=${correlationId} COMPAT_ALIAS assetId=${assetId} treating APPROVED_PENDING_PUBLISH as APPROVED`);
   }
 
   // 3. Determine storage path

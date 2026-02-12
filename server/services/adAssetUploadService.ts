@@ -591,28 +591,21 @@ function getBucketFilter(bucket: ReviewBucket): SQL | undefined {
         baseExclusions,
         or(
           eq(adAssets.approvalStatus, 'APPROVED_PENDING_PUBLISH'),
-          and(
-            eq(adAssets.approvalStatus, 'APPROVED'),
-            or(
-              eq(adAssets.publishStatus, 'PENDING'),
-              isNull(adAssets.publishStatus)
-            )
-          )
+          eq(adAssets.approvalStatus, 'APPROVED'),
+        ),
+        or(
+          eq(adAssets.publishStatus, 'PENDING'),
+          isNull(adAssets.publishStatus)
         )
       );
     case 'failed':
       return and(
         baseExclusions,
         or(
-          and(
-            eq(adAssets.approvalStatus, 'APPROVED_PENDING_PUBLISH'),
-            eq(adAssets.publishStatus, 'PUBLISH_FAILED'),
-          ),
-          and(
-            eq(adAssets.approvalStatus, 'APPROVED'),
-            eq(adAssets.publishStatus, 'PUBLISH_FAILED'),
-          )
-        )
+          eq(adAssets.approvalStatus, 'APPROVED_PENDING_PUBLISH'),
+          eq(adAssets.approvalStatus, 'APPROVED'),
+        ),
+        eq(adAssets.publishStatus, 'PUBLISH_FAILED'),
       );
     case 'rejected':
       return and(
@@ -713,15 +706,15 @@ export async function approveAsset(
       return { success: false, message: 'Asset heeft technische validatiefouten' };
     }
     
-    const isRetryPublish = asset.approvalStatus === 'APPROVED_PENDING_PUBLISH' || asset.approvalStatus === 'APPROVED';
+    const isRetryPublish = asset.approvalStatus === 'APPROVED_PENDING_PUBLISH' || asset.approvalStatus === 'APPROVED' || asset.approvalStatus === 'LIVE';
     if (isRetryPublish) {
-      console.log(`[VideoReview] APPROVE_RETRY assetId=${assetId} status=${asset.approvalStatus} -> retry publish`);
+      console.log(`[VideoReview] APPROVE_RETRY assetId=${assetId} status=${asset.approvalStatus} publishStatus=${asset.publishStatus} -> retry publish`);
     } else if (asset.approvalStatus !== 'UPLOADED' && asset.approvalStatus !== 'IN_REVIEW') {
       return { success: false, message: `Asset heeft status ${asset.approvalStatus}, kan niet goedkeuren` };
     }
     
     const updatePayload: any = {
-      approvalStatus: 'APPROVED_PENDING_PUBLISH',
+      approvalStatus: 'APPROVED',
       publishStatus: 'PENDING',
       publishAttempts: (asset.publishAttempts || 0) + 1,
       lastPublishAttemptAt: new Date(),
@@ -877,7 +870,7 @@ export async function approveAsset(
     
     await db.update(adAssets)
       .set({
-        approvalStatus: publishSuccess ? 'LIVE' : 'APPROVED_PENDING_PUBLISH',
+        approvalStatus: publishSuccess ? 'LIVE' : 'APPROVED',
         publishStatus: publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED',
         publishError: publishErrorMsg,
         yodeckMediaId: effectiveYodeckMediaId || asset.yodeckMediaId,
@@ -885,7 +878,7 @@ export async function approveAsset(
       })
       .where(eq(adAssets.id, assetId));
     
-    console.log(`[VideoReviewApprove] ${approveCorrelationId} approvalStatus=${publishSuccess ? 'LIVE' : 'APPROVED_PENDING_PUBLISH'} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
+    console.log(`[VideoReviewApprove] ${approveCorrelationId} approvalStatus=${publishSuccess ? 'LIVE' : 'APPROVED'} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
     
     // Build success message with auto-placement and canonical publish info
     let message = isRetryPublish ? 'Asset was al goedgekeurd; publicatie opnieuw gestart' : 'Video goedgekeurd';
@@ -953,7 +946,7 @@ export async function rejectAsset(
       return { success: false, message: 'Asset niet gevonden' };
     }
     
-    const rejectableStatuses = ['UPLOADED', 'IN_REVIEW', 'PENDING_REVIEW', 'APPROVED_PENDING_PUBLISH', 'PUBLISH_FAILED'];
+    const rejectableStatuses = ['UPLOADED', 'IN_REVIEW', 'PENDING_REVIEW', 'APPROVED_PENDING_PUBLISH', 'APPROVED', 'PUBLISH_FAILED'];
     if (asset.approvalStatus === 'LIVE') {
       return { success: false, message: 'Een live asset kan niet worden afgekeurd. Archiveer deze eerst.' };
     }

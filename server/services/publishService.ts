@@ -577,7 +577,6 @@ export async function publishAsset(
   }
 
   const atomicResult = await db.update(adAssets).set({
-    approvalStatus: 'APPROVED_PENDING_PUBLISH',
     publishStatus: 'PENDING',
     publishAttempts: sql`COALESCE(${adAssets.publishAttempts}, 0) + 1`,
     lastPublishAttemptAt: new Date(),
@@ -660,14 +659,14 @@ export async function publishAsset(
       : null;
 
   await db.update(adAssets).set({
-    approvalStatus: publishSuccess ? 'LIVE' : 'APPROVED_PENDING_PUBLISH',
+    approvalStatus: publishSuccess ? 'LIVE' : 'APPROVED',
     publishStatus: publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED',
     publishError: publishErrorMsg,
     yodeckMediaId: effectiveYodeckMediaId || asset.yodeckMediaId,
     yodeckUploadedAt: effectiveYodeckMediaId ? new Date() : asset.yodeckUploadedAt,
   }).where(eq(adAssets.id, assetId));
 
-  console.log(`${LOG} ${correlationId} DONE approvalStatus=${publishSuccess ? 'LIVE' : 'APPROVED_PENDING_PUBLISH'} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
+  console.log(`${LOG} ${correlationId} DONE approvalStatus=${publishSuccess ? 'LIVE' : 'APPROVED'} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
 
   return {
     ok: publishSuccess,
