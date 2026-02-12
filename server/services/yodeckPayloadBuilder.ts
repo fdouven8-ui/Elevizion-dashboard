@@ -73,24 +73,26 @@ export function buildYodeckCreateMediaPayload(name: string): YodeckCreateMediaPa
 
 export interface YodeckCreateMediaPayloadUrl {
   name: string;
-  description: string;
-  media_type: string;
+  media_origin: {
+    type: string;
+    source: string;
+    format: null;
+  };
   arguments: {
     download_from_url: string;
-    buffering: boolean;
-    resolution: string;
   };
 }
 
 export function buildYodeckUrlMediaPayload(name: string, downloadUrl: string): YodeckCreateMediaPayloadUrl {
   const payload: YodeckCreateMediaPayloadUrl = {
     name,
-    description: "",
-    media_type: "video",
+    media_origin: {
+      type: "video",
+      source: "url",
+      format: null,
+    },
     arguments: {
       download_from_url: downloadUrl,
-      buffering: false,
-      resolution: "highest",
     },
   };
 

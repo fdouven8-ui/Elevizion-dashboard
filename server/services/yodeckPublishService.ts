@@ -2219,6 +2219,7 @@ class YodeckPublishService {
       const payload = buildYodeckUrlMediaPayload(mediaName, cdnUrl);
       
       console.log(`[YodeckPublish][${corrId}] URL_IMPORT: Creating media with download_from_url`);
+      console.log(`[YodeckPublish][${corrId}] YODECK CREATE BODY:`, JSON.stringify(payload, null, 2));
       
       const createResp = await axios.post(`${YODECK_BASE_URL}/media/`, payload, {
         headers: {
@@ -2230,10 +2231,12 @@ class YodeckPublishService {
       });
 
       debug.createStatus = createResp.status;
+      const createRespText = typeof createResp.data === "string" ? createResp.data : JSON.stringify(createResp.data);
+      console.log(`[YodeckPublish][${corrId}] YODECK CREATE RESPONSE STATUS: ${createResp.status}`);
+      console.log(`[YodeckPublish][${corrId}] YODECK CREATE RESPONSE TEXT: ${createRespText.substring(0, 500)}`);
       
       if (createResp.status < 200 || createResp.status >= 300) {
-        const body = typeof createResp.data === "string" ? createResp.data.substring(0, 300) : JSON.stringify(createResp.data).substring(0, 300);
-        debug.createError = body;
+        debug.createError = createRespText.substring(0, 300);
         return { ok: false, error: `Create failed: HTTP ${createResp.status}`, debug };
       }
 
