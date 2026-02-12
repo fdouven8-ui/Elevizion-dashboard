@@ -784,9 +784,16 @@ export default function VideoReview() {
                       </>
                     )}
                     {isPublishFailed(item) && (
-                      <Badge variant="destructive" className="ml-2" data-testid={`publish-failed-badge-${item.asset.id}`}>
+                      <Badge variant="destructive" className="ml-2" data-testid={`publish-failed-badge-${item.asset.id}`}
+                        title={item.asset.publishError || "Publicatie mislukt"}>
                         <AlertTriangle className="h-3 w-3 mr-1" />
-                        Publicatie mislukt
+                        {item.asset.publishError?.includes("INVALID_SOURCE") 
+                          ? "Bron-URL ongeldig"
+                          : item.asset.publishError?.includes("UPLOAD_ALL_METHODS_FAILED")
+                            ? "Upload mislukt (alle methoden)"
+                            : item.asset.publishError?.includes("initialized")
+                              ? "Upload vastgelopen"
+                              : "Publicatie mislukt"}
                       </Badge>
                     )}
                   </div>

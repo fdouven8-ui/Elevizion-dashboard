@@ -18561,6 +18561,85 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.get("/api/admin/yodeck/publish-debug/:planId", requireAdminAccess, async (req, res) => {
+    try {
+      const { planId } = req.params;
+      const plan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+      if (!plan) return res.status(404).json({ ok: false, error: "Plan not found" });
+
+      const asset = await db.query.adAssets.findFirst({
+        where: eq(adAssets.id, plan.adAssetId),
+      });
+
+      const outboxJobs = await db.query.integrationOutbox.findMany({
+        where: and(
+          eq(integrationOutbox.entityId, plan.advertiserId),
+          eq(integrationOutbox.provider, "yodeck")
+        ),
+        orderBy: [desc(integrationOutbox.updatedAt)],
+        limit: 10,
+      });
+
+      const report = plan.publishReport as any;
+      const lastDebug = report?.lastDebug || plan.lastErrorDetails?.lastDebug || null;
+
+      const approvedTargets = (plan.approvedTargets as any[]) || [];
+      const targetLocations = [];
+      for (const t of approvedTargets.slice(0, 20)) {
+        const loc = await db.query.locations.findFirst({
+          where: eq(locations.id, t.locationId),
+        });
+        targetLocations.push({
+          locationId: t.locationId,
+          locationName: loc?.name || "unknown",
+          yodeckDeviceId: loc?.yodeckDeviceId || null,
+          playlistId: loc?.playlistId || null,
+        });
+      }
+
+      res.json({
+        ok: true,
+        plan: {
+          id: plan.id,
+          status: plan.status,
+          advertiserId: plan.advertiserId,
+          adAssetId: plan.adAssetId,
+          linkKey: plan.linkKey,
+          createdAt: plan.createdAt,
+          publishedAt: plan.publishedAt,
+          failedAt: plan.failedAt,
+          retryCount: (plan as any).retryCount || 0,
+          lastErrorCode: plan.lastErrorCode,
+          lastErrorMessage: plan.lastErrorMessage,
+        },
+        asset: asset ? {
+          id: asset.id,
+          originalFileName: asset.originalFileName,
+          storagePath: asset.storagePath,
+          mimeType: asset.mimeType,
+          fileSize: asset.fileSize,
+          status: asset.status,
+        } : null,
+        lastDebug,
+        publishReport: report,
+        outboxJobs: outboxJobs.map(j => ({
+          id: j.id,
+          actionType: j.actionType,
+          status: j.status,
+          externalId: j.externalId,
+          lastError: j.lastError,
+          processedAt: j.processedAt,
+          updatedAt: j.updatedAt,
+        })),
+        targetLocations,
+      });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   app.post("/api/admin/advertisers/:id/ensure-canonical", requireAdminAccess, async (req, res) => {
     try {
       const { ensureCanonicalYodeckMedia } = await import("./services/canonicalMediaService");

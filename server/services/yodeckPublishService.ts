@@ -1644,20 +1644,29 @@ class YodeckPublishService {
 
   /**
    * Upload a video file from Object Storage to Yodeck
-   * Uses adaptive retry strategy:
-   * 1. First attempt: name + file only
-   * 2. If Yodeck says media_origin is missing (err_1002): retry with media_origin
-   * 3. Never include media_origin if it was previously rejected (err_1003)
+   * Strategy:
+   * 1. Generate public CDN URL for the asset
+   * 2. Validate source URL (HEAD + Range + ftyp check) 
+   * 3. Try URL-based import first (Yodeck downloads from our CDN)
+   * 4. If URL import fails with "initialized", fallback to presigned PUT with buffer
+   * 5. Store lastDebug diagnostics for /api/admin/yodeck/publish-debug/:planId
    */
   async uploadMediaFromStorage(
     storagePath: string,
     mediaName: string,
     idempotencyKey: string,
     advertiserId: string
-  ): Promise<{ ok: boolean; mediaId?: number; error?: string; errorCode?: string; errorDetails?: any }> {
-    console.log(`[YodeckPublish] Uploading media: ${mediaName} from ${storagePath}`);
+  ): Promise<{ ok: boolean; mediaId?: number; error?: string; errorCode?: string; errorDetails?: any; lastDebug?: any }> {
+    const corrId = crypto.randomUUID().substring(0, 8);
+    console.log(`[YodeckPublish][${corrId}] Uploading media: ${mediaName} from ${storagePath}`);
 
-    // Check if already uploaded via outbox (succeeded = skip re-upload)
+    const lastDebug: Record<string, any> = {
+      correlationId: corrId,
+      storagePath,
+      mediaName,
+      startedAt: new Date().toISOString(),
+    };
+
     const existing = await db.query.integrationOutbox.findFirst({
       where: and(
         eq(integrationOutbox.idempotencyKey, idempotencyKey),
@@ -1666,11 +1675,10 @@ class YodeckPublishService {
     });
 
     if (existing?.externalId) {
-      console.log(`[YodeckPublish] Already uploaded, mediaId=${existing.externalId}`);
-      return { ok: true, mediaId: parseInt(existing.externalId) };
+      console.log(`[YodeckPublish][${corrId}] Already uploaded, mediaId=${existing.externalId}`);
+      return { ok: true, mediaId: parseInt(existing.externalId), lastDebug };
     }
 
-    // Upsert outbox record for tracking (handles conflicts gracefully)
     const { storage: storageService } = await import("../storage");
     const upsertResult = await storageService.upsertOutboxJob({
       provider: "yodeck",
@@ -1683,8 +1691,8 @@ class YodeckPublishService {
     });
     
     if (upsertResult.isLocked) {
-      console.log(`[YodeckPublish] Upload job is already being processed`);
-      return { ok: false, error: "ALREADY_PROCESSING" };
+      console.log(`[YodeckPublish][${corrId}] Upload job is already being processed`);
+      return { ok: false, error: "ALREADY_PROCESSING", lastDebug };
     }
     
     await db.update(integrationOutbox)
@@ -1692,85 +1700,245 @@ class YodeckPublishService {
       .where(eq(integrationOutbox.id, upsertResult.job.id));
 
     try {
-      // Get file from R2 Object Storage as buffer
-      const objectStorage = new ObjectStorageService();
-      const r2Result = await objectStorage.getObjectBuffer(storagePath);
-      
-      if (!r2Result) {
-        throw new Error("Could not get file from R2 Object Storage");
-      }
-      
-      // Buffer already downloaded via getObjectBuffer
-      const fileBuffer = r2Result.buffer;
-      const fileSize = fileBuffer.length;
-      
-      if (fileSize > BUFFER_FALLBACK_MAX_BYTES) {
-        throw new Error(`File too large (${(fileSize / 1024 / 1024).toFixed(1)}MB > ${BUFFER_FALLBACK_MAX_BYTES / 1024 / 1024}MB)`);
-      }
-      
-      console.log(`[YodeckPublish] File loaded: ${fileSize} bytes`);
-      
-      // Normalize name
-      const normalizedName = this.normalizeMp4Name(mediaName);
-      
-      // === Use shared two-step upload with retry ===
-      const uploadResult = await this.uploadMediaWithRetry({
-        bytes: fileBuffer,
-        name: normalizedName,
-        contentType: 'video/mp4',
-      });
-      
-      if (!uploadResult.ok || !uploadResult.mediaId) {
+      const { generateMediaCdnUrl } = await import("../routes/mediaCdn");
+      const cdnUrl = generateMediaCdnUrl(storagePath, 4);
+      lastDebug.cdnUrl = cdnUrl.substring(0, 120) + "...";
+      console.log(`[YodeckPublish][${corrId}] Generated CDN URL for source validation`);
+
+      const { validateVideoSource } = await import("./videoSourceValidator");
+      const sourceCheck = await validateVideoSource(cdnUrl, corrId);
+      lastDebug.sourceCheck = {
+        valid: sourceCheck.valid,
+        headStatus: sourceCheck.headStatus,
+        contentType: sourceCheck.contentType,
+        contentLength: sourceCheck.contentLength,
+        hasFtyp: sourceCheck.hasFtyp,
+        ftypOffset: sourceCheck.ftypOffset,
+        errorCode: sourceCheck.errorCode,
+        errorMessage: sourceCheck.errorMessage,
+        durationMs: sourceCheck.durationMs,
+      };
+
+      if (!sourceCheck.valid) {
+        console.error(`[YodeckPublish][${corrId}] INVALID_SOURCE: ${sourceCheck.errorCode} - ${sourceCheck.errorMessage}`);
+        lastDebug.outcome = "INVALID_SOURCE";
+        
         await db.update(integrationOutbox)
           .set({ 
             status: "failed",
-            lastError: JSON.stringify({ 
-              code: "TWO_STEP_UPLOAD_FAILED", 
-              diagnostics: uploadResult.diagnostics
-            }),
+            lastError: JSON.stringify({ code: sourceCheck.errorCode, message: sourceCheck.errorMessage, debug: lastDebug }),
             processedAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
         
-        const lastError = uploadResult.diagnostics.lastError;
         return { 
           ok: false, 
-          error: lastError?.message || "Two-step upload failed", 
-          errorCode: "TWO_STEP_UPLOAD_FAILED",
-          errorDetails: uploadResult.diagnostics
+          error: sourceCheck.errorMessage || "Source URL validation failed", 
+          errorCode: sourceCheck.errorCode || "INVALID_SOURCE",
+          errorDetails: lastDebug,
+          lastDebug,
         };
       }
-      
-      // Success!
+
+      console.log(`[YodeckPublish][${corrId}] Source validated OK. Trying URL-based import first...`);
+
+      const normalizedName = this.normalizeMp4Name(mediaName);
+      let uploadMethodUsed: string = "none";
+      let mediaId: number | undefined;
+      let uploadDiagnostics: any = {};
+
+      const urlImportResult = await this.tryUrlImport(normalizedName, cdnUrl, corrId);
+      lastDebug.urlImport = urlImportResult.debug;
+
+      if (urlImportResult.ok && urlImportResult.mediaId) {
+        mediaId = urlImportResult.mediaId;
+        uploadMethodUsed = "url_import";
+        console.log(`[YodeckPublish][${corrId}] URL import SUCCESS: mediaId=${mediaId}`);
+      } else {
+        console.log(`[YodeckPublish][${corrId}] URL import failed (${urlImportResult.error}), falling back to presigned PUT...`);
+        lastDebug.urlImportFailed = urlImportResult.error;
+
+        const objectStorage = new ObjectStorageService();
+        const r2Result = await objectStorage.getObjectBuffer(storagePath);
+        
+        if (!r2Result) {
+          throw new Error("Could not get file from R2 Object Storage");
+        }
+        
+        const fileBuffer = r2Result.buffer;
+        const fileSize = fileBuffer.length;
+        
+        if (fileSize > BUFFER_FALLBACK_MAX_BYTES) {
+          throw new Error(`File too large (${(fileSize / 1024 / 1024).toFixed(1)}MB > ${BUFFER_FALLBACK_MAX_BYTES / 1024 / 1024}MB)`);
+        }
+        
+        console.log(`[YodeckPublish][${corrId}] File loaded: ${fileSize} bytes for presigned PUT`);
+        
+        const uploadResult = await this.uploadMediaWithRetry({
+          bytes: fileBuffer,
+          name: normalizedName,
+          contentType: 'video/mp4',
+        });
+        
+        uploadDiagnostics = uploadResult.diagnostics;
+        lastDebug.presignedPut = {
+          ok: uploadResult.ok,
+          mediaId: uploadResult.mediaId,
+          attempts: uploadResult.attempts,
+          method: uploadResult.uploadMethodUsed,
+        };
+
+        if (!uploadResult.ok || !uploadResult.mediaId) {
+          lastDebug.outcome = "BOTH_METHODS_FAILED";
+          
+          await db.update(integrationOutbox)
+            .set({ 
+              status: "failed",
+              lastError: JSON.stringify({ 
+                code: "UPLOAD_ALL_METHODS_FAILED", 
+                urlImportError: urlImportResult.error,
+                presignedDiagnostics: uploadResult.diagnostics,
+                debug: lastDebug,
+              }),
+              processedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
+          
+          const lastError = uploadResult.diagnostics.lastError;
+          return { 
+            ok: false, 
+            error: lastError?.message || "All upload methods failed", 
+            errorCode: "UPLOAD_ALL_METHODS_FAILED",
+            errorDetails: lastDebug,
+            lastDebug,
+          };
+        }
+
+        mediaId = uploadResult.mediaId;
+        uploadMethodUsed = "presigned_put_fallback";
+        console.log(`[YodeckPublish][${corrId}] Presigned PUT fallback SUCCESS: mediaId=${mediaId}`);
+      }
+
+      lastDebug.outcome = "SUCCESS";
+      lastDebug.mediaId = mediaId;
+      lastDebug.uploadMethodUsed = uploadMethodUsed;
+      lastDebug.completedAt = new Date().toISOString();
+
       await db.update(integrationOutbox)
         .set({
           status: "succeeded",
-          externalId: String(uploadResult.mediaId),
+          externalId: String(mediaId),
           responseJson: { 
-            mediaId: uploadResult.mediaId, 
-            method: uploadResult.uploadMethodUsed,
-            diagnostics: uploadResult.diagnostics
+            mediaId, 
+            method: uploadMethodUsed,
+            debug: lastDebug,
           },
           processedAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
       
-      console.log(`[YodeckPublish] Two-step upload SUCCESS: mediaId=${uploadResult.mediaId}`);
-      return { ok: true, mediaId: uploadResult.mediaId };
+      console.log(`[YodeckPublish][${corrId}] Upload SUCCESS via ${uploadMethodUsed}: mediaId=${mediaId}`);
+      return { ok: true, mediaId, lastDebug };
+
     } catch (err: any) {
-      console.error(`[YodeckPublish] Upload error:`, err.message);
+      console.error(`[YodeckPublish][${corrId}] Upload error:`, err.message);
+      lastDebug.outcome = "ERROR";
+      lastDebug.error = err.message;
+      
       await db.update(integrationOutbox)
         .set({
           status: "failed",
-          lastError: err.message,
+          lastError: JSON.stringify({ message: err.message, debug: lastDebug }),
           processedAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(integrationOutbox.idempotencyKey, idempotencyKey));
 
-      return { ok: false, error: err.message };
+      return { ok: false, error: err.message, lastDebug };
+    }
+  }
+
+  /**
+   * Try URL-based import: Yodeck downloads from our public CDN URL
+   * This avoids interrupted binary uploads entirely
+   */
+  private async tryUrlImport(
+    name: string,
+    cdnUrl: string,
+    corrId: string
+  ): Promise<{ ok: boolean; mediaId?: number; error?: string; debug: any }> {
+    const debug: Record<string, any> = { method: "url_import", startedAt: new Date().toISOString() };
+    
+    try {
+      const apiKey = await this.getApiKey();
+      const { buildYodeckUrlMediaPayload } = await import("./yodeckPayloadBuilder");
+      
+      const mediaName = name.endsWith(".mp4") ? name : `${name}.mp4`;
+      const payload = buildYodeckUrlMediaPayload(mediaName, cdnUrl);
+      
+      console.log(`[YodeckPublish][${corrId}] URL_IMPORT: Creating media with download_from_url`);
+      
+      const createResp = await axios.post(`${YODECK_BASE_URL}/media/`, payload, {
+        headers: {
+          "Authorization": `Token ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 30000,
+        validateStatus: () => true,
+      });
+
+      debug.createStatus = createResp.status;
+      
+      if (createResp.status < 200 || createResp.status >= 300) {
+        const body = typeof createResp.data === "string" ? createResp.data.substring(0, 300) : JSON.stringify(createResp.data).substring(0, 300);
+        debug.createError = body;
+        return { ok: false, error: `Create failed: HTTP ${createResp.status}`, debug };
+      }
+
+      const mediaId = createResp.data?.id;
+      if (!mediaId) {
+        return { ok: false, error: "No mediaId in create response", debug };
+      }
+
+      debug.mediaId = mediaId;
+      console.log(`[YodeckPublish][${corrId}] URL_IMPORT: mediaId=${mediaId}, polling status...`);
+
+      const pollResult = await this.pollMediaStatus(mediaId, {
+        maxAttempts: 40,
+        intervalMs: 3000,
+        correlationId: corrId,
+      });
+
+      debug.poll = {
+        ok: pollResult.ok,
+        finalStatus: pollResult.finalStatus,
+        isAborted: pollResult.isAborted,
+        attempts: pollResult.pollAttempts,
+      };
+
+      if (!pollResult.ok || pollResult.isAborted) {
+        console.error(`[YodeckPublish][${corrId}] URL_IMPORT: Media stuck/failed: ${pollResult.finalStatus}`);
+        
+        if (pollResult.finalStatus === "initialized" || pollResult.isAborted) {
+          console.log(`[YodeckPublish][${corrId}] URL_IMPORT: Cleaning up failed media ${mediaId}`);
+          await this.deleteMedia(mediaId, corrId);
+          debug.cleanedUp = true;
+        }
+        
+        return { ok: false, mediaId: undefined, error: `Media status: ${pollResult.finalStatus}`, debug };
+      }
+
+      debug.completedAt = new Date().toISOString();
+      console.log(`[YodeckPublish][${corrId}] URL_IMPORT: SUCCESS mediaId=${mediaId} status=${pollResult.finalStatus}`);
+      return { ok: true, mediaId, debug };
+
+    } catch (err: any) {
+      debug.error = err.message;
+      console.error(`[YodeckPublish][${corrId}] URL_IMPORT error: ${err.message}`);
+      return { ok: false, error: err.message, debug };
     }
   }
 
@@ -2299,7 +2467,7 @@ class YodeckPublishService {
         .update(`upload:${planId}:${asset.id}`)
         .digest("hex");
 
-      // Step 1: Upload media to Yodeck
+      // Step 1: Upload media to Yodeck (validates source URL first, tries URL import then presigned PUT fallback)
       const uploadResult = await this.uploadMediaFromStorage(
         asset.storagePath,
         `${plan.linkKey}_${asset.originalFileName || "video"}`,
@@ -2307,8 +2475,16 @@ class YodeckPublishService {
         plan.advertiserId
       );
 
+      if (uploadResult.lastDebug) {
+        (report as any).lastDebug = uploadResult.lastDebug;
+      }
+
       if (!uploadResult.ok || !uploadResult.mediaId) {
-        throw new Error(`Upload failed: ${uploadResult.error}`);
+        const errorCode = uploadResult.errorCode || "YODECK_UPLOAD_FAILED";
+        const err = new Error(`Upload failed: ${uploadResult.error}`);
+        (err as any).errorCode = errorCode;
+        (err as any).lastDebug = uploadResult.lastDebug;
+        throw err;
       }
 
       report.yodeckMediaId = String(uploadResult.mediaId);
@@ -2648,11 +2824,14 @@ class YodeckPublishService {
       report.completedAt = new Date().toISOString();
       console.error(`[YodeckPublish] Plan ${planId} failed:`, err.message);
 
-      // Determine error code from message
-      let errorCode = "PUBLISH_FAILED";
+      let errorCode = (err as any).errorCode || "PUBLISH_FAILED";
       let auditEventType: "PLAN_PUBLISH_FAILED" | "PLAN_PUBLISH_VERIFY_FAILED" = "PLAN_PUBLISH_FAILED";
       
-      if (err.message?.includes("Upload failed")) {
+      if (err.message?.includes("INVALID_SOURCE") || errorCode.startsWith("INVALID_SOURCE")) {
+        errorCode = errorCode.startsWith("INVALID_SOURCE") ? errorCode : "INVALID_SOURCE";
+      } else if (err.message?.includes("UPLOAD_ALL_METHODS_FAILED")) {
+        errorCode = "UPLOAD_ALL_METHODS_FAILED";
+      } else if (err.message?.includes("Upload failed") && errorCode === "PUBLISH_FAILED") {
         errorCode = "YODECK_UPLOAD_FAILED";
       } else if (err.message?.includes("UPLOAD_OK_BUT_NOT_IN_PLAYLIST")) {
         errorCode = "UPLOAD_OK_BUT_NOT_IN_PLAYLIST";
@@ -2679,9 +2858,10 @@ class YodeckPublishService {
           lastErrorMessage: err.message?.substring(0, 500) || "Unknown error",
           lastErrorDetails: { 
             stack: err.stack?.substring(0, 2000),
-            report: { ...report, error: err.message }
+            report: { ...report, error: err.message },
+            lastDebug: (err as any).lastDebug || (report as any).lastDebug || null,
           },
-          publishReport: { ...report, error: err.message } as any,
+          publishReport: { ...report, error: err.message, lastDebug: (err as any).lastDebug || (report as any).lastDebug || null } as any,
         })
         .where(eq(placementPlans.id, planId));
 

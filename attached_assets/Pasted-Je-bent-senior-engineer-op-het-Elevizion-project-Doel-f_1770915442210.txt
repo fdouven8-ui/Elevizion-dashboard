@@ -1,0 +1,68 @@
+Je bent senior engineer op het Elevizion project. Doel: fix publish naar Yodeck die faalt met:
+"Upload appeared to succeed but media status is initialized. This indicates the upload was interrupted or corrupted."
+We gebruiken nu uploadMethodUsed="two-step". We moeten dit structureel oplossen zonder baseline/upload flow te breken.
+
+CONTEXT (zeker uit logs):
+- Placement plan publish faalt: "Geen Yodeck media ID verkregen"
+- Yodeck error: media blijft "initialized" na upload
+- Browser kan /api/ad-assets/:id/stream HEAD 200 en Range 206 met content-type video/mp4
+- Maar Yodeck download gebeurt extern zonder cookies; als onze sourceUrl auth/cookies vereist of HTML teruggeeft, blijft Yodeck op initialized.
+
+TAKEN (doe alles):
+1) Vind de server code die de Yodeck upload uitvoert voor placement-plans publish (publishPlan / uploadMediaWithRetry). Identificeer exact:
+   - welke "source URL" of bytes we aan Yodeck voeren
+   - welke headers/content-type/content-length we verwachten
+   - of we interne endpoints gebruiken (/api/...) of directe R2 URL.
+
+2) Voeg harde server-side verificatie toe vóór upload:
+   - Maak helper validateVideoSource(url):
+     - HEAD request uitvoeren (met redirects volgen) en log: finalUrl, status, content-type, content-length, accept-ranges
+     - Doe een Range GET bytes=0-1023 (of 0-2047) en log status + content-range + eerste bytes signature (zonder hele file te loggen).
+     - Verifieer: status 200/206, content-type start met "video/", en de eerste bytes bevatten "ftyp" binnen de eerste 64 bytes (MP4 signature).
+     - Als content-type text/html of status >= 400: markeer als INVALID_SOURCE en stop publish met duidelijke error.
+   - Sla deze verificatie-resultaten op in publishReport.lastDebug zodat het zichtbaar is in /api/placement-plans output.
+
+3) Fix de bron-URL die Yodeck gebruikt:
+   - Als we nu interne URL gebruiken (bv /api/ad-assets/:id/stream of /elevizion-assets/...):
+     -> vervang dit door een absolute publiek bereikbare URL die Yodeck zónder cookies kan downloaden.
+   - We gebruiken Cloudflare R2/obj store: implementeer getPublicDownloadUrlForAsset(adAsset):
+     - Indien we al een storagePath hebben (R2 key), maak een signed GET URL (voldoende geldig, bv 2 uur) of een public bucket URL.
+     - Zorg dat de URL HTTPS is en direct de mp4 bytes serveert (niet via app HTML).
+   - Update Yodeck upload payload zodat die deze public URL gebruikt.
+
+4) Maak upload robuuster (two-step):
+   - Als Yodeck two-step upload met "download_from_url" / "play_from_url" kan:
+     -> geef Yodeck die public URL.
+   - Als two-step bytes upload gebruikt:
+     -> download server-side via fetch(stream) van de public URL, met timeout + retries, en controleer:
+        - aantal bytes == content-length (als aanwezig)
+        - mp4 signature check
+     -> pas daarna uploaden naar Yodeck.
+   - Bij detectie dat Yodeck media na upload blijft "initialized" langer dan X polls:
+     -> delete die media in Yodeck (als aangemaakt) en retry 1x met alternatief pad:
+        A) download_from_url (public URL)
+        B) direct bytes upload (server-side download + upload)
+     - Log welk pad is gebruikt (uploadMethodUsed) en sla dit op.
+
+5) Voeg minimale debug endpoints toe (zonder security gaten):
+   - GET /api/admin/yodeck/publish-debug/:planId
+     -> return de laatste publish debug (sourceUrl, head/range checks, yodeck response summary).
+   - Gebruik bestaande admin auth middleware.
+   - GEEN secrets in response.
+
+6) Update UI error:
+   - Als INVALID_SOURCE: toon "Bronbestand is niet extern downloadbaar (Yodeck krijgt HTML/403/404). Controleer public URL." + debugId/correlationId.
+   - Als initialized-stuck: toon "Yodeck upload incompleet; probeer opnieuw (fallback method used)".
+
+7) Voeg tests/guards:
+   - Unit-ish test function voor mp4 signature detect (ftyp).
+   - Zorg dat bestaande baseline playlist flow, review approve/reject niet breekt.
+
+OUTPUT:
+- Pas alleen relevante files aan.
+- Geef in console logs duidelijke tags: [YodeckPublish][correlationId] en [SourceCheck]
+- Na implementatie moet ik via browser console kunnen testen:
+  fetch("/api/placement-plans/<PLAN_ID>/retry",{method:"POST"}).then(r=>r.json()).then(console.log)
+  en daarna fetch("/api/admin/yodeck/publish-debug/<PLAN_ID>").then(r=>r.json()).then(console.log)
+
+Ga nu implementeren.
