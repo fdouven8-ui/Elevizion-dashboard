@@ -9,13 +9,13 @@ import MarketingFooter from "@/components/marketing/MarketingFooter";
 import { PRICING_PACKAGES, PRICING_CONSTANTS, type PricingPackage } from "@/lib/pricing";
 import Logo from "@/components/Logo";
 
-function getPackageStartParam(pkgId: string): string {
+function getPortalPlanCode(pkgId: string): string {
   const mapping: Record<string, string> = {
-    starter: "single",
-    "local-plus": "triple",
-    premium: "ten",
+    starter: "PLAN_1",
+    "local-plus": "PLAN_3",
+    premium: "PLAN_10",
   };
-  return mapping[pkgId] || "single";
+  return mapping[pkgId] || "PLAN_1";
 }
 
 function PricingCard({ pkg }: { pkg: PricingPackage }) {
@@ -91,7 +91,7 @@ function PricingCard({ pkg }: { pkg: PricingPackage }) {
             asChild
             data-testid={`button-pricing-${pkg.screens}`}
           >
-            <Link href={`/start?package=${getPackageStartParam(pkg.id)}`}>
+            <Link href={`/portal/signup?plan=${getPortalPlanCode(pkg.id)}`}>
               {pkg.ctaText}
             </Link>
           </Button>
@@ -190,7 +190,7 @@ export default function Prijzen() {
                 className="gap-2 bg-emerald-500 hover:bg-emerald-600 font-semibold py-6 px-8"
                 asChild
               >
-                <Link href="/start?package=triple">
+                <Link href="/portal/signup?plan=PLAN_3">
                   <Megaphone className="h-5 w-5" />
                   Start vanaf €30 per scherm
                 </Link>

@@ -1,0 +1,151 @@
+ROLE: Senior full-stack engineer.
+PROJECT: Elevizion Dashboard (React+TS+Vite frontend, Express+TS backend, Drizzle/Postgres).
+HARD CONSTRAINTS:
+- DO NOT TOUCH the Yodeck upload/publish pipeline or any code paths used for media upload, canonical media, playlist sync, yodeck client, etc.
+- Keep code clean and separated: portal auth/onboarding must be isolated in its own routes/services/components.
+- Goal is “single source of truth” for portal onboarding + plan/screen selection, persisted in DB.
+
+CONTEXT:
+- Portal exists at /portal with sidebar (Overzicht, Schermen, Video, Facturatie).
+- /portal/screens currently shows “Kies je plan” but it was empty because plans were missing; plans are now present and returned by GET /api/portal/plans:
+  plans[] items look like:
+  { id, code:"PLAN_1|PLAN_3|PLAN_10", name, maxScreens, minCommitMonths:3, priceMonthlyCents }
+- /api/admin/plans endpoint does not exist; seed exists at POST /api/admin/plans/seed.
+- We want customer self-service accounts + mandatory email verification via Postmark.
+- Old email-based onboarding flow must be retired: do not offer it on website anymore; endpoints can remain but should redirect users toward portal account flow where safe.
+
+DELIVERABLES:
+A) DATABASE (Drizzle)
+1) Create a new table for portal users (or extend existing advertisers if already best-fit, but prefer new clean table):
+   table: portal_users
+   fields:
+   - id uuid pk
+   - email text unique not null
+   - password_hash text not null
+   - email_verified_at timestamp null
+   - verify_token_hash text null
+   - verify_token_expires_at timestamp null
+   - company_name text null
+   - contact_name text null
+   - phone text null
+   - kvk text null
+   - vat text null
+   - address text null
+   - plan_code text null  (PLAN_1/PLAN_3/PLAN_10)
+   - onboarding_complete boolean default false
+   - created_at timestamp default now
+   - updated_at timestamp default now
+2) Add a lightweight join to existing advertiser records:
+   - Either create advertisers.portalUserId (nullable fk) OR create portal_user_advertiser map table.
+   Requirement: each portal user should map to exactly one advertiser record for now.
+   This mapping must NOT break existing admin dashboard advertisers flow.
+
+B) BACKEND API (Express)
+Implement portal auth + onboarding API with sessions (use existing session middleware if present).
+Routes (JSON only):
+1) POST /api/portal/signup
+   body: { companyName, email, password }
+   - Validate email format, password >= 6
+   - Create portal_user with password_hash (bcrypt)
+   - Generate verify token (random 32-48 bytes), store hash + expiry (24h)
+   - Send Postmark email: “Verifieer je e-mailadres” with link:
+     https://elevizion.nl/portal/verify-email?token=XXXX
+   - Return { ok:true }
+2) GET /api/portal/verify-email?token=...
+   - Hash token, match portal_user with non-expired token
+   - Set email_verified_at, clear token fields
+   - Create session (log them in)
+   - Ensure advertiser record exists + link to portal user (idempotent)
+   - Redirect to /portal/onboarding (or return JSON { ok:true, redirect:"/portal/onboarding" } depending on routing style)
+3) POST /api/portal/login
+   body { email, password }
+   - Require email_verified_at present
+   - Create session
+4) POST /api/portal/logout
+5) GET /api/portal/me
+   - Return portal user profile + onboarding status + selected plan + selected screens count
+6) PATCH /api/portal/me
+   - Allow updating company_name, contact_name, phone, kvk, vat, address (NOT email here)
+   - Recompute onboarding_complete when combined with plan+screens (see below)
+7) GET /api/portal/plans
+   - Return plans from DB (existing plans table)
+   - shape: { ok:true, plans:[...] }
+8) POST /api/portal/plan
+   body { planCode }
+   - Validate planCode exists
+   - Save portal_users.plan_code
+9) GET /api/portal/screens
+   - Return available screens grouped by location city (location is “plaats”; screens have a business name)
+   - shape optimized for UI selection
+10) POST /api/portal/screens
+    body { screenIds: string[] }
+    - Enforce hard limit: screenIds.length <= selectedPlan.maxScreens
+    - Persist selection (create portal_user_screen_selections table: portalUserId + screenId unique)
+11) Onboarding completeness logic:
+    - “required fields”: company_name, contact_name, phone, kvk, email_verified
+    - plus plan_code set
+    - plus at least 1 selected screen
+    - set onboarding_complete true/false accordingly on every relevant update
+12) Email change + password change endpoints:
+    - POST /api/portal/change-password { currentPassword, newPassword }
+    - POST /api/portal/change-email/start { newEmail } -> send verification to new email
+    - GET /api/portal/change-email/confirm?token=... -> apply new email (keep verified)
+   Keep minimal but working; Postmark templates.
+
+C) FRONTEND (Portal)
+Add/adjust pages with clean small UI:
+1) /portal/signup
+   - form: companyName, email, password
+   - after submit: “Check je mail om te verifiëren”
+2) /portal/login
+3) /portal/verify-email
+   - reads token from query; calls backend verify endpoint; then routes to onboarding
+4) /portal/onboarding
+   - guided steps but can reuse existing pages:
+     Step 1: /portal/account (gegevens)
+     Step 2: /portal/screens (plan + screens)
+     Step 3: /portal/video (existing upload entrypoint; do NOT change upload pipeline)
+5) /portal/account
+   - show and edit gegevens (company/contact/phone/kvk/vat/address)
+   - show email (readonly) + button “Wijzig e-mail”
+   - change password form
+6) Fix /portal/screens rendering:
+   - Must render plan cards from data.plans (NOT data.items)
+   - Display price from priceMonthlyCents to €xx,xx
+   - Select plan -> POST /api/portal/plan
+   - Then show screen selector grouped by city->business and enforce limit
+7) Navigation sidebar:
+   - add “Gegevens” item
+   - Keep it small and consistent.
+
+D) WEBSITE FRONTEND (Marketing site)
+- Update Pricing page buttons:
+  - “Start met 1 scherm” -> /portal/signup?plan=PLAN_1
+  - “Start met 3 schermen” -> /portal/signup?plan=PLAN_3
+  - “Start met 10 schermen” -> /portal/signup?plan=PLAN_10
+- After signup+verify, preselect plan from query param (on /portal/signup store desired plan in localStorage; after login/verify, auto POST /api/portal/plan if not set)
+
+E) POSTMARK
+- Use existing Postmark integration.
+- Add templates (or inline HTML) for:
+  1) Verify email
+  2) Change email verify
+- Ensure all emails are Dutch.
+
+F) SAFETY / SINGLE SOURCE OF TRUTH
+- Plan selection and screen selection must be persisted in DB and reflected by /api/portal/me.
+- Admin dashboard must still see advertisers and uploaded assets exactly like before.
+- Do not duplicate truth in multiple places: portal DB tables are truth for portal; yodeck truth remains in existing services.
+- Add a minimal admin debug endpoint:
+  GET /api/admin/portal/users/:id (admin only) -> view portal user + linked advertiser + selected screens + plan
+
+G) TESTING QUICK CHECKS
+- Add small dev-only console hints (or system-health) that shows:
+  - portalUsers count
+  - verified users count
+  - onboardingComplete count
+
+When done:
+- Provide the exact routes list added
+- Provide the exact DB migrations created
+- Do NOT refactor unrelated files.

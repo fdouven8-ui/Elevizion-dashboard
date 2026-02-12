@@ -6,11 +6,6 @@ import { Check } from "lucide-react";
 
 type Plan = { id: string; code: string; name: string; maxScreens: number; priceMonthlyCents: number; minCommitMonths: number };
 type Screen = { id: string; screenId: string; name: string; city: string | null };
-type MeData = {
-  advertiser: { id: string; planId: string | null; onboardingComplete: boolean };
-  plan: Plan | null;
-  placements: { total: number };
-};
 
 function formatPrice(cents: number) {
   return new Intl.NumberFormat("nl-NL", { style: "currency", currency: "EUR" }).format(cents / 100);
@@ -18,7 +13,8 @@ function formatPrice(cents: number) {
 
 export default function PortalScreens() {
   const [, navigate] = useLocation();
-  const [me, setMe] = useState<MeData | null>(null);
+  const [userPlanCode, setUserPlanCode] = useState<string | null>(null);
+  const [currentPlan, setCurrentPlan] = useState<Plan | null>(null);
   const [allPlans, setAllPlans] = useState<Plan[]>([]);
   const [selectedPlanCode, setSelectedPlanCode] = useState<string | null>(null);
   const [cities, setCities] = useState<string[]>([]);
@@ -36,10 +32,14 @@ export default function PortalScreens() {
       fetch("/api/portal/cities").then(r => r.json()),
     ]).then(([meData, plansData, citiesData]) => {
       if (!meData.ok) { navigate("/portal/login"); return; }
-      setMe(meData);
+      setUserPlanCode(meData.user.planCode);
+      setCurrentPlan(meData.plan);
       if (plansData.ok) setAllPlans(plansData.plans);
       if (citiesData.ok) setCities(citiesData.cities);
-      if (meData.plan?.code) setSelectedPlanCode(meData.plan.code);
+      if (meData.user.planCode) setSelectedPlanCode(meData.user.planCode);
+      if (meData.selectedScreenIds?.length > 0) {
+        setSelectedScreens(new Set(meData.selectedScreenIds));
+      }
       setLoading(false);
     });
   }, []);
@@ -51,19 +51,9 @@ export default function PortalScreens() {
     fetch(url).then(r => r.json()).then(d => d.ok && setScreens(d.screens));
   }, [selectedCity]);
 
-  useEffect(() => {
-    if (me?.advertiser?.id) {
-      fetch("/api/portal/placements").then(r => r.json()).then(d => {
-        if (d.ok && d.placements) {
-          setSelectedScreens(new Set(d.placements.map((p: any) => p.screenId)));
-        }
-      });
-    }
-  }, [me?.advertiser?.id]);
-
-  const activePlan = allPlans.find(p => p.code === selectedPlanCode) || me?.plan;
+  const activePlan = allPlans.find(p => p.code === selectedPlanCode) || currentPlan;
   const maxScreens = activePlan?.maxScreens ?? 0;
-  const needsPlan = !me?.advertiser?.planId && !selectedPlanCode;
+  const needsPlan = !userPlanCode && !selectedPlanCode;
 
   function toggleScreen(id: string) {
     const next = new Set(selectedScreens);
@@ -85,8 +75,8 @@ export default function PortalScreens() {
     setError("");
     setSaving(true);
     try {
-      if (!me?.advertiser?.planId && selectedPlanCode) {
-        const res = await fetch("/api/portal/onboarding", {
+      if (!userPlanCode && selectedPlanCode) {
+        const res = await fetch("/api/portal/plan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ planCode: selectedPlanCode }),
@@ -95,7 +85,7 @@ export default function PortalScreens() {
         if (!res.ok || !data.ok) { setError(data.message || "Fout bij plan opslaan"); setSaving(false); return; }
       }
 
-      const res = await fetch("/api/portal/placements", {
+      const res = await fetch("/api/portal/screens", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ screenIds: Array.from(selectedScreens) }),
@@ -116,7 +106,7 @@ export default function PortalScreens() {
         <p className="text-muted-foreground">Kies je plan en selecteer schermen</p>
       </div>
 
-      {(!me?.advertiser?.planId || needsPlan) && (
+      {(!userPlanCode || needsPlan) && (
         <Card>
           <CardHeader><CardTitle>Kies je plan</CardTitle></CardHeader>
           <CardContent>
@@ -146,7 +136,7 @@ export default function PortalScreens() {
         </Card>
       )}
 
-      {me?.advertiser?.planId && activePlan && (
+      {userPlanCode && activePlan && (
         <Card>
           <CardContent className="pt-4">
             <div className="text-sm text-muted-foreground">Huidig plan</div>
@@ -156,7 +146,7 @@ export default function PortalScreens() {
         </Card>
       )}
 
-      {(selectedPlanCode || me?.advertiser?.planId) && (
+      {(selectedPlanCode || userPlanCode) && (
         <>
           <Card>
             <CardHeader>
@@ -218,7 +208,7 @@ export default function PortalScreens() {
           <Button
             data-testid="button-save-screens"
             onClick={handleSave}
-            disabled={selectedScreens.size === 0 || saving || (!selectedPlanCode && !me?.advertiser?.planId)}
+            disabled={selectedScreens.size === 0 || saving || (!selectedPlanCode && !userPlanCode)}
             className="w-full"
           >
             {saving ? "Opslaan..." : "Opslaan"}

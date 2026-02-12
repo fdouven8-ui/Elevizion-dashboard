@@ -166,6 +166,38 @@ export const advertiserAccounts = pgTable("advertiser_accounts", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
+export const portalUsers = pgTable("portal_users", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: text("email").notNull().unique(),
+  passwordHash: text("password_hash").notNull(),
+  emailVerifiedAt: timestamp("email_verified_at"),
+  verifyTokenHash: text("verify_token_hash"),
+  verifyTokenExpiresAt: timestamp("verify_token_expires_at"),
+  changeEmailTokenHash: text("change_email_token_hash"),
+  changeEmailTokenExpiresAt: timestamp("change_email_token_expires_at"),
+  pendingEmail: text("pending_email"),
+  companyName: text("company_name"),
+  contactName: text("contact_name"),
+  phone: text("phone"),
+  kvk: text("kvk"),
+  vat: text("vat"),
+  address: text("address"),
+  planCode: text("plan_code"),
+  onboardingComplete: boolean("onboarding_complete").default(false),
+  advertiserId: varchar("advertiser_id").references(() => advertisers.id),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+export const portalUserScreenSelections = pgTable("portal_user_screen_selections", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  portalUserId: varchar("portal_user_id").notNull().references(() => portalUsers.id, { onDelete: "cascade" }),
+  screenId: varchar("screen_id").notNull().references(() => screens.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+}, (table) => [
+  uniqueIndex("portal_user_screen_idx").on(table.portalUserId, table.screenId),
+]);
+
 export const portalPlacements = pgTable("portal_placements", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   advertiserId: varchar("advertiser_id").notNull().references(() => advertisers.id, { onDelete: "cascade" }),

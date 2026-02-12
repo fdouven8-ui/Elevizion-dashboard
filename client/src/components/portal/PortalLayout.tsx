@@ -1,12 +1,13 @@
 import { useLocation } from "wouter";
 import { useState } from "react";
-import { LayoutDashboard, Monitor, Video, Receipt, LogOut, Menu, X } from "lucide-react";
+import { LayoutDashboard, Monitor, Video, Receipt, User, LogOut, Menu, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 const NAV_ITEMS = [
   { path: "/portal", label: "Overzicht", icon: LayoutDashboard },
   { path: "/portal/screens", label: "Schermen", icon: Monitor },
   { path: "/portal/video", label: "Video", icon: Video },
+  { path: "/portal/account", label: "Gegevens", icon: User },
   { path: "/portal/billing", label: "Facturatie", icon: Receipt },
 ];
 

@@ -24871,6 +24871,100 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // ADMIN PORTAL USERS DEBUG
+  // ============================================================================
+
+  app.get("/api/admin/portal/users/:id", requireAdminAccess, async (req, res) => {
+    try {
+      const { portalUsers, portalUserScreenSelections, advertisers, plans, screens } = await import("@shared/schema");
+      const { eq, inArray } = await import("drizzle-orm");
+      const userId = req.params.id;
+      const [user] = await db.select().from(portalUsers).where(eq(portalUsers.id, userId)).limit(1);
+      if (!user) return res.status(404).json({ ok: false, message: "Portal user not found" });
+
+      let advertiser = null;
+      if (user.advertiserId) {
+        const [adv] = await db.select().from(advertisers).where(eq(advertisers.id, user.advertiserId)).limit(1);
+        advertiser = adv || null;
+      }
+
+      let plan = null;
+      if (user.planCode) {
+        const [p] = await db.select().from(plans).where(eq(plans.code, user.planCode)).limit(1);
+        plan = p || null;
+      }
+
+      const selections = await db.select().from(portalUserScreenSelections)
+        .where(eq(portalUserScreenSelections.portalUserId, userId));
+      const screenIds = selections.map(s => s.screenId);
+      let selectedScreens: any[] = [];
+      if (screenIds.length > 0) {
+        selectedScreens = await db.select({ id: screens.id, name: screens.name, city: screens.city })
+          .from(screens).where(inArray(screens.id, screenIds));
+      }
+
+      res.json({
+        ok: true,
+        portalUser: {
+          id: user.id,
+          email: user.email,
+          emailVerified: !!user.emailVerifiedAt,
+          emailVerifiedAt: user.emailVerifiedAt,
+          companyName: user.companyName,
+          contactName: user.contactName,
+          phone: user.phone,
+          kvk: user.kvk,
+          vat: user.vat,
+          address: user.address,
+          planCode: user.planCode,
+          onboardingComplete: user.onboardingComplete,
+          createdAt: user.createdAt,
+        },
+        advertiser: advertiser ? {
+          id: advertiser.id,
+          companyName: advertiser.companyName,
+          email: advertiser.email,
+          onboardingComplete: advertiser.onboardingComplete,
+          assetStatus: advertiser.assetStatus,
+          planId: advertiser.planId,
+        } : null,
+        plan,
+        selectedScreens,
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.get("/api/admin/portal/users", requireAdminAccess, async (req, res) => {
+    try {
+      const { portalUsers } = await import("@shared/schema");
+      const { sql } = await import("drizzle-orm");
+      const allUsers = await db.select({
+        id: portalUsers.id,
+        email: portalUsers.email,
+        emailVerifiedAt: portalUsers.emailVerifiedAt,
+        companyName: portalUsers.companyName,
+        planCode: portalUsers.planCode,
+        onboardingComplete: portalUsers.onboardingComplete,
+        createdAt: portalUsers.createdAt,
+      }).from(portalUsers).orderBy(portalUsers.createdAt);
+
+      const total = allUsers.length;
+      const verified = allUsers.filter(u => u.emailVerifiedAt).length;
+      const onboardingComplete = allUsers.filter(u => u.onboardingComplete).length;
+
+      res.json({
+        ok: true,
+        summary: { total, verified, onboardingComplete },
+        users: allUsers,
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ============================================================================
   // API 404 CATCH-ALL - Must be LAST before Vite/Static middleware
   // ============================================================================
   // This ensures all unknown /api/* routes return JSON 404, never HTML

@@ -77,6 +77,8 @@ import PortalOverview from "@/pages/portal/PortalOverview";
 import PortalScreens from "@/pages/portal/PortalScreens";
 import PortalVideo from "@/pages/portal/PortalVideo";
 import PortalBilling from "@/pages/portal/PortalBilling";
+import PortalVerifyEmail from "@/pages/portal/PortalVerifyEmail";
+import PortalAccount from "@/pages/portal/PortalAccount";
 
 function DashboardRouter() {
   return (
@@ -151,10 +153,13 @@ function Router() {
       <Route path="/start" component={Start} />
       <Route path="/portal/login" component={PortalLogin} />
       <Route path="/portal/signup" component={PortalSignup} />
+      <Route path="/portal/verify-email" component={PortalVerifyEmail} />
+      <Route path="/portal/change-email" component={PortalVerifyEmail} />
       <Route path="/portal/onboarding">{() => <PortalLayout><PortalOnboarding /></PortalLayout>}</Route>
       <Route path="/portal/screens">{() => <PortalLayout><PortalScreens /></PortalLayout>}</Route>
       <Route path="/portal/video">{() => <PortalLayout><PortalVideo /></PortalLayout>}</Route>
       <Route path="/portal/billing">{() => <PortalLayout><PortalBilling /></PortalLayout>}</Route>
+      <Route path="/portal/account">{() => <PortalLayout><PortalAccount /></PortalLayout>}</Route>
       <Route path="/portal/status">{() => <PortalLayout><PortalStatus /></PortalLayout>}</Route>
       <Route path="/portal">{() => <PortalLayout><PortalOverview /></PortalLayout>}</Route>
       <Route path="/portal/:token" component={AdvertiserPortal} />

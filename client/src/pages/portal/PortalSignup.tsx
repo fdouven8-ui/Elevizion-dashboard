@@ -1,16 +1,28 @@
-import { useState } from "react";
-import { useLocation } from "wouter";
+import { useState, useEffect } from "react";
+import { useLocation, useSearch } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CheckCircle, Mail } from "lucide-react";
 
 export default function PortalSignup() {
   const [, navigate] = useLocation();
+  const search = useSearch();
+  const params = new URLSearchParams(search);
+  const planFromUrl = params.get("plan");
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [companyName, setCompanyName] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
+
+  useEffect(() => {
+    if (planFromUrl) {
+      localStorage.setItem("portal_desired_plan", planFromUrl);
+    }
+  }, [planFromUrl]);
 
   async function handleSignup(e: React.FormEvent) {
     e.preventDefault();
@@ -27,12 +39,52 @@ export default function PortalSignup() {
         setError(data.message || "Registratie mislukt");
         return;
       }
-      navigate("/portal/screens");
+      setEmailSent(true);
     } catch {
       setError("Er ging iets mis. Probeer het opnieuw.");
     } finally {
       setLoading(false);
     }
+  }
+
+  if (emailSent) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-8 pb-8 text-center space-y-4">
+            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
+              <Mail className="w-8 h-8 text-green-600" />
+            </div>
+            <h2 className="text-xl font-bold" data-testid="text-check-email">Check je e-mail</h2>
+            <p className="text-muted-foreground">
+              We hebben een verificatielink gestuurd naar <strong>{email}</strong>. 
+              Klik op de link om je account te activeren.
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Geen e-mail ontvangen? Check je spam-map of{" "}
+              <button 
+                className="text-blue-600 underline" 
+                data-testid="button-resend"
+                onClick={async () => {
+                  await fetch("/api/portal/resend-verify", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email }),
+                  });
+                }}
+              >
+                verstuur opnieuw
+              </button>
+            </p>
+            <div className="pt-2">
+              <a href="/portal/login" className="text-sm text-blue-600 underline" data-testid="link-login">
+                Naar inloggen
+              </a>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   return (
