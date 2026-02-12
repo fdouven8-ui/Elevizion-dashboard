@@ -2729,9 +2729,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
-  // Mark-reviewed: admin has seen the item, remove from "to review" queue
-  // Sets status to REVIEWED so it exits the review queue (which only shows UPLOADED/IN_REVIEW/PENDING_REVIEW/etc)
-  app.post("/api/admin/review/:id/mark-reviewed", requireAdminAccess, async (req: any, res) => {
+  // Shared handler: mark-reviewed
+  async function handleMarkReviewed(req: any, res: any) {
     try {
       const assetId = req.params.id;
       const user = (req as any).user;
@@ -2751,10 +2750,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
     } catch (error: any) {
       res.status(500).json({ ok: false, message: error.message });
     }
-  });
+  }
 
-  // Soft-delete review item: marks as DELETED, does NOT touch Yodeck content
-  app.delete("/api/admin/review/:id", requireAdminAccess, async (req: any, res) => {
+  // Shared handler: soft-delete
+  async function handleDeleteReview(req: any, res: any) {
     try {
       const assetId = req.params.id;
       const user = (req as any).user;
@@ -2774,7 +2773,15 @@ Sitemap: ${SITE_URL}/sitemap.xml
     } catch (error: any) {
       res.status(500).json({ ok: false, message: error.message });
     }
-  });
+  }
+
+  // Legacy routes (backward compat)
+  app.post("/api/admin/review/:id/mark-reviewed", requireAdminAccess, handleMarkReviewed);
+  app.delete("/api/admin/review/:id", requireAdminAccess, handleDeleteReview);
+
+  // Canonical routes under /api/admin/video-review
+  app.post("/api/admin/video-review/:id/mark-reviewed", requireAdminAccess, handleMarkReviewed);
+  app.delete("/api/admin/video-review/:id", requireAdminAccess, handleDeleteReview);
 
   // Get proposal/preview of screens before approval (dry-run, no DB changes)
   // Includes auto-provisioning: if screens lack playlists, attempts to create them and re-simulates

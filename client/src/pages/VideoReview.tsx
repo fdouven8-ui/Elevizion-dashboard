@@ -354,7 +354,7 @@ export default function VideoReview() {
 
   const markReviewedMutation = useMutation({
     mutationFn: async ({ assetId }: { assetId: string }) => {
-      const res = await fetch(`/api/admin/review/${assetId}/mark-reviewed`, {
+      const res = await fetch(`/api/admin/video-review/${assetId}/mark-reviewed`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
@@ -376,7 +376,7 @@ export default function VideoReview() {
 
   const deleteMutation = useMutation({
     mutationFn: async ({ assetId }: { assetId: string }) => {
-      const res = await fetch(`/api/admin/review/${assetId}`, {
+      const res = await fetch(`/api/admin/video-review/${assetId}`, {
         method: "DELETE",
       });
       if (!res.ok) {
