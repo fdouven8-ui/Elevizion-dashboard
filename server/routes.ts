@@ -24107,6 +24107,47 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.get("/api/admin/debug/head-range", requireAdminAccess, async (req, res) => {
+    const url = req.query.url as string;
+    if (!url) {
+      return res.status(400).json({ error: "url query parameter required" });
+    }
+
+    const pickHeaders = (h: Headers) => {
+      const keys = ["content-type", "content-length", "accept-ranges", "content-range", "cache-control"];
+      const out: Record<string, string> = {};
+      for (const k of keys) {
+        const v = h.get(k);
+        if (v) out[k] = v;
+      }
+      return out;
+    };
+
+    try {
+      const headRes = await fetch(url, { method: "HEAD", redirect: "follow" });
+      const headResult = { status: headRes.status, headers: pickHeaders(headRes.headers) };
+      console.log(`[DebugHeadRange] HEAD ${url} → ${headRes.status}`, headResult.headers);
+
+      const rangeRes = await fetch(url, {
+        method: "GET",
+        headers: { Range: "bytes=0-1023" },
+        redirect: "follow",
+      });
+      const rangeResult = { status: rangeRes.status, headers: pickHeaders(rangeRes.headers) };
+      console.log(`[DebugHeadRange] Range GET ${url} → ${rangeRes.status}`, rangeResult.headers);
+      await rangeRes.arrayBuffer();
+
+      res.json({
+        head: headResult,
+        range: rangeResult,
+        finalUrlAfterRedirects: headRes.url,
+      });
+    } catch (error: any) {
+      console.error("[DebugHeadRange] Error:", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   /**
    * POST /api/admin/media/:assetId/validate
    * Trigger validation for a media asset
