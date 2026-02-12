@@ -3397,6 +3397,68 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  app.post("/api/admin/placement-plans/:id/unlock", requireAdminAccess, async (req: any, res) => {
+    const planId = req.params.id;
+    const corrId = crypto.randomUUID().substring(0, 8);
+
+    try {
+      const plan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+
+      if (!plan) {
+        return res.status(404).json({ error: "Plan niet gevonden" });
+      }
+
+      const previous = {
+        status: plan.status,
+        retryCount: plan.retryCount,
+        lastErrorCode: plan.lastErrorCode,
+        lastErrorMessage: plan.lastErrorMessage,
+      };
+
+      const newStatus = plan.status === "FAILED" || plan.status === "PUBLISHING" ? "APPROVED" : plan.status;
+
+      await db.update(placementPlans)
+        .set({
+          retryCount: 0,
+          lastErrorCode: null,
+          lastErrorMessage: null,
+          lastErrorDetails: null,
+          status: newStatus,
+          updatedAt: new Date(),
+        })
+        .where(eq(placementPlans.id, planId));
+
+      const updatedPlan = await db.query.placementPlans.findFirst({
+        where: eq(placementPlans.id, planId),
+      });
+
+      const current = {
+        status: updatedPlan?.status,
+        retryCount: updatedPlan?.retryCount,
+        lastErrorCode: updatedPlan?.lastErrorCode,
+        lastErrorMessage: updatedPlan?.lastErrorMessage,
+      };
+
+      console.log(`[PlacementPlans][${corrId}] UNLOCK planId=${planId} actor=admin previous=${JSON.stringify(previous)} current=${JSON.stringify(current)}`);
+
+      const { logAudit } = await import("./services/auditService");
+      await logAudit({
+        action: "placement_plan_unlock",
+        entityType: "placement_plan",
+        entityId: planId,
+        actorId: req.user?.id || "admin",
+        details: { correlationId: corrId, previous, current },
+      });
+
+      res.json({ ok: true, planId, correlationId: corrId, previous, current });
+    } catch (error: any) {
+      console.error(`[PlacementPlans][${corrId}] Unlock error:`, error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // Retry a failed plan
   // Returns 200 always (except 404/400/409), with success: true/false based on publish result
   app.post("/api/placement-plans/:id/retry", isAuthenticated, async (req, res) => {
@@ -3429,8 +3491,17 @@ Sitemap: ${SITE_URL}/sitemap.xml
       const MAX_RETRIES = 5;
       const currentRetryCount = (plan as any)?.retryCount || 0;
       
-      // Force retry option: ?force=1 or X-Force-Retry header
-      const forceRetry = req.query.force === '1' || req.headers['x-force-retry'] === '1';
+      // Force retry option: ?force=1 or X-Force-Retry header (admin only)
+      const forceRequested = req.query.force === '1' || req.headers['x-force-retry'] === '1';
+      const isAdmin = hasAdminAccess(req);
+      const forceRetry = forceRequested && isAdmin;
+
+      if (forceRequested && !isAdmin) {
+        return res.status(403).json({
+          success: false,
+          message: "Force retry is alleen beschikbaar voor administrators.",
+        });
+      }
       
       // Dev/test mode bypasses retry limits
       const isDevMode = process.env.NODE_ENV === 'development' || process.env.TEST_MODE?.toUpperCase() === 'TRUE';
@@ -3473,18 +3544,20 @@ Sitemap: ${SITE_URL}/sitemap.xml
       
       // Log bypass if used
       if (bypassGuards && (currentRetryCount >= MAX_RETRIES || isPermanentError)) {
-        console.log(`[PlacementPlans] Retry guard bypassed: force=${forceRetry}, devMode=${isDevMode}, retryCount=${currentRetryCount}, isPermanentError=${isPermanentError}`);
+        console.log(`[PlacementPlans] FORCE_RETRY_USED: force=${forceRetry}, devMode=${isDevMode}, retryCount=${currentRetryCount}, isPermanentError=${isPermanentError}, planId=${planId}`);
       }
       
-      // Reset retryCount if force retry
+      // Reset retryCount and clear errors if force retry
       if (forceRetry) {
-        const { db } = await import("./db");
-        const { placementPlans } = await import("@shared/schema");
-        const { eq } = await import("drizzle-orm");
         await db.update(placementPlans)
-          .set({ retryCount: 0 })
+          .set({
+            retryCount: 0,
+            lastErrorCode: null,
+            lastErrorMessage: null,
+            lastErrorDetails: null,
+          })
           .where(eq(placementPlans.id, planId));
-        console.log(`[PlacementPlans] Force retry: reset retryCount to 0 for plan ${planId}`);
+        console.log(`[PlacementPlans] FORCE_RETRY_USED: reset retryCount+errors for plan ${planId}`);
       }
       
       // Reset status to APPROVED for retry (publishPlan will increment retryCount on failure)
@@ -3500,11 +3573,47 @@ Sitemap: ${SITE_URL}/sitemap.xml
         })
         .where(ormMod.eq(schemaMod.placementPlans.id, planId));
       
+      // CDN sanity check before publish
+      let cdnPreCheck: any = null;
+      try {
+        const asset = plan.adAssetId
+          ? await db.query.adAssets.findFirst({ where: eq(adAssets.id, plan.adAssetId) })
+          : null;
+        const assetAny = asset as any;
+        const storagePath = assetAny?.normalizedStoragePath || assetAny?.convertedStoragePath || assetAny?.storagePath;
+        if (storagePath) {
+          const { generateMediaCdnUrl } = await import("./routes/mediaCdn");
+          const cdnUrl = generateMediaCdnUrl(storagePath, { ttlHours: 7 * 24, mime: "video/mp4", name: assetAny?.originalFilename || "video.mp4" });
+          try {
+            const headRes = await fetch(cdnUrl, { method: "HEAD", redirect: "manual" });
+            const rangeRes = await fetch(cdnUrl, { method: "GET", headers: { Range: "bytes=0-1" }, redirect: "manual" });
+            await rangeRes.arrayBuffer();
+            cdnPreCheck = { cdnUrl: cdnUrl.substring(0, 80) + "...", headStatus: headRes.status, rangeStatus: rangeRes.status, ok: headRes.status === 200 && rangeRes.status === 206 };
+            console.log(`[PlacementPlans] CDN PRE-CHECK planId=${planId}: head=${headRes.status} range=${rangeRes.status} ok=${cdnPreCheck.ok}`);
+          } catch (cdnErr: any) {
+            cdnPreCheck = { error: cdnErr.message, ok: false };
+            console.warn(`[PlacementPlans] CDN PRE-CHECK FAILED planId=${planId}: ${cdnErr.message}`);
+          }
+        }
+      } catch (e: any) {
+        console.warn(`[PlacementPlans] CDN pre-check lookup error: ${e.message}`);
+      }
+
+      // Persist CDN precheck to plan's lastErrorDetails for diagnostics
+      if (cdnPreCheck) {
+        await dbMod.db.update(schemaMod.placementPlans)
+          .set({
+            lastErrorDetails: { cdnPreCheck, checkedAt: new Date().toISOString() },
+          })
+          .where(ormMod.eq(schemaMod.placementPlans.id, planId));
+      }
+
       // Publish (the service will update status to PUBLISHING -> PUBLISHED/FAILED and increment retryCount on failure)
       // Service uses upsert for outbox records, so duplicate key errors are handled gracefully
       let report: any;
       try {
         report = await yodeckPublishService.publishPlan(planId);
+        if (cdnPreCheck) report.cdnPreCheck = cdnPreCheck;
       } catch (publishError: any) {
         // Publish failed - get updated plan to show current state
         const failedPlan = await placementEngine.getPlan(planId);
