@@ -1,0 +1,40 @@
+We have Yodeck publish failing with "HEAD returned 500".
+publish-debug shows lastDebug.cdnUrl points to *.kirk.replit.dev/api/media-cdn/<token>.
+From elevizion.nl, browser fetch is blocked by CORS AND the HEAD request to that media-cdn endpoint returns 500.
+
+GOAL:
+1) Never generate any Yodeck source URL pointing to *.replit.dev or any /api/* domain that is not the public production domain.
+2) /api/media-cdn/:token must NEVER 500. It should work for HEAD/GET and be safe for Yodeck HEAD checks.
+3) Prefer redirect-to-R2 approach.
+
+IMPLEMENT STEPS:
+
+A) Fix URL generation:
+- Find where lastDebug.cdnUrl / media-cdn url is built (search: "media-cdn", "cdnUrl", "kirk.replit.dev", "REPLIT", "BASE_URL", "PUBLIC_URL").
+- Introduce a single function getPublicBaseUrl():
+  - Uses env PUBLIC_BASE_URL if set, else constructs from request host/proto (req.protocol + '://' + req.get('host')).
+  - In production, it must resolve to https://elevizion.nl (or the current host).
+- Ensure publish-debug and publish pipeline uses getPublicBaseUrl() and NEVER hardcodes replit domains.
+
+B) Replace media-cdn usage for Yodeck:
+- In publishPlan/uploadMediaWithRetry, do NOT pass /api/media-cdn url to Yodeck.
+- Instead generate a direct R2 signed URL to the actual mp4 object (asset.storagePath or normalizedStoragePath).
+- Save it as lastDebug.yodeckSourceUrl.
+
+C) Rewrite /api/media-cdn/:token:
+- Token resolves to storagePath (existing logic).
+- Generate an R2 signed URL for that storagePath.
+- Respond with HTTP 302 redirect to the signed URL for BOTH GET and HEAD.
+- For OPTIONS, respond 204 with Access-Control-Allow-Origin:* and allow headers/methods.
+- Never throw 500; on token invalid -> 404 JSON, on signing error -> 502 JSON.
+
+D) Add server-side source validation (for debugging):
+- Before calling Yodeck, do a server-side HEAD + Range bytes=0-1023 to lastDebug.yodeckSourceUrl.
+- Store headStatus, contentType, contentLength, acceptRanges, rangeStatus, contentRange into lastDebug.
+- If headStatus>=400 or contentType not video/*, throw explicit error INVALID_SOURCE_FOR_YODECK.
+
+E) After implementing, verify:
+- /api/admin/yodeck/publish-debug/:planId shows lastDebug.yodeckSourceUrl is https:// (not replit.dev) and headStatus=200/302 acceptable, rangeStatus=206.
+- Retry publish: POST /api/placement-plans/<planId>/retry should no longer fail on HEAD.
+
+Do minimal changes; do not alter baseline playlist/upload flow beyond source URL generation and media-cdn handler safety.

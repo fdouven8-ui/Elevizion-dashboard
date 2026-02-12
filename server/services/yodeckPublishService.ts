@@ -1702,6 +1702,7 @@ class YodeckPublishService {
     try {
       const { getR2PresignedUrl } = await import("../objectStorage");
       const cdnUrl = await getR2PresignedUrl(storagePath, 7200);
+      lastDebug.yodeckSourceUrl = cdnUrl;
       lastDebug.cdnUrl = cdnUrl.substring(0, 120) + "...";
       lastDebug.cdnUrlType = "r2_presigned";
       console.log(`[YodeckPublish][${corrId}] Generated R2 presigned URL for Yodeck download`);
@@ -1713,6 +1714,9 @@ class YodeckPublishService {
         headStatus: sourceCheck.headStatus,
         contentType: sourceCheck.contentType,
         contentLength: sourceCheck.contentLength,
+        acceptRanges: sourceCheck.acceptRanges,
+        rangeStatus: sourceCheck.rangeStatus,
+        contentRange: sourceCheck.rangeContentRange,
         hasFtyp: sourceCheck.hasFtyp,
         ftypOffset: sourceCheck.ftypOffset,
         errorCode: sourceCheck.errorCode,

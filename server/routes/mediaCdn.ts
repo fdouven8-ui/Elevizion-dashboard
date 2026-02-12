@@ -62,33 +62,42 @@ function verifyToken(token: string): MediaCdnToken | null {
   }
 }
 
+async function generateR2RedirectUrl(storagePath: string): Promise<string> {
+  const { getR2PresignedUrl, R2_IS_CONFIGURED } = await import("../objectStorage");
+  if (!R2_IS_CONFIGURED) {
+    throw new Error("R2 not configured");
+  }
+  return getR2PresignedUrl(storagePath, 7200);
+}
+
+router.options("/:token", (_req: Request, res: Response) => {
+  res.set({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+    "Access-Control-Allow-Headers": "Range, Content-Type, Authorization",
+    "Access-Control-Max-Age": "86400",
+  });
+  return res.status(204).end();
+});
+
 router.head("/:token", async (req: Request, res: Response) => {
   const token = req.params.token;
   const payload = verifyToken(token);
-  if (!payload) return res.status(403).end();
+  if (!payload) {
+    return res.status(404).json({ error: "Invalid or expired token" });
+  }
 
   try {
-    const { ObjectStorageService, R2_IS_CONFIGURED, s3Client, EFFECTIVE_BUCKET_NAME, resolveR2ObjectKey } = await import("../objectStorage");
-    const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
-
-    if (R2_IS_CONFIGURED && EFFECTIVE_BUCKET_NAME) {
-      const key = resolveR2ObjectKey(payload.path);
-      const headResult = await s3Client.send(new HeadObjectCommand({ Bucket: EFFECTIVE_BUCKET_NAME, Key: key }));
-      res.set({
-        "Content-Type": headResult.ContentType || "video/mp4",
-        "Content-Length": String(headResult.ContentLength || 0),
-        "Cache-Control": "public, max-age=86400",
-        "Accept-Ranges": "bytes",
-      });
-      return res.status(200).end();
-    }
-
-    res.set({ "Content-Type": "video/mp4", "Accept-Ranges": "bytes" });
-    return res.status(200).end();
+    const r2Url = await generateR2RedirectUrl(payload.path);
+    res.set({
+      "Location": r2Url,
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-cache",
+    });
+    return res.status(302).end();
   } catch (err: any) {
-    console.error(`${LOG_PREFIX} HEAD error:`, err.message);
-    res.set({ "Content-Type": "video/mp4", "Accept-Ranges": "bytes" });
-    return res.status(200).end();
+    console.error(`${LOG_PREFIX} HEAD redirect error: ${err.message}`);
+    return res.status(502).json({ error: "Failed to generate signed URL" });
   }
 });
 
@@ -98,57 +107,22 @@ router.get("/:token", async (req: Request, res: Response) => {
 
   if (!payload) {
     console.warn(`${LOG_PREFIX} Invalid or expired token`);
-    return res.status(403).json({ error: "Invalid or expired token" });
+    return res.status(404).json({ error: "Invalid or expired token" });
   }
 
-  console.log(`${LOG_PREFIX} Serving file: path=${payload.path}`);
+  console.log(`${LOG_PREFIX} Redirecting to R2: path=${payload.path}`);
 
   try {
-    const { ObjectStorageService, R2_IS_CONFIGURED } = await import("../objectStorage");
-
-    if (!R2_IS_CONFIGURED) {
-      const { Client } = await import("@replit/object-storage");
-      const client = new Client();
-      const result = await client.downloadAsBytes(payload.path);
-      if (!result.ok) {
-        console.error(`${LOG_PREFIX} File not found in Replit storage: ${payload.path}`);
-        return res.status(404).json({ error: "File not found" });
-      }
-      const buf = Buffer.from(result.value as unknown as ArrayBuffer);
-      console.log(`${LOG_PREFIX} Serving ${buf.length} bytes from Replit storage`);
-      res.set({
-        "Content-Type": "video/mp4",
-        "Content-Length": String(buf.length),
-        "Cache-Control": "public, max-age=86400",
-        "Accept-Ranges": "bytes",
-      });
-      return res.send(buf);
-    }
-
-    const r2Service = new ObjectStorageService();
-    const objData = await r2Service.getObjectBuffer(payload.path);
-
-    if (!objData) {
-      console.error(`${LOG_PREFIX} File not found in R2: ${payload.path}`);
-      return res.status(404).json({ error: "File not found" });
-    }
-
-    console.log(`${LOG_PREFIX} Serving ${objData.buffer.length} bytes from R2, key=${objData.key}`);
-
-    const head32 = objData.buffer.subarray(0, 32).toString("hex");
-    console.log(`${LOG_PREFIX} head32=${head32}`);
-
+    const r2Url = await generateR2RedirectUrl(payload.path);
     res.set({
-      "Content-Type": "video/mp4",
-      "Content-Length": String(objData.buffer.length),
-      "Cache-Control": "public, max-age=86400",
-      "Accept-Ranges": "bytes",
+      "Location": r2Url,
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-cache",
     });
-    return res.send(objData.buffer);
-
+    return res.redirect(302, r2Url);
   } catch (err: any) {
-    console.error(`${LOG_PREFIX} Error serving file:`, err.message);
-    return res.status(500).json({ error: "Internal error serving file" });
+    console.error(`${LOG_PREFIX} GET redirect error: ${err.message}`);
+    return res.status(502).json({ error: "Failed to generate signed URL" });
   }
 });
 
