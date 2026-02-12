@@ -2628,83 +2628,49 @@ Sitemap: ${SITE_URL}/sitemap.xml
     res.json(REJECTION_REASONS);
   });
 
+  // Publish trace - diagnostic endpoint for debugging publish flow (ADMIN ONLY)
+  app.get("/api/admin/video-review/:id/publish-trace", requireAdminAccess, async (req: any, res) => {
+    try {
+      const { getPublishTrace } = await import("./services/publishService");
+      const trace = await getPublishTrace(req.params.id);
+      if (!trace) {
+        return res.status(404).json({ ok: false, message: "Asset niet gevonden" });
+      }
+      res.json(trace);
+    } catch (error: any) {
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
   // Retry publish for failed assets (ADMIN ONLY)
-  // Publishes ONLY the specific assetId - NO scan/dedup pipeline
+  // Uses central publishAsset() with idempotency guard
   app.post("/api/admin/video-review/:id/retry-publish", requireAdminAccess, async (req: any, res) => {
     try {
       const assetId = req.params.id;
       const user = req.currentUser as any;
-      const correlationId = `retry-${assetId}-${Date.now()}`;
-      
-      const { getAdAssetById } = await import("./services/adAssetUploadService");
-      const asset = await getAdAssetById(assetId);
-      
-      if (!asset) {
-        return res.status(404).json({ ok: false, message: "Asset niet gevonden" });
-      }
-      
-      if (asset.approvalStatus !== 'APPROVED' && asset.approvalStatus !== 'APPROVED_PENDING_PUBLISH') {
-        return res.status(400).json({ 
-          ok: false, 
-          message: `Asset heeft status ${asset.approvalStatus}, moet APPROVED of APPROVED_PENDING_PUBLISH zijn voor retry` 
-        });
-      }
-      
-      if (asset.publishStatus === 'PENDING') {
-        return res.status(400).json({ 
-          ok: false, 
-          message: "Publicatie is al bezig. Wacht tot deze klaar is." 
-        });
-      }
-      
-      if (asset.publishStatus === 'PUBLISHED') {
-        return res.status(400).json({ 
-          ok: false, 
-          message: "Asset is al succesvol gepubliceerd." 
-        });
-      }
-      
-      console.log(`[VideoReview] RETRY_PUBLISH_START assetId=${assetId} correlationId=${correlationId} currentPublishStatus=${asset.publishStatus}`);
-      
-      // Mark as PENDING before starting
-      await db.update(adAssets).set({
-        publishStatus: 'PENDING',
-        publishAttempts: (asset.publishAttempts || 0) + 1,
-        lastPublishAttemptAt: new Date(),
-        publishError: null,
-      }).where(eq(adAssets.id, assetId));
-      
-      // DIRECT single-asset publish - NO scan/dedup
-      const { publishSingleAsset } = await import("./services/mediaPipelineService");
-      const result = await publishSingleAsset({
-        assetId,
-        correlationId,
+      const { publishAsset } = await import("./services/publishService");
+      const result = await publishAsset(assetId, {
         actor: `admin_retry:${user?.id || 'admin'}`,
+        isRetry: true,
       });
-      
-      // If publish succeeded, also push to playlists
-      let canonicalPublish = null;
-      if (result.ok && result.yodeckMediaId) {
-        try {
-          const { publishApprovedAdToAllLocations } = await import("./services/yodeckAutopilotService");
-          const autopilotResult = await publishApprovedAdToAllLocations(assetId);
-          canonicalPublish = {
-            success: autopilotResult.ok,
-            locationsUpdated: autopilotResult.locationsSuccess,
-          };
-        } catch (e: any) {
-          console.warn(`[VideoReview] Canonical publish after retry failed: ${e.message}`);
-        }
+
+      if (result.alreadyProcessing) {
+        return res.status(200).json({
+          ok: true,
+          message: result.error || "Publicatie is al bezig of voltooid",
+          correlationId: result.correlationId,
+          yodeckMediaId: result.yodeckMediaId,
+        });
       }
-      
+
       res.json({
         ok: result.ok,
-        message: result.ok 
-          ? `Publicatie gelukt${canonicalPublish?.locationsUpdated ? ` en gepubliceerd naar ${canonicalPublish.locationsUpdated} locatie(s)` : ''}`
+        message: result.ok
+          ? `Publicatie gelukt${result.locationsUpdated ? ` en gepubliceerd naar ${result.locationsUpdated} locatie(s)` : ''}`
           : `Publicatie mislukt: ${result.error}`,
         yodeckMediaId: result.yodeckMediaId,
-        correlationId,
-        canonicalPublish,
+        correlationId: result.correlationId,
+        locationsUpdated: result.locationsUpdated,
       });
     } catch (error: any) {
       console.error('[VideoReview] Retry publish error:', error);

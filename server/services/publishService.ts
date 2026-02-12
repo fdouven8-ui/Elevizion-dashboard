@@ -7,7 +7,7 @@
 
 import { db } from "../db";
 import { screens } from "@shared/schema";
-import { eq } from "drizzle-orm";
+import { eq, ne, and, sql } from "drizzle-orm";
 import { getCanonicalApprovedAsset } from "./adAssetService";
 import { resolveTargetScreensForAdvertiser } from "./placementResolver";
 import { 
@@ -304,5 +304,376 @@ export async function publishApprovedAdvertiser(advertiserId: string): Promise<P
     correlationId,
     asset: { assetId: asset.assetId, yodeckMediaId: asset.yodeckMediaId },
     targets: targetResults,
+  };
+}
+
+import { adAssets, advertisers, uploadJobs, screenContentItems } from "@shared/schema";
+import { desc, inArray } from "drizzle-orm";
+
+export interface PublishStep {
+  step: string;
+  ok: boolean;
+  ts: string;
+  details: string;
+}
+
+export interface PublishTraceResult {
+  asset: {
+    id: string;
+    approvalStatus: string;
+    publishStatus: string | null;
+    publishAttempts: number;
+    lastPublishAttemptAt: string | null;
+    publishError: string | null;
+    storagePath: string | null;
+    normalizedStoragePath: string | null;
+    yodeckReadinessStatus: string;
+  };
+  targeting: {
+    advertiserId: string;
+    advertiserName: string | null;
+    targetRegionCodes: string[] | null;
+    selectedScreenIds: string[];
+    selectedYodeckPlayerIds: (number | null)[];
+  };
+  playlist: {
+    baselinePlaylistId: string | null;
+    screenPlaylists: {
+      screenId: string;
+      screenName: string;
+      playlistId: string | null;
+      yodeckMediaPresent: boolean;
+    }[];
+  };
+  yodeck: {
+    mediaId: number | null;
+    uploadedAt: string | null;
+    lastUploadJob: {
+      id: string;
+      status: string;
+      finalState: string | null;
+      correlationId: string | null;
+      yodeckMediaId: number | null;
+      yodeckStatus: string | null;
+      yodeckFileSize: number | null;
+      lastError: string | null;
+      errorCode: string | null;
+      attempt: number;
+      createdAt: string;
+    } | null;
+  };
+  lastSteps: PublishStep[];
+  recommendation: string;
+}
+
+export async function getPublishTrace(assetId: string): Promise<PublishTraceResult | null> {
+  const asset = await db.query.adAssets.findFirst({
+    where: eq(adAssets.id, assetId),
+  });
+
+  if (!asset) return null;
+
+  const advertiser = await db.query.advertisers.findFirst({
+    where: eq(advertisers.id, asset.advertiserId),
+  });
+
+  let relevantScreens: any[] = [];
+  let targetingError: string | null = null;
+  try {
+    const targetsResult = await resolveTargetScreensForAdvertiser(asset.advertiserId);
+    if (targetsResult.ok && targetsResult.targets) {
+      const targetIds = new Set(targetsResult.targets.map((t: any) => t.id));
+      const allScreens = await db.select().from(screens).catch(() => [] as any[]);
+      relevantScreens = allScreens.filter((s: any) => targetIds.has(s.id));
+    } else {
+      targetingError = targetsResult.error || targetsResult.errorCode || null;
+      relevantScreens = await db.select().from(screens).catch(() => [] as any[]);
+    }
+  } catch {
+    relevantScreens = await db.select().from(screens).catch(() => [] as any[]);
+    targetingError = "Targeting resolver fout";
+  }
+  const relevantScreenIds = relevantScreens.map((s: any) => s.id);
+
+  let contentItems: any[] = [];
+  if (asset.yodeckMediaId && relevantScreenIds.length > 0) {
+    contentItems = await db.select().from(screenContentItems)
+      .where(
+        and(
+          eq(screenContentItems.yodeckMediaId, asset.yodeckMediaId),
+          inArray(screenContentItems.screenId, relevantScreenIds)
+        )
+      ).catch(() => []);
+  }
+
+  const contentScreenIds = new Set(contentItems.map((c: any) => c.screenId));
+
+  const latestUploadJob = await db.query.uploadJobs.findFirst({
+    where: eq(uploadJobs.advertiserId, asset.advertiserId),
+    orderBy: [desc(uploadJobs.createdAt)],
+  }).catch(() => null);
+
+  const baselinePlaylistId = process.env.BASELINE_PLAYLIST_ID || null;
+
+  const steps: PublishStep[] = [];
+  const now = new Date().toISOString();
+
+  const hasTargeting = relevantScreenIds.length > 0 && !targetingError;
+  steps.push({
+    step: "resolve_targeting",
+    ok: hasTargeting,
+    ts: asset.approvedAt?.toISOString() || now,
+    details: targetingError
+      ? `Targeting fout: ${targetingError} (fallback: ${relevantScreenIds.length} schermen)`
+      : hasTargeting
+        ? `${relevantScreenIds.length} scherm(en) gevonden via targeting resolver`
+        : "Geen schermen gevonden voor targeting",
+  });
+
+  const hasMedia = !!asset.yodeckMediaId;
+  steps.push({
+    step: "ensure_yodeck_media",
+    ok: hasMedia,
+    ts: asset.yodeckUploadedAt?.toISOString() || now,
+    details: hasMedia
+      ? `yodeckMediaId=${asset.yodeckMediaId}`
+      : asset.publishError || "Geen Yodeck media ID",
+  });
+
+  if (hasMedia) {
+    const presentCount = contentItems.length;
+    steps.push({
+      step: "ensure_playlist_items",
+      ok: presentCount > 0,
+      ts: now,
+      details: presentCount > 0
+        ? `Media aanwezig op ${presentCount}/${relevantScreenIds.length} scherm(en)`
+        : `Media niet gevonden op schermplaylists`,
+    });
+  }
+
+  const isLive = asset.approvalStatus === 'LIVE' && asset.publishStatus === 'PUBLISHED';
+  steps.push({
+    step: "publish_status",
+    ok: isLive,
+    ts: asset.lastPublishAttemptAt?.toISOString() || now,
+    details: isLive
+      ? "Asset is LIVE en gepubliceerd"
+      : `approvalStatus=${asset.approvalStatus} publishStatus=${asset.publishStatus}`,
+  });
+
+  if (latestUploadJob) {
+    steps.push({
+      step: "upload_job_status",
+      ok: latestUploadJob.status === 'READY',
+      ts: latestUploadJob.createdAt?.toISOString() || now,
+      details: `job=${latestUploadJob.id} status=${latestUploadJob.status} finalState=${latestUploadJob.finalState} yodeckStatus=${latestUploadJob.yodeckStatus}`,
+    });
+  }
+
+  let recommendation = "UNKNOWN";
+  if (isLive) {
+    recommendation = "NONE - Asset is live en werkend";
+  } else if (!hasTargeting) {
+    recommendation = "FIX_TARGETING - Geen schermen gevonden. Controleer locatie-koppeling en regio-instellingen.";
+  } else if (!hasMedia && asset.yodeckReadinessStatus === 'NEEDS_NORMALIZATION') {
+    recommendation = "WAIT_PROCESSING - Video wordt nog genormaliseerd.";
+  } else if (!hasMedia && asset.yodeckReadinessStatus === 'NORMALIZING') {
+    recommendation = "WAIT_PROCESSING - Normalisatie is bezig.";
+  } else if (!hasMedia && (asset.publishStatus === 'PUBLISH_FAILED' || !asset.publishStatus)) {
+    recommendation = "RETRY_PUBLISH - Geen Yodeck media. Gebruik 'Opnieuw publiceren'.";
+  } else if (hasMedia && contentItems.length === 0) {
+    recommendation = "PLAYLIST_REBUILD - Media bestaat in Yodeck maar is niet op playlists. Gebruik baseline sync.";
+  } else if (asset.publishStatus === 'PUBLISH_FAILED') {
+    recommendation = "RETRY_PUBLISH - Publicatie eerder mislukt. Gebruik 'Opnieuw publiceren'.";
+  } else if (asset.publishStatus === 'PENDING') {
+    recommendation = "WAIT_PROCESSING - Publicatie is bezig.";
+  } else {
+    recommendation = `CHECK_MANUALLY - approvalStatus=${asset.approvalStatus} publishStatus=${asset.publishStatus}`;
+  }
+
+  return {
+    asset: {
+      id: asset.id,
+      approvalStatus: asset.approvalStatus,
+      publishStatus: asset.publishStatus,
+      publishAttempts: asset.publishAttempts || 0,
+      lastPublishAttemptAt: asset.lastPublishAttemptAt?.toISOString() || null,
+      publishError: asset.publishError,
+      storagePath: asset.storagePath,
+      normalizedStoragePath: asset.normalizedStoragePath,
+      yodeckReadinessStatus: asset.yodeckReadinessStatus,
+    },
+    targeting: {
+      advertiserId: asset.advertiserId,
+      advertiserName: advertiser?.companyName || null,
+      targetRegionCodes: (advertiser as any)?.targetRegionCodes || null,
+      selectedScreenIds: relevantScreenIds,
+      selectedYodeckPlayerIds: relevantScreens.map((s: any) => s.yodeckPlayerId || null),
+    },
+    playlist: {
+      baselinePlaylistId,
+      screenPlaylists: relevantScreens.map((s: any) => ({
+        screenId: s.id,
+        screenName: s.name || s.id,
+        playlistId: s.playlistId || null,
+        yodeckMediaPresent: contentScreenIds.has(s.id),
+      })),
+    },
+    yodeck: {
+      mediaId: asset.yodeckMediaId,
+      uploadedAt: asset.yodeckUploadedAt?.toISOString() || null,
+      lastUploadJob: latestUploadJob ? {
+        id: latestUploadJob.id,
+        status: latestUploadJob.status,
+        finalState: latestUploadJob.finalState,
+        correlationId: latestUploadJob.correlationId,
+        yodeckMediaId: latestUploadJob.yodeckMediaId,
+        yodeckStatus: latestUploadJob.yodeckStatus,
+        yodeckFileSize: latestUploadJob.yodeckFileSize,
+        lastError: latestUploadJob.lastError,
+        errorCode: latestUploadJob.errorCode,
+        attempt: latestUploadJob.attempt,
+        createdAt: latestUploadJob.createdAt?.toISOString() || '',
+      } : null,
+    },
+    lastSteps: steps,
+    recommendation,
+  };
+}
+
+export interface PublishAssetResult {
+  ok: boolean;
+  correlationId: string;
+  yodeckMediaId?: number | null;
+  locationsUpdated?: number;
+  error?: string;
+  alreadyProcessing?: boolean;
+}
+
+export async function publishAsset(
+  assetId: string,
+  opts: { actor: string; isRetry?: boolean }
+): Promise<PublishAssetResult> {
+  const correlationId = `publish-${assetId}-${Date.now()}`;
+  const LOG = `[PublishAsset]`;
+
+  const asset = await db.query.adAssets.findFirst({
+    where: eq(adAssets.id, assetId),
+  });
+
+  if (!asset) {
+    return { ok: false, correlationId, error: "Asset niet gevonden" };
+  }
+
+  if (asset.publishStatus === 'PUBLISHED' && asset.approvalStatus === 'LIVE') {
+    console.log(`${LOG} ${correlationId} IDEMPOTENT_SKIP assetId=${assetId} already LIVE+PUBLISHED`);
+    return { ok: true, correlationId, yodeckMediaId: asset.yodeckMediaId, alreadyProcessing: true };
+  }
+
+  const allowedStatuses = ['APPROVED', 'APPROVED_PENDING_PUBLISH'];
+  if (!allowedStatuses.includes(asset.approvalStatus)) {
+    return { ok: false, correlationId, error: `Asset heeft status ${asset.approvalStatus}, moet APPROVED of APPROVED_PENDING_PUBLISH zijn` };
+  }
+
+  const atomicResult = await db.update(adAssets).set({
+    approvalStatus: 'APPROVED_PENDING_PUBLISH',
+    publishStatus: 'PENDING',
+    publishAttempts: sql`COALESCE(${adAssets.publishAttempts}, 0) + 1`,
+    lastPublishAttemptAt: new Date(),
+    publishError: null,
+  }).where(
+    and(
+      eq(adAssets.id, assetId),
+      ne(adAssets.publishStatus, 'PENDING')
+    )
+  ).returning({ id: adAssets.id });
+
+  if (atomicResult.length === 0) {
+    console.log(`${LOG} ${correlationId} IDEMPOTENT_SKIP assetId=${assetId} publishStatus=PENDING (concurrent guard)`);
+    return { ok: true, correlationId, alreadyProcessing: true, error: "Publicatie is al bezig" };
+  }
+
+  console.log(`${LOG} ${correlationId} START assetId=${assetId} actor=${opts.actor} approvalStatus=${asset.approvalStatus} publishStatus=${asset.publishStatus}`);
+
+  let effectiveYodeckMediaId = asset.yodeckMediaId;
+
+  if (!effectiveYodeckMediaId) {
+    console.log(`${LOG} ${correlationId} no yodeckMediaId, running publishSingleAsset`);
+    try {
+      const { publishSingleAsset } = await import('./mediaPipelineService');
+      const result = await publishSingleAsset({
+        assetId,
+        correlationId,
+        actor: opts.actor,
+      });
+
+      if (result.ok && result.yodeckMediaId) {
+        effectiveYodeckMediaId = result.yodeckMediaId;
+        console.log(`${LOG} ${correlationId} publishSingleAsset OK yodeckMediaId=${effectiveYodeckMediaId}`);
+      } else {
+        console.warn(`${LOG} ${correlationId} publishSingleAsset FAILED: ${result.error}`);
+        await db.update(adAssets).set({
+          publishStatus: 'PUBLISH_FAILED',
+          publishError: result.error || 'Yodeck upload mislukt',
+        }).where(eq(adAssets.id, assetId));
+        return { ok: false, correlationId, error: result.error || 'Yodeck upload mislukt' };
+      }
+    } catch (err: any) {
+      console.error(`${LOG} ${correlationId} publishSingleAsset EXCEPTION: ${err.message}`);
+      await db.update(adAssets).set({
+        publishStatus: 'PUBLISH_FAILED',
+        publishError: err.message,
+      }).where(eq(adAssets.id, assetId));
+      return { ok: false, correlationId, error: err.message };
+    }
+  } else {
+    console.log(`${LOG} ${correlationId} existing yodeckMediaId=${effectiveYodeckMediaId}`);
+  }
+
+  let locationsUpdated = 0;
+  let canonicalPublishOk = false;
+  let canonicalPublishError: string | null = null;
+  try {
+    const { publishApprovedAdToAllLocations } = await import('./yodeckAutopilotService');
+    console.log(`${LOG} ${correlationId} starting canonical publish yodeckMediaId=${effectiveYodeckMediaId}`);
+    const autopilotResult = await publishApprovedAdToAllLocations(assetId);
+    locationsUpdated = autopilotResult.locationsSuccess;
+    canonicalPublishOk = autopilotResult.ok;
+
+    if (autopilotResult.ok) {
+      console.log(`${LOG} ${correlationId} canonical publish OK locations=${locationsUpdated}`);
+    } else {
+      canonicalPublishError = `${autopilotResult.locationsFailed} locatie(s) mislukt`;
+      console.warn(`${LOG} ${correlationId} canonical publish PARTIAL_FAIL failed=${autopilotResult.locationsFailed}`);
+    }
+  } catch (err: any) {
+    canonicalPublishError = err.message;
+    console.warn(`${LOG} ${correlationId} canonical publish ERROR: ${err.message}`);
+  }
+
+  const publishSuccess = !!effectiveYodeckMediaId && canonicalPublishOk;
+  const publishErrorMsg = !effectiveYodeckMediaId
+    ? 'Geen Yodeck media ID verkregen'
+    : !canonicalPublishOk
+      ? (canonicalPublishError || 'Publicatie naar schermen mislukt')
+      : null;
+
+  await db.update(adAssets).set({
+    approvalStatus: publishSuccess ? 'LIVE' : 'APPROVED_PENDING_PUBLISH',
+    publishStatus: publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED',
+    publishError: publishErrorMsg,
+    yodeckMediaId: effectiveYodeckMediaId || asset.yodeckMediaId,
+    yodeckUploadedAt: effectiveYodeckMediaId ? new Date() : asset.yodeckUploadedAt,
+  }).where(eq(adAssets.id, assetId));
+
+  console.log(`${LOG} ${correlationId} DONE approvalStatus=${publishSuccess ? 'LIVE' : 'APPROVED_PENDING_PUBLISH'} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
+
+  return {
+    ok: publishSuccess,
+    correlationId,
+    yodeckMediaId: effectiveYodeckMediaId,
+    locationsUpdated,
+    error: publishErrorMsg || undefined,
   };
 }
