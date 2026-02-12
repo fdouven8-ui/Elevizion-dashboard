@@ -1,0 +1,74 @@
+Je bent senior TS/Node + React engineer in Elevizion. DOEL: portal onboarding werkend maken + mini klant-dashboard (klein menu) toevoegen.
+CRITICAL: raak upload/yodeck pipeline services NIET aan.
+
+A) PLANS (data + API)
+1) Voeg plans tabel toe als die nog niet bestaat (shared/schema.ts + migration):
+- id uuid pk
+- code text unique (PLAN_1, PLAN_3, PLAN_10)
+- name text
+- maxScreens int
+- priceMonthlyCents int (4999, 12999, 29999)
+- minCommitMonths int (3)
+- createdAt default now
+
+2) Voeg admin endpoint toe (admin-role): POST /api/admin/plans/seed
+- idempotent upsert/insert-if-missing
+- seed exact:
+  PLAN_1 Starter 1 4999 3
+  PLAN_3 Local Plus 3 12999 3
+  PLAN_10 Premium 10 29999 3
+- response: {ok:true, inserted:[...], skipped:[...]}
+
+3) Zorg dat GET /api/portal/plans de plans tabel leest en return:
+{ ok:true, plans:[{code,name,maxScreens,priceMonthlyCents,minCommitMonths}] }
+(nooit leeg na seed)
+
+B) PORTAL “MINI DASHBOARD” FRONTEND
+1) Voeg een PortalLayout component toe met:
+- smalle sidebar links (menu)
+- main content rechts
+- NL labels, super clean
+Menu items:
+- Overzicht -> /portal
+- Schermen -> /portal/screens
+- Video -> /portal/video
+- Facturatie -> /portal/billing
+- Uitloggen (button -> POST /api/portal/logout, daarna redirect /portal/login)
+
+2) Routing:
+- Zorg dat alle /portal/* pagina’s PortalLayout gebruiken.
+- /portal/signup en /portal/login blijven zonder layout (auth pages).
+
+3) Pagina’s (minimaal):
+- /portal (Overzicht):
+  * Fetch /api/portal/me
+  * Toon: bedrijfsnaam, gekozen plan (naam + maxScreens), aantal gekozen schermen, status (live/queued/selected)
+  * Toon “Onboarding afronden” knop als onboarding niet compleet (link naar /portal/screens)
+  * Toon “Upload nieuwe video” knop alleen als onboardingComplete=true (link naar /portal/video)
+
+- /portal/screens:
+  * Fetch /api/portal/plans voor plan cards als nog geen plan gekozen
+  * Fetch cities + screens endpoint die al bestaat (of laat het simpel: toon alleen beschikbare screens direct)
+  * Selecteer schermen (checkboxes) met hard limiet = plan.maxScreens
+  * Save -> POST /api/portal/placements
+  * Als plan nog niet gekozen: kies plan (planCode) via POST /api/portal/onboarding of bestaand onboarding endpoint
+  * Na save: redirect /portal
+
+- /portal/video:
+  * Fetch /api/portal/me
+  * Toon melding:
+    - als onboardingComplete=false: “Kies eerst je plan en schermen”
+    - anders: knop “Upload nieuwe video”
+  * Klik -> POST /api/portal/upload/open en redirect naar returned url
+
+- /portal/billing:
+  * placeholder tekst
+
+C) ACCEPTANCE TESTS
+1) Na deploy: POST /api/admin/plans/seed -> ok true
+2) GET /api/portal/plans -> 3 plans
+3) Portal sidebar zichtbaar na login
+4) Overzicht werkt met /api/portal/me
+5) Video knop werkt alleen na onboardingComplete
+
+Lever dit als één nette changeset, zonder rommel in bestaande code.

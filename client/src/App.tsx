@@ -72,6 +72,11 @@ import PortalLogin from "@/pages/portal/PortalLogin";
 import PortalSignup from "@/pages/portal/PortalSignup";
 import PortalOnboarding from "@/pages/portal/PortalOnboarding";
 import PortalStatus from "@/pages/portal/PortalStatus";
+import PortalLayout from "@/components/portal/PortalLayout";
+import PortalOverview from "@/pages/portal/PortalOverview";
+import PortalScreens from "@/pages/portal/PortalScreens";
+import PortalVideo from "@/pages/portal/PortalVideo";
+import PortalBilling from "@/pages/portal/PortalBilling";
 
 function DashboardRouter() {
   return (
@@ -146,8 +151,12 @@ function Router() {
       <Route path="/start" component={Start} />
       <Route path="/portal/login" component={PortalLogin} />
       <Route path="/portal/signup" component={PortalSignup} />
-      <Route path="/portal/onboarding" component={PortalOnboarding} />
-      <Route path="/portal/status" component={PortalStatus} />
+      <Route path="/portal/onboarding">{() => <PortalLayout><PortalOnboarding /></PortalLayout>}</Route>
+      <Route path="/portal/screens">{() => <PortalLayout><PortalScreens /></PortalLayout>}</Route>
+      <Route path="/portal/video">{() => <PortalLayout><PortalVideo /></PortalLayout>}</Route>
+      <Route path="/portal/billing">{() => <PortalLayout><PortalBilling /></PortalLayout>}</Route>
+      <Route path="/portal/status">{() => <PortalLayout><PortalStatus /></PortalLayout>}</Route>
+      <Route path="/portal">{() => <PortalLayout><PortalOverview /></PortalLayout>}</Route>
       <Route path="/portal/:token" component={AdvertiserPortal} />
       <Route path="/locatie-portal/:token" component={LocationPortal} />
       <Route path="/regio/limburg">{() => <LocalLanding city="limburg" />}</Route>

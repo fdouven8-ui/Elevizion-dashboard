@@ -24758,6 +24758,46 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // ADMIN PLANS SEED ENDPOINT
+  // ============================================================================
+
+  app.post("/api/admin/plans/seed", requireAdminAccess, async (_req, res) => {
+    try {
+      const { plans } = await import("@shared/schema");
+      const { eq } = await import("drizzle-orm");
+
+      const SEED_PLANS = [
+        { code: "PLAN_1", name: "Starter", maxScreens: 1, priceMonthlyCents: 4999, minCommitMonths: 3 },
+        { code: "PLAN_3", name: "Local Plus", maxScreens: 3, priceMonthlyCents: 12999, minCommitMonths: 3 },
+        { code: "PLAN_10", name: "Premium", maxScreens: 10, priceMonthlyCents: 29999, minCommitMonths: 3 },
+      ];
+
+      const inserted: string[] = [];
+      const skipped: string[] = [];
+
+      for (const sp of SEED_PLANS) {
+        const [existing] = await db.select({ id: plans.id }).from(plans).where(eq(plans.code, sp.code)).limit(1);
+        if (existing) {
+          await db.update(plans).set({
+            name: sp.name,
+            maxScreens: sp.maxScreens,
+            priceMonthlyCents: sp.priceMonthlyCents,
+            minCommitMonths: sp.minCommitMonths,
+          }).where(eq(plans.code, sp.code));
+          skipped.push(sp.code);
+        } else {
+          await db.insert(plans).values(sp);
+          inserted.push(sp.code);
+        }
+      }
+
+      res.json({ ok: true, inserted, skipped });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  // ============================================================================
   // ADMIN PORTAL DEBUG ENDPOINTS (read-only + attempt-live trigger)
   // ============================================================================
 

@@ -29,7 +29,7 @@ export default function PortalOnboarding() {
       if (!d.ok) { navigate("/portal/login"); return; }
       if (d.advertiser?.companyName) setCompanyName(d.advertiser.companyName);
       if (d.advertiser?.contactName) setContactName(d.advertiser.contactName);
-      if (d.advertiser?.onboardingComplete) navigate("/portal/status");
+      if (d.advertiser?.onboardingComplete) navigate("/portal");
     });
   }, []);
 
@@ -90,7 +90,7 @@ export default function PortalOnboarding() {
         setError(data.message || "Fout");
         return;
       }
-      navigate("/portal/status");
+      navigate("/portal");
     } catch { setError("Fout bij opslaan"); }
     finally { setLoading(false); }
   }

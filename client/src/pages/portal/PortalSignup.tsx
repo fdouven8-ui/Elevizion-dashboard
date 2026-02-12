@@ -27,7 +27,7 @@ export default function PortalSignup() {
         setError(data.message || "Registratie mislukt");
         return;
       }
-      navigate("/portal/onboarding");
+      navigate("/portal/screens");
     } catch {
       setError("Er ging iets mis. Probeer het opnieuw.");
     } finally {

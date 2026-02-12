@@ -12,6 +12,19 @@ Elevizion Dashboard is an OPS-first internal operations control room for managin
 ### Frontend
 The frontend is built with React 18, TypeScript, and Vite. It uses Wouter for routing, TanStack React Query for state management, and shadcn/ui (Radix UI + Tailwind CSS v4) for UI components. Forms are handled with React Hook Form and Zod validation. The UI/UX features a pages-based structure with consistent navigation, KPI tiles, and modules for screens, ads, advertisers, settings, and finance. Quick-create onboarding flows are accessible via public portals with token-based authentication.
 
+#### Customer Portal (Mini Dashboard)
+- **Layout**: `PortalLayout` component with sidebar navigation (Overzicht, Schermen, Video, Facturatie, Uitloggen)
+- **Auth pages** (`/portal/login`, `/portal/signup`): No sidebar layout
+- **Dashboard pages** (wrapped in PortalLayout):
+  - `/portal` — Overview: company info, plan, screen count, status, onboarding CTA
+  - `/portal/screens` — Plan selection + screen selection with city filters
+  - `/portal/video` — Upload link (blocked when onboarding incomplete)
+  - `/portal/billing` — Placeholder for future invoicing
+  - `/portal/onboarding` — Legacy onboarding wizard (also in layout)
+  - `/portal/status` — Legacy status page (also in layout)
+- **Plans table** includes: code, name, maxScreens, priceMonthlyCents, minCommitMonths
+- **Admin seed**: `POST /api/admin/plans/seed` — idempotent upsert of 3 plans (Starter/Local Plus/Premium)
+
 ### Backend
 The backend is an Express.js application written in TypeScript, providing a RESTful API. It uses a centralized `storage.ts` for database abstraction and PostgreSQL with Drizzle ORM for data persistence. Zod schemas are used for data validation, with business logic primarily residing within the storage service.
 

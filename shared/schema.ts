@@ -153,6 +153,8 @@ export const plans = pgTable("plans", {
   code: text("code").notNull().unique(),
   name: text("name").notNull(),
   maxScreens: integer("max_screens").notNull(),
+  priceMonthlyCents: integer("price_monthly_cents").notNull().default(0),
+  minCommitMonths: integer("min_commit_months").notNull().default(3),
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

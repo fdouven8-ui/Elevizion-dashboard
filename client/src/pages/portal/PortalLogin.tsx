@@ -27,9 +27,9 @@ export default function PortalLogin() {
         return;
       }
       if (data.advertiser?.onboardingComplete) {
-        navigate("/portal/status");
+        navigate("/portal");
       } else {
-        navigate("/portal/onboarding");
+        navigate("/portal/screens");
       }
     } catch {
       setError("Er ging iets mis. Probeer het opnieuw.");
