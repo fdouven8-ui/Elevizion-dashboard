@@ -568,17 +568,15 @@ export interface ReviewQueueItem {
 }
 
 export async function getPendingReviewAssets(): Promise<ReviewQueueItem[]> {
-  // Include:
-  // 1. New uploads pending review (approvalStatus='UPLOADED', validationStatus='valid')
-  // 2. Approved but not yet published (approvalStatus='APPROVED', publishStatus != 'PUBLISHED')
-  // 3. Failed publishes (publishStatus='PUBLISH_FAILED') - these need retry
   const pendingAssets = await db.query.adAssets.findMany({
     where: and(
       eq(adAssets.validationStatus, 'valid'),
       or(
-        // New uploads waiting for admin approval
         eq(adAssets.approvalStatus, 'UPLOADED'),
-        // Approved but failed to publish - keep visible for retry
+        eq(adAssets.approvalStatus, 'IN_REVIEW'),
+        eq(adAssets.approvalStatus, 'PENDING_REVIEW'),
+        eq(adAssets.approvalStatus, 'APPROVED_PENDING_PUBLISH'),
+        eq(adAssets.approvalStatus, 'LIVE'),
         and(
           eq(adAssets.approvalStatus, 'APPROVED'),
           or(
@@ -657,25 +655,22 @@ export async function approveAsset(
       return { success: false, message: 'Asset heeft technische validatiefouten' };
     }
     
-    // IDEMPOTENT: If already APPROVED, trigger retry publish instead of failing
-    const isAlreadyApproved = asset.approvalStatus === 'APPROVED';
-    if (isAlreadyApproved) {
-      console.log(`[VideoReview] APPROVE_IDEMPOTENT assetId=${assetId} -> triggers retry publish`);
-      // Fall through to publish logic - no status change needed
+    const isRetryPublish = asset.approvalStatus === 'APPROVED_PENDING_PUBLISH' || asset.approvalStatus === 'APPROVED';
+    if (isRetryPublish) {
+      console.log(`[VideoReview] APPROVE_RETRY assetId=${assetId} status=${asset.approvalStatus} -> retry publish`);
     } else if (asset.approvalStatus !== 'UPLOADED' && asset.approvalStatus !== 'IN_REVIEW') {
       return { success: false, message: `Asset heeft status ${asset.approvalStatus}, kan niet goedkeuren` };
     }
     
-    // Update asset status - either new approval or retry publish
     const updatePayload: any = {
+      approvalStatus: 'APPROVED_PENDING_PUBLISH',
       publishStatus: 'PENDING',
       publishAttempts: (asset.publishAttempts || 0) + 1,
       lastPublishAttemptAt: new Date(),
-      publishError: null, // Clear previous error
+      publishError: null,
     };
     
-    if (!isAlreadyApproved) {
-      updatePayload.approvalStatus = 'APPROVED';
+    if (!isRetryPublish) {
       updatePayload.approvedAt = new Date();
       updatePayload.approvedBy = adminId;
       updatePayload.reviewedByAdminAt = new Date();
@@ -734,7 +729,7 @@ export async function approveAsset(
         const result = await publishSingleAsset({
           assetId,
           correlationId: approveCorrelationId,
-          actor: isAlreadyApproved ? 'approve_idempotent' : 'approve_new',
+          actor: isRetryPublish ? 'approve_retry' : 'approve_new',
         });
         
         pipelineResult = {
@@ -815,9 +810,8 @@ export async function approveAsset(
       console.error('[AdminReview] Failed to send approval email:', emailError);
     }
     
-    // Update publishStatus based on outcome
     const publishSuccess = effectiveYodeckMediaId && (canonicalPublishResult?.success || autoPlacementResult?.success);
-    const publishError = !effectiveYodeckMediaId 
+    const publishErrorMsg = !effectiveYodeckMediaId 
       ? 'Geen Yodeck media ID verkregen'
       : (!canonicalPublishResult?.success && !autoPlacementResult?.success)
         ? 'Publicatie naar schermen mislukt'
@@ -825,17 +819,18 @@ export async function approveAsset(
     
     await db.update(adAssets)
       .set({
+        approvalStatus: publishSuccess ? 'LIVE' : 'APPROVED_PENDING_PUBLISH',
         publishStatus: publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED',
-        publishError: publishError,
+        publishError: publishErrorMsg,
         yodeckMediaId: effectiveYodeckMediaId || asset.yodeckMediaId,
         yodeckUploadedAt: effectiveYodeckMediaId ? new Date() : asset.yodeckUploadedAt,
       })
       .where(eq(adAssets.id, assetId));
     
-    console.log(`[VideoReviewApprove] ${approveCorrelationId} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
+    console.log(`[VideoReviewApprove] ${approveCorrelationId} approvalStatus=${publishSuccess ? 'LIVE' : 'APPROVED_PENDING_PUBLISH'} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
     
     // Build success message with auto-placement and canonical publish info
-    let message = isAlreadyApproved ? 'Asset was al goedgekeurd; publicatie opnieuw gestart' : 'Video goedgekeurd';
+    let message = isRetryPublish ? 'Asset was al goedgekeurd; publicatie opnieuw gestart' : 'Video goedgekeurd';
     if (canonicalPublishResult?.success && canonicalPublishResult.locationsUpdated > 0) {
       message += ` en gepubliceerd naar ${canonicalPublishResult.locationsUpdated} locatie(s)`;
     } else if (autoPlacementResult?.success && autoPlacementResult.placementsCreated > 0) {
@@ -843,7 +838,7 @@ export async function approveAsset(
     } else if (autoPlacementResult?.success && autoPlacementResult.screensPublished > 0) {
       message += ` en ${autoPlacementResult.screensPublished} scherm(en) gesynchroniseerd`;
     } else if (!publishSuccess) {
-      message += ` maar publicatie mislukt: ${publishError}. Klik op "Opnieuw proberen" om te herproberen.`;
+      message += ` maar publicatie mislukt: ${publishErrorMsg}. Klik op "Opnieuw proberen" om te herproberen.`;
     }
     
     return { 
@@ -900,7 +895,11 @@ export async function rejectAsset(
       return { success: false, message: 'Asset niet gevonden' };
     }
     
-    if (asset.approvalStatus !== 'UPLOADED' && asset.approvalStatus !== 'IN_REVIEW') {
+    const rejectableStatuses = ['UPLOADED', 'IN_REVIEW', 'PENDING_REVIEW', 'APPROVED_PENDING_PUBLISH', 'PUBLISH_FAILED'];
+    if (asset.approvalStatus === 'LIVE') {
+      return { success: false, message: 'Een live asset kan niet worden afgekeurd. Archiveer deze eerst.' };
+    }
+    if (!rejectableStatuses.includes(asset.approvalStatus)) {
       return { success: false, message: `Asset heeft status ${asset.approvalStatus}, kan niet afkeuren` };
     }
     

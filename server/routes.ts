@@ -2641,10 +2641,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(404).json({ ok: false, message: "Asset niet gevonden" });
       }
       
-      if (asset.approvalStatus !== 'APPROVED') {
+      if (asset.approvalStatus !== 'APPROVED' && asset.approvalStatus !== 'APPROVED_PENDING_PUBLISH') {
         return res.status(400).json({ 
           ok: false, 
-          message: `Asset heeft status ${asset.approvalStatus}, moet APPROVED zijn voor retry` 
+          message: `Asset heeft status ${asset.approvalStatus}, moet APPROVED of APPROVED_PENDING_PUBLISH zijn voor retry` 
         });
       }
       
@@ -2706,6 +2706,25 @@ Sitemap: ${SITE_URL}/sitemap.xml
       });
     } catch (error: any) {
       console.error('[VideoReview] Retry publish error:', error);
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
+  // Archive video asset (ADMIN ONLY) - simple status change, no Yodeck calls
+  app.post("/api/admin/video-review/:id/archive", requireAdminAccess, async (req: any, res) => {
+    try {
+      const assetId = req.params.id;
+      const { getAdAssetById } = await import("./services/adAssetUploadService");
+      const asset = await getAdAssetById(assetId);
+      if (!asset) {
+        return res.status(404).json({ ok: false, message: "Asset niet gevonden" });
+      }
+      await db.update(adAssets).set({
+        approvalStatus: 'ARCHIVED',
+      }).where(eq(adAssets.id, assetId));
+      console.log(`[VideoReview] ARCHIVED assetId=${assetId} by admin`);
+      res.json({ ok: true });
+    } catch (error: any) {
       res.status(500).json({ ok: false, message: error.message });
     }
   });

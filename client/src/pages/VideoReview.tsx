@@ -330,22 +330,49 @@ export default function VideoReview() {
     return (bytes / (1024 * 1024)).toFixed(1) + " MB";
   };
 
+  const archiveMutation = useMutation({
+    mutationFn: async ({ assetId }: { assetId: string }) => {
+      const res = await fetch(`/api/admin/video-review/${assetId}/archive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || "Fout bij archiveren");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Gearchiveerd", description: "Asset is gearchiveerd" });
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/video-review"] });
+      setPreviewAsset(null);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Fout", description: error.message, variant: "destructive" });
+    },
+  });
+
   const handleApprove = (item: ReviewQueueItem) => {
-    // If approved and failed/null publish, use retry-publish endpoint
-    const isApprovedWithFailedPublish = item.asset.approvalStatus === 'APPROVED' && 
-      (item.asset.publishStatus === 'PUBLISH_FAILED' || item.asset.publishStatus === null);
+    const isApprovedPending = item.asset.approvalStatus === 'APPROVED_PENDING_PUBLISH' || item.asset.approvalStatus === 'APPROVED';
+    const hasFailed = item.asset.publishStatus === 'PUBLISH_FAILED' || item.asset.publishStatus === null;
     
-    if (isApprovedWithFailedPublish) {
+    if (isApprovedPending && hasFailed) {
       retryPublishMutation.mutate({ assetId: item.asset.id });
     } else {
       approveMutation.mutate({ assetId: item.asset.id, companyName: item.advertiser.companyName });
     }
   };
   
-  const isAlreadyApproved = (item: ReviewQueueItem) => item.asset.approvalStatus === 'APPROVED';
+  const isApprovedPending = (item: ReviewQueueItem) => item.asset.approvalStatus === 'APPROVED_PENDING_PUBLISH' || item.asset.approvalStatus === 'APPROVED';
+  const isLive = (item: ReviewQueueItem) => item.asset.approvalStatus === 'LIVE';
   const isPublishFailed = (item: ReviewQueueItem) => item.asset.publishStatus === 'PUBLISH_FAILED';
   const isPublishPending = (item: ReviewQueueItem) => item.asset.publishStatus === 'PENDING';
-  const canRetryPublish = (item: ReviewQueueItem) => isAlreadyApproved(item) && (isPublishFailed(item) || item.asset.publishStatus === null);
+  const canRetryPublish = (item: ReviewQueueItem) => isApprovedPending(item) && (isPublishFailed(item) || item.asset.publishStatus === null);
+  const canReject = (item: ReviewQueueItem) => {
+    const s = item.asset.approvalStatus;
+    return s === 'UPLOADED' || s === 'IN_REVIEW' || s === 'PENDING_REVIEW' || s === 'APPROVED_PENDING_PUBLISH' || s === 'PUBLISH_FAILED' || (s === 'APPROVED' && item.asset.publishStatus === 'PUBLISH_FAILED');
+  };
+  const canApproveItem = (item: ReviewQueueItem) => !isApprovedPending(item) && !isLive(item);
 
   const handlePublish = () => {
     if (!approvedPlan) return;
@@ -489,7 +516,7 @@ export default function VideoReview() {
                         <Loader2 className="h-4 w-4 mr-1 animate-spin" />
                         Bezig met publiceren...
                       </Button>
-                    ) : !isAlreadyApproved(item) ? (
+                    ) : canApproveItem(item) ? (
                       <Button
                         size="sm"
                         variant="default"
@@ -502,7 +529,7 @@ export default function VideoReview() {
                         Goedkeuren
                       </Button>
                     ) : null}
-                    {!isAlreadyApproved(item) && (
+                    {canReject(item) && (
                       <Button
                         size="sm"
                         variant="destructive"
@@ -513,6 +540,15 @@ export default function VideoReview() {
                         Afkeuren
                       </Button>
                     )}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => archiveMutation.mutate({ assetId: item.asset.id })}
+                      disabled={archiveMutation.isPending}
+                      data-testid={`archive-btn-${item.asset.id}`}
+                    >
+                      Archiveren
+                    </Button>
                     {isPublishFailed(item) && (
                       <Badge variant="destructive" className="ml-2" data-testid={`publish-failed-badge-${item.asset.id}`}>
                         <AlertTriangle className="h-3 w-3 mr-1" />
@@ -850,29 +886,53 @@ export default function VideoReview() {
               Sluiten
             </Button>
             <Button
-              variant="destructive"
+              size="sm"
+              variant="outline"
               onClick={() => {
-                setRejectAsset(previewAsset);
-                setPreviewAsset(null);
+                if (previewAsset) archiveMutation.mutate({ assetId: previewAsset.asset.id });
               }}
+              disabled={archiveMutation.isPending}
             >
-              <XCircle className="h-4 w-4 mr-1" />
-              Afkeuren
+              Archiveren
             </Button>
-            <Button
-              className="bg-green-600 hover:bg-green-700"
-              onClick={() => previewAsset && handleApprove(previewAsset)}
-              disabled={approveMutation.isPending || !canApprove}
-              title={
-                proposalLoading ? "Schermen worden geladen..." :
-                !canApprove ? "Kan niet goedkeuren: geen schermen beschikbaar" : 
-                proposalError ? "Goedkeuren ondanks fout bij ophalen voorstel" :
-                "Keur video goed en zet voorstel klaar"
-              }
-            >
-              <CheckCircle className="h-4 w-4 mr-1" />
-              {approveMutation.isPending ? "Goedkeuren..." : "Goedkeuren"}
-            </Button>
+            {previewAsset && canReject(previewAsset) && (
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  setRejectAsset(previewAsset);
+                  setPreviewAsset(null);
+                }}
+              >
+                <XCircle className="h-4 w-4 mr-1" />
+                Afkeuren
+              </Button>
+            )}
+            {previewAsset && canApproveItem(previewAsset) && (
+              <Button
+                className="bg-green-600 hover:bg-green-700"
+                onClick={() => previewAsset && handleApprove(previewAsset)}
+                disabled={approveMutation.isPending || !canApprove}
+                title={
+                  proposalLoading ? "Schermen worden geladen..." :
+                  !canApprove ? "Kan niet goedkeuren: geen schermen beschikbaar" : 
+                  proposalError ? "Goedkeuren ondanks fout bij ophalen voorstel" :
+                  "Keur video goed en zet voorstel klaar"
+                }
+              >
+                <CheckCircle className="h-4 w-4 mr-1" />
+                {approveMutation.isPending ? "Goedkeuren..." : "Goedkeuren"}
+              </Button>
+            )}
+            {previewAsset && canRetryPublish(previewAsset) && (
+              <Button
+                className="bg-blue-600 hover:bg-blue-700"
+                onClick={() => previewAsset && handleApprove(previewAsset)}
+                disabled={retryPublishMutation.isPending}
+              >
+                <RefreshCw className={`h-4 w-4 mr-1 ${retryPublishMutation.isPending ? 'animate-spin' : ''}`} />
+                Opnieuw publiceren
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
