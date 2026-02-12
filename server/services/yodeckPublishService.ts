@@ -1655,7 +1655,8 @@ class YodeckPublishService {
     storagePath: string,
     mediaName: string,
     idempotencyKey: string,
-    advertiserId: string
+    advertiserId: string,
+    assetId?: string
   ): Promise<{ ok: boolean; mediaId?: number; error?: string; errorCode?: string; errorDetails?: any; lastDebug?: any }> {
     const corrId = crypto.randomUUID().substring(0, 8);
     console.log(`[YodeckPublish][${corrId}] Uploading media: ${mediaName} from ${storagePath}`);
@@ -1700,12 +1701,18 @@ class YodeckPublishService {
       .where(eq(integrationOutbox.id, upsertResult.job.id));
 
     try {
-      const { getR2PresignedUrl } = await import("../objectStorage");
-      const cdnUrl = await getR2PresignedUrl(storagePath, 7200);
+      const publicBase = process.env.PUBLIC_BASE_URL || "https://elevizion.nl";
+      let cdnUrl: string;
+      if (assetId) {
+        cdnUrl = `${publicBase}/api/ad-assets/${assetId}/stream`;
+      } else {
+        const { getR2PresignedUrl } = await import("../objectStorage");
+        cdnUrl = await getR2PresignedUrl(storagePath, 7200);
+      }
       lastDebug.yodeckSourceUrl = cdnUrl;
-      lastDebug.cdnUrl = cdnUrl.substring(0, 120) + "...";
-      lastDebug.cdnUrlType = "r2_presigned";
-      console.log(`[YodeckPublish][${corrId}] Generated R2 presigned URL for Yodeck download`);
+      lastDebug.cdnUrl = cdnUrl;
+      lastDebug.cdnUrlType = assetId ? "public_stream" : "r2_presigned";
+      console.log(`[YodeckPublish][${corrId}] Yodeck source URL: ${cdnUrl}`);
 
       const { validateVideoSource } = await import("./videoSourceValidator");
       const sourceCheck = await validateVideoSource(cdnUrl, corrId);
@@ -2477,7 +2484,8 @@ class YodeckPublishService {
         asset.storagePath,
         `${plan.linkKey}_${asset.originalFileName || "video"}`,
         uploadIdempotencyKey,
-        plan.advertiserId
+        plan.advertiserId,
+        asset.id
       );
 
       if (uploadResult.lastDebug) {
@@ -2812,9 +2820,7 @@ class YodeckPublishService {
       // Note: Partial failures are logged in the catch block with PLAN_FAILED or PLAN_PUBLISH_FAILED
       
       if (finalStatus === "PUBLISHED" && report.successCount > 0) {
-        const baseUrl = process.env.REPLIT_DEV_DOMAIN 
-          ? `https://${process.env.REPLIT_DEV_DOMAIN}` 
-          : '';
+        const baseUrl = process.env.PUBLIC_BASE_URL || "https://elevizion.nl";
         dispatchMailEvent("ADVERTISER_PUBLISHED", plan.advertiserId, baseUrl)
           .then(result => {
             if (!result.success && !result.skipped) {

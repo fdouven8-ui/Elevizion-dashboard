@@ -33,11 +33,8 @@ export function generateMediaCdnToken(storagePath: string, ttlHours: number = DE
 
 export function generateMediaCdnUrl(storagePath: string, ttlHours: number = DEFAULT_TTL_HOURS): string {
   const token = generateMediaCdnToken(storagePath, ttlHours);
-  const domain = process.env.REPLIT_DEV_DOMAIN || process.env.REPLIT_DOMAINS || "";
-  if (!domain) {
-    throw new Error("Cannot determine public domain for media CDN URL");
-  }
-  return `https://${domain}/api/media-cdn/${token}`;
+  const baseUrl = process.env.PUBLIC_BASE_URL || "https://elevizion.nl";
+  return `${baseUrl}/api/media-cdn/${token}`;
 }
 
 function verifyToken(token: string): MediaCdnToken | null {

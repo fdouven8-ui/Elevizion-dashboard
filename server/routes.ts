@@ -2487,10 +2487,10 @@ Sitemap: ${SITE_URL}/sitemap.xml
   });
 
   // Stream video asset (admin only) - supports byte-range for video player seeking
-  app.get("/api/ad-assets/:id/stream", isAuthenticated, async (req, res) => {
+  app.get("/api/ad-assets/:id/stream", async (req, res) => {
     try {
       const { getAdAssetById } = await import("./services/adAssetUploadService");
-      const { ObjectStorageService } = await import("./objectStorage");
+      const { ObjectStorageService, getR2PresignedUrl, R2_IS_CONFIGURED } = await import("./objectStorage");
       
       const asset = await getAdAssetById(req.params.id);
       if (!asset) {
@@ -2501,6 +2501,15 @@ Sitemap: ${SITE_URL}/sitemap.xml
       if (!asset.storagePath) {
         console.log(`[AssetStream] No storagePath for asset ${req.params.id}`);
         return res.status(404).json({ message: "Bestand niet gevonden in storage" });
+      }
+
+      const isAuthed = !!(req as any).user || !!(req as any).session?.userId;
+
+      if (!isAuthed && R2_IS_CONFIGURED) {
+        console.log(`[AssetStream] Unauthenticated request for asset ${req.params.id} — redirecting to R2`);
+        const r2Url = await getR2PresignedUrl(asset.storagePath, 7200);
+        res.set({ "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" });
+        return res.redirect(302, r2Url);
       }
       
       console.log(`[AssetStream] assetId=${req.params.id} storagePath=${asset.storagePath} method=${req.method} range=${req.headers.range || 'none'}`);
@@ -2519,20 +2528,28 @@ Sitemap: ${SITE_URL}/sitemap.xml
     } catch (error: any) {
       console.error("[AssetStream] Error:", error);
       if (!res.headersSent) {
-        res.status(500).json({ message: error.message });
+        res.status(502).json({ message: "Failed to serve asset" });
       }
     }
   });
 
-  app.head("/api/ad-assets/:id/stream", isAuthenticated, async (req, res) => {
+  app.head("/api/ad-assets/:id/stream", async (req, res) => {
     try {
       const { getAdAssetById } = await import("./services/adAssetUploadService");
-      const { ObjectStorageService, s3Client, EFFECTIVE_BUCKET_NAME, resolveR2ObjectKey, R2_IS_CONFIGURED } = await import("./objectStorage");
+      const { getR2PresignedUrl, R2_IS_CONFIGURED, s3Client, EFFECTIVE_BUCKET_NAME, resolveR2ObjectKey } = await import("./objectStorage");
       const { HeadObjectCommand } = await import("@aws-sdk/client-s3");
       
       const asset = await getAdAssetById(req.params.id);
-      if (!asset) return res.status(404).end();
-      if (!asset.storagePath) return res.status(404).end();
+      if (!asset) return res.status(404).json({ error: "Asset not found" });
+      if (!asset.storagePath) return res.status(404).json({ error: "No storage path" });
+
+      const isAuthed = !!(req as any).user || !!(req as any).session?.userId;
+
+      if (!isAuthed && R2_IS_CONFIGURED) {
+        const r2Url = await getR2PresignedUrl(asset.storagePath, 7200);
+        res.set({ "Location": r2Url, "Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache" });
+        return res.status(302).end();
+      }
       
       if (R2_IS_CONFIGURED && EFFECTIVE_BUCKET_NAME) {
         const key = resolveR2ObjectKey(asset.storagePath);
@@ -2548,18 +2565,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
         return res.status(200).end();
       }
 
-      const objectStorage = new ObjectStorageService();
-      const file = await objectStorage.getFileByPath(asset.storagePath);
-      if (!file) return res.status(404).end();
-      
-      res.set({
-        "Content-Type": "video/mp4",
-        "Accept-Ranges": "bytes",
-      });
+      res.set({ "Content-Type": "video/mp4", "Accept-Ranges": "bytes" });
       return res.status(200).end();
     } catch (error: any) {
       console.error("[AssetStream] HEAD error:", error.message);
-      if (!res.headersSent) res.status(200).end();
+      return res.status(502).json({ error: "Failed to check asset" });
     }
   });
 

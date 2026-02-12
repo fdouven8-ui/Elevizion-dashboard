@@ -368,7 +368,8 @@ export async function uploadVideoToYodeckViaUrl(
   advertiserId: string,
   assetPath: string,
   desiredFilename: string,
-  fileSize: number
+  fileSize: number,
+  assetId?: string
 ): Promise<TransactionalUploadResult> {
   const correlationId = generateCorrelationId();
   console.log(`${LOG_PREFIX} [${correlationId}] Starting URL-based upload for advertiser=${advertiserId} path=${assetPath}`);
@@ -392,8 +393,14 @@ export async function uploadVideoToYodeckViaUrl(
   console.log(`${LOG_PREFIX} [${correlationId}] Created URL-upload job=${jobId}`);
 
   try {
-    const cdnUrl = await getR2PresignedUrl(assetPath, 86400);
-    console.log(`${LOG_PREFIX} [${correlationId}] Generated R2 presigned URL: ${cdnUrl.substring(0, 80)}...`);
+    const publicBase = process.env.PUBLIC_BASE_URL || "https://elevizion.nl";
+    let cdnUrl: string;
+    if (assetId) {
+      cdnUrl = `${publicBase}/api/ad-assets/${assetId}/stream`;
+    } else {
+      cdnUrl = await getR2PresignedUrl(assetPath, 86400);
+    }
+    console.log(`${LOG_PREFIX} [${correlationId}] Yodeck source URL: ${cdnUrl}`);
 
     console.log(`${LOG_PREFIX} [${correlationId}] PRE-FLIGHT: Checking CDN URL returns valid MP4...`);
     const preflightResp = await fetch(cdnUrl, { method: "GET", headers: { "Range": "bytes=0-31" } });
