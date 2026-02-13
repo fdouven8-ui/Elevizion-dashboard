@@ -1,0 +1,70 @@
+CONTEXT:
+Endpoint POST /api/admin/video-review/:id/retry-publish returns:
+{ ok:true, message:"Publicatie is al bezig of voltooid", correlationId:"publish-...", yodeckMediaId:30040771 }
+But issue: media exists in Yodeck yet not correctly assigned to the target screen. Current flow claims success without verifying Yodeck screen_content points to intended playlist.
+
+GOAL:
+Make publish/retry flow deterministic and verifiable:
+- Determine intended target screen(s) and intended playlistId for this video review item.
+- Ensure screen_content is set to that playlist (PATCH /api/v2/screens/{id}).
+- Verify by GET /api/v2/screens/{id} that screen_content.source_type=="playlist" and source_id==intendedPlaylistId.
+- Only then return ok:true.
+- If verification fails, return ok:false with debug details and keep correlationId.
+
+REQUIREMENTS:
+1) Do NOT create new playlists in this change.
+2) Do NOT change upload/baseline logic except to add verification step after the existing save&push.
+3) Add minimal logging + response fields so frontend/debug can prove what happened.
+
+IMPLEMENTATION STEPS:
+A) Find route handler for:
+   POST /api/admin/video-review/:id/retry-publish
+   and the service it calls (publish/retry logic).
+B) Identify the internal values used for targeting:
+   - yodeckScreenId (numeric) OR yodeckPlayerId/uuid mapping.
+   - intendedPlaylistId (the per-screen playlist, NOT the baseline playlist).
+C) Add a helper in yodeckClient (server/services/yodeckClient.ts or equivalent):
+   - getScreen(screenId:number): GET /api/v2/screens/{id}
+   - patchScreenContent(screenId:number, playlistId:number): PATCH /api/v2/screens/{id} with
+     { screen_content: { source_type:"playlist", source_id: playlistId } }
+   Use existing API key auth style.
+
+D) In retry-publish flow AFTER existing playlist/media steps:
+   1) compute: targetScreenIds[] (or single) + intendedPlaylistId
+   2) for each targetScreenId:
+      - before = await getScreen(id) (store before.screen_content + before.last_pushed)
+      - await patchScreenContent(id, intendedPlaylistId)
+      - wait 1500ms
+      - after = await getScreen(id)
+      - verify after.screen_content.source_type=="playlist" && after.screen_content.source_id==intendedPlaylistId
+      - if mismatch: retry patch once (wait 2500ms) and re-check
+      - if still mismatch: throw error SCREEN_ASSIGNMENT_FAILED with details
+
+E) Update response JSON of retry-publish to include:
+   {
+     ok,
+     message,
+     correlationId,
+     yodeckMediaId,
+     intendedPlaylistId,
+     targetScreenIds,
+     screenAssignment: [
+       { screenId, before:{screen_content,last_pushed}, after:{screen_content,last_pushed}, verified:boolean }
+     ]
+   }
+If publish is "already in progress or completed" (current message), still run the verification step and return these fields.
+
+F) Add a lightweight debug endpoint (admin-only) for manual verification:
+   POST /api/admin/yodeck/verify-screen
+   body: { screenId:number, playlistId:number }
+   returns { ok, before, after, verified }
+
+ACCEPTANCE:
+- Calling retry-publish must either:
+  - return ok:true with verified:true for the target screen(s), OR
+  - return ok:false with SCREEN_ASSIGNMENT_FAILED and include the before/after screen_content and intendedPlaylistId.
+- No new playlists created.
+- No baseline playlist impacted.
+
+REFERENCE:
+Yodeck v2 screens payload includes screen_content with source_type/source_id. Playlists are patched via /api/v2/playlists/{id}. Media endpoints not the focus here.

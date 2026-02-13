@@ -6,7 +6,7 @@
  */
 
 import { db } from "../db";
-import { screens } from "@shared/schema";
+import { screens, locations } from "@shared/schema";
 import { eq, ne, and, sql } from "drizzle-orm";
 import { getCanonicalApprovedAsset } from "./adAssetService";
 import { resolveTargetScreensForAdvertiser } from "./placementResolver";
@@ -542,6 +542,14 @@ export async function getPublishTrace(assetId: string): Promise<PublishTraceResu
   };
 }
 
+export interface ScreenAssignmentResult {
+  screenId: number;
+  before: { source_type: string | null; source_id: number | null } | null;
+  after: { source_type: string | null; source_id: number | null } | null;
+  verified: boolean;
+  error?: string;
+}
+
 export interface PublishAssetResult {
   ok: boolean;
   correlationId: string;
@@ -549,6 +557,72 @@ export interface PublishAssetResult {
   locationsUpdated?: number;
   error?: string;
   alreadyProcessing?: boolean;
+  intendedPlaylistId?: number | null;
+  targetScreenIds?: number[];
+  screenAssignment?: ScreenAssignmentResult[];
+}
+
+export async function verifyScreenAssignment(
+  screenId: number,
+  intendedPlaylistId: number,
+): Promise<ScreenAssignmentResult> {
+  const LOG = `[ScreenVerify]`;
+  try {
+    const { getYodeckClient } = await import('./yodeckClient');
+    const client = await getYodeckClient();
+    if (!client) throw new Error('Yodeck client not configured');
+
+    const before = await client.getScreen(screenId);
+    const beforeContent = before?.screen_content
+      ? { source_type: before.screen_content.source_type || null, source_id: before.screen_content.source_id || null }
+      : null;
+
+    const alreadyCorrect = beforeContent?.source_type === "playlist" && beforeContent?.source_id === intendedPlaylistId;
+    if (alreadyCorrect) {
+      console.log(`${LOG} screen ${screenId} already assigned to playlist ${intendedPlaylistId}`);
+      return { screenId, before: beforeContent, after: beforeContent, verified: true };
+    }
+
+    console.log(`${LOG} screen ${screenId} before: ${JSON.stringify(beforeContent)} → patching to playlist ${intendedPlaylistId}`);
+    const patchResult = await client.patchScreenContent(screenId, intendedPlaylistId);
+    if (!patchResult.ok) {
+      return { screenId, before: beforeContent, after: null, verified: false, error: patchResult.error };
+    }
+
+    await new Promise(r => setTimeout(r, 1500));
+
+    const after1 = await client.getScreen(screenId);
+    const after1Content = after1?.screen_content
+      ? { source_type: after1.screen_content.source_type || null, source_id: after1.screen_content.source_id || null }
+      : null;
+
+    if (after1Content?.source_type === "playlist" && after1Content?.source_id === intendedPlaylistId) {
+      console.log(`${LOG} screen ${screenId} VERIFIED on first check`);
+      return { screenId, before: beforeContent, after: after1Content, verified: true };
+    }
+
+    console.log(`${LOG} screen ${screenId} first check FAILED, retrying patch...`);
+    await client.patchScreenContent(screenId, intendedPlaylistId);
+    await new Promise(r => setTimeout(r, 2500));
+
+    const after2 = await client.getScreen(screenId);
+    const after2Content = after2?.screen_content
+      ? { source_type: after2.screen_content.source_type || null, source_id: after2.screen_content.source_id || null }
+      : null;
+
+    const verified = after2Content?.source_type === "playlist" && after2Content?.source_id === intendedPlaylistId;
+    console.log(`${LOG} screen ${screenId} ${verified ? 'VERIFIED' : 'FAILED'} on retry check`);
+    return {
+      screenId,
+      before: beforeContent,
+      after: after2Content,
+      verified,
+      error: verified ? undefined : `SCREEN_ASSIGNMENT_FAILED: expected playlist ${intendedPlaylistId}, got ${JSON.stringify(after2Content)}`,
+    };
+  } catch (err: any) {
+    console.error(`${LOG} screen ${screenId} exception: ${err.message}`);
+    return { screenId, before: null, after: null, verified: false, error: err.message };
+  }
 }
 
 export async function publishAsset(
@@ -651,12 +725,67 @@ export async function publishAsset(
     console.warn(`${LOG} ${correlationId} canonical publish ERROR: ${err.message}`);
   }
 
-  const publishSuccess = !!effectiveYodeckMediaId && canonicalPublishOk;
+  let intendedPlaylistId: number | null = null;
+  let targetScreenIds: number[] = [];
+  let screenAssignment: ScreenAssignmentResult[] = [];
+
+  try {
+    const { findLocationsForAdvertiser } = await import('./yodeckCanonicalService');
+    const targetLocationIds = await findLocationsForAdvertiser(asset.advertiserId);
+
+    for (const locId of targetLocationIds) {
+      const [loc] = await db.select().from(locations).where(eq(locations.id, locId));
+      if (!loc) continue;
+
+      const playlistId = loc.yodeckPlaylistId ? parseInt(loc.yodeckPlaylistId) : null;
+      if (!playlistId || isNaN(playlistId)) {
+        console.warn(`${LOG} ${correlationId} location ${locId} has no yodeckPlaylistId, skip verification`);
+        continue;
+      }
+
+      if (!intendedPlaylistId) intendedPlaylistId = playlistId;
+
+      let yodeckScreenId: number | null = null;
+      if (loc.yodeckDeviceId) {
+        yodeckScreenId = parseInt(loc.yodeckDeviceId);
+      } else {
+        const linkedScreens = await db.select({ yodeckPlayerId: screens.yodeckPlayerId })
+          .from(screens)
+          .where(eq(screens.locationId, locId));
+        if (linkedScreens.length > 0 && linkedScreens[0].yodeckPlayerId) {
+          yodeckScreenId = parseInt(linkedScreens[0].yodeckPlayerId);
+        }
+      }
+
+      if (!yodeckScreenId || isNaN(yodeckScreenId)) {
+        console.warn(`${LOG} ${correlationId} location ${locId} has no yodeckScreenId, skip screen verification`);
+        continue;
+      }
+
+      targetScreenIds.push(yodeckScreenId);
+      console.log(`${LOG} ${correlationId} verifying screen ${yodeckScreenId} → playlist ${playlistId}`);
+      const result = await verifyScreenAssignment(yodeckScreenId, playlistId);
+      screenAssignment.push(result);
+    }
+  } catch (err: any) {
+    console.warn(`${LOG} ${correlationId} screen verification phase error: ${err.message}`);
+  }
+
+  const allScreensVerified = screenAssignment.length > 0
+    ? screenAssignment.every(s => s.verified)
+    : true;
+  const screenVerifyError = !allScreensVerified
+    ? `SCREEN_ASSIGNMENT_FAILED: ${screenAssignment.filter(s => !s.verified).map(s => `screen ${s.screenId}`).join(', ')}`
+    : null;
+
+  const publishSuccess = !!effectiveYodeckMediaId && canonicalPublishOk && allScreensVerified;
   const publishErrorMsg = !effectiveYodeckMediaId
     ? 'Geen Yodeck media ID verkregen'
     : !canonicalPublishOk
       ? (canonicalPublishError || 'Publicatie naar schermen mislukt')
-      : null;
+      : screenVerifyError
+        ? screenVerifyError
+        : null;
 
   await db.update(adAssets).set({
     approvalStatus: publishSuccess ? 'LIVE' : 'APPROVED',
@@ -666,7 +795,7 @@ export async function publishAsset(
     yodeckUploadedAt: effectiveYodeckMediaId ? new Date() : asset.yodeckUploadedAt,
   }).where(eq(adAssets.id, assetId));
 
-  console.log(`${LOG} ${correlationId} DONE approvalStatus=${publishSuccess ? 'LIVE' : 'APPROVED'} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId}`);
+  console.log(`${LOG} ${correlationId} DONE approvalStatus=${publishSuccess ? 'LIVE' : 'APPROVED'} publishStatus=${publishSuccess ? 'PUBLISHED' : 'PUBLISH_FAILED'} yodeckMediaId=${effectiveYodeckMediaId} screensVerified=${allScreensVerified}`);
 
   return {
     ok: publishSuccess,
@@ -674,5 +803,8 @@ export async function publishAsset(
     yodeckMediaId: effectiveYodeckMediaId,
     locationsUpdated,
     error: publishErrorMsg || undefined,
+    intendedPlaylistId,
+    targetScreenIds,
+    screenAssignment,
   };
 }
