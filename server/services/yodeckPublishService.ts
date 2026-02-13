@@ -608,7 +608,7 @@ class YodeckPublishService {
     }
 
     // Create new tag-based playlist with predefined filter tag
-    const createResult = await this.createTagBasedPlaylist(location, playlistFilterTag);
+    const createResult = await this.createTagBasedPlaylist(location, playlistFilterTag, { adminMaintenance: true });
     if (!createResult.ok || !createResult.playlistId) {
       await db.update(locations)
         .set({
@@ -712,9 +712,17 @@ class YodeckPublishService {
    */
   private async createTagBasedPlaylist(
     location: any,
-    playlistTag: string
+    playlistTag: string,
+    opts?: { adminMaintenance?: boolean }
   ): Promise<{ ok: boolean; playlistId?: number; error?: string }> {
     const playlistName = `EVZ ${location.name || location.id}`;
+
+    if (!opts?.adminMaintenance) {
+      const msg = `PUBLISH_GUARD: Blocked tag-based playlist creation "${playlistName}" — only allowed via admin maintenance routes`;
+      console.error(`[YodeckPublish] ${msg}`);
+      return { ok: false, error: msg };
+    }
+
     const description = `Auto-managed by Elevizion. Filter tag: ${playlistTag}`;
 
     // Try different payload structures based on capability hints
@@ -3009,47 +3017,56 @@ class YodeckPublishService {
 
       console.log(`[YodeckPublish] Resolved mediaId=${resolvedMediaId} via ${resolveResult.resolvedVia} for plan ${planId}`);
 
-      // Step 2: Ensure tag-based playlists exist for all target locations
+      // Step 2: Look up EXISTING screen playlist IDs from DB (NO playlist creation during publish)
       const locationIds = approvedTargets.map(t => t.locationId);
       const perLocationResults: Array<{
         locationId: string;
         playlistId?: number;
         verifyStatus: string;
-        assignStatus?: string;
         error?: string;
       }> = [];
 
-      console.log(`[YodeckPublish] Ensuring tag-based playlists for ${locationIds.length} locations`);
+      const screenPlaylistIds: number[] = [];
+      console.log(`[YodeckPublish] PUBLISH_GUARD: Looking up existing screen playlists for ${locationIds.length} locations (NO playlist creation allowed)`);
 
       for (const locationId of locationIds) {
-        const ensureResult = await this.ensureTagBasedPlaylist(locationId);
-        perLocationResults.push({
-          locationId,
-          playlistId: ensureResult.playlistId,
-          verifyStatus: ensureResult.verifyStatus,
-          assignStatus: ensureResult.ok ? "OK" : "FAILED",
-          error: ensureResult.error,
+        const loc = await db.query.locations.findFirst({
+          where: eq(locations.id, locationId),
         });
 
-        if (!ensureResult.ok) {
-          console.error(`[YodeckPublish] Failed to ensure playlist for location ${locationId}: ${ensureResult.error}`);
+        if (!loc) {
+          perLocationResults.push({ locationId, verifyStatus: "MISSING", error: "Location not found in DB" });
+          continue;
         }
+
+        if (!loc.yodeckPlaylistId) {
+          console.warn(`[YodeckPublish] PUBLISH_GUARD: Location ${locationId} (${loc.name}) has NO playlist ID — skipping (must be set up via admin first)`);
+          perLocationResults.push({ locationId, verifyStatus: "NO_PLAYLIST", error: "No yodeckPlaylistId — run admin setup first" });
+          continue;
+        }
+
+        const pid = parseInt(loc.yodeckPlaylistId);
+        if (isNaN(pid)) {
+          perLocationResults.push({ locationId, verifyStatus: "INVALID", error: `Invalid playlistId: ${loc.yodeckPlaylistId}` });
+          continue;
+        }
+
+        screenPlaylistIds.push(pid);
+        perLocationResults.push({ locationId, playlistId: pid, verifyStatus: "OK" });
+        console.log(`[YodeckPublish] PUBLISH_PLAYLIST_TOUCH: locationId=${locationId} screenPlaylistId=${pid} name="${loc.name}"`);
       }
 
-      // Step 3: Tag-based publishing - tag media with all target locations at once
-      // This is scalable (works for 100s of screens) and doesn't require playlist item management
-      // NOTE: Using only predefined tags - these must be pre-created in Yodeck UI
+      console.log(`[YodeckPublish] PUBLISH_GUARD: Will touch ${screenPlaylistIds.length} existing screen playlists: [${screenPlaylistIds.join(', ')}]`);
+
+      // Step 3: Tag-based publishing — tag media with placement tags
       const tags = this.generatePlacementTags();
       
       console.log(`[YodeckPublish] Tag CRUD API not used; using predefined tags only: ${tags.join(', ')}`);
-      console.log(`[YodeckPublish] (must pre-exist in Yodeck UI)`);
       
       const tagIdempotencyKey = crypto
         .createHash("sha256")
         .update(`tags:${planId}:${resolvedMediaId}:${locationIds.join(',')}`)
         .digest("hex");
-      
-      console.log(`[YodeckPublish] Using tag-based publishing for ${locationIds.length} locations`);
       
       const tagResult = await this.updateMediaTags(
         resolvedMediaId,
@@ -3075,21 +3092,19 @@ class YodeckPublishService {
         }
       }
       
-      // Update target reports based on tag result AND per-location ensure results
+      // Build target reports — only based on existing playlist availability + tag result
       for (const target of approvedTargets) {
         const locationResult = perLocationResults.find(r => r.locationId === target.locationId);
-        // Check both assignStatus and absence of error to ensure any failure is tracked
-        const ensureOk = locationResult?.assignStatus === "OK" && !locationResult?.error;
-        const allOk = tagResult.ok && missingTags.length === 0 && ensureOk;
+        const hasPlaylist = locationResult?.verifyStatus === "OK" && !!locationResult?.playlistId;
+        const allOk = hasPlaylist && tagResult.ok && missingTags.length === 0;
         
         const targetReport: { locationId: string; status: string; error?: string } = {
           locationId: target.locationId,
           status: allOk ? "tagged" : "failed",
         };
         
-        // Collect all errors
         const errors: string[] = [];
-        if (locationResult?.error) errors.push(locationResult.error);
+        if (!hasPlaylist && locationResult?.error) errors.push(locationResult.error);
         if (tagResult.error) errors.push(tagResult.error);
         if (missingTags.length > 0) errors.push(`Missing tags: ${missingTags.join(', ')}`);
         
@@ -3110,158 +3125,11 @@ class YodeckPublishService {
       (report as any).tagsApplied = tags;
       (report as any).missingTags = missingTags;
       (report as any).perLocation = perLocationResults;
+      (report as any).screenPlaylistIds = screenPlaylistIds;
 
-      // Step 5: Ensure ads surface is active on screens (layout or schedule)
-      // This guarantees ads are visible, not just tagged
-      console.log(`[YodeckPublish] Ensuring ads surface is active for ${locationIds.length} locations`);
-      const surfaceResults: Array<{ locationId: string; surfaceActive: boolean; mode?: string; error?: string }> = [];
-      
-      for (const locationId of locationIds) {
-        const locationResult = perLocationResults.find(r => r.locationId === locationId);
-        if (!locationResult?.playlistId) continue;
-        
-        const loc = await db.query.locations.findFirst({
-          where: eq(locations.id, locationId),
-        });
-        
-        if (!loc?.yodeckDeviceId) {
-          surfaceResults.push({ 
-            locationId, 
-            surfaceActive: false, 
-            error: "No Yodeck screen linked" 
-          });
-          continue;
-        }
-        
-        try {
-          const { ensureAdsSurfaceActive } = await import("./yodeckLayoutService");
-          const surfaceResult = await ensureAdsSurfaceActive({
-            locationId,
-            screenId: loc.yodeckDeviceId,
-            adsPlaylistId: String(locationResult.playlistId),
-          });
-          
-          surfaceResult.logs.forEach(log => console.log(log));
-          
-          surfaceResults.push({
-            locationId,
-            surfaceActive: surfaceResult.surfaceActive,
-            mode: surfaceResult.mode,
-            error: surfaceResult.error,
-          });
-          
-          // Update target report if surface failed
-          if (!surfaceResult.surfaceActive) {
-            const targetIdx = report.targets.findIndex(t => t.locationId === locationId);
-            if (targetIdx >= 0 && report.targets[targetIdx].status === "tagged") {
-              report.targets[targetIdx].status = "failed";
-              report.targets[targetIdx].error = surfaceResult.error || "ADS_SURFACE_NOT_ACTIVE";
-              report.successCount--;
-              report.failedCount++;
-            }
-          }
-        } catch (e: any) {
-          console.error(`[YodeckPublish] Surface check failed for ${locationId}: ${e.message}`);
-          surfaceResults.push({ 
-            locationId, 
-            surfaceActive: false, 
-            error: e.message 
-          });
-        }
-      }
-      
-      (report as any).surfaceResults = surfaceResults;
-
-      // Step 6: Verify screen is on Elevizion layout (not a demo/external layout)
-      // This ensures ads are truly visible, not hidden behind "Visitors - Black Friday Deal" etc.
-      console.log(`[YodeckPublish] Verifying Elevizion layout for ${locationIds.length} locations`);
-      const layoutVerifyResults: Array<{ locationId: string; layoutVerified: boolean; layoutName?: string; error?: string }> = [];
-      
-      for (const locationId of locationIds) {
-        const loc = await db.query.locations.findFirst({
-          where: eq(locations.id, locationId),
-        });
-        
-        if (!loc?.yodeckDeviceId) {
-          layoutVerifyResults.push({ 
-            locationId, 
-            layoutVerified: false, 
-            error: "No Yodeck screen linked" 
-          });
-          // Mark target as failed - no screen means no layout verification possible
-          const targetIdx = report.targets.findIndex(t => t.locationId === locationId);
-          if (targetIdx >= 0 && report.targets[targetIdx].status === "tagged") {
-            report.targets[targetIdx].status = "failed";
-            report.targets[targetIdx].error = "SCREEN_NOT_LINKED";
-            report.successCount--;
-            report.failedCount++;
-          }
-          continue;
-        }
-        
-        try {
-          const { getScreenContentStatus, isElevizionLayout, ensureScreenUsesElevizionLayout } = await import("./yodeckLayoutService");
-          const screenStatus = await getScreenContentStatus(loc.yodeckDeviceId);
-          
-          if (screenStatus.ok && screenStatus.mode === "layout" && isElevizionLayout(screenStatus.layoutName)) {
-            // Screen is on correct Elevizion layout
-            layoutVerifyResults.push({
-              locationId,
-              layoutVerified: true,
-              layoutName: screenStatus.layoutName,
-            });
-            console.log(`[YodeckPublish] Location ${locationId}: Elevizion layout OK (${screenStatus.layoutName})`);
-          } else {
-            // Screen is on wrong layout - attempt auto-fix
-            console.log(`[YodeckPublish] Location ${locationId}: Wrong layout detected (${screenStatus.layoutName || screenStatus.mode}), attempting auto-fix...`);
-            
-            const forceResult = await ensureScreenUsesElevizionLayout(locationId);
-            forceResult.logs.forEach(log => console.log(log));
-            
-            if (forceResult.ok && forceResult.verified) {
-              layoutVerifyResults.push({
-                locationId,
-                layoutVerified: true,
-                layoutName: forceResult.layoutName,
-              });
-              console.log(`[YodeckPublish] Location ${locationId}: Auto-fixed to Elevizion layout (${forceResult.layoutName})`);
-            } else {
-              // Failed to fix - mark target as failed
-              layoutVerifyResults.push({
-                locationId,
-                layoutVerified: false,
-                error: forceResult.error || "SCREEN_LAYOUT_NOT_APPLIED",
-              });
-              
-              const targetIdx = report.targets.findIndex(t => t.locationId === locationId);
-              if (targetIdx >= 0 && report.targets[targetIdx].status === "tagged") {
-                report.targets[targetIdx].status = "failed";
-                report.targets[targetIdx].error = forceResult.error || "SCREEN_LAYOUT_NOT_APPLIED";
-                report.successCount--;
-                report.failedCount++;
-              }
-              console.log(`[YodeckPublish] Location ${locationId}: FAILED - could not apply Elevizion layout`);
-            }
-          }
-        } catch (e: any) {
-          console.error(`[YodeckPublish] Layout verify failed for ${locationId}: ${e.message}`);
-          layoutVerifyResults.push({ 
-            locationId, 
-            layoutVerified: false, 
-            error: e.message 
-          });
-          // Mark target as failed on verification error
-          const targetIdx = report.targets.findIndex(t => t.locationId === locationId);
-          if (targetIdx >= 0 && report.targets[targetIdx].status === "tagged") {
-            report.targets[targetIdx].status = "failed";
-            report.targets[targetIdx].error = `LAYOUT_VERIFY_ERROR: ${e.message}`;
-            report.successCount--;
-            report.failedCount++;
-          }
-        }
-      }
-      
-      (report as any).layoutVerifyResults = layoutVerifyResults;
+      // NOTE: Steps 5+6 (ensureAdsSurfaceActive, ensureScreenUsesElevizionLayout) REMOVED from publish.
+      // Those steps created unwanted playlists ("EMPTY (reset)", "EVZ <name>").
+      // Layout/surface management belongs in dedicated admin maintenance flows only.
 
       // Update plan status based on results
       report.completedAt = new Date().toISOString();

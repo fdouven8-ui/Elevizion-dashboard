@@ -727,7 +727,15 @@ export class YodeckClient {
   /**
    * Create a new playlist in Yodeck
    */
-  async createPlaylist(name: string, workspaceId?: number): Promise<{ ok: boolean; data?: YodeckPlaylist; error?: string }> {
+  async createPlaylist(name: string, workspaceId?: number, opts?: { adminMaintenance?: boolean }): Promise<{ ok: boolean; data?: YodeckPlaylist; error?: string }> {
+    const FORBIDDEN_PATTERNS = ["EMPTY (reset)", "EVZ "];
+    const isForbidden = FORBIDDEN_PATTERNS.some(p => name.includes(p));
+    if (isForbidden && !opts?.adminMaintenance) {
+      const msg = `PUBLISH_GUARD: Blocked playlist creation with forbidden name "${name}". This is only allowed via admin maintenance routes.`;
+      console.error(`[YodeckClient] ${msg}`);
+      return { ok: false, error: msg };
+    }
+
     await semaphore.acquire();
     
     try {
