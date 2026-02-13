@@ -18833,7 +18833,13 @@ KvK: 90982541 | BTW: NL004857473B37</p>
           candidateName: report?.resolveDebug?.candidateName || null,
           findByName: report?.resolveDebug?.findByName || null,
           createAttempt: report?.resolveDebug?.createAttempt || null,
+          createStatus: report?.resolveDebug?.createAttempt?.httpStatus || null,
+          createResponseIdExtracted: report?.resolveDebug?.createAttempt?.mediaId || null,
           findByTag: report?.resolveDebug?.findByTag || null,
+          retryFindByName: report?.resolveDebug?.retryFindByName || null,
+          localUpload: report?.resolveDebug?.localUpload || null,
+          dbMediaIdInvalid: report?.resolveDebug?.dbMediaIdInvalid || null,
+          correlationId: report?.resolveDebug?.correlationId || report?.lastCorrelationId || null,
         },
         asset: asset ? {
           id: asset.id,

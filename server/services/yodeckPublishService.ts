@@ -266,8 +266,7 @@ class YodeckPublishService {
       
       console.log(`[YodeckPublish][${corrId}] Poll attempt ${attempts}: status="${lastStatus}" duration=${media.duration || 0}s`);
       
-      // Check for terminal success states
-      if (lastStatus === 'ready' || media.is_ready) {
+      if (lastStatus === 'finished' || lastStatus === 'ready' || lastStatus === 'active' || media.is_ready) {
         return {
           ok: true,
           finalStatus: lastStatus,
@@ -2240,7 +2239,10 @@ class YodeckPublishService {
         return { ok: false, error: `Create failed: HTTP ${createResp.status}`, debug };
       }
 
-      const mediaId = createResp.data?.id;
+      const { YodeckClient } = await import("./yodeckClient");
+      const mediaId = YodeckClient.extractMediaId(createResp.data);
+      debug.createResponseIdExtracted = mediaId;
+      debug.createResponseRawId = createResp.data?.id;
       if (!mediaId) {
         return { ok: false, error: "No mediaId in create response", debug };
       }

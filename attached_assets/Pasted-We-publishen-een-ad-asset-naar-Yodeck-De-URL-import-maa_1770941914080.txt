@@ -1,0 +1,143 @@
+We publishen een ad-asset naar Yodeck. De URL-import maakt media aan in Yodeck (HTTP 201) en geeft een mediaId terug (bewezen: media bestaat). Maar de placement plan eindigt alsnog in FAILED met ALL_METHODS_FAILED en publishReport.yodeckMediaId blijft null.
+
+DOEL
+
+Zodra Yodeck Create Media (url import of local upload) een geldige mediaId oplevert, moet de publish als SUCCESS tellen.
+
+placementPlan.yodeckMediaId moet worden opgeslagen.
+
+publishReport.yodeckMediaId moet gevuld worden.
+
+Status moet door naar de volgende stap (playlist placement) i.p.v. blijven hangen in FAILED.
+
+EISEN
+
+Geen veranderingen aan upload/baseline flows buiten publish.
+
+Houd “fallback” (url_import → local upload) intact, maar:
+
+Als url_import al success geeft, niet alsnog naar failure.
+
+local upload fallback mag alleen draaien als url_import echt faalt.
+
+Logica moet idempotent zijn: als placementPlan.yodeckMediaId al bestaat, hergebruik die en skip create.
+
+AANPASSINGEN
+
+A) Fix: “media status finished” is GEEN fout
+
+In jouw debug staat cdnImportError: "Media status: finished". Dat lijkt alsof je ergens finished als error string opslaat.
+
+Zoek in code naar iets als:
+
+"Media status:"
+
+finished
+
+cdnImportError
+
+throw new Error("Media status: " + status)
+
+Fix: finished (en meestal ook active/ready, afhankelijk van Yodeck) moet success zijn.
+
+B) Fix: behandel Create(201) + mediaId als success
+
+In de functie die Yodeck media aanmaakt (waarschijnlijk in server/services/yodeckClient.ts of server/services/publish*):
+
+Zorg dat je bij create response de id / media.id correct pakt.
+
+Soms zit het op res.id, soms res.data.id, soms res.media.id afhankelijk van jouw request wrapper.
+
+Implementatie-eis:
+Maak een helper:
+
+function extractMediaId(createRes: any): number | null {
+  const id =
+    createRes?.id ??
+    createRes?.media?.id ??
+    createRes?.data?.id ??
+    createRes?.body?.id ??
+    null;
+  return typeof id === "number" ? id : (typeof id === "string" ? Number(id) : null);
+}
+
+
+Na create:
+
+const mediaId = extractMediaId(res);
+
+Als mediaId truthy → success.
+
+C) Persist yodeckMediaId op placementPlan + publishReport
+
+Waar je publish status/rapport opslaat (DB update):
+
+Zet:
+
+placementPlans.yodeckMediaId = mediaId
+
+publishReport.yodeckMediaId = mediaId
+
+plan.status = "APPROVED" of liever "PUBLISHED"/"READY_FOR_PLACEMENT" (gebruik jouw bestaande enum/flow)
+
+Belangrijk: zet NIET FAILED als mediaId bestaat.
+
+D) Outcome/decision logic corrigeren
+
+Je outcome: ALL_METHODS_FAILED wordt nu gezet als (cdnImportError || localUploadError). Maar als url_import success gaf, moet outcome URL_IMPORT_OK (of vergelijkbaar) zijn.
+
+Nieuwe logica:
+
+if (mediaId) outcome = "OK";
+
+Alleen als beide methodes geen mediaId opleveren → ALL_METHODS_FAILED.
+
+E) Retry moet hergebruiken
+
+Bij retry:
+
+Als placementPlan.yodeckMediaId bestaat → skip create, ga direct door naar playlist placement stap.
+
+Anders: create opnieuw.
+
+F) Voeg harde debug velden toe
+
+In publish-debug response:
+
+resolvedMediaId en resolvedVia (url_import/local_upload/existing)
+
+createStatus, createResponseIdExtracted, etc.
+
+Acceptance
+Na deploy:
+
+Run:
+
+fetch("/api/placement-plans/8c059ea9-ba10-4ffa-8fb1-060cf5196073/retry", {method:"POST"})
+  .then(r=>r.json()).then(console.log).catch(console.error);
+
+
+Run:
+
+fetch("/api/admin/yodeck/publish-debug/8c059ea9-ba10-4ffa-8fb1-060cf5196073")
+  .then(r=>r.json()).then(d => {
+    console.log("status:", d.plan?.status);
+    console.log("yodeckMediaId:", d.plan?.yodeckMediaId || d.publishReport?.yodeckMediaId);
+    console.log("outcome:", d.lastDebug?.outcome);
+    console.log("resolvedMediaId:", d.lastDebug?.resolvedMediaId);
+    console.log("resolvedVia:", d.lastDebug?.resolvedVia);
+    return d;
+  })
+  .then(console.log)
+  .catch(console.error);
+
+
+Expected
+
+plan.status ≠ FAILED
+
+yodeckMediaId gevuld (30039391 of nieuw)
+
+outcome = OK / URL_IMPORT_OK
+
+retryCount blijft netjes

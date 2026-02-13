@@ -642,6 +642,18 @@ export class YodeckClient {
     return match || null;
   }
 
+  static extractMediaId(createRes: any): number | null {
+    const id =
+      createRes?.id ??
+      createRes?.media?.id ??
+      createRes?.data?.id ??
+      createRes?.body?.id ??
+      null;
+    if (typeof id === "number" && id > 0) return id;
+    if (typeof id === "string" && !isNaN(Number(id)) && Number(id) > 0) return Number(id);
+    return null;
+  }
+
   async createMediaFromUrl(opts: {
     name: string;
     downloadUrl: string;
@@ -692,7 +704,12 @@ export class YodeckClient {
 
         if (response.status >= 200 && response.status < 300) {
           const data = JSON.parse(respText);
-          return { ok: true, mediaId: data.id, data, httpStatus: response.status };
+          const mediaId = YodeckClient.extractMediaId(data);
+          console.log(`[YodeckClient][${corrId}] createMediaFromUrl extractMediaId: raw.id=${data?.id} extracted=${mediaId}`);
+          if (mediaId) {
+            return { ok: true, mediaId, data, httpStatus: response.status };
+          }
+          return { ok: false, error: `HTTP ${response.status} but no mediaId extracted from response`, data, httpStatus: response.status };
         }
 
         return { ok: false, error: `HTTP ${response.status}: ${respBody}`, httpStatus: response.status };
