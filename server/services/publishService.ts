@@ -556,6 +556,7 @@ export interface PublishAssetResult {
   yodeckMediaId?: number | null;
   locationsUpdated?: number;
   error?: string;
+  message?: string;
   alreadyProcessing?: boolean;
   intendedPlaylistId?: number | null;
   targetScreenIds?: number[];
@@ -625,6 +626,57 @@ export async function verifyScreenAssignment(
   }
 }
 
+export async function resolveAndVerifyScreens(
+  advertiserId: string,
+  correlationId: string,
+): Promise<{ intendedPlaylistId: number | null; targetScreenIds: number[]; screenAssignment: ScreenAssignmentResult[] }> {
+  const LOG = `[ScreenVerifyPhase]`;
+  let intendedPlaylistId: number | null = null;
+  const targetScreenIds: number[] = [];
+  const screenAssignment: ScreenAssignmentResult[] = [];
+
+  const { findLocationsForAdvertiser } = await import('./yodeckCanonicalService');
+  const targetLocationIds = await findLocationsForAdvertiser(advertiserId);
+  console.log(`${LOG} ${correlationId} found ${targetLocationIds.length} locations for advertiser ${advertiserId}`);
+
+  for (const locId of targetLocationIds) {
+    const [loc] = await db.select().from(locations).where(eq(locations.id, locId));
+    if (!loc) continue;
+
+    const playlistId = loc.yodeckPlaylistId ? parseInt(loc.yodeckPlaylistId) : null;
+    if (!playlistId || isNaN(playlistId)) {
+      console.warn(`${LOG} ${correlationId} location ${locId} has no yodeckPlaylistId, skip`);
+      continue;
+    }
+
+    if (!intendedPlaylistId) intendedPlaylistId = playlistId;
+
+    let yodeckScreenId: number | null = null;
+    if (loc.yodeckDeviceId) {
+      yodeckScreenId = parseInt(loc.yodeckDeviceId);
+    } else {
+      const linkedScreens = await db.select({ yodeckPlayerId: screens.yodeckPlayerId })
+        .from(screens)
+        .where(eq(screens.locationId, locId));
+      if (linkedScreens.length > 0 && linkedScreens[0].yodeckPlayerId) {
+        yodeckScreenId = parseInt(linkedScreens[0].yodeckPlayerId);
+      }
+    }
+
+    if (!yodeckScreenId || isNaN(yodeckScreenId)) {
+      console.warn(`${LOG} ${correlationId} location ${locId} has no yodeckScreenId, skip`);
+      continue;
+    }
+
+    targetScreenIds.push(yodeckScreenId);
+    console.log(`${LOG} ${correlationId} verifying screen ${yodeckScreenId} → playlist ${playlistId}`);
+    const result = await verifyScreenAssignment(yodeckScreenId, playlistId);
+    screenAssignment.push(result);
+  }
+
+  return { intendedPlaylistId, targetScreenIds, screenAssignment };
+}
+
 export async function publishAsset(
   assetId: string,
   opts: { actor: string; isRetry?: boolean }
@@ -641,8 +693,39 @@ export async function publishAsset(
   }
 
   if (asset.publishStatus === 'PUBLISHED' && asset.approvalStatus === 'LIVE') {
-    console.log(`${LOG} ${correlationId} IDEMPOTENT_SKIP assetId=${assetId} already LIVE+PUBLISHED`);
-    return { ok: true, correlationId, yodeckMediaId: asset.yodeckMediaId, alreadyProcessing: true };
+    console.log(`${LOG} ${correlationId} ALREADY_PUBLISHED assetId=${assetId} — running screen verification`);
+    try {
+      const { intendedPlaylistId, targetScreenIds, screenAssignment } =
+        await resolveAndVerifyScreens(asset.advertiserId, correlationId);
+
+      if (targetScreenIds.length === 0) {
+        return {
+          ok: false, correlationId, yodeckMediaId: asset.yodeckMediaId,
+          alreadyProcessing: true, error: "NO_TARGET_RESOLVED",
+          intendedPlaylistId, targetScreenIds, screenAssignment,
+        };
+      }
+
+      const allVerified = screenAssignment.every(s => s.verified);
+      return {
+        ok: allVerified,
+        correlationId,
+        yodeckMediaId: asset.yodeckMediaId,
+        alreadyProcessing: true,
+        message: allVerified ? "Publicatie voltooid en geverifieerd" : undefined,
+        error: allVerified ? undefined : `SCREEN_ASSIGNMENT_FAILED: ${screenAssignment.filter(s => !s.verified).map(s => `screen ${s.screenId}`).join(', ')}`,
+        intendedPlaylistId,
+        targetScreenIds,
+        screenAssignment,
+      };
+    } catch (err: any) {
+      console.error(`${LOG} ${correlationId} screen verification error for LIVE asset: ${err.message}`);
+      return {
+        ok: false, correlationId, yodeckMediaId: asset.yodeckMediaId,
+        alreadyProcessing: true, error: err.message,
+        intendedPlaylistId: null, targetScreenIds: [], screenAssignment: [],
+      };
+    }
   }
 
   const allowedStatuses = ['APPROVED', 'APPROVED_PENDING_PUBLISH'];
@@ -663,8 +746,35 @@ export async function publishAsset(
   ).returning({ id: adAssets.id });
 
   if (atomicResult.length === 0) {
-    console.log(`${LOG} ${correlationId} IDEMPOTENT_SKIP assetId=${assetId} publishStatus=PENDING (concurrent guard)`);
-    return { ok: true, correlationId, alreadyProcessing: true, error: "Publicatie is al bezig" };
+    console.log(`${LOG} ${correlationId} CONCURRENT_PENDING assetId=${assetId} — running screen verification anyway`);
+    try {
+      const { intendedPlaylistId, targetScreenIds, screenAssignment } =
+        await resolveAndVerifyScreens(asset.advertiserId, correlationId);
+
+      if (targetScreenIds.length === 0) {
+        return {
+          ok: false, correlationId, alreadyProcessing: true, error: "NO_TARGET_RESOLVED",
+          intendedPlaylistId, targetScreenIds, screenAssignment,
+        };
+      }
+
+      const allVerified = screenAssignment.every(s => s.verified);
+      return {
+        ok: allVerified,
+        correlationId,
+        alreadyProcessing: true,
+        message: allVerified ? "Publicatie voltooid en geverifieerd" : undefined,
+        error: allVerified ? undefined : `SCREEN_ASSIGNMENT_FAILED: ${screenAssignment.filter(s => !s.verified).map(s => `screen ${s.screenId}`).join(', ')}`,
+        intendedPlaylistId,
+        targetScreenIds,
+        screenAssignment,
+      };
+    } catch (err: any) {
+      return {
+        ok: false, correlationId, alreadyProcessing: true, error: err.message,
+        intendedPlaylistId: null, targetScreenIds: [], screenAssignment: [],
+      };
+    }
   }
 
   console.log(`${LOG} ${correlationId} START assetId=${assetId} actor=${opts.actor} approvalStatus=${asset.approvalStatus} publishStatus=${asset.publishStatus}`);
@@ -730,43 +840,10 @@ export async function publishAsset(
   let screenAssignment: ScreenAssignmentResult[] = [];
 
   try {
-    const { findLocationsForAdvertiser } = await import('./yodeckCanonicalService');
-    const targetLocationIds = await findLocationsForAdvertiser(asset.advertiserId);
-
-    for (const locId of targetLocationIds) {
-      const [loc] = await db.select().from(locations).where(eq(locations.id, locId));
-      if (!loc) continue;
-
-      const playlistId = loc.yodeckPlaylistId ? parseInt(loc.yodeckPlaylistId) : null;
-      if (!playlistId || isNaN(playlistId)) {
-        console.warn(`${LOG} ${correlationId} location ${locId} has no yodeckPlaylistId, skip verification`);
-        continue;
-      }
-
-      if (!intendedPlaylistId) intendedPlaylistId = playlistId;
-
-      let yodeckScreenId: number | null = null;
-      if (loc.yodeckDeviceId) {
-        yodeckScreenId = parseInt(loc.yodeckDeviceId);
-      } else {
-        const linkedScreens = await db.select({ yodeckPlayerId: screens.yodeckPlayerId })
-          .from(screens)
-          .where(eq(screens.locationId, locId));
-        if (linkedScreens.length > 0 && linkedScreens[0].yodeckPlayerId) {
-          yodeckScreenId = parseInt(linkedScreens[0].yodeckPlayerId);
-        }
-      }
-
-      if (!yodeckScreenId || isNaN(yodeckScreenId)) {
-        console.warn(`${LOG} ${correlationId} location ${locId} has no yodeckScreenId, skip screen verification`);
-        continue;
-      }
-
-      targetScreenIds.push(yodeckScreenId);
-      console.log(`${LOG} ${correlationId} verifying screen ${yodeckScreenId} → playlist ${playlistId}`);
-      const result = await verifyScreenAssignment(yodeckScreenId, playlistId);
-      screenAssignment.push(result);
-    }
+    const verifyResult = await resolveAndVerifyScreens(asset.advertiserId, correlationId);
+    intendedPlaylistId = verifyResult.intendedPlaylistId;
+    targetScreenIds = verifyResult.targetScreenIds;
+    screenAssignment = verifyResult.screenAssignment;
   } catch (err: any) {
     console.warn(`${LOG} ${correlationId} screen verification phase error: ${err.message}`);
   }

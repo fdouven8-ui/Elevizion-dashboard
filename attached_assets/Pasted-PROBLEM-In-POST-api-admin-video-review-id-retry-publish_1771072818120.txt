@@ -1,0 +1,89 @@
+PROBLEM:
+In POST /api/admin/video-review/:id/retry-publish, when publish is "already in progress or completed",
+the route returns early:
+
+{
+  ok: true,
+  message: "Publicatie is al bezig of voltooid"
+}
+
+This causes:
+- intendedPlaylistId = null
+- targetScreenIds = []
+- screenAssignment = []
+- NO screen verification
+- NO screen patch
+- NO deterministic assignment
+
+GOAL:
+Even when publish is already completed,
+we MUST still:
+1) Determine intendedPlaylistId
+2) Determine targetScreenIds
+3) Verify screen assignment
+4) If mismatch → patch + re-verify
+5) Return full debug payload
+
+IMPLEMENTATION:
+
+A) Locate early return block in retry-publish handler:
+   the branch that returns when publish is already in progress or completed.
+
+B) REMOVE the early return.
+
+C) Replace it with:
+
+   // Always compute targeting data
+   const intendedPlaylistId = await computeIntendedPlaylistId(reviewItem);
+   const targetScreenIds = await computeTargetScreenIds(reviewItem);
+
+   const screenAssignment = [];
+
+   for (const screenId of targetScreenIds) {
+       const before = await yodeckClient.getScreen(screenId);
+
+       if (
+           before.screen_content?.source_type !== "playlist" ||
+           before.screen_content?.source_id !== intendedPlaylistId
+       ) {
+           await yodeckClient.patchScreenContent(screenId, intendedPlaylistId);
+           await new Promise(r => setTimeout(r, 2000));
+       }
+
+       const after = await yodeckClient.getScreen(screenId);
+
+       const verified =
+           after.screen_content?.source_type === "playlist" &&
+           after.screen_content?.source_id === intendedPlaylistId;
+
+       screenAssignment.push({
+           screenId,
+           before: before.screen_content,
+           after: after.screen_content,
+           verified
+       });
+
+       if (!verified) {
+           throw new Error("SCREEN_ASSIGNMENT_FAILED");
+       }
+   }
+
+D) Always return:
+
+{
+  ok: true,
+  message: "Publicatie voltooid en geverifieerd",
+  correlationId,
+  yodeckMediaId,
+  intendedPlaylistId,
+  targetScreenIds,
+  screenAssignment
+}
+
+E) If no screenId or playlistId can be determined:
+   return ok:false with error "NO_TARGET_RESOLVED"
+
+ACCEPTANCE:
+- retry-publish must NEVER return early without intendedPlaylistId and targetScreenIds
+- screenAssignment array must never be empty unless explicitly no screen configured
+- If screen mismatch occurs → route must throw error instead of silent success

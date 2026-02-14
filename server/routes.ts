@@ -2699,76 +2699,22 @@ Sitemap: ${SITE_URL}/sitemap.xml
     try {
       const assetId = req.params.id;
       const user = req.currentUser as any;
-      const { publishAsset, verifyScreenAssignment } = await import("./services/publishService");
+      const { publishAsset } = await import("./services/publishService");
       const result = await publishAsset(assetId, {
         actor: `admin_retry:${user?.id || 'admin'}`,
         isRetry: true,
       });
 
-      if (result.alreadyProcessing) {
-        let screenAssignment = result.screenAssignment || [];
-        let intendedPlaylistId = result.intendedPlaylistId || null;
-        let targetScreenIds = result.targetScreenIds || [];
-
-        if (screenAssignment.length === 0 && result.yodeckMediaId) {
-          try {
-            const { adAssets, locations: locationsTable, screens: screensTable } = await import("@shared/schema");
-            const { eq } = await import("drizzle-orm");
-            const { db } = await import("./db");
-            const [asset] = await db.select().from(adAssets).where(eq(adAssets.id, assetId));
-            if (asset) {
-              const { findLocationsForAdvertiser } = await import("./services/yodeckCanonicalService");
-              const locIds = await findLocationsForAdvertiser(asset.advertiserId);
-              for (const locId of locIds) {
-                const [loc] = await db.select().from(locationsTable).where(eq(locationsTable.id, locId));
-                if (!loc?.yodeckPlaylistId) continue;
-                const playlistId = parseInt(loc.yodeckPlaylistId);
-                if (isNaN(playlistId)) continue;
-                if (!intendedPlaylistId) intendedPlaylistId = playlistId;
-
-                let yodeckScreenId: number | null = null;
-                if (loc.yodeckDeviceId) {
-                  yodeckScreenId = parseInt(loc.yodeckDeviceId);
-                } else {
-                  const linked = await db.select({ yodeckPlayerId: screensTable.yodeckPlayerId })
-                    .from(screensTable).where(eq(screensTable.locationId, locId));
-                  if (linked.length > 0 && linked[0].yodeckPlayerId) {
-                    yodeckScreenId = parseInt(linked[0].yodeckPlayerId);
-                  }
-                }
-                if (!yodeckScreenId || isNaN(yodeckScreenId)) continue;
-                targetScreenIds.push(yodeckScreenId);
-                const verifyResult = await verifyScreenAssignment(yodeckScreenId, playlistId);
-                screenAssignment.push(verifyResult);
-              }
-            }
-          } catch (verifyErr: any) {
-            console.warn(`[VideoReview] Verification for already-processing asset failed: ${verifyErr.message}`);
-          }
-        }
-
-        const allVerified = screenAssignment.length > 0
-          ? screenAssignment.every(s => s.verified)
-          : null;
-
-        return res.status(200).json({
-          ok: allVerified !== false,
-          message: result.error || "Publicatie is al bezig of voltooid",
-          correlationId: result.correlationId,
-          yodeckMediaId: result.yodeckMediaId,
-          intendedPlaylistId,
-          targetScreenIds,
-          screenAssignment,
-        });
-      }
+      const message = result.message
+        || (result.ok
+          ? `Publicatie voltooid en geverifieerd${result.locationsUpdated ? ` — ${result.locationsUpdated} locatie(s)` : ''}`
+          : `Publicatie mislukt: ${result.error}`);
 
       res.json({
         ok: result.ok,
-        message: result.ok
-          ? `Publicatie gelukt${result.locationsUpdated ? ` en gepubliceerd naar ${result.locationsUpdated} locatie(s)` : ''}`
-          : `Publicatie mislukt: ${result.error}`,
-        yodeckMediaId: result.yodeckMediaId,
+        message,
         correlationId: result.correlationId,
+        yodeckMediaId: result.yodeckMediaId,
         locationsUpdated: result.locationsUpdated,
         intendedPlaylistId: result.intendedPlaylistId,
         targetScreenIds: result.targetScreenIds,
