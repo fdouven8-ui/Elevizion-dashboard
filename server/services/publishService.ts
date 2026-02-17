@@ -588,8 +588,8 @@ export async function verifyScreenAssignment(
     if (!client) throw new Error('Yodeck client not configured');
 
     const before = await client.getScreen(screenId);
-    const beforeContent = before?.takeover_content
-      ? { source_type: before.takeover_content.source_type || null, source_id: before.takeover_content.source_id || null }
+    const beforeContent = before?.screen_content
+      ? { source_type: before.screen_content.source_type || null, source_id: before.screen_content.source_id || null }
       : null;
 
     const alreadyCorrect = beforeContent?.source_type === "playlist" && beforeContent?.source_id === intendedPlaylistId;
@@ -598,7 +598,7 @@ export async function verifyScreenAssignment(
       return { screenId, before: beforeContent, after: beforeContent, verified: true };
     }
 
-    console.log(`${LOG} screen ${screenId} before: ${JSON.stringify(beforeContent)} → patching takeover_content to playlist ${intendedPlaylistId}`);
+    console.log(`${LOG} screen ${screenId} before: ${JSON.stringify(beforeContent)} → patching screen_content to playlist ${intendedPlaylistId}`);
     const patchResult = await client.patchScreenContent(screenId, intendedPlaylistId);
     if (!patchResult.ok) {
       return { screenId, before: beforeContent, after: null, verified: false, error: patchResult.error };
@@ -607,8 +607,8 @@ export async function verifyScreenAssignment(
     await new Promise(r => setTimeout(r, 1500));
 
     const after1 = await client.getScreen(screenId);
-    const after1Content = after1?.takeover_content
-      ? { source_type: after1.takeover_content.source_type || null, source_id: after1.takeover_content.source_id || null }
+    const after1Content = after1?.screen_content
+      ? { source_type: after1.screen_content.source_type || null, source_id: after1.screen_content.source_id || null }
       : null;
 
     if (after1Content?.source_type === "playlist" && after1Content?.source_id === intendedPlaylistId) {
@@ -621,8 +621,8 @@ export async function verifyScreenAssignment(
     await new Promise(r => setTimeout(r, 2500));
 
     const after2 = await client.getScreen(screenId);
-    const after2Content = after2?.takeover_content
-      ? { source_type: after2.takeover_content.source_type || null, source_id: after2.takeover_content.source_id || null }
+    const after2Content = after2?.screen_content
+      ? { source_type: after2.screen_content.source_type || null, source_id: after2.screen_content.source_id || null }
       : null;
 
     const verified = after2Content?.source_type === "playlist" && after2Content?.source_id === intendedPlaylistId;
