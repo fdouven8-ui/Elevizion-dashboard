@@ -2711,6 +2711,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
 
       let finalResult = { ...result };
       const forcedTargetUsed = !!(forcedScreenId || forcedPlayerId);
+      let __pushProbe = false;
 
       if (!result.ok && result.error === "NO_TARGET_RESOLVED" && (forcedScreenId || forcedPlayerId)) {
         console.log(`[RetryPublish] NO_TARGET_RESOLVED — attempting forced target: screenId=${forcedScreenId} playerId=${forcedPlayerId}`);
@@ -2786,6 +2787,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
               const pushClient = await (await import("./services/yodeckClient")).getYodeckClient();
               if (pushClient) {
                 pushResult = await pushClient.pushToScreen(resolvedScreenId, true);
+                __pushProbe = true;
                 forcedNotes.push(`Push result: ok=${pushResult.ok}${pushResult.error ? ' error=' + pushResult.error : ''}`);
                 afterPushScreen = await pushClient.getScreen(resolvedScreenId);
               }
@@ -2845,6 +2847,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
         screenAssignment: finalResult.screenAssignment,
         debug: finalResult.debug || { step: "resolve-target", now: new Date().toISOString() },
         forcedTargetUsed,
+        __pushProbe,
       });
     } catch (error: any) {
       console.error('[VideoReview] Retry publish error:', error);
