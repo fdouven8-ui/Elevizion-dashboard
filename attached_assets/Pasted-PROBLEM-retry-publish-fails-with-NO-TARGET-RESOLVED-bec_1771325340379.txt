@@ -1,0 +1,53 @@
+PROBLEM:
+retry-publish fails with NO_TARGET_RESOLVED because it only resolves targets via SIGNED contracts:
+advertiser -> contracts(0) -> placements(0) -> screens(0) -> locations(0) -> withPlaylist(0) -> mappings(0)
+But for bootstrapping/testing (and even real ops), we must be able to publish to a specific screen even if contracts are not signed yet.
+
+GOAL:
+Add a safe, explicit fallback target resolution for POST /api/admin/video-review/:id/retry-publish:
+- Prefer explicit target stored on the review item (if exists).
+- Else allow admin to force a target via request body.
+- Ensure intendedPlaylistId is resolved from that target (screen playlist "EVZ | SCREEN | <playerId>").
+- Then run screen assignment + verification as already implemented.
+
+IMPLEMENTATION:
+1) In server/routes.ts handler POST /api/admin/video-review/:id/retry-publish (around line ~2713):
+   - Accept optional JSON body:
+     { yodeckScreenId?: number, yodeckPlayerId?: number }
+   - Validate: at least one of these if contract-based resolution yields 0 targets.
+
+2) Target resolution logic:
+   A) Run existing resolution (contracts/placements) as-is.
+   B) If it returns 0 targets:
+      - If body.yodeckScreenId present: use that as sole target.
+      - Else if body.yodeckPlayerId present:
+         - Resolve yodeckScreenId by querying Yodeck screens list once OR use existing DB mapping if you store playerId->screenId.
+         - If you already store yodeckPlayerId on our Screen model, use that mapping.
+      - If still not resolved: keep NO_TARGET_RESOLVED but include debug showing forced inputs were absent/failed.
+
+3) intendedPlaylistId resolution for forced target:
+   - We already have per-screen playlists named "EVZ | SCREEN | <playerId>" (example: 591895, 591896).
+   - Implement helper to find or fetch playlistId for that playerId WITHOUT creating new playlists.
+   - If DB already stores yodeckPlaylistId for screen/player, use it.
+   - Else search Yodeck playlists by name (exact match) and take its id.
+
+4) Return fields:
+   - intendedPlaylistId
+   - targetScreenIds
+   - screenAssignment[] verified
+   - debug should include whether forcedTarget was used.
+
+5) Keep constraints:
+   - No new playlists created.
+   - Do not require signed contracts for admin retry-publish when forced target provided.
+   - This endpoint is admin-only, so forced targeting is acceptable.
+
+ACCEPTANCE TEST:
+From browser console:
+fetch("/api/admin/video-review/9ed9ae02-4d42-426e-8492-a5c6375b7917/retry-publish",{
+ method:"POST",
+ headers:{ "Content-Type":"application/json" },
+ body: JSON.stringify({ yodeckPlayerId: 591895 })
+}).then(r=>r.json()).then(console.log)
+
+Must return ok:true and screenAssignment[0].verified===true, with intendedPlaylistId not null.

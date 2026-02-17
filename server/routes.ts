@@ -2695,33 +2695,139 @@ Sitemap: ${SITE_URL}/sitemap.xml
 
   // Retry publish for failed assets (ADMIN ONLY)
   // Uses central publishAsset() with idempotency guard
+  // Supports forced target: { yodeckScreenId?: number, yodeckPlayerId?: number }
   app.post("/api/admin/video-review/:id/retry-publish", requireAdminAccess, async (req: any, res) => {
     try {
       const assetId = req.params.id;
       const user = req.currentUser as any;
-      const { publishAsset } = await import("./services/publishService");
+      const forcedScreenId = req.body?.yodeckScreenId ? Number(req.body.yodeckScreenId) : null;
+      const forcedPlayerId = req.body?.yodeckPlayerId ? Number(req.body.yodeckPlayerId) : null;
+
+      const { publishAsset, verifyScreenAssignment } = await import("./services/publishService");
       const result = await publishAsset(assetId, {
         actor: `admin_retry:${user?.id || 'admin'}`,
         isRetry: true,
       });
 
-      const message = result.message
-        || (result.ok
-          ? `Publicatie voltooid en geverifieerd${result.locationsUpdated ? ` — ${result.locationsUpdated} locatie(s)` : ''}`
-          : `Publicatie mislukt: ${result.error}`);
+      let finalResult = { ...result };
+      const forcedTargetUsed = !!(forcedScreenId || forcedPlayerId);
+
+      if (!result.ok && result.error === "NO_TARGET_RESOLVED" && (forcedScreenId || forcedPlayerId)) {
+        console.log(`[RetryPublish] NO_TARGET_RESOLVED — attempting forced target: screenId=${forcedScreenId} playerId=${forcedPlayerId}`);
+
+        let resolvedScreenId = forcedScreenId;
+        let resolvedPlaylistId: number | null = null;
+        const forcedNotes: string[] = [];
+
+        if (!resolvedScreenId && forcedPlayerId) {
+          const screenRow = await db.select({ id: screens.id, yodeckPlayerId: screens.yodeckPlayerId })
+            .from(screens)
+            .where(eq(screens.yodeckPlayerId, String(forcedPlayerId)))
+            .limit(1);
+
+          if (screenRow.length > 0) {
+            const yodeckClient = (await import("./services/yodeckClient")).getYodeckClient();
+            const yodeckScreen = await yodeckClient.getScreen(forcedPlayerId);
+            if (yodeckScreen) {
+              resolvedScreenId = yodeckScreen.id;
+              forcedNotes.push(`Resolved yodeckScreenId=${resolvedScreenId} from playerId=${forcedPlayerId} via Yodeck API`);
+            } else {
+              resolvedScreenId = forcedPlayerId;
+              forcedNotes.push(`Yodeck API lookup failed for playerId=${forcedPlayerId}, using as screenId directly`);
+            }
+          } else {
+            resolvedScreenId = forcedPlayerId;
+            forcedNotes.push(`No DB screen row for playerId=${forcedPlayerId}, using as screenId directly`);
+          }
+        }
+
+        if (resolvedScreenId) {
+          const screenRow = await db.select({
+            playlistId: screens.playlistId,
+            yodeckPlayerId: screens.yodeckPlayerId,
+          })
+            .from(screens)
+            .where(eq(screens.yodeckPlayerId, String(forcedPlayerId || resolvedScreenId)))
+            .limit(1);
+
+          if (screenRow.length > 0 && screenRow[0].playlistId) {
+            resolvedPlaylistId = parseInt(screenRow[0].playlistId);
+            forcedNotes.push(`Resolved playlistId=${resolvedPlaylistId} from DB screens.playlistId`);
+          }
+
+          if (!resolvedPlaylistId) {
+            const playerId = forcedPlayerId || resolvedScreenId;
+            const searchName = `EVZ | SCREEN | ${playerId}`;
+            forcedNotes.push(`Searching Yodeck playlists for name prefix: "${searchName}"`);
+            try {
+              const yodeckClient = (await import("./services/yodeckClient")).getYodeckClient();
+              const allPlaylists = await yodeckClient.getPlaylists();
+              const match = allPlaylists.find(p => p.name && p.name.startsWith(searchName));
+              if (match) {
+                resolvedPlaylistId = match.id;
+                forcedNotes.push(`Found playlist "${match.name}" id=${match.id} via Yodeck search`);
+              } else {
+                forcedNotes.push(`No playlist found matching "${searchName}" in ${allPlaylists.length} playlists`);
+              }
+            } catch (err: any) {
+              forcedNotes.push(`Yodeck playlist search failed: ${err.message}`);
+            }
+          }
+        }
+
+        if (resolvedScreenId && resolvedPlaylistId) {
+          forcedNotes.push(`Running verification: screen=${resolvedScreenId} playlist=${resolvedPlaylistId}`);
+          const verifyResult = await verifyScreenAssignment(resolvedScreenId, resolvedPlaylistId);
+
+          finalResult = {
+            ...result,
+            ok: verifyResult.verified,
+            error: verifyResult.verified ? undefined : `SCREEN_ASSIGNMENT_FAILED: screen ${resolvedScreenId}`,
+            message: verifyResult.verified ? "Publicatie geverifieerd via geforceerd doel" : undefined,
+            intendedPlaylistId: resolvedPlaylistId,
+            targetScreenIds: [resolvedScreenId],
+            screenAssignment: [verifyResult],
+            debug: {
+              ...(result.debug || {} as any),
+              forcedTarget: true,
+              forcedScreenId: resolvedScreenId,
+              forcedPlayerId: forcedPlayerId,
+              resolvedPlaylistId,
+              forcedNotes,
+            },
+          };
+        } else {
+          forcedNotes.push(`Could not resolve: screenId=${resolvedScreenId} playlistId=${resolvedPlaylistId}`);
+          finalResult = {
+            ...result,
+            debug: {
+              ...(result.debug || {} as any),
+              forcedTarget: true,
+              forcedScreenId: resolvedScreenId,
+              forcedPlayerId: forcedPlayerId,
+              resolvedPlaylistId,
+              forcedNotes,
+            },
+          };
+        }
+      }
+
+      const message = finalResult.message
+        || (finalResult.ok
+          ? `Publicatie voltooid en geverifieerd${finalResult.locationsUpdated ? ` — ${finalResult.locationsUpdated} locatie(s)` : ''}`
+          : `Publicatie mislukt: ${finalResult.error}`);
 
       res.json({
-        ok: result.ok,
+        ok: finalResult.ok,
         message,
-        correlationId: result.correlationId,
-        yodeckMediaId: result.yodeckMediaId,
-        locationsUpdated: result.locationsUpdated,
-        intendedPlaylistId: result.intendedPlaylistId,
-        targetScreenIds: result.targetScreenIds,
-        screenAssignment: result.screenAssignment,
-        debug: result.debug || { step: "resolve-target", now: new Date().toISOString() },
-        __debugMarker: "DBG_NO_TARGET_20260217_A",
-        __debugWhere: "server/routes.ts:2713 POST /api/admin/video-review/:id/retry-publish",
+        correlationId: finalResult.correlationId,
+        yodeckMediaId: finalResult.yodeckMediaId,
+        locationsUpdated: finalResult.locationsUpdated,
+        intendedPlaylistId: finalResult.intendedPlaylistId,
+        targetScreenIds: finalResult.targetScreenIds,
+        screenAssignment: finalResult.screenAssignment,
+        debug: finalResult.debug || { step: "resolve-target", now: new Date().toISOString() },
+        forcedTargetUsed,
       });
     } catch (error: any) {
       console.error('[VideoReview] Retry publish error:', error);
