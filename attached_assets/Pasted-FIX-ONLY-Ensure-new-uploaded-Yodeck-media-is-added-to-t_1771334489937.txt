@@ -1,0 +1,64 @@
+FIX ONLY: Ensure new uploaded Yodeck media is added to the intended screen playlist (no new playlists, no baseline changes).
+
+Facts from production:
+GET /api/v2/playlists/30590872 returns items shaped like:
+{ id:<mediaId>, priority:<n>, duration:<sec>, name:<str>, type:"media" }
+Currently playlist 30590872 does NOT contain new mediaId 30040771.
+
+Goal:
+When approve/publish/retry-publish runs and we have:
+- intendedPlaylistId (e.g. 30590872)
+- yodeckMediaId (e.g. 30040771)
+then playlist must be updated so that mediaId is present.
+Do NOT create any playlists. Only touch intendedPlaylistId.
+
+Implement:
+
+1) In yodeckClient:
+   - getPlaylist(id): GET /api/v2/playlists/{id}
+   - patchPlaylist(id, payload): PATCH /api/v2/playlists/{id}
+
+2) Create helper (server/services or inside route):
+   async ensureMediaInPlaylist({ playlistId, mediaId, mode })
+   mode:
+     - "append" (default): keep existing items, add media if missing
+     - "replace-advertiser-slot": remove previous advertiser media for this review (if you can identify it), then add new media
+   For now implement at least "append" safely.
+
+   Steps:
+   a) pl = await getPlaylist(playlistId)
+   b) if pl.items already has { type:"media", id: mediaId } => return alreadyPresent
+   c) else:
+      nextPriority = (max pl.items[].priority or 0) + 1
+      newItem = { id: mediaId, type:"media", priority: nextPriority }
+      newItems = pl.items.map(i => ({ id:i.id, type:i.type, priority:i.priority, duration:i.duration })) + newItem
+      await patchPlaylist(playlistId, { items: newItems })
+      pl2 = await getPlaylist(playlistId)
+      verify pl2 contains mediaId, else throw error
+
+3) Wire into BOTH:
+   - approve/publish flow (where the playlist should be updated)
+   - POST /api/admin/video-review/:id/retry-publish
+   Place call AFTER we know intendedPlaylistId + yodeckMediaId and BEFORE pushToScreen()
+
+4) Response debugging (keep, very useful):
+   add playlistWrite:
+   {
+     playlistId,
+     mediaId,
+     beforeCount,
+     afterCount,
+     added: true/false,
+     nextPriority,
+     nowHasMedia: true/false
+   }
+
+Constraints:
+- NEVER create playlists.
+- NEVER modify other playlists.
+- Avoid duplicates.
+- Keep existing items untouched (append-only) unless mode replace is explicitly used.
+
+Acceptance test:
+Call retry-publish for review 9ed9ae02... with yodeckPlayerId 591895.
+Then GET playlist 30590872 must include item { type:"media", id:30040771 }.

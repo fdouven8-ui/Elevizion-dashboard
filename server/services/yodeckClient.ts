@@ -587,6 +587,52 @@ export class YodeckClient {
     return null;
   }
   
+  async getPlaylistFresh(id: number): Promise<YodeckPlaylist | null> {
+    this.playlistCache.delete(`playlist:${id}`);
+    const response = await this.request<YodeckPlaylist>(`/playlists/${id}`);
+    if (response.ok && response.data) {
+      this.playlistCache.set(`playlist:${id}`, response.data);
+      return response.data;
+    }
+    return null;
+  }
+
+  async patchPlaylist(id: number, payload: Record<string, any>): Promise<{ ok: boolean; data?: any; error?: string }> {
+    console.log(`[YodeckClient] PATCH /playlists/${id}`);
+    await semaphore.acquire();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/playlists/${id}/`, {
+          method: "PATCH",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (!response.ok) {
+          const text = await response.text();
+          console.error(`[YodeckClient] PATCH playlist ${id} FAILED: HTTP ${response.status}`, text);
+          return { ok: false, error: `HTTP ${response.status}: ${text}` };
+        }
+        const data = await response.json();
+        this.playlistCache.delete(`playlist:${id}`);
+        console.log(`[YodeckClient] PATCH playlist ${id} OK`);
+        return { ok: true, data };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        return { ok: false, error: err.name === "AbortError" ? "timeout" : err.message };
+      }
+    } finally {
+      semaphore.release();
+    }
+  }
+
   async getPlaylists(): Promise<YodeckPlaylist[]> {
     console.log("[YodeckClient] Fetching all playlists...");
     const playlists = await this.listAll<YodeckPlaylist>("/playlists");

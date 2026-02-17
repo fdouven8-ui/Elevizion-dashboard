@@ -2780,8 +2780,53 @@ Sitemap: ${SITE_URL}/sitemap.xml
           forcedNotes.push(`Running verification: screen=${resolvedScreenId} playlist=${resolvedPlaylistId}`);
           const verifyResult = await verifyScreenAssignment(resolvedScreenId, resolvedPlaylistId);
 
+          let playlistWrite: any = null;
           let pushResult: any = null;
           let afterPushScreen: any = null;
+          const effectiveMediaId = result.yodeckMediaId;
+
+          if (verifyResult.verified && effectiveMediaId && resolvedPlaylistId) {
+            try {
+              const plClient = await (await import("./services/yodeckClient")).getYodeckClient();
+              if (plClient) {
+                const pl = await plClient.getPlaylistFresh(resolvedPlaylistId);
+                if (pl) {
+                  const items = pl.items || [];
+                  const alreadyPresent = items.some((i: any) => i.type === "media" && i.id === effectiveMediaId);
+                  const beforeCount = items.length;
+
+                  if (alreadyPresent) {
+                    playlistWrite = { playlistId: resolvedPlaylistId, mediaId: effectiveMediaId, beforeCount, afterCount: beforeCount, added: false, alreadyPresent: true, nowHasMedia: true };
+                    forcedNotes.push(`Media ${effectiveMediaId} already in playlist ${resolvedPlaylistId}`);
+                  } else {
+                    const maxPriority = items.reduce((max: number, i: any) => Math.max(max, i.priority || 0), 0);
+                    const nextPriority = maxPriority + 1;
+                    const newItems = items.map((i: any) => ({ id: i.id, type: i.type, priority: i.priority, duration: i.duration }));
+                    newItems.push({ id: effectiveMediaId, type: "media", priority: nextPriority, duration: 15 });
+
+                    const patchRes = await plClient.patchPlaylist(resolvedPlaylistId, { items: newItems });
+                    if (!patchRes.ok) {
+                      forcedNotes.push(`Playlist PATCH failed: ${patchRes.error}`);
+                      playlistWrite = { playlistId: resolvedPlaylistId, mediaId: effectiveMediaId, beforeCount, added: false, error: patchRes.error };
+                    } else {
+                      const pl2 = await plClient.getPlaylistFresh(resolvedPlaylistId);
+                      const afterItems = pl2?.items || [];
+                      const nowHasMedia = afterItems.some((i: any) => i.type === "media" && i.id === effectiveMediaId);
+                      playlistWrite = { playlistId: resolvedPlaylistId, mediaId: effectiveMediaId, beforeCount, afterCount: afterItems.length, added: true, nextPriority, nowHasMedia };
+                      forcedNotes.push(`Media ${effectiveMediaId} ${nowHasMedia ? 'added' : 'FAILED to add'} to playlist ${resolvedPlaylistId} (${beforeCount}→${afterItems.length} items)`);
+                    }
+                  }
+                } else {
+                  forcedNotes.push(`Playlist ${resolvedPlaylistId} not found in Yodeck for media write`);
+                  playlistWrite = { playlistId: resolvedPlaylistId, mediaId: effectiveMediaId, error: "playlist not found" };
+                }
+              }
+            } catch (plErr: any) {
+              forcedNotes.push(`Playlist write error: ${plErr.message}`);
+              playlistWrite = { playlistId: resolvedPlaylistId, mediaId: effectiveMediaId, error: plErr.message };
+            }
+          }
+
           if (verifyResult.verified) {
             try {
               const pushClient = await (await import("./services/yodeckClient")).getYodeckClient();
@@ -2813,6 +2858,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
               resolvedPlaylistId,
               forcedNotes,
               afterPushScreenContent: afterPushScreen?.screen_content || null,
+              playlistWrite,
             },
           };
         } else {
