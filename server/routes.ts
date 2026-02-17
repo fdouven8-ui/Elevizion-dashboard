@@ -2726,8 +2726,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
             .limit(1);
 
           if (screenRow.length > 0) {
-            const yodeckClient = (await import("./services/yodeckClient")).getYodeckClient();
-            const yodeckScreen = await yodeckClient.getScreen(forcedPlayerId);
+            const yodeckClient = await (await import("./services/yodeckClient")).getYodeckClient();
+            const yodeckScreen = yodeckClient ? await yodeckClient.getScreen(forcedPlayerId) : null;
             if (yodeckScreen) {
               resolvedScreenId = yodeckScreen.id;
               forcedNotes.push(`Resolved yodeckScreenId=${resolvedScreenId} from playerId=${forcedPlayerId} via Yodeck API`);
@@ -2760,8 +2760,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
             const searchName = `EVZ | SCREEN | ${playerId}`;
             forcedNotes.push(`Searching Yodeck playlists for name prefix: "${searchName}"`);
             try {
-              const yodeckClient = (await import("./services/yodeckClient")).getYodeckClient();
-              const allPlaylists = await yodeckClient.getPlaylists();
+              const yodeckClient = await (await import("./services/yodeckClient")).getYodeckClient();
+              const allPlaylists = yodeckClient ? await yodeckClient.getPlaylists() : [];
               const match = allPlaylists.find(p => p.name && p.name.startsWith(searchName));
               if (match) {
                 resolvedPlaylistId = match.id;
