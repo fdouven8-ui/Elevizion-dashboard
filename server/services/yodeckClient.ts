@@ -356,6 +356,10 @@ class TTLCache<T> {
     this.cache.set(key, { data, timestamp: Date.now() });
   }
 
+  delete(key: string): void {
+    this.cache.delete(key);
+  }
+
   clear(): void {
     this.cache.clear();
   }
