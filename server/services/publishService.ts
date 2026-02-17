@@ -307,8 +307,8 @@ export async function publishApprovedAdvertiser(advertiserId: string): Promise<P
   };
 }
 
-import { adAssets, advertisers, uploadJobs, screenContentItems } from "@shared/schema";
-import { desc, inArray } from "drizzle-orm";
+import { adAssets, advertisers, uploadJobs, screenContentItems, contracts, placements } from "@shared/schema";
+import { desc, inArray, isNotNull } from "drizzle-orm";
 
 export interface PublishStep {
   step: string;
@@ -550,6 +550,19 @@ export interface ScreenAssignmentResult {
   error?: string;
 }
 
+export interface ResolveDebugInfo {
+  reviewId: string;
+  hasAdvertiserId: boolean;
+  advertiserId: string | null;
+  contractsFoundCount: number;
+  placementsFoundCount: number;
+  locationsFoundCount: number;
+  locationsWithPlaylistCount: number;
+  screensFoundCount: number;
+  screenMappingsFoundCount: number;
+  notes: string[];
+}
+
 export interface PublishAssetResult {
   ok: boolean;
   correlationId: string;
@@ -561,6 +574,7 @@ export interface PublishAssetResult {
   intendedPlaylistId?: number | null;
   targetScreenIds?: number[];
   screenAssignment?: ScreenAssignmentResult[];
+  debug?: ResolveDebugInfo;
 }
 
 export async function verifyScreenAssignment(
@@ -629,52 +643,120 @@ export async function verifyScreenAssignment(
 export async function resolveAndVerifyScreens(
   advertiserId: string,
   correlationId: string,
-): Promise<{ intendedPlaylistId: number | null; targetScreenIds: number[]; screenAssignment: ScreenAssignmentResult[] }> {
+  assetId?: string,
+): Promise<{ intendedPlaylistId: number | null; targetScreenIds: number[]; screenAssignment: ScreenAssignmentResult[]; debug: ResolveDebugInfo }> {
   const LOG = `[ScreenVerifyPhase]`;
   let intendedPlaylistId: number | null = null;
   const targetScreenIds: number[] = [];
   const screenAssignment: ScreenAssignmentResult[] = [];
+  const notes: string[] = [];
 
-  const { findLocationsForAdvertiser } = await import('./yodeckCanonicalService');
-  const targetLocationIds = await findLocationsForAdvertiser(advertiserId);
-  console.log(`${LOG} ${correlationId} found ${targetLocationIds.length} locations for advertiser ${advertiserId}`);
+  const debug: ResolveDebugInfo = {
+    reviewId: assetId || 'unknown',
+    hasAdvertiserId: !!advertiserId,
+    advertiserId: advertiserId || null,
+    contractsFoundCount: 0,
+    placementsFoundCount: 0,
+    locationsFoundCount: 0,
+    locationsWithPlaylistCount: 0,
+    screensFoundCount: 0,
+    screenMappingsFoundCount: 0,
+    notes,
+  };
 
-  for (const locId of targetLocationIds) {
-    const [loc] = await db.select().from(locations).where(eq(locations.id, locId));
-    if (!loc) continue;
-
-    const playlistId = loc.yodeckPlaylistId ? parseInt(loc.yodeckPlaylistId) : null;
-    if (!playlistId || isNaN(playlistId)) {
-      console.warn(`${LOG} ${correlationId} location ${locId} has no yodeckPlaylistId, skip`);
-      continue;
-    }
-
-    if (!intendedPlaylistId) intendedPlaylistId = playlistId;
-
-    let yodeckScreenId: number | null = null;
-    if (loc.yodeckDeviceId) {
-      yodeckScreenId = parseInt(loc.yodeckDeviceId);
-    } else {
-      const linkedScreens = await db.select({ yodeckPlayerId: screens.yodeckPlayerId })
-        .from(screens)
-        .where(eq(screens.locationId, locId));
-      if (linkedScreens.length > 0 && linkedScreens[0].yodeckPlayerId) {
-        yodeckScreenId = parseInt(linkedScreens[0].yodeckPlayerId);
-      }
-    }
-
-    if (!yodeckScreenId || isNaN(yodeckScreenId)) {
-      console.warn(`${LOG} ${correlationId} location ${locId} has no yodeckScreenId, skip`);
-      continue;
-    }
-
-    targetScreenIds.push(yodeckScreenId);
-    console.log(`${LOG} ${correlationId} verifying screen ${yodeckScreenId} → playlist ${playlistId}`);
-    const result = await verifyScreenAssignment(yodeckScreenId, playlistId);
-    screenAssignment.push(result);
+  if (!advertiserId) {
+    notes.push('advertiserId is missing on asset');
+    return { intendedPlaylistId, targetScreenIds, screenAssignment, debug };
   }
 
-  return { intendedPlaylistId, targetScreenIds, screenAssignment };
+  const advertiserContracts = await db.select({ id: contracts.id })
+    .from(contracts)
+    .where(and(eq(contracts.advertiserId, advertiserId), eq(contracts.status, "signed")));
+  debug.contractsFoundCount = advertiserContracts.length;
+
+  if (advertiserContracts.length === 0) {
+    notes.push(`No signed contracts for advertiser ${advertiserId}`);
+  }
+
+  const contractIds = advertiserContracts.map(c => c.id);
+  if (contractIds.length > 0) {
+    const contractPlacements = await db.select({ screenId: placements.screenId })
+      .from(placements)
+      .where(inArray(placements.contractId, contractIds));
+    debug.placementsFoundCount = contractPlacements.length;
+
+    if (contractPlacements.length === 0) {
+      notes.push(`No placements for ${contractIds.length} contract(s)`);
+    }
+
+    const screenIds = Array.from(new Set(contractPlacements.map(p => p.screenId).filter(Boolean)));
+    debug.screensFoundCount = screenIds.length;
+
+    if (screenIds.length === 0) {
+      notes.push('No screenIds from placements');
+    }
+
+    if (screenIds.length > 0) {
+      const screenLocations = await db.select({ locationId: screens.locationId })
+        .from(screens)
+        .where(and(inArray(screens.id, screenIds), isNotNull(screens.locationId)));
+
+      const locationIds = Array.from(new Set(screenLocations.map(s => s.locationId).filter(Boolean))) as string[];
+      debug.locationsFoundCount = locationIds.length;
+
+      if (locationIds.length === 0) {
+        notes.push(`${screenIds.length} screen(s) found but none have locationId`);
+      }
+
+      for (const locId of locationIds) {
+        const [loc] = await db.select().from(locations).where(eq(locations.id, locId));
+        if (!loc) {
+          notes.push(`Location ${locId} not found in DB`);
+          continue;
+        }
+
+        const playlistId = loc.yodeckPlaylistId ? parseInt(loc.yodeckPlaylistId) : null;
+        if (!playlistId || isNaN(playlistId)) {
+          notes.push(`Location ${locId} (${loc.name}) has no yodeckPlaylistId`);
+          continue;
+        }
+
+        debug.locationsWithPlaylistCount++;
+        if (!intendedPlaylistId) intendedPlaylistId = playlistId;
+
+        let yodeckScreenId: number | null = null;
+        if (loc.yodeckDeviceId) {
+          yodeckScreenId = parseInt(loc.yodeckDeviceId);
+        } else {
+          const linkedScreens = await db.select({ yodeckPlayerId: screens.yodeckPlayerId })
+            .from(screens)
+            .where(eq(screens.locationId, locId));
+          if (linkedScreens.length > 0 && linkedScreens[0].yodeckPlayerId) {
+            yodeckScreenId = parseInt(linkedScreens[0].yodeckPlayerId);
+          }
+        }
+
+        if (!yodeckScreenId || isNaN(yodeckScreenId)) {
+          notes.push(`Location ${locId} (${loc.name}) has playlist ${playlistId} but no yodeckScreenId/yodeckDeviceId`);
+          continue;
+        }
+
+        debug.screenMappingsFoundCount++;
+        targetScreenIds.push(yodeckScreenId);
+        console.log(`${LOG} ${correlationId} verifying screen ${yodeckScreenId} → playlist ${playlistId}`);
+        const result = await verifyScreenAssignment(yodeckScreenId, playlistId);
+        screenAssignment.push(result);
+      }
+    }
+  }
+
+  if (targetScreenIds.length === 0) {
+    notes.push(`Resolution chain: advertiser(${advertiserId}) → contracts(${debug.contractsFoundCount}) → placements(${debug.placementsFoundCount}) → screens(${debug.screensFoundCount}) → locations(${debug.locationsFoundCount}) → withPlaylist(${debug.locationsWithPlaylistCount}) → mappings(${debug.screenMappingsFoundCount}) = 0 targets`);
+  }
+
+  console.log(`${LOG} ${correlationId} resolve complete: ${targetScreenIds.length} targets, ${notes.length} notes`);
+
+  return { intendedPlaylistId, targetScreenIds, screenAssignment, debug };
 }
 
 export async function publishAsset(
@@ -695,14 +777,14 @@ export async function publishAsset(
   if (asset.publishStatus === 'PUBLISHED' && asset.approvalStatus === 'LIVE') {
     console.log(`${LOG} ${correlationId} ALREADY_PUBLISHED assetId=${assetId} — running screen verification`);
     try {
-      const { intendedPlaylistId, targetScreenIds, screenAssignment } =
-        await resolveAndVerifyScreens(asset.advertiserId, correlationId);
+      const { intendedPlaylistId, targetScreenIds, screenAssignment, debug } =
+        await resolveAndVerifyScreens(asset.advertiserId, correlationId, assetId);
 
       if (targetScreenIds.length === 0) {
         return {
           ok: false, correlationId, yodeckMediaId: asset.yodeckMediaId,
           alreadyProcessing: true, error: "NO_TARGET_RESOLVED",
-          intendedPlaylistId, targetScreenIds, screenAssignment,
+          intendedPlaylistId, targetScreenIds, screenAssignment, debug,
         };
       }
 
@@ -717,6 +799,7 @@ export async function publishAsset(
         intendedPlaylistId,
         targetScreenIds,
         screenAssignment,
+        debug,
       };
     } catch (err: any) {
       console.error(`${LOG} ${correlationId} screen verification error for LIVE asset: ${err.message}`);
@@ -748,13 +831,13 @@ export async function publishAsset(
   if (atomicResult.length === 0) {
     console.log(`${LOG} ${correlationId} CONCURRENT_PENDING assetId=${assetId} — running screen verification anyway`);
     try {
-      const { intendedPlaylistId, targetScreenIds, screenAssignment } =
-        await resolveAndVerifyScreens(asset.advertiserId, correlationId);
+      const { intendedPlaylistId, targetScreenIds, screenAssignment, debug } =
+        await resolveAndVerifyScreens(asset.advertiserId, correlationId, assetId);
 
       if (targetScreenIds.length === 0) {
         return {
           ok: false, correlationId, alreadyProcessing: true, error: "NO_TARGET_RESOLVED",
-          intendedPlaylistId, targetScreenIds, screenAssignment,
+          intendedPlaylistId, targetScreenIds, screenAssignment, debug,
         };
       }
 
@@ -768,6 +851,7 @@ export async function publishAsset(
         intendedPlaylistId,
         targetScreenIds,
         screenAssignment,
+        debug,
       };
     } catch (err: any) {
       return {
@@ -838,12 +922,14 @@ export async function publishAsset(
   let intendedPlaylistId: number | null = null;
   let targetScreenIds: number[] = [];
   let screenAssignment: ScreenAssignmentResult[] = [];
+  let resolveDebug: ResolveDebugInfo | undefined;
 
   try {
-    const verifyResult = await resolveAndVerifyScreens(asset.advertiserId, correlationId);
+    const verifyResult = await resolveAndVerifyScreens(asset.advertiserId, correlationId, assetId);
     intendedPlaylistId = verifyResult.intendedPlaylistId;
     targetScreenIds = verifyResult.targetScreenIds;
     screenAssignment = verifyResult.screenAssignment;
+    resolveDebug = verifyResult.debug;
   } catch (err: any) {
     console.warn(`${LOG} ${correlationId} screen verification phase error: ${err.message}`);
   }
@@ -883,5 +969,6 @@ export async function publishAsset(
     intendedPlaylistId,
     targetScreenIds,
     screenAssignment,
+    debug: resolveDebug,
   };
 }
