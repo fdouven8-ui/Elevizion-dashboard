@@ -601,6 +601,18 @@ export class YodeckClient {
     return null;
   }
 
+  /**
+   * PATCH a Yodeck playlist.
+   *
+   * IMPORTANT — Yodeck Media PK vs Playlist Item PK:
+   *   GET /playlists/{id} returns items like: { id: <playlistItemPK>, media: <mediaPK>, type, priority, duration, name }
+   *   PATCH /playlists/{id} expects items as: { id: <mediaPK>, type, priority, duration }
+   *   The "id" in PATCH payload refers to the MEDIA PK (the Yodeck media object),
+   *   NOT the playlist-item's own PK. Yodeck reuses the field name "id" with different semantics.
+   *   If you pass a media PK that does not exist (404 on GET /media/{id}), Yodeck returns
+   *   HTTP 400 err_1003 with details: items.media = ["Invalid pk ... object does not exist."]
+   *   Always verify media existence (GET /media/{id} → 200, status=finished) before patching.
+   */
   async patchPlaylist(id: number, payload: Record<string, any>): Promise<{ ok: boolean; data?: any; error?: string }> {
     console.log(`[YodeckClient] PATCH /playlists/${id}`);
     await semaphore.acquire();
@@ -742,15 +754,20 @@ export class YodeckClient {
     console.log(`[YodeckClient][${corrId}] findMediaByNameExact: searching for "${name}"`);
 
     const results = await this.listMediaPaginated({ search: name });
-    const exact = results.find(m => m.name === name);
+    const exactMatches = results.filter(m => m.name === name);
 
-    if (exact) {
-      console.log(`[YodeckClient][${corrId}] findMediaByNameExact: FOUND id=${exact.id} status=${exact.status || "?"}`);
-    } else {
+    if (exactMatches.length === 0) {
       console.log(`[YodeckClient][${corrId}] findMediaByNameExact: NOT_FOUND (checked ${results.length} results)`);
+      return null;
     }
 
-    return exact || null;
+    const finished = exactMatches.filter(m => m.status === "finished");
+    const best = finished.length > 0
+      ? finished.sort((a, b) => (b.id || 0) - (a.id || 0))[0]
+      : exactMatches.sort((a, b) => (b.id || 0) - (a.id || 0))[0];
+
+    console.log(`[YodeckClient][${corrId}] findMediaByNameExact: FOUND id=${best.id} status=${best.status || "?"} (${exactMatches.length} matches, ${finished.length} finished)`);
+    return best;
   }
 
   async findMediaByTag(tag: string): Promise<YodeckMedia | null> {

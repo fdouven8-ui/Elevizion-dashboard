@@ -1,0 +1,42 @@
+We have a critical bug in the Elevizion publish flow to Yodeck.
+
+Symptoms proven by logs:
+- retry-publish tries to PATCH playlist with yodeckMediaId=30040771, but Yodeck returns HTTP 400 err_1003: items.media invalid pk "30040771" - object does not exist.
+- Our debug endpoint /api/admin/yodeck/raw-media confirms:
+  - mediaId 30039391 => HTTP 200 (exists, status=finished)
+  - mediaId 30040771 => HTTP 404 err_1004 (does NOT exist)
+So we sometimes store/return an incorrect yodeckMediaId and then playlist insertion fails, while push-to-screen can still be “completed” because screen playlist assignment didn’t change.
+
+Goal:
+1) Make yodeckMediaId canonical and always valid:
+   - Whenever we create/import media (createMediaFromUrl or clone/patch pipeline), immediately verify it exists via Yodeck GET /media/{id}.
+   - Only accept/store yodeckMediaId if GET returns 200 and status is 'finished' (and ideally file_size>0 if available).
+   - If we have a yodeckMediaId but GET /media/{id} returns 404, treat it as invalid: clear it in DB for that asset and re-import by name.
+   - When searching by name (findMediaByNameExact), if multiple results exist, pick the one with status=finished and newest created_at; ignore initialized/processing entries (fileSize 0).
+
+2) Fix playlist insertion:
+   - Before PATCH /playlists/{playlistId}, verify the media exists (GET /media/{mediaId} 200). If not, abort with a clear error.
+   - Build playlist PATCH payload exactly to include the media by ID (Yodeck expects items.media ids to be media PKs).
+   - Ensure we do not accidentally use playlist item IDs or any internal DB IDs as Yodeck media IDs.
+
+3) Fix cache bug:
+   - We have "this.playlistCache.delete is not a function" during playlist write.
+   - Make playlistCache a real Map or implement the correct invalidation method for whatever cache type it is (e.g. if it’s an LRU cache it might be .del() or .delete(key)). Ensure no runtime exception can prevent playlist write.
+
+4) Add/adjust debug endpoints (server/routes.ts):
+   - POST /api/admin/yodeck/raw-media { mediaId } => proxy GET https://app.yodeck.com/api/v2/media/{mediaId} and return {ok, raw, headers}
+   - POST /api/admin/yodeck/raw-playlist { playlistId } => proxy GET https://app.yodeck.com/api/v2/playlists/{playlistId}
+   - POST /api/admin/yodeck/raw-screen { screenId } => proxy GET https://app.yodeck.com/api/v2/screens/{screenId}
+These should already partly exist; ensure all 3 exist and are consistent.
+
+5) Update retry-publish response to report playlistWrite failure truthfully:
+   - If playlist PATCH fails, response ok must be false unless we explicitly choose a "push-only" mode.
+   - Return debug.playlistWrite with request/response snippets and correlationId.
+
+Constraints:
+- Do NOT create new playlists or change baseline logic.
+- Only fix the mediaId canonicalization + playlist insertion + cache invalidation + debug routes.
+- Keep changes minimal and localized (likely yodeckClient.ts + publish/retry routes in server/routes.ts).
+
+After implementing:
+- Add a short doc comment in code explaining the difference between Yodeck Media PK vs Playlist Item PK.

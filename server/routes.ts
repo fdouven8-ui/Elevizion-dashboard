@@ -2873,7 +2873,26 @@ Sitemap: ${SITE_URL}/sitemap.xml
                     }
                   }
 
+                  if (resolved && verifiedMediaId !== effectiveMediaId) {
+                    try {
+                      await db.update(adAssets).set({ yodeckMediaId: verifiedMediaId }).where(eq(adAssets.id, assetId));
+                      forcedNotes.push(`DB updated: adAssets.yodeckMediaId ${effectiveMediaId} → ${verifiedMediaId}`);
+                      mediaResolution.dbUpdated = true;
+                    } catch (dbErr: any) {
+                      forcedNotes.push(`DB update failed: ${dbErr.message}`);
+                    }
+                  }
+
                   if (!resolved) {
+                    if (asset) {
+                      try {
+                        await db.update(adAssets).set({ yodeckMediaId: null }).where(eq(adAssets.id, assetId));
+                        forcedNotes.push(`DB cleared: invalid yodeckMediaId ${effectiveMediaId} removed from asset`);
+                        mediaResolution.dbCleared = true;
+                      } catch (dbErr: any) {
+                        forcedNotes.push(`DB clear failed: ${dbErr.message}`);
+                      }
+                    }
                     playlistWrite = {
                       playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId,
                       error: "MEDIA_NOT_READY", mediaResolution,
@@ -2881,6 +2900,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
                     forcedNotes.push(`MEDIA_NOT_READY: could not verify media ${effectiveMediaId} in Yodeck`);
                   }
                 } else {
+                  if (mediaCheck.data.status !== 'finished') {
+                    forcedNotes.push(`Media ${effectiveMediaId} exists but status="${mediaCheck.data.status}" (not finished) — proceeding cautiously`);
+                  }
                   mediaResolution.status = mediaCheck.data.status;
                   mediaResolution.name = mediaCheck.data.name;
                   forcedNotes.push(`Media ${effectiveMediaId} verified in Yodeck: name="${mediaCheck.data.name}" status="${mediaCheck.data.status}"`);
@@ -2959,11 +2981,18 @@ Sitemap: ${SITE_URL}/sitemap.xml
             }
           }
 
+          const playlistWriteOk = !playlistWrite?.error;
+          const overallOk = verifyResult.verified && playlistWriteOk;
+
           finalResult = {
             ...result,
-            ok: verifyResult.verified,
-            error: verifyResult.verified ? undefined : `SCREEN_ASSIGNMENT_FAILED: screen ${resolvedScreenId}`,
-            message: verifyResult.verified ? "Publicatie geverifieerd via geforceerd doel" : undefined,
+            ok: overallOk,
+            error: !overallOk
+              ? (playlistWrite?.error
+                ? `PLAYLIST_WRITE_FAILED: ${playlistWrite.error}`
+                : `SCREEN_ASSIGNMENT_FAILED: screen ${resolvedScreenId}`)
+              : undefined,
+            message: overallOk ? "Publicatie geverifieerd via geforceerd doel" : undefined,
             intendedPlaylistId: resolvedPlaylistId,
             targetScreenIds: [resolvedScreenId],
             screenAssignment: [{ ...verifyResult, push: pushResult, lastPushed: afterPushScreen?.last_pushed || null }],
@@ -24053,6 +24082,34 @@ KvK: 90982541 | BTW: NL004857473B37</p>
    * POST /api/admin/yodeck/debug-get-screen
    * Dump raw Yodeck screen JSON for debugging
    */
+  app.post("/api/admin/yodeck/raw-screen", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.body || {};
+      if (!screenId) {
+        return res.status(400).json({ ok: false, error: "screenId is required" });
+      }
+      const token = process.env.YODECK_AUTH_TOKEN;
+      if (!token) {
+        return res.status(500).json({ ok: false, error: "YODECK_AUTH_TOKEN not configured" });
+      }
+      const url = `https://app.yodeck.com/api/v2/screens/${Number(screenId)}/`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { "Authorization": `Token ${token}`, "Accept": "application/json" },
+      });
+      const headers: Record<string, string> = {};
+      response.headers.forEach((v, k) => { headers[k] = v; });
+      if (!response.ok) {
+        const text = await response.text();
+        return res.json({ ok: false, status: response.status, error: text, headers });
+      }
+      const raw = await response.json();
+      res.json({ ok: true, raw, headers });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   app.post("/api/admin/yodeck/debug-get-screen", requireAdminAccess, async (req, res) => {
     try {
       const { screenId } = req.body || {};
