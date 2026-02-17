@@ -1,0 +1,57 @@
+DO NOT REFACTOR. INVESTIGATE FIRST, THEN PATCH MINIMALLY.
+
+Problem:
+New uploaded yodeckMediaId is created successfully but NOT added/replaced in the intended Yodeck playlist.
+We must restore the original “ad recognition” logic used by this project to know which playlist item(s) are ads for a given review/advertiser/screen, and then replace correctly.
+
+Hard location:
+retry-publish route is at server/routes.ts around line ~2713 (debugWhere showed it).
+Use that as starting point.
+
+GOALS:
+A) Identify exactly how “ads” are recognized in this codebase:
+   - Is it based on Yodeck media naming prefix like "ADV-"?
+   - Is it based on tags?
+   - Is it based on DB mapping (review/adAsset/advertiserId/yodeckMediaId/screen playlistId)?
+   - Is it based on stored yodeckMediaId in our DB for that review?
+
+B) Restore correct behavior:
+   - When publishing for a screen playlist, replace the previous ad item(s) for the SAME review/advertiser (not baseline RSS/weather/promo).
+   - Then add the new yodeckMediaId.
+   - Do NOT create playlists.
+   - Do NOT touch baseline items.
+
+INVESTIGATION STEPS (must output findings in comments/logs):
+1) Search for ad naming/tagging conventions:
+   - "ADV-" "advertiserId" "yodeckMediaId" "mediaId" "playlist items" "type: \"media\"" "ensure" "replace" "ad slot"
+2) Locate publish flow that previously did playlist mutation:
+   - Search for calls to PATCH /playlists or functions like patchPlaylist / rebuildPlaylist / insertIntoPlaylist / addToPlaylist.
+3) Confirm current Yodeck playlist item structure is {id, priority, duration, name, type:"media"} (we already observed via debug-get-playlist).
+
+MINIMAL PATCH (after you identify ad recognition):
+4) Implement helper ensureReplaceAdInPlaylist({playlistId, newMediaId, matchPredicate})
+   - Fetch playlist
+   - Identify “ad item(s)” using the EXISTING project rule you found
+   - Remove only those ad items (for the relevant review/advertiser/screen)
+   - Append new item {id:newMediaId, type:"media", priority:max+1, duration:optional}
+   - PATCH /api/v2/playlists/{id} with updated items
+   - Re-fetch and verify newMediaId present
+
+5) Wire into:
+   - approve/publish flow
+   - retry-publish route
+   It must run AFTER new yodeckMediaId is known and BEFORE pushToScreen()
+
+DEBUG OUTPUT REQUIRED (do not remove later):
+Return in retry-publish response:
+playlistWrite: {
+  playlistId,
+  removedItemIds: [...],
+  addedMediaId: newMediaId,
+  beforeIds: [...],
+  afterIds: [...]
+}
+
+Acceptance:
+- Re-running retry-publish will result in playlist containing the NEW mediaId and NOT accumulating duplicates.
+- Baseline items remain unchanged.
