@@ -2779,6 +2779,22 @@ Sitemap: ${SITE_URL}/sitemap.xml
           forcedNotes.push(`Running verification: screen=${resolvedScreenId} playlist=${resolvedPlaylistId}`);
           const verifyResult = await verifyScreenAssignment(resolvedScreenId, resolvedPlaylistId);
 
+          let pushResult: any = null;
+          let afterPushScreen: any = null;
+          if (verifyResult.verified) {
+            try {
+              const pushClient = await (await import("./services/yodeckClient")).getYodeckClient();
+              if (pushClient) {
+                pushResult = await pushClient.pushToScreen(resolvedScreenId, true);
+                forcedNotes.push(`Push result: ok=${pushResult.ok}${pushResult.error ? ' error=' + pushResult.error : ''}`);
+                afterPushScreen = await pushClient.getScreen(resolvedScreenId);
+              }
+            } catch (pushErr: any) {
+              forcedNotes.push(`Push error: ${pushErr.message}`);
+              pushResult = { ok: false, error: pushErr.message };
+            }
+          }
+
           finalResult = {
             ...result,
             ok: verifyResult.verified,
@@ -2786,7 +2802,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
             message: verifyResult.verified ? "Publicatie geverifieerd via geforceerd doel" : undefined,
             intendedPlaylistId: resolvedPlaylistId,
             targetScreenIds: [resolvedScreenId],
-            screenAssignment: [verifyResult],
+            screenAssignment: [{ ...verifyResult, push: pushResult, lastPushed: afterPushScreen?.last_pushed || null }],
             debug: {
               ...(result.debug || {} as any),
               forcedTarget: true,
@@ -2794,6 +2810,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
               forcedPlayerId: forcedPlayerId,
               resolvedPlaylistId,
               forcedNotes,
+              afterPushScreenContent: afterPushScreen?.screen_content || null,
             },
           };
         } else {

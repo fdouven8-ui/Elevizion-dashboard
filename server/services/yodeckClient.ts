@@ -540,6 +540,41 @@ export class YodeckClient {
     }
   }
 
+  async pushToScreen(screenId: number, useDownloadTimeslots = true): Promise<{ ok: boolean; data?: any; error?: string }> {
+    console.log(`[YodeckClient] POST /screens/${screenId}/push`);
+    await semaphore.acquire();
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+      try {
+        const response = await fetch(`${YODECK_BASE_URL}/screens/${screenId}/push/`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Token ${this.apiKey}`,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ use_download_timeslots: useDownloadTimeslots }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (!response.ok) {
+          const text = await response.text();
+          console.error(`[YodeckClient] PUSH screen ${screenId} FAILED: HTTP ${response.status}`, text);
+          return { ok: false, error: `HTTP ${response.status}: ${text}` };
+        }
+        const data = await response.json().catch(() => ({}));
+        console.log(`[YodeckClient] PUSH screen ${screenId} OK`);
+        return { ok: true, data };
+      } catch (err: any) {
+        clearTimeout(timeout);
+        return { ok: false, error: err.name === "AbortError" ? "timeout" : err.message };
+      }
+    } finally {
+      semaphore.release();
+    }
+  }
+
   async getPlaylist(id: number): Promise<YodeckPlaylist | null> {
     const cached = this.playlistCache.get(`playlist:${id}`);
     if (cached) return cached;
