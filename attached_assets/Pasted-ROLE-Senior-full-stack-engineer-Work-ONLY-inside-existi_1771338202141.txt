@@ -1,0 +1,42 @@
+ROLE: Senior full-stack engineer. Work ONLY inside existing Elevizion codebase. Do NOT redesign architecture. Goal: make publish -> playlist write -> push fully reliable and debuggable via browser console (replit shell unreliable).
+
+CONTEXT (from logs):
+- retry-publish route exists at server/routes.ts around line ~2713. It returns debug with playlistWrite errors.
+- Current failures seen:
+  1) "this.playlistCache.delete is not a function" during playlist write
+  2) Yodeck playlist PATCH fails with HTTP 400 err_1003: details.reason.items.media = ["Invalid pk \"30040771\" - object does not exist."]
+- Yodeck UI shows the intended media is actually id=30039391, while publish flow tries id=30040771.
+- raw playlist endpoint exists: POST /api/admin/yodeck/raw-playlist with {playlistId} and returns raw playlist including items [{id,type:"media",duration,priority,...}]
+- Need a media debug endpoint. Current POST /api/admin/yodeck/get-media does NOT exist (404).
+
+TASKS (implement all):
+1) Add yodeckClient method getMedia(mediaId:number) that calls GET https://app.yodeck.com/api/v2/media/{id} and returns parsed JSON (or throws with status/body). Follow the patterns used by existing yodeckClient methods (auth header, logging, correlationId if present).
+2) Add admin debug route:
+   - POST /api/admin/yodeck/raw-media
+   - body: { mediaId:number }
+   - response: { ok:true, raw:<yodeck media json> } OR { ok:false, error, status, details }
+   This must allow us to call from browser console.
+3) Fix playlistCache bug:
+   - Find playlistCache usage that calls this.playlistCache.delete(...)
+   - Ensure playlistCache is an actual Map/LRU with a .delete method OR guard it safely.
+   - No breaking changes; keep cache behavior but stop crashing.
+4) Make playlist write robust in publish/retry-publish:
+   - Before attempting playlist PATCH, verify the media exists in Yodeck:
+     a) call getMedia(mediaId). If 404 or err_1003 / invalid pk, treat as NOT READY/NOT EXIST.
+     b) If not ready, attempt resolveActualMediaId() by searching Yodeck media list by:
+        - exact name match (review asset name) AND created_at most recent
+        - OR tag/linkKey if available (e.g. ADV-HOI-75BF95)
+       Choose the best candidate and use its id.
+     c) If still not resolvable, return ok:false with message "MEDIA_NOT_READY" and include debug about attempts.
+   - Add a small polling fallback (e.g. up to 10 tries, exponential backoff 300ms->3s) when media was just uploaded, because Yodeck may return id before it becomes patchable.
+5) Fix the playlist PATCH payload schema:
+   - Inspect existing code that patches playlist items.
+   - Compare with Yodeck docs for PATCH /playlists/{id}.
+   - Use the same item shape Yodeck expects (do not reuse GET response shape if not accepted).
+   - Ensure we are adding mediaId to items correctly and preserving existing items.
+   - After patch, re-fetch raw playlist and confirm mediaId is present; if not present, treat as failure and report.
+6) Ensure retry-publish returns in JSON:
+   - intendedPlaylistId
+   - targetScreenIds
+   - playlistWrite object: {playlistId, addedMediaId, removedItemIds, beforeIds, afterIds, ok/error}
+   - push result for each screen (already there) and afterPushScre

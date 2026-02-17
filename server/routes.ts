@@ -2792,10 +2792,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
                 const asset = await db.query.adAssets.findFirst({ where: eq(adAssets.id, assetId) });
                 let advertiserLinkKey: string | null = null;
                 let oldYodeckMediaIds: number[] = [];
+                let assetStoredFilename: string | null = null;
 
                 if (asset?.advertiserId) {
                   const adv = await db.query.advertisers.findFirst({ where: eq(advertisers.id, asset.advertiserId) });
                   advertiserLinkKey = adv?.linkKey || null;
+                  assetStoredFilename = asset.storedFilename || null;
 
                   const allAssets = await db.select({ yodeckMediaId: adAssets.yodeckMediaId })
                     .from(adAssets)
@@ -2807,53 +2809,133 @@ Sitemap: ${SITE_URL}/sitemap.xml
                     .map(a => a.yodeckMediaId)
                     .filter((id): id is number => id !== null && id !== effectiveMediaId);
                 }
-                forcedNotes.push(`Ad recognition: linkKey=${advertiserLinkKey}, oldMediaIds=[${oldYodeckMediaIds.join(',')}], newMediaId=${effectiveMediaId}`);
 
-                const pl = await plClient.getPlaylistFresh(resolvedPlaylistId);
-                if (pl) {
-                  const items: any[] = pl.items || [];
-                  const beforeIds = items.map((i: any) => i.id);
-                  const alreadyPresent = items.some((i: any) => i.type === "media" && i.id === effectiveMediaId);
+                let verifiedMediaId = effectiveMediaId;
+                let mediaResolution: any = { originalId: effectiveMediaId, method: "direct" };
 
-                  const isAdvertiserItem = (item: any): boolean => {
-                    if (item.type !== "media") return false;
-                    if (oldYodeckMediaIds.includes(item.id)) return true;
-                    if (advertiserLinkKey && item.name) {
-                      const prefix = advertiserLinkKey.split('-').slice(0, 2).join('-');
-                      if (item.name.startsWith(prefix)) return true;
-                    }
-                    return false;
-                  };
+                const mediaCheck = await plClient.fetchMediaRaw(effectiveMediaId);
+                if (!mediaCheck.ok || !mediaCheck.data) {
+                  forcedNotes.push(`Media ${effectiveMediaId} NOT FOUND in Yodeck (status=${mediaCheck.status}), searching by name...`);
+                  mediaResolution.directCheckFailed = true;
 
-                  const removedItemIds = items.filter(isAdvertiserItem).map((i: any) => i.id);
-                  const keptItems = items.filter((i: any) => !isAdvertiserItem(i));
+                  let resolved = false;
+                  const searchNames: string[] = [];
+                  if (assetStoredFilename) {
+                    searchNames.push(assetStoredFilename.replace(/\.[^/.]+$/, ""));
+                  }
+                  if (advertiserLinkKey) {
+                    searchNames.push(advertiserLinkKey);
+                    const prefix = advertiserLinkKey.split('-').slice(0, 2).join('-');
+                    if (prefix !== advertiserLinkKey) searchNames.push(prefix);
+                  }
+                  mediaResolution.searchNames = searchNames;
 
-                  if (alreadyPresent && removedItemIds.length === 0) {
-                    playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId, removedItemIds: [], beforeIds, afterIds: beforeIds, alreadyPresent: true, nowHasMedia: true };
-                    forcedNotes.push(`Media ${effectiveMediaId} already in playlist, no old ads to remove`);
-                  } else {
-                    const keptWithoutNew = keptItems.filter((i: any) => i.id !== effectiveMediaId);
-                    const maxPriority = keptWithoutNew.reduce((max: number, i: any) => Math.max(max, i.priority || 0), 0);
-                    const nextPriority = maxPriority + 1;
-                    const newItems = keptWithoutNew.map((i: any) => ({ id: i.id, type: i.type, priority: i.priority, duration: i.duration }));
-                    newItems.push({ id: effectiveMediaId, type: "media", priority: nextPriority, duration: 15 });
-
-                    const patchRes = await plClient.patchPlaylist(resolvedPlaylistId, { items: newItems });
-                    if (!patchRes.ok) {
-                      forcedNotes.push(`Playlist PATCH failed: ${patchRes.error}`);
-                      playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId, removedItemIds, beforeIds, error: patchRes.error };
-                    } else {
-                      const pl2 = await plClient.getPlaylistFresh(resolvedPlaylistId);
-                      const afterItems = pl2?.items || [];
-                      const afterIds = afterItems.map((i: any) => i.id);
-                      const nowHasMedia = afterItems.some((i: any) => i.type === "media" && i.id === effectiveMediaId);
-                      playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId, removedItemIds, beforeIds, afterIds, nowHasMedia, nextPriority };
-                      forcedNotes.push(`Playlist updated: removed=[${removedItemIds.join(',')}] added=${effectiveMediaId} nowHas=${nowHasMedia} (${beforeIds.length}→${afterIds.length} items)`);
+                  for (const searchName of searchNames) {
+                    if (resolved) break;
+                    try {
+                      const searchResults = await plClient.listMediaPaginated({ search: searchName });
+                      const candidates = searchResults
+                        .filter(m => m.name && m.name.includes(searchName))
+                        .sort((a, b) => (b.id || 0) - (a.id || 0));
+                      if (candidates.length > 0) {
+                        const best = candidates[0];
+                        const bestCheck = await plClient.fetchMediaRaw(best.id);
+                        if (bestCheck.ok && bestCheck.data) {
+                          verifiedMediaId = best.id;
+                          resolved = true;
+                          mediaResolution.method = "name_search";
+                          mediaResolution.searchTerm = searchName;
+                          mediaResolution.resolvedId = best.id;
+                          mediaResolution.resolvedName = best.name;
+                          mediaResolution.candidateCount = candidates.length;
+                          forcedNotes.push(`Resolved media via name search "${searchName}": id=${best.id} name="${best.name}"`);
+                        }
+                      }
+                    } catch (searchErr: any) {
+                      forcedNotes.push(`Search for "${searchName}" failed: ${searchErr.message}`);
                     }
                   }
+
+                  if (!resolved) {
+                    forcedNotes.push(`Polling for media ${effectiveMediaId} availability (may be recently uploaded)...`);
+                    for (let attempt = 1; attempt <= 6; attempt++) {
+                      const delay = Math.min(300 * Math.pow(2, attempt - 1), 3000);
+                      await new Promise(r => setTimeout(r, delay));
+                      const pollCheck = await plClient.fetchMediaRaw(effectiveMediaId);
+                      if (pollCheck.ok && pollCheck.data) {
+                        verifiedMediaId = effectiveMediaId;
+                        resolved = true;
+                        mediaResolution.method = "poll";
+                        mediaResolution.pollAttempts = attempt;
+                        forcedNotes.push(`Media ${effectiveMediaId} became available after ${attempt} poll(s)`);
+                        break;
+                      }
+                    }
+                  }
+
+                  if (!resolved) {
+                    playlistWrite = {
+                      playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId,
+                      error: "MEDIA_NOT_READY", mediaResolution,
+                    };
+                    forcedNotes.push(`MEDIA_NOT_READY: could not verify media ${effectiveMediaId} in Yodeck`);
+                  }
                 } else {
-                  forcedNotes.push(`Playlist ${resolvedPlaylistId} not found in Yodeck for media write`);
-                  playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId, error: "playlist not found" };
+                  mediaResolution.status = mediaCheck.data.status;
+                  mediaResolution.name = mediaCheck.data.name;
+                  forcedNotes.push(`Media ${effectiveMediaId} verified in Yodeck: name="${mediaCheck.data.name}" status="${mediaCheck.data.status}"`);
+                }
+
+                forcedNotes.push(`Ad recognition: linkKey=${advertiserLinkKey}, oldMediaIds=[${oldYodeckMediaIds.join(',')}], verifiedMediaId=${verifiedMediaId}`);
+
+                if (!playlistWrite) {
+                  const pl = await plClient.getPlaylistFresh(resolvedPlaylistId);
+                  if (pl) {
+                    const items: any[] = pl.items || [];
+                    const beforeIds = items.map((i: any) => i.id);
+                    const alreadyPresent = items.some((i: any) => i.type === "media" && i.id === verifiedMediaId);
+
+                    const isAdvertiserItem = (item: any): boolean => {
+                      if (item.type !== "media") return false;
+                      if (item.id === verifiedMediaId) return false;
+                      if (oldYodeckMediaIds.includes(item.id)) return true;
+                      if (advertiserLinkKey && item.name) {
+                        const prefix = advertiserLinkKey.split('-').slice(0, 2).join('-');
+                        if (item.name.startsWith(prefix)) return true;
+                      }
+                      return false;
+                    };
+
+                    const removedItemIds = items.filter(isAdvertiserItem).map((i: any) => i.id);
+                    const keptItems = items.filter((i: any) => !isAdvertiserItem(i));
+
+                    if (alreadyPresent && removedItemIds.length === 0) {
+                      playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedItemIds: [], beforeIds, afterIds: beforeIds, alreadyPresent: true, nowHasMedia: true, mediaResolution };
+                      forcedNotes.push(`Media ${verifiedMediaId} already in playlist, no old ads to remove`);
+                    } else {
+                      const keptWithoutNew = keptItems.filter((i: any) => i.id !== verifiedMediaId);
+                      const maxPriority = keptWithoutNew.reduce((max: number, i: any) => Math.max(max, i.priority || 0), 0);
+                      const nextPriority = maxPriority + 1;
+                      const newItems = keptWithoutNew.map((i: any) => ({ id: i.id, type: i.type, priority: i.priority, duration: i.duration }));
+                      newItems.push({ id: verifiedMediaId, type: "media", priority: nextPriority, duration: 15 });
+
+                      const patchRes = await plClient.patchPlaylist(resolvedPlaylistId, { items: newItems });
+                      if (!patchRes.ok) {
+                        forcedNotes.push(`Playlist PATCH failed: ${patchRes.error}`);
+                        playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedItemIds, beforeIds, error: patchRes.error, mediaResolution };
+                      } else {
+                        const pl2 = await plClient.getPlaylistFresh(resolvedPlaylistId);
+                        const afterItems = pl2?.items || [];
+                        const afterIds = afterItems.map((i: any) => i.id);
+                        const nowHasMedia = afterItems.some((i: any) => i.type === "media" && i.id === verifiedMediaId);
+                        playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedItemIds, beforeIds, afterIds, nowHasMedia, nextPriority, mediaResolution };
+                        forcedNotes.push(`Playlist updated: removed=[${removedItemIds.join(',')}] added=${verifiedMediaId} nowHas=${nowHasMedia} (${beforeIds.length}→${afterIds.length} items)`);
+                      }
+                    }
+                  } else {
+                    forcedNotes.push(`Playlist ${resolvedPlaylistId} not found in Yodeck for media write`);
+                    playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, error: "playlist not found", mediaResolution };
+                  }
                 }
               }
             } catch (plErr: any) {
@@ -24004,6 +24086,34 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         return res.status(500).json({ ok: false, error: "YODECK_AUTH_TOKEN not configured" });
       }
       const url = `https://app.yodeck.com/api/v2/playlists/${Number(playlistId)}/`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { "Authorization": `Token ${token}`, "Accept": "application/json" },
+      });
+      const headers: Record<string, string> = {};
+      response.headers.forEach((v, k) => { headers[k] = v; });
+      if (!response.ok) {
+        const text = await response.text();
+        return res.json({ ok: false, status: response.status, error: text, headers });
+      }
+      const raw = await response.json();
+      res.json({ ok: true, raw, headers });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/admin/yodeck/raw-media", requireAdminAccess, async (req, res) => {
+    try {
+      const { mediaId } = req.body || {};
+      if (!mediaId) {
+        return res.status(400).json({ ok: false, error: "mediaId is required" });
+      }
+      const token = process.env.YODECK_AUTH_TOKEN;
+      if (!token) {
+        return res.status(500).json({ ok: false, error: "YODECK_AUTH_TOKEN not configured" });
+      }
+      const url = `https://app.yodeck.com/api/v2/media/${Number(mediaId)}/`;
       const response = await fetch(url, {
         method: "GET",
         headers: { "Authorization": `Token ${token}`, "Accept": "application/json" },
