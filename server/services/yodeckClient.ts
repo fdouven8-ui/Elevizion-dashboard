@@ -213,6 +213,11 @@ export interface YodeckScreen {
     source_id: number | null;
     source_name: string | null;
   } | null;
+  takeover_content?: {
+    source_type: "playlist" | "layout" | "schedule" | "tagbased-playlist" | "tagbased_playlist" | null;
+    source_id: number | null;
+    source_name?: string | null;
+  } | null;
 }
 
 export interface YodeckPlaylistItem {
@@ -499,7 +504,7 @@ export class YodeckClient {
   }
 
   async patchScreenContent(screenId: number, playlistId: number): Promise<{ ok: boolean; data?: any; error?: string }> {
-    console.log(`[YodeckClient] PATCH /screens/${screenId} screen_content → playlist ${playlistId}`);
+    console.log(`[YodeckClient] PATCH /screens/${screenId} takeover_content → playlist ${playlistId}`);
     await semaphore.acquire();
     try {
       const controller = new AbortController();
@@ -513,7 +518,7 @@ export class YodeckClient {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            screen_content: { source_type: "playlist", source_id: playlistId },
+            takeover_content: { source_type: "playlist", source_id: playlistId },
           }),
           signal: controller.signal,
         });
