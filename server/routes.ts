@@ -2719,6 +2719,9 @@ Sitemap: ${SITE_URL}/sitemap.xml
         intendedPlaylistId: result.intendedPlaylistId,
         targetScreenIds: result.targetScreenIds,
         screenAssignment: result.screenAssignment,
+        debug: result.debug || { step: "resolve-target", now: new Date().toISOString() },
+        __debugMarker: "DBG_NO_TARGET_20260217_A",
+        __debugWhere: "server/routes.ts:2713 POST /api/admin/video-review/:id/retry-publish",
       });
     } catch (error: any) {
       console.error('[VideoReview] Retry publish error:', error);
