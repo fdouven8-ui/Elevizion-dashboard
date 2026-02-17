@@ -23867,6 +23867,32 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   /**
+   * POST /api/admin/yodeck/debug-get-screen
+   * Dump raw Yodeck screen JSON for debugging
+   */
+  app.post("/api/admin/yodeck/debug-get-screen", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId } = req.body || {};
+      if (!screenId) {
+        return res.status(400).json({ ok: false, error: "screenId is required" });
+      }
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      if (!client) {
+        return res.status(500).json({ ok: false, error: "Yodeck client not configured" });
+      }
+      const screen = await client.getScreen(Number(screenId));
+      if (!screen) {
+        return res.status(404).json({ ok: false, error: `Screen ${screenId} not found in Yodeck` });
+      }
+      res.json({ ok: true, screen });
+    } catch (error: any) {
+      console.error('[Admin] debug-get-screen error:', error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/admin/yodeck/cleanup
    * Clean up unused media and playlists from Yodeck
    */
