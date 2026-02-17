@@ -23912,6 +23912,28 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.post("/api/admin/yodeck/debug-get-playlist", requireAdminAccess, async (req, res) => {
+    try {
+      const { playlistId } = req.body || {};
+      if (!playlistId) {
+        return res.status(400).json({ ok: false, error: "playlistId is required" });
+      }
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      if (!client) {
+        return res.status(500).json({ ok: false, error: "Yodeck client not configured" });
+      }
+      const playlist = await client.getPlaylist(Number(playlistId));
+      if (!playlist) {
+        return res.status(404).json({ ok: false, error: `Playlist ${playlistId} not found in Yodeck` });
+      }
+      res.json({ ok: true, playlist });
+    } catch (error: any) {
+      console.error('[Admin] debug-get-playlist error:', error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   /**
    * POST /api/admin/yodeck/cleanup
    * Clean up unused media and playlists from Yodeck
