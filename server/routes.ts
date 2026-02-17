@@ -23993,6 +23993,34 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.post("/api/admin/yodeck/raw-playlist", requireAdminAccess, async (req, res) => {
+    try {
+      const { playlistId } = req.body || {};
+      if (!playlistId) {
+        return res.status(400).json({ ok: false, error: "playlistId is required" });
+      }
+      const token = process.env.YODECK_AUTH_TOKEN;
+      if (!token) {
+        return res.status(500).json({ ok: false, error: "YODECK_AUTH_TOKEN not configured" });
+      }
+      const url = `https://app.yodeck.com/api/v2/playlists/${Number(playlistId)}/`;
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { "Authorization": `Token ${token}`, "Accept": "application/json" },
+      });
+      const headers: Record<string, string> = {};
+      response.headers.forEach((v, k) => { headers[k] = v; });
+      if (!response.ok) {
+        const text = await response.text();
+        return res.json({ ok: false, status: response.status, error: text, headers });
+      }
+      const raw = await response.json();
+      res.json({ ok: true, raw, headers });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   app.post("/api/admin/yodeck/debug-get-playlist", requireAdminAccess, async (req, res) => {
     try {
       const { playlistId } = req.body || {};
