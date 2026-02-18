@@ -1,0 +1,56 @@
+We have a broken publish flow to Yodeck playlists due to stale/invalid media IDs.
+
+Evidence:
+- We try to PATCH playlist with mediaId=30040771 but Yodeck returns HTTP 400 err_1003: "Invalid pk \"30040771\" - object does not exist."
+- raw-media shows correct finished media exists with id=30148692 and name "ADV-HOI-75BF95_Testvideo 2.mp4".
+- There is also a stuck mediaId=30148537 staying initialized fileSize=0 causing noise.
+- retry-publish currently reports ok/verified because screen_content playlist matches, but playlist patch can silently fail and screen doesn't change.
+
+Goal:
+1) Make playlist write deterministic and always use a VALID, EXISTING, FINISHED Yodeck media id.
+2) If the stored yodeckMediaId is invalid, resolve the correct one by exact name (and/or linkKey) and status=finished, then update DB.
+3) Ensure we patch the CORRECT target playlist (screen playlist of selected screen) and not another screen.
+4) Add good debug output with correlationId, including: mediaId used, existence check result, playlistId, patch payload summary, and post-write verification (raw-playlist contains media item id).
+5) Do NOT create extra playlists; do NOT touch baseline flow.
+
+Implementation tasks (minimal changes):
+A) In server/services/yodeckClient.ts (or wherever playlist patch is done):
+- Add function ensureMediaReadyAndExists({mediaId, expectedName}):
+  - call GET /api/v2/media/{id} (or reuse existing request wrapper). If 404 err_1004 -> treat as not existing.
+  - if not existing OR status not finished:
+      - query list/search media by exact name expectedName (already have findMediaByNameExact) AND pick the most recent with status finished.
+      - return resolvedMediaId.
+  - return a guaranteed existing finished mediaId.
+- Before PATCH playlist items, always call ensureMediaReadyAndExists.
+- After PATCH, verify by GET playlist and ensure items include resolvedMediaId; if not, throw error.
+
+B) Fix caching bug:
+- We saw "this.playlistCache.delete is not a function". Ensure playlistCache is a Map (or implement delete method). If it's an object, replace with Map or add a safe invalidate helper:
+  - invalidatePlaylistCache(playlistId) that works for both Map and plain object.
+
+C) In POST /api/admin/video-review/:id/retry-publish:
+- When resolving the media to place:
+  - Determine expectedName from the asset (file name stored / linkKey-derived naming).
+  - If current yodeckMediaId fails existence check, resolve by name using ensureMediaReadyAndExists and update the asset record with the resolved mediaId.
+- When targeting is forced (body.yodeckPlayerId):
+  - Resolve yodeckScreenId using Yodeck API (already exists).
+  - Resolve playlistId from DB screens.playlistId for that player/screen mapping.
+  - Ensure the chosen playlistId belongs to that same player/screen (optional: verify screen_content.source_id equals playlistId).
+- Then perform playlist write + push.
+
+D) Add two debug endpoints for diagnostics (do not expose publicly; admin only):
+- POST /api/admin/yodeck/raw-media {mediaId} -> proxies GET /api/v2/media/{id} and returns ok/raw/statusCode.
+- POST /api/admin/yodeck/raw-playlist {playlistId} -> proxies GET /api/v2/playlists/{id}.
+
+E) Optional cleanup helper (admin only):
+- POST /api/admin/yodeck/cleanup-stuck-media {mediaIds:[...]} that checks each id; if status initialized and filesize 0 for >N minutes, delete it.
+
+Acceptance tests (must run):
+1) Retry-publish with forced playerId=591895 for reviewId 9ed9ae02-... must:
+- resolve to mediaId 30148692 (not 30040771),
+- PATCH playlist 30590872 successfully,
+- verify playlist now contains 30148692,
+- push to screen id 591895.
+2) Running raw-playlist after retry shows the new mediaId in items list.
+3) No new playlists created.
+4) No silent success: if patch fails, endpoint returns ok:false with clear error.

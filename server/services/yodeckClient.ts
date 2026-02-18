@@ -798,6 +798,107 @@ export class YodeckClient {
     return null;
   }
 
+  /**
+   * Ensures a Yodeck media ID is valid, existing, and has status=finished.
+   * If the given mediaId is invalid/missing/not-finished, resolves by exact name search.
+   * Returns a guaranteed existing, finished media ID — or null if unresolvable.
+   *
+   * @param mediaId - The stored media ID to verify
+   * @param expectedName - The expected Yodeck media name for fallback search
+   * @returns Resolution result with resolvedId, method, and diagnostic details
+   */
+  async ensureMediaReadyAndExists(params: {
+    mediaId: number;
+    expectedName?: string;
+    searchNames?: string[];
+  }): Promise<{
+    resolvedId: number | null;
+    method: "direct" | "name_search" | "poll" | "unresolved";
+    originalId: number;
+    status?: string;
+    name?: string;
+    searchTerm?: string;
+    candidateCount?: number;
+    pollAttempts?: number;
+    notes: string[];
+  }> {
+    const { mediaId, expectedName, searchNames = [] } = params;
+    const corrId = Math.random().toString(36).substring(2, 8);
+    const notes: string[] = [];
+    const log = (msg: string) => {
+      const line = `[ensureMedia][${corrId}] ${msg}`;
+      console.log(line);
+      notes.push(msg);
+    };
+
+    log(`Checking mediaId=${mediaId} expectedName="${expectedName || "?"}"...`);
+
+    const direct = await this.fetchMediaRaw(mediaId);
+    if (direct.ok && direct.data && direct.data.status === "finished") {
+      log(`DIRECT OK: id=${mediaId} name="${direct.data.name}" status=finished`);
+      return { resolvedId: mediaId, method: "direct", originalId: mediaId, status: "finished", name: direct.data.name, notes };
+    }
+
+    if (direct.ok && direct.data) {
+      log(`DIRECT EXISTS but status="${direct.data.status}" (not finished) — trying name search`);
+    } else {
+      log(`DIRECT FAILED: id=${mediaId} status=${direct.status} — searching by name`);
+    }
+
+    const nameSet = new Set<string>();
+    if (expectedName) nameSet.add(expectedName);
+    searchNames.forEach(n => nameSet.add(n));
+    const allSearchNames = Array.from(nameSet);
+
+    for (const name of allSearchNames) {
+      try {
+        const found = await this.findMediaByNameExact(name);
+        if (found && found.status === "finished") {
+          log(`NAME_SEARCH OK: "${name}" → id=${found.id} status=finished`);
+          return { resolvedId: found.id, method: "name_search", originalId: mediaId, status: "finished", name: found.name, searchTerm: name, notes };
+        }
+        if (found) {
+          log(`NAME_SEARCH: "${name}" → id=${found.id} but status="${found.status}"`);
+        }
+      } catch (err: any) {
+        log(`NAME_SEARCH ERROR for "${name}": ${err.message}`);
+      }
+    }
+
+    for (const name of allSearchNames) {
+      try {
+        const results = await this.listMediaPaginated({ search: name });
+        const candidates = results
+          .filter(m => m.name && m.name.includes(name) && m.status === "finished")
+          .sort((a, b) => (b.id || 0) - (a.id || 0));
+        if (candidates.length > 0) {
+          const best = candidates[0];
+          log(`PARTIAL_SEARCH OK: "${name}" → id=${best.id} name="${best.name}" (${candidates.length} candidates)`);
+          return { resolvedId: best.id, method: "name_search", originalId: mediaId, status: "finished", name: best.name, searchTerm: name, candidateCount: candidates.length, notes };
+        }
+      } catch (err: any) {
+        log(`PARTIAL_SEARCH ERROR for "${name}": ${err.message}`);
+      }
+    }
+
+    log(`Polling mediaId=${mediaId} (may be recently uploaded)...`);
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      const delay = Math.min(300 * Math.pow(2, attempt - 1), 3000);
+      await new Promise(r => setTimeout(r, delay));
+      const poll = await this.fetchMediaRaw(mediaId);
+      if (poll.ok && poll.data && poll.data.status === "finished") {
+        log(`POLL OK after ${attempt} attempt(s): id=${mediaId} status=finished`);
+        return { resolvedId: mediaId, method: "poll", originalId: mediaId, status: "finished", name: poll.data.name, pollAttempts: attempt, notes };
+      }
+      if (poll.ok && poll.data) {
+        log(`POLL attempt ${attempt}: status="${poll.data.status}" (not finished yet)`);
+      }
+    }
+
+    log(`UNRESOLVED: could not find valid finished media for id=${mediaId}`);
+    return { resolvedId: null, method: "unresolved", originalId: mediaId, notes };
+  }
+
   async createMediaFromUrl(opts: {
     name: string;
     downloadUrl: string;

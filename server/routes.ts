@@ -2784,6 +2784,8 @@ Sitemap: ${SITE_URL}/sitemap.xml
           let pushResult: any = null;
           let afterPushScreen: any = null;
           const effectiveMediaId = result.yodeckMediaId;
+          const corrId = Math.random().toString(36).substring(2, 8);
+          forcedNotes.push(`[${corrId}] Starting playlist write: mediaId=${effectiveMediaId} playlist=${resolvedPlaylistId} screen=${resolvedScreenId}`);
 
           if (verifyResult.verified && effectiveMediaId && resolvedPlaylistId) {
             try {
@@ -2792,12 +2794,21 @@ Sitemap: ${SITE_URL}/sitemap.xml
                 const asset = await db.query.adAssets.findFirst({ where: eq(adAssets.id, assetId) });
                 let advertiserLinkKey: string | null = null;
                 let oldYodeckMediaIds: number[] = [];
-                let assetStoredFilename: string | null = null;
+                const searchNames: string[] = [];
 
                 if (asset?.advertiserId) {
                   const adv = await db.query.advertisers.findFirst({ where: eq(advertisers.id, asset.advertiserId) });
                   advertiserLinkKey = adv?.linkKey || null;
-                  assetStoredFilename = asset.storedFilename || null;
+
+                  if (asset.storedFilename) {
+                    searchNames.push(asset.storedFilename.replace(/\.[^/.]+$/, ""));
+                    searchNames.push(asset.storedFilename);
+                  }
+                  if (advertiserLinkKey) {
+                    searchNames.push(advertiserLinkKey);
+                    const prefix = advertiserLinkKey.split('-').slice(0, 2).join('-');
+                    if (prefix !== advertiserLinkKey) searchNames.push(prefix);
+                  }
 
                   const allAssets = await db.select({ yodeckMediaId: adAssets.yodeckMediaId })
                     .from(adAssets)
@@ -2810,117 +2821,56 @@ Sitemap: ${SITE_URL}/sitemap.xml
                     .filter((id): id is number => id !== null && id !== effectiveMediaId);
                 }
 
-                let verifiedMediaId = effectiveMediaId;
-                let mediaResolution: any = { originalId: effectiveMediaId, method: "direct" };
+                const mediaResolution = await plClient.ensureMediaReadyAndExists({
+                  mediaId: effectiveMediaId,
+                  searchNames,
+                });
+                forcedNotes.push(...mediaResolution.notes.map(n => `[${corrId}] ${n}`));
 
-                const mediaCheck = await plClient.fetchMediaRaw(effectiveMediaId);
-                if (!mediaCheck.ok || !mediaCheck.data) {
-                  forcedNotes.push(`Media ${effectiveMediaId} NOT FOUND in Yodeck (status=${mediaCheck.status}), searching by name...`);
-                  mediaResolution.directCheckFailed = true;
+                let verifiedMediaId = mediaResolution.resolvedId;
 
-                  let resolved = false;
-                  const searchNames: string[] = [];
-                  if (assetStoredFilename) {
-                    searchNames.push(assetStoredFilename.replace(/\.[^/.]+$/, ""));
+                if (verifiedMediaId && verifiedMediaId !== effectiveMediaId) {
+                  try {
+                    await db.update(adAssets).set({ yodeckMediaId: verifiedMediaId }).where(eq(adAssets.id, assetId));
+                    forcedNotes.push(`[${corrId}] DB updated: adAssets.yodeckMediaId ${effectiveMediaId} → ${verifiedMediaId}`);
+                  } catch (dbErr: any) {
+                    forcedNotes.push(`[${corrId}] DB update failed: ${dbErr.message}`);
                   }
-                  if (advertiserLinkKey) {
-                    searchNames.push(advertiserLinkKey);
-                    const prefix = advertiserLinkKey.split('-').slice(0, 2).join('-');
-                    if (prefix !== advertiserLinkKey) searchNames.push(prefix);
-                  }
-                  mediaResolution.searchNames = searchNames;
-
-                  for (const searchName of searchNames) {
-                    if (resolved) break;
-                    try {
-                      const searchResults = await plClient.listMediaPaginated({ search: searchName });
-                      const candidates = searchResults
-                        .filter(m => m.name && m.name.includes(searchName))
-                        .sort((a, b) => (b.id || 0) - (a.id || 0));
-                      if (candidates.length > 0) {
-                        const best = candidates[0];
-                        const bestCheck = await plClient.fetchMediaRaw(best.id);
-                        if (bestCheck.ok && bestCheck.data) {
-                          verifiedMediaId = best.id;
-                          resolved = true;
-                          mediaResolution.method = "name_search";
-                          mediaResolution.searchTerm = searchName;
-                          mediaResolution.resolvedId = best.id;
-                          mediaResolution.resolvedName = best.name;
-                          mediaResolution.candidateCount = candidates.length;
-                          forcedNotes.push(`Resolved media via name search "${searchName}": id=${best.id} name="${best.name}"`);
-                        }
-                      }
-                    } catch (searchErr: any) {
-                      forcedNotes.push(`Search for "${searchName}" failed: ${searchErr.message}`);
-                    }
-                  }
-
-                  if (!resolved) {
-                    forcedNotes.push(`Polling for media ${effectiveMediaId} availability (may be recently uploaded)...`);
-                    for (let attempt = 1; attempt <= 6; attempt++) {
-                      const delay = Math.min(300 * Math.pow(2, attempt - 1), 3000);
-                      await new Promise(r => setTimeout(r, delay));
-                      const pollCheck = await plClient.fetchMediaRaw(effectiveMediaId);
-                      if (pollCheck.ok && pollCheck.data) {
-                        verifiedMediaId = effectiveMediaId;
-                        resolved = true;
-                        mediaResolution.method = "poll";
-                        mediaResolution.pollAttempts = attempt;
-                        forcedNotes.push(`Media ${effectiveMediaId} became available after ${attempt} poll(s)`);
-                        break;
-                      }
-                    }
-                  }
-
-                  if (resolved && verifiedMediaId !== effectiveMediaId) {
-                    try {
-                      await db.update(adAssets).set({ yodeckMediaId: verifiedMediaId }).where(eq(adAssets.id, assetId));
-                      forcedNotes.push(`DB updated: adAssets.yodeckMediaId ${effectiveMediaId} → ${verifiedMediaId}`);
-                      mediaResolution.dbUpdated = true;
-                    } catch (dbErr: any) {
-                      forcedNotes.push(`DB update failed: ${dbErr.message}`);
-                    }
-                  }
-
-                  if (!resolved) {
-                    if (asset) {
-                      try {
-                        await db.update(adAssets).set({ yodeckMediaId: null }).where(eq(adAssets.id, assetId));
-                        forcedNotes.push(`DB cleared: invalid yodeckMediaId ${effectiveMediaId} removed from asset`);
-                        mediaResolution.dbCleared = true;
-                      } catch (dbErr: any) {
-                        forcedNotes.push(`DB clear failed: ${dbErr.message}`);
-                      }
-                    }
-                    playlistWrite = {
-                      playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId,
-                      error: "MEDIA_NOT_READY", mediaResolution,
-                    };
-                    forcedNotes.push(`MEDIA_NOT_READY: could not verify media ${effectiveMediaId} in Yodeck`);
-                  }
-                } else {
-                  if (mediaCheck.data.status !== 'finished') {
-                    forcedNotes.push(`Media ${effectiveMediaId} exists but status="${mediaCheck.data.status}" (not finished) — proceeding cautiously`);
-                  }
-                  mediaResolution.status = mediaCheck.data.status;
-                  mediaResolution.name = mediaCheck.data.name;
-                  forcedNotes.push(`Media ${effectiveMediaId} verified in Yodeck: name="${mediaCheck.data.name}" status="${mediaCheck.data.status}"`);
                 }
 
-                forcedNotes.push(`Ad recognition: linkKey=${advertiserLinkKey}, oldMediaIds=[${oldYodeckMediaIds.join(',')}], verifiedMediaId=${verifiedMediaId}`);
+                if (!verifiedMediaId) {
+                  if (asset) {
+                    try {
+                      await db.update(adAssets).set({ yodeckMediaId: null }).where(eq(adAssets.id, assetId));
+                      forcedNotes.push(`[${corrId}] DB cleared: invalid yodeckMediaId ${effectiveMediaId} removed from asset`);
+                    } catch (dbErr: any) {
+                      forcedNotes.push(`[${corrId}] DB clear failed: ${dbErr.message}`);
+                    }
+                  }
+                  playlistWrite = {
+                    playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId,
+                    error: "MEDIA_NOT_READY", mediaResolution, corrId,
+                  };
+                  forcedNotes.push(`[${corrId}] MEDIA_NOT_READY: could not verify media ${effectiveMediaId} in Yodeck`);
+                }
+
+                forcedNotes.push(`[${corrId}] Ad recognition: linkKey=${advertiserLinkKey}, oldMediaIds=[${oldYodeckMediaIds.join(',')}], verifiedMediaId=${verifiedMediaId}`);
 
                 if (!playlistWrite) {
                   const pl = await plClient.getPlaylistFresh(resolvedPlaylistId);
                   if (pl) {
                     const items: any[] = pl.items || [];
-                    const beforeIds = items.map((i: any) => i.id);
-                    const alreadyPresent = items.some((i: any) => i.type === "media" && i.id === verifiedMediaId);
+                    const beforeMediaIds = items.map((i: any) => i.media ?? i.id);
+                    forcedNotes.push(`[${corrId}] Playlist ${resolvedPlaylistId} has ${items.length} items, mediaIds=[${beforeMediaIds.join(',')}]`);
+
+                    const getMediaPk = (item: any): number => item.media ?? item.id;
+                    const alreadyPresent = items.some((i: any) => i.type === "media" && getMediaPk(i) === verifiedMediaId);
 
                     const isAdvertiserItem = (item: any): boolean => {
                       if (item.type !== "media") return false;
-                      if (item.id === verifiedMediaId) return false;
-                      if (oldYodeckMediaIds.includes(item.id)) return true;
+                      const mediaPk = getMediaPk(item);
+                      if (mediaPk === verifiedMediaId) return false;
+                      if (oldYodeckMediaIds.includes(mediaPk)) return true;
                       if (advertiserLinkKey && item.name) {
                         const prefix = advertiserLinkKey.split('-').slice(0, 2).join('-');
                         if (item.name.startsWith(prefix)) return true;
@@ -2928,41 +2878,52 @@ Sitemap: ${SITE_URL}/sitemap.xml
                       return false;
                     };
 
-                    const removedItemIds = items.filter(isAdvertiserItem).map((i: any) => i.id);
+                    const removedMediaIds = items.filter(isAdvertiserItem).map((i: any) => getMediaPk(i));
                     const keptItems = items.filter((i: any) => !isAdvertiserItem(i));
 
-                    if (alreadyPresent && removedItemIds.length === 0) {
-                      playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedItemIds: [], beforeIds, afterIds: beforeIds, alreadyPresent: true, nowHasMedia: true, mediaResolution };
-                      forcedNotes.push(`Media ${verifiedMediaId} already in playlist, no old ads to remove`);
+                    if (alreadyPresent && removedMediaIds.length === 0) {
+                      playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedMediaIds: [], beforeMediaIds, afterMediaIds: beforeMediaIds, alreadyPresent: true, nowHasMedia: true, mediaResolution };
+                      forcedNotes.push(`[${corrId}] Media ${verifiedMediaId} already in playlist, no old ads to remove`);
                     } else {
-                      const keptWithoutNew = keptItems.filter((i: any) => i.id !== verifiedMediaId);
+                      const keptWithoutNew = keptItems.filter((i: any) => getMediaPk(i) !== verifiedMediaId);
                       const maxPriority = keptWithoutNew.reduce((max: number, i: any) => Math.max(max, i.priority || 0), 0);
                       const nextPriority = maxPriority + 1;
-                      const newItems = keptWithoutNew.map((i: any) => ({ id: i.id, type: i.type, priority: i.priority, duration: i.duration }));
+                      const newItems = keptWithoutNew.map((i: any) => ({
+                        id: getMediaPk(i),
+                        type: i.type,
+                        priority: i.priority,
+                        duration: i.duration
+                      }));
                       newItems.push({ id: verifiedMediaId, type: "media", priority: nextPriority, duration: 15 });
 
+                      forcedNotes.push(`[${corrId}] PATCH payload: ${newItems.length} items, mediaPKs=[${newItems.map(i => i.id).join(',')}]`);
                       const patchRes = await plClient.patchPlaylist(resolvedPlaylistId, { items: newItems });
                       if (!patchRes.ok) {
-                        forcedNotes.push(`Playlist PATCH failed: ${patchRes.error}`);
-                        playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedItemIds, beforeIds, error: patchRes.error, mediaResolution };
+                        forcedNotes.push(`[${corrId}] Playlist PATCH failed: ${patchRes.error}`);
+                        playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedMediaIds, beforeMediaIds, error: patchRes.error, mediaResolution, corrId };
                       } else {
                         const pl2 = await plClient.getPlaylistFresh(resolvedPlaylistId);
                         const afterItems = pl2?.items || [];
-                        const afterIds = afterItems.map((i: any) => i.id);
-                        const nowHasMedia = afterItems.some((i: any) => i.type === "media" && i.id === verifiedMediaId);
-                        playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedItemIds, beforeIds, afterIds, nowHasMedia, nextPriority, mediaResolution };
-                        forcedNotes.push(`Playlist updated: removed=[${removedItemIds.join(',')}] added=${verifiedMediaId} nowHas=${nowHasMedia} (${beforeIds.length}→${afterIds.length} items)`);
+                        const afterMediaIds = afterItems.map((i: any) => i.media ?? i.id);
+                        const nowHasMedia = afterItems.some((i: any) => i.type === "media" && (i.media ?? i.id) === verifiedMediaId);
+                        if (!nowHasMedia) {
+                          forcedNotes.push(`[${corrId}] POST-PATCH VERIFICATION FAILED: media ${verifiedMediaId} NOT found in playlist after PATCH! afterMediaIds=[${afterMediaIds.join(',')}]`);
+                          playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedMediaIds, beforeMediaIds, afterMediaIds, nowHasMedia: false, error: "POST_PATCH_VERIFY_FAILED", mediaResolution, corrId };
+                        } else {
+                          playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedMediaIds, beforeMediaIds, afterMediaIds, nowHasMedia: true, nextPriority, mediaResolution, corrId };
+                          forcedNotes.push(`[${corrId}] Playlist updated: removed=[${removedMediaIds.join(',')}] added=${verifiedMediaId} nowHas=true (${beforeMediaIds.length}→${afterMediaIds.length} items)`);
+                        }
                       }
                     }
                   } else {
-                    forcedNotes.push(`Playlist ${resolvedPlaylistId} not found in Yodeck for media write`);
-                    playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, error: "playlist not found", mediaResolution };
+                    forcedNotes.push(`[${corrId}] Playlist ${resolvedPlaylistId} not found in Yodeck for media write`);
+                    playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, error: "playlist not found", mediaResolution, corrId };
                   }
                 }
               }
             } catch (plErr: any) {
-              forcedNotes.push(`Playlist write error: ${plErr.message}`);
-              playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId, error: plErr.message };
+              forcedNotes.push(`[${corrId}] Playlist write error: ${plErr.message}`);
+              playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: effectiveMediaId, error: plErr.message, corrId };
             }
           }
 
@@ -2972,11 +2933,11 @@ Sitemap: ${SITE_URL}/sitemap.xml
               if (pushClient) {
                 pushResult = await pushClient.pushToScreen(resolvedScreenId, true);
                 __pushProbe = true;
-                forcedNotes.push(`Push result: ok=${pushResult.ok}${pushResult.error ? ' error=' + pushResult.error : ''}`);
+                forcedNotes.push(`[${corrId}] Push result: ok=${pushResult.ok}${pushResult.error ? ' error=' + pushResult.error : ''}`);
                 afterPushScreen = await pushClient.getScreen(resolvedScreenId);
               }
             } catch (pushErr: any) {
-              forcedNotes.push(`Push error: ${pushErr.message}`);
+              forcedNotes.push(`[${corrId}] Push error: ${pushErr.message}`);
               pushResult = { ok: false, error: pushErr.message };
             }
           }
@@ -2998,6 +2959,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
             screenAssignment: [{ ...verifyResult, push: pushResult, lastPushed: afterPushScreen?.last_pushed || null }],
             debug: {
               ...(result.debug || {} as any),
+              corrId,
               forcedTarget: true,
               forcedScreenId: resolvedScreenId,
               forcedPlayerId: forcedPlayerId,
@@ -24106,6 +24068,71 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       const raw = await response.json();
       res.json({ ok: true, raw, headers });
     } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/admin/yodeck/cleanup-stuck-media", requireAdminAccess, async (req, res) => {
+    try {
+      const { mediaIds, minAgeMinutes = 30 } = req.body || {};
+      if (!mediaIds || !Array.isArray(mediaIds) || mediaIds.length === 0) {
+        return res.status(400).json({ ok: false, error: "mediaIds[] is required" });
+      }
+      if (mediaIds.length > 50) {
+        return res.status(400).json({ ok: false, error: "Max 50 media IDs per request" });
+      }
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      if (!client) {
+        return res.status(500).json({ ok: false, error: "Yodeck client not configured" });
+      }
+
+      const results: any[] = [];
+      for (const mid of mediaIds) {
+        const mediaId = Number(mid);
+        if (!mediaId || isNaN(mediaId)) {
+          results.push({ mediaId: mid, action: "skip", reason: "invalid_id" });
+          continue;
+        }
+        const check = await client.fetchMediaRaw(mediaId);
+        if (!check.ok || !check.data) {
+          results.push({ mediaId, action: "skip", reason: "not_found", status: check.status });
+          continue;
+        }
+        const m = check.data;
+        const isStuck = m.status === "initialized" && (m.file_size === 0 || m.file_size === null);
+        if (!isStuck) {
+          results.push({ mediaId, action: "skip", reason: "not_stuck", status: m.status, fileSize: m.file_size });
+          continue;
+        }
+        const created = m.created_at ? new Date(m.created_at).getTime() : 0;
+        const ageMinutes = created > 0 ? (Date.now() - created) / 60000 : Infinity;
+        if (ageMinutes < minAgeMinutes) {
+          results.push({ mediaId, action: "skip", reason: "too_recent", ageMinutes: Math.round(ageMinutes), minAgeMinutes, name: m.name });
+          continue;
+        }
+
+        const token = process.env.YODECK_AUTH_TOKEN;
+        if (!token) {
+          results.push({ mediaId, action: "error", reason: "no_token" });
+          continue;
+        }
+        try {
+          const delRes = await fetch(`https://app.yodeck.com/api/v2/media/${mediaId}/`, {
+            method: "DELETE",
+            headers: { "Authorization": `Token ${token}`, "Accept": "application/json" },
+          });
+          results.push({ mediaId, action: delRes.ok ? "deleted" : "delete_failed", httpStatus: delRes.status, name: m.name, ageMinutes: Math.round(ageMinutes) });
+        } catch (delErr: any) {
+          results.push({ mediaId, action: "error", reason: delErr.message, name: m.name });
+        }
+      }
+
+      const deleted = results.filter(r => r.action === "deleted").length;
+      const skipped = results.filter(r => r.action === "skip").length;
+      res.json({ ok: true, summary: { total: mediaIds.length, deleted, skipped }, results });
+    } catch (error: any) {
+      console.error('[Admin] cleanup-stuck-media error:', error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });
