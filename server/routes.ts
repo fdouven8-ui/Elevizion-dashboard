@@ -2897,7 +2897,49 @@ Sitemap: ${SITE_URL}/sitemap.xml
                       newItems.push({ id: verifiedMediaId, type: "media", priority: nextPriority, duration: 15 });
 
                       forcedNotes.push(`[${corrId}] PATCH payload: ${newItems.length} items, mediaPKs=[${newItems.map(i => i.id).join(',')}]`);
-                      const patchRes = await plClient.patchPlaylist(resolvedPlaylistId, { items: newItems });
+                      let patchRes = await plClient.patchPlaylist(resolvedPlaylistId, { items: newItems });
+
+                      if (!patchRes.ok && patchRes.error && patchRes.error.includes('err_1003')) {
+                        forcedNotes.push(`[${corrId}] PATCH err_1003 detected — re-resolving media by name...`);
+                        const reResolve = await plClient.ensureMediaReadyAndExists({
+                          mediaId: verifiedMediaId!,
+                          searchNames: searchNames,
+                        });
+                        forcedNotes.push(...reResolve.notes.map(n => `[${corrId}][retry] ${n}`));
+
+                        if (reResolve.resolvedId && reResolve.resolvedId !== verifiedMediaId) {
+                          verifiedMediaId = reResolve.resolvedId;
+                          forcedNotes.push(`[${corrId}] Re-resolved media: ${reResolve.originalId} → ${reResolve.resolvedId}`);
+                          try {
+                            await db.update(adAssets).set({ yodeckMediaId: verifiedMediaId }).where(eq(adAssets.id, assetId));
+                            forcedNotes.push(`[${corrId}] DB updated with re-resolved yodeckMediaId=${verifiedMediaId}`);
+                          } catch (dbErr: any) {
+                            forcedNotes.push(`[${corrId}] DB update after re-resolve failed: ${dbErr.message}`);
+                          }
+
+                          const retryItems = newItems.map(i =>
+                            (i.id === reResolve.originalId && i.type === "media")
+                              ? { ...i, id: verifiedMediaId! }
+                              : i
+                          );
+                          const hasNew = retryItems.some(i => i.id === verifiedMediaId && i.type === "media");
+                          if (!hasNew) {
+                            const staleIdx = retryItems.findIndex(i => i.type === "media" && i.id === reResolve.originalId);
+                            if (staleIdx >= 0) {
+                              retryItems[staleIdx] = { ...retryItems[staleIdx], id: verifiedMediaId! };
+                            } else {
+                              forcedNotes.push(`[${corrId}] WARNING: could not locate stale mediaId=${reResolve.originalId} in retryItems, appending corrected entry`);
+                              retryItems.push({ id: verifiedMediaId!, type: "media", priority: nextPriority, duration: 15 });
+                            }
+                          }
+                          forcedNotes.push(`[${corrId}] RETRY PATCH payload: mediaPKs=[${retryItems.map(i => i.id).join(',')}]`);
+                          patchRes = await plClient.patchPlaylist(resolvedPlaylistId, { items: retryItems });
+                          if (patchRes.ok) {
+                            forcedNotes.push(`[${corrId}] RETRY PATCH succeeded after err_1003 recovery`);
+                          }
+                        }
+                      }
+
                       if (!patchRes.ok) {
                         forcedNotes.push(`[${corrId}] Playlist PATCH failed: ${patchRes.error}`);
                         playlistWrite = { playlistId: resolvedPlaylistId, addedMediaId: verifiedMediaId, removedMediaIds, beforeMediaIds, error: patchRes.error, mediaResolution, corrId };
@@ -24133,6 +24175,36 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       res.json({ ok: true, summary: { total: mediaIds.length, deleted, skipped }, results });
     } catch (error: any) {
       console.error('[Admin] cleanup-stuck-media error:', error);
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.post("/api/admin/yodeck/push-screen", requireAdminAccess, async (req, res) => {
+    try {
+      const { screenId, use_download_timeslots } = req.body || {};
+      if (!screenId) {
+        return res.status(400).json({ ok: false, error: "screenId is required" });
+      }
+      const { getYodeckClient } = await import("./services/yodeckClient");
+      const client = await getYodeckClient();
+      if (!client) {
+        return res.status(500).json({ ok: false, error: "Yodeck client not configured" });
+      }
+      const useTimeslots = use_download_timeslots !== undefined ? !!use_download_timeslots : true;
+      const pushResult = await client.pushToScreen(Number(screenId), useTimeslots);
+      let screen: any = null;
+      try {
+        screen = await client.getScreen(Number(screenId));
+      } catch {}
+      res.json({
+        ok: pushResult.ok,
+        pushResult,
+        lastPushed: screen?.last_pushed || null,
+        screenContent: screen?.screen_content || null,
+        error: pushResult.error || undefined,
+      });
+    } catch (error: any) {
+      console.error('[Admin] push-screen error:', error);
       res.status(500).json({ ok: false, error: error.message });
     }
   });

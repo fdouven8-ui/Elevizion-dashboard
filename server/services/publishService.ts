@@ -898,6 +898,45 @@ export async function publishAsset(
     console.log(`${LOG} ${correlationId} existing yodeckMediaId=${effectiveYodeckMediaId}`);
   }
 
+  if (effectiveYodeckMediaId) {
+    try {
+      const { getYodeckClient } = await import('./yodeckClient');
+      const client = await getYodeckClient();
+      if (client) {
+        const assetForName = await db.query.adAssets.findFirst({ where: eq(adAssets.id, assetId) });
+        const nameSearches: string[] = [];
+        if (assetForName?.storedFilename) {
+          nameSearches.push(assetForName.storedFilename.replace(/\.[^/.]+$/, ""));
+          nameSearches.push(assetForName.storedFilename);
+        }
+        if (assetForName?.advertiserId) {
+          const adv = await db.query.advertisers.findFirst({ where: eq(advertisers.id, assetForName.advertiserId) });
+          if (adv?.linkKey) {
+            nameSearches.push(adv.linkKey);
+            const prefix = adv.linkKey.split('-').slice(0, 2).join('-');
+            if (prefix !== adv.linkKey) nameSearches.push(prefix);
+          }
+        }
+
+        const resolution = await client.ensureMediaReadyAndExists({
+          mediaId: effectiveYodeckMediaId,
+          searchNames: nameSearches,
+        });
+        console.log(`${LOG} ${correlationId} ensureMedia: method=${resolution.method} resolved=${resolution.resolvedId} original=${resolution.originalId}`);
+
+        if (resolution.resolvedId && resolution.resolvedId !== effectiveYodeckMediaId) {
+          console.log(`${LOG} ${correlationId} DB self-heal: yodeckMediaId ${effectiveYodeckMediaId} → ${resolution.resolvedId}`);
+          await db.update(adAssets).set({ yodeckMediaId: resolution.resolvedId }).where(eq(adAssets.id, assetId));
+          effectiveYodeckMediaId = resolution.resolvedId;
+        } else if (!resolution.resolvedId) {
+          console.warn(`${LOG} ${correlationId} MEDIA_UNRESOLVABLE: yodeckMediaId=${effectiveYodeckMediaId} could not be verified (proceeding — may be transient)`);
+        }
+      }
+    } catch (verifyErr: any) {
+      console.warn(`${LOG} ${correlationId} media verification error (continuing): ${verifyErr.message}`);
+    }
+  }
+
   let locationsUpdated = 0;
   let canonicalPublishOk = false;
   let canonicalPublishError: string | null = null;
