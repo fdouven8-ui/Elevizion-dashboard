@@ -820,6 +820,7 @@ export class YodeckClient {
     searchTerm?: string;
     candidateCount?: number;
     pollAttempts?: number;
+    staleCleaned?: boolean;
     notes: string[];
   }> {
     const { mediaId, expectedName, searchNames = [] } = params;
@@ -840,7 +841,25 @@ export class YodeckClient {
     }
 
     if (direct.ok && direct.data) {
-      log(`DIRECT EXISTS but status="${direct.data.status}" (not finished) — trying name search`);
+      const st = direct.data.status;
+      const origin = direct.data.media_origin;
+      const args = direct.data.arguments || {};
+      const originSource = typeof origin === 'object' ? origin?.source : origin;
+      const isStale = (st === 'initialized' || st === 'processing') &&
+        (originSource !== 'local' || args.buffering === true);
+
+      if (isStale) {
+        log(`STALE_MEDIA DETECTED: id=${mediaId} status="${st}" origin.source="${originSource}" buffering=${args.buffering}`);
+        console.log(`[YodeckRecovery] DELETE_STALE mediaId=${mediaId} reason=${st}_not_local origin=${originSource} buffering=${args.buffering}`);
+        const delResult = await this.deleteMedia(mediaId);
+        log(`DELETE_STALE result: ok=${delResult.ok} status=${delResult.status}`);
+        if (delResult.ok) {
+          return { resolvedId: null, method: "unresolved", originalId: mediaId, staleCleaned: true, notes };
+        }
+        log(`DELETE_STALE FAILED — proceeding to name search fallback`);
+      }
+
+      log(`DIRECT EXISTS but status="${st}" (not finished) — trying name search`);
     } else {
       log(`DIRECT FAILED: id=${mediaId} status=${direct.status} — searching by name`);
     }

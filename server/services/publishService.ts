@@ -928,6 +928,42 @@ export async function publishAsset(
           console.log(`${LOG} ${correlationId} DB self-heal: yodeckMediaId ${effectiveYodeckMediaId} → ${resolution.resolvedId}`);
           await db.update(adAssets).set({ yodeckMediaId: resolution.resolvedId }).where(eq(adAssets.id, assetId));
           effectiveYodeckMediaId = resolution.resolvedId;
+        } else if (!resolution.resolvedId && resolution.staleCleaned) {
+          console.log(`[YodeckRecovery] ${correlationId} STALE_CLEANED mediaId=${effectiveYodeckMediaId} — creating fresh local upload`);
+          const freshAsset = await db.query.adAssets.findFirst({ where: eq(adAssets.id, assetId) });
+          const sp = freshAsset?.normalizedStoragePath || freshAsset?.convertedStoragePath || freshAsset?.storagePath;
+          const mediaName = freshAsset?.storedFilename || `asset-${assetId}.mp4`;
+          if (sp) {
+            const { yodeckPublishService: pubSvc } = await import('./yodeckPublishService');
+            const recoveryCorrId = `${correlationId}-recovery`;
+            console.log(`[YodeckCreate] ${recoveryCorrId} storagePath=${sp} name=${mediaName}`);
+            const uploadResult = await pubSvc.localUploadFromR2({
+              storagePath: sp,
+              name: mediaName,
+              correlationId: recoveryCorrId,
+            });
+            if (uploadResult.ok && uploadResult.mediaId) {
+              console.log(`[YodeckRecovery] ${recoveryCorrId} FRESH_UPLOAD_OK newMediaId=${uploadResult.mediaId}`);
+              await db.update(adAssets).set({ yodeckMediaId: uploadResult.mediaId }).where(eq(adAssets.id, assetId));
+              effectiveYodeckMediaId = uploadResult.mediaId;
+            } else {
+              console.error(`[YodeckRecovery] ${recoveryCorrId} FRESH_UPLOAD_FAILED debug=${JSON.stringify(uploadResult.debug).substring(0, 300)}`);
+              await db.update(adAssets).set({
+                publishStatus: 'PUBLISH_FAILED',
+                publishError: 'Stale media cleaned but fresh upload failed',
+                yodeckMediaId: null,
+              }).where(eq(adAssets.id, assetId));
+              return { ok: false, correlationId, error: 'Fresh local upload failed after stale media cleanup' };
+            }
+          } else {
+            console.error(`[YodeckRecovery] ${correlationId} NO_STORAGE_PATH for asset=${assetId} — cannot re-upload`);
+            await db.update(adAssets).set({
+              publishStatus: 'PUBLISH_FAILED',
+              publishError: 'Stale media cleaned but no storagePath available for re-upload',
+              yodeckMediaId: null,
+            }).where(eq(adAssets.id, assetId));
+            return { ok: false, correlationId, error: 'No storagePath for re-upload after stale cleanup' };
+          }
         } else if (!resolution.resolvedId) {
           console.warn(`${LOG} ${correlationId} MEDIA_UNRESOLVABLE: yodeckMediaId=${effectiveYodeckMediaId} could not be verified (proceeding — may be transient)`);
         }
