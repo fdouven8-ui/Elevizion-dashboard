@@ -1,0 +1,42 @@
+We need a minimal fix: (1) normalization ffmpeg is being KILLED causing yodeckReadinessStatus=REJECTED and publishError "Geen Yodeck media ID". (2) Yodeck local upload creates media but does not actually PUT bytes to get_upload_url, so media stays initialized fileSize=0.
+
+Do NOT add job systems or new architecture. Just fix root cause.
+
+A) Normalization: make it best-effort and cheap
+- Current ffmpeg command re-encodes (libx264) and gets "Killed".
+- Change normalization to prefer a fast stream-copy when possible:
+  ffmpeg -y -i INPUT -c:v copy -movflags +faststart -an OUTPUT
+- If stream-copy fails, fall back to a very light re-encode:
+  ffmpeg -y -i INPUT -c:v libx264 -preset ultrafast -crf 28 -pix_fmt yuv420p -movflags +faststart -an OUTPUT
+- If BOTH fail (or process killed), do NOT set readinessStatus=REJECTED. Instead:
+  - set normalizationError but continue publish using ORIGINAL storagePath as the upload source.
+  - Log: [Normalize] FAILED_BUT_CONTINUING reason=...
+This removes "Geen Yodeck media ID" purely due to normalization.
+
+B) Yodeck local upload: ensure PUT happens and is logged
+In publishSingleAsset / RetryPublish local upload flow:
+1) After create media (source:"local"), capture the create response and log:
+   - mediaId, status, fileSize, hasGetUploadUrl (boolean) (do NOT print full URL token, only host + path prefix)
+2) REQUIRE get_upload_url. If missing => throw hard error "Yodeck returned no get_upload_url".
+3) Immediately PUT the downloaded bytes to get_upload_url:
+   - method: PUT
+   - body: Buffer (the bytes we already downloaded)
+   - headers:
+     Content-Type: video/mp4
+     Content-Length: <buffer.length>
+   - await the response, read text on non-2xx, and throw.
+   - Log:
+     [YodeckUpload] PUT_OK mediaId=... status=<code> bytes=<len>
+     or
+     [YodeckUpload] PUT_FAIL mediaId=... status=<code> body=<first 300 chars>
+4) Only AFTER PUT_OK start polling status.
+5) If after 3 polls fileSize is still 0, do an extra GET media and log the returned status+fileSize (helps confirm Yodeck actually received bytes).
+
+C) Make sure we’re not polling the wrong mediaId
+- Ensure the mediaId being polled is the same one created in the local flow.
+- Do not fall back to createMediaFromUrl within the same attempt if local was started.
+
+Acceptance:
+- Logs show create response + PUT_OK for mediaId.
+- Poll transitions to processing/finished and fileSize>0.
+- Normalization failures no longer block publish; they only log and continue with original file.

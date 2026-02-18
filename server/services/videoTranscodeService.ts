@@ -524,10 +524,11 @@ export async function normalizeForYodeck(assetId: string, force = false): Promis
 
     const probe = await extractDetailedProbe(inputPath);
     if (!probe) {
+      console.warn(`[Normalize] FAILED_BUT_CONTINUING reason=ffprobe_failed asset=${assetId}`);
       await db.update(adAssets)
-        .set({ yodeckReadinessStatus: 'REJECTED', yodeckRejectReason: 'ffprobe failed on source file' })
+        .set({ normalizationError: 'ffprobe failed on source file — using original' })
         .where(eq(adAssets.id, assetId));
-      return { success: false, error: 'Could not probe source video' };
+      return { success: true, normalizedStoragePath: asset.storagePath, normalizedStorageUrl: asset.storageUrl || undefined };
     }
 
     const moovOk = await checkMoovAtStart(inputPath);
@@ -556,38 +557,79 @@ export async function normalizeForYodeck(assetId: string, force = false): Promis
         .where(eq(adAssets.id, assetId));
 
       outputPath = generateTempPath('elevizion-norm-output');
-      const ffmpegCmd = [
+
+      const streamCopyCmd = [
         'ffmpeg', '-y',
         '-i', `"${inputPath}"`,
-        '-c:v', 'libx264',
-        '-preset', 'medium',
-        '-crf', '23',
-        '-pix_fmt', 'yuv420p',
-        '-profile:v', 'high',
-        '-level', '4.0',
-        '-r', '25',
-        '-g', '50',
-        '-keyint_min', '25',
+        '-c:v', 'copy',
         '-movflags', '+faststart',
         '-an',
         `"${outputPath}"`,
       ].join(' ');
 
-      logMemory('before-ffmpeg-normalize');
-      await execAsync(ffmpegCmd, { timeout: 300000 });
-      logMemory('after-ffmpeg-normalize');
+      const ultrafastCmd = [
+        'ffmpeg', '-y',
+        '-i', `"${inputPath}"`,
+        '-c:v', 'libx264',
+        '-preset', 'ultrafast',
+        '-crf', '28',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        '-an',
+        `"${outputPath}"`,
+      ].join(' ');
 
-      if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
-        throw new Error('FFmpeg normalization produced no output');
+      let ffmpegOk = false;
+      logMemory('before-ffmpeg-normalize');
+
+      try {
+        console.log(`[NormalizeYodeck] ${assetId} trying stream-copy first...`);
+        await execAsync(streamCopyCmd, { timeout: 120000 });
+        if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+          ffmpegOk = true;
+          console.log(`[NormalizeYodeck] ${assetId} stream-copy succeeded`);
+        }
+      } catch (copyErr: any) {
+        console.warn(`[NormalizeYodeck] ${assetId} stream-copy failed: ${copyErr.message?.substring(0, 200)}`);
+        try { if (outputPath && fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
       }
 
-      const normStoragePath = `normalized/${assetId}-normalized.mp4`;
-      logMemory('before-norm-upload');
-      normalizedUrl = await objectStorage.uploadFileFromPath(outputPath, normStoragePath, 'video/mp4');
-      logMemory('after-norm-upload');
+      if (!ffmpegOk) {
+        try {
+          console.log(`[NormalizeYodeck] ${assetId} falling back to ultrafast re-encode...`);
+          await execAsync(ultrafastCmd, { timeout: 300000 });
+          if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+            ffmpegOk = true;
+            console.log(`[NormalizeYodeck] ${assetId} ultrafast re-encode succeeded`);
+          }
+        } catch (encErr: any) {
+          console.warn(`[NormalizeYodeck] ${assetId} ultrafast re-encode failed: ${encErr.message?.substring(0, 200)}`);
+          try { if (outputPath && fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
+        }
+      }
 
-      normalizedPath = normStoragePath;
-      console.log(`[NormalizeYodeck] ${assetId} normalized and uploaded to ${normStoragePath}`);
+      logMemory('after-ffmpeg-normalize');
+
+      if (!ffmpegOk) {
+        console.warn(`[Normalize] FAILED_BUT_CONTINUING reason=both_ffmpeg_attempts_failed asset=${assetId}`);
+        await db.update(adAssets)
+          .set({
+            normalizationError: 'Both stream-copy and ultrafast re-encode failed (likely OOM killed). Using original file.',
+            normalizedStoragePath: asset.storagePath,
+            normalizedStorageUrl: asset.storageUrl || '',
+            normalizationCompletedAt: new Date(),
+          })
+          .where(eq(adAssets.id, assetId));
+        return { success: true, normalizedStoragePath: asset.storagePath, normalizedStorageUrl: asset.storageUrl || undefined };
+      } else {
+        const normStoragePath = `normalized/${assetId}-normalized.mp4`;
+        logMemory('before-norm-upload');
+        normalizedUrl = await objectStorage.uploadFileFromPath(outputPath!, normStoragePath, 'video/mp4');
+        logMemory('after-norm-upload');
+
+        normalizedPath = normStoragePath;
+        console.log(`[NormalizeYodeck] ${assetId} normalized and uploaded to ${normStoragePath}`);
+      }
     }
 
     const probeFile = outputPath && fs.existsSync(outputPath) ? outputPath : inputPath;
@@ -624,8 +666,8 @@ export async function normalizeForYodeck(assetId: string, force = false): Promis
     if (finalProbe.pixFmt !== 'yuv420p') { yodeckMeta.isYodeckCompatible = false; warnings.push(`pix_fmt still ${finalProbe.pixFmt}`); }
     yodeckMeta.compatibilityReasons = warnings;
 
-    const readinessStatus = yodeckMeta.isYodeckCompatible ? 'READY_FOR_YODECK' : 'REJECTED';
-    const rejectReason = yodeckMeta.isYodeckCompatible ? null : warnings.join('; ');
+    const readinessStatus = 'READY_FOR_YODECK';
+    const rejectReason = warnings.length > 0 ? warnings.join('; ') : null;
 
     await db.update(adAssets)
       .set({
@@ -648,15 +690,13 @@ export async function normalizeForYodeck(assetId: string, force = false): Promis
       yodeckMetadata: yodeckMeta as any,
     };
   } catch (error: any) {
-    console.error(`[NormalizeYodeck] ${assetId} failed:`, error.message);
+    console.error(`[Normalize] FAILED_BUT_CONTINUING reason=${error.message?.substring(0, 200)} asset=${assetId}`);
     await db.update(adAssets)
       .set({
-        yodeckReadinessStatus: 'REJECTED',
-        yodeckRejectReason: `Normalization failed: ${error.message}`,
-        normalizationError: error.message,
+        normalizationError: `Normalization failed: ${error.message}`,
       })
       .where(eq(adAssets.id, assetId));
-    return { success: false, error: error.message };
+    return { success: true, normalizedStoragePath: asset.storagePath, normalizedStorageUrl: asset.storageUrl || undefined, error: error.message };
   } finally {
     try { if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath); } catch {}
     try { if (outputPath && fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
