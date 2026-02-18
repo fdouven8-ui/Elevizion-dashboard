@@ -909,14 +909,14 @@ export class YodeckClient {
     await semaphore.acquire();
 
     try {
+      if (!opts.downloadUrl) {
+        throw new Error(`createMediaFromUrl: downloadUrl is missing or null for name="${opts.name}"`);
+      }
+
       const body: Record<string, any> = {
         name: opts.name,
         media_origin: {
-          type: opts.type || "video",
           source: "url",
-          format: null,
-        },
-        arguments: {
           download_from_url: opts.downloadUrl,
         },
       };
