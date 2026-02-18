@@ -950,8 +950,22 @@ export class YodeckClient {
         if (response.status >= 200 && response.status < 300) {
           const data = JSON.parse(respText);
           const mediaId = YodeckClient.extractMediaId(data);
-          console.log(`[YodeckClient][${corrId}] createMediaFromUrl extractMediaId: raw.id=${data?.id} extracted=${mediaId}`);
+          console.log(`[YodeckClient][${corrId}] createMediaFromUrl extractMediaId: raw.id=${data?.id} extracted=${mediaId} download_from_url=${data?.media_origin?.download_from_url ?? data?.download_from_url ?? 'MISSING'}`);
           if (mediaId) {
+            const returnedDownloadUrl = data?.media_origin?.download_from_url ?? data?.download_from_url;
+            if (!returnedDownloadUrl) {
+              console.error(`[YodeckClient][${corrId}] createMediaFromUrl: Yodeck returned download_from_url=null for mediaId=${mediaId}, deleting stale media`);
+              try {
+                await fetch(`${YODECK_BASE_URL}/media/${mediaId}/`, {
+                  method: "DELETE",
+                  headers: { "Authorization": `Token ${this.apiKey}` },
+                });
+                console.log(`[YodeckClient][${corrId}] Deleted stale media ${mediaId}`);
+              } catch (delErr: any) {
+                console.warn(`[YodeckClient][${corrId}] Failed to delete stale media ${mediaId}: ${delErr.message}`);
+              }
+              return { ok: false, error: `Yodeck created media ${mediaId} but download_from_url is null — deleted`, httpStatus: response.status };
+            }
             return { ok: true, mediaId, data, httpStatus: response.status };
           }
           return { ok: false, error: `HTTP ${response.status} but no mediaId extracted from response`, data, httpStatus: response.status };

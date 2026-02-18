@@ -1,0 +1,39 @@
+Fix Yodeck local upload pipeline stuck at status=initialized fileSize=0.
+
+We must NOT add new architectures. Just fix root cause.
+
+Observations:
+- Some url-import media had download_from_url=null -> Yodeck can never download.
+- Local upload flow shows source:"local", UPLOAD_JOB_CREATED, then media stays initialized+fileSize=0, indicating the PUT to get_upload_url is missing/failing/wrong.
+
+Tasks:
+1) In yodeckClient createMediaFromUrl:
+   - Hard validate signedUrl: if falsy/null/empty -> throw BEFORE calling Yodeck.
+   - Ensure payload uses media_origin.download_from_url (not arguments.*).
+   - If Yodeck returns media where download_from_url is null, treat as failure and delete that media (cleanup).
+
+2) In local upload flow (create media with source:"local"):
+   a) After creating media, log the create response fields:
+      - mediaId, status, get_upload_url (must be present)
+   b) Perform PUT upload to get_upload_url with the actual mp4 bytes as binary stream.
+      - Add explicit headers: Content-Type: video/mp4
+      - Add Content-Length if known (use buffer length or stream size)
+      - Log: PUT url (redact tokens), bytes length, HTTP status, response headers (etag)
+      - If PUT status not in {200,201,204}: throw with body text.
+   c) After PUT success, poll media until status becomes finished AND fileSize>0.
+      - If after e.g. 5 polls fileSize still 0, call GET media again and include get_upload_url presence in debug.
+      - If polling times out: mark publish failed and DO NOT attempt playlist patch/push.
+
+3) Ensure we are not doing two uploads:
+   - For a publish attempt, choose ONE mode: local upload.
+   - Remove any fallback that calls createMediaFromUrl after creating local media.
+   - Make sure the mediaId used for polling/playlist is the one returned by the local create.
+
+4) Add minimal debug endpoint (admin only) to validate upload worked:
+   - POST /api/admin/yodeck/raw-media {mediaId} already exists; keep it.
+   - Add POST /api/admin/yodeck/raw-media-upload-url {mediaId} that returns get_upload_url presence (if available) + status + fileSize (or just reuse raw-media in logs).
+
+Acceptance:
+- After approve, logs must show PUT upload status 200/201/204 and bytes>0.
+- raw-media for new mediaId shows status moves to processing/finished and fileSize>0.
+- No more stuck initialized media with fileSize=0 unless PUT fails; then clear error is returned.

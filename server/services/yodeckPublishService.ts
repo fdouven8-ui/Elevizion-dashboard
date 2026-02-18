@@ -1508,7 +1508,10 @@ class YodeckPublishService {
 
       const yodeckMediaId = createResp.data.id;
       debug.yodeckMediaId = yodeckMediaId;
-      console.log(`[YodeckPublish][${corrId}] Yodeck media created: id=${yodeckMediaId}`);
+      debug.createResponseStatus = createResp.data.status;
+      debug.createResponseGetUploadUrl = createResp.data.get_upload_url ?? null;
+      debug.createResponseFileSize = createResp.data.file_size ?? createResp.data.fileSize ?? 0;
+      console.log(`[YodeckPublish][${corrId}] Yodeck media created: id=${yodeckMediaId} status=${createResp.data.status} get_upload_url=${createResp.data.get_upload_url ? 'PRESENT' : 'MISSING'} fileSize=${createResp.data.file_size ?? 0}`);
 
       let getUploadUrlEndpoint = createResp.data.get_upload_url;
       if (!getUploadUrlEndpoint) {
@@ -1607,6 +1610,9 @@ class YodeckPublishService {
 
           putStatus = putResp.status;
           debug.yodeckUploadPutStatus = putStatus;
+          debug.yodeckUploadPutEtag = putResp.headers?.etag || null;
+          const putBytes = contentLength || 'unknown';
+          console.log(`[YodeckPublish][${corrId}] PUT result: status=${putResp.status} bytes=${putBytes} etag=${putResp.headers?.etag || 'none'} url=${presignedUploadUrl.substring(0, 60)}...`);
 
           if ([200, 201, 204].includes(putResp.status)) {
             console.log(`[YodeckPublish][${corrId}] PUT succeeded: ${putResp.status}`);
@@ -1666,6 +1672,29 @@ class YodeckPublishService {
       debug.pollStates.push(pollResult.finalStatus);
       debug.pollAttempts = pollResult.pollAttempts;
       debug.pollOk = pollResult.ok;
+
+      if (pollResult.ok && pollResult.mediaDetails) {
+        const mediaAny = pollResult.mediaDetails as any;
+        const fileSize = mediaAny.file_size ?? 0;
+        debug.finalFileSize = fileSize;
+        if (fileSize === 0 || fileSize === '0') {
+          console.warn(`[YodeckPublish][${corrId}] Poll says finished but fileSize=0, doing extra GET to confirm...`);
+          const extraCheck = await this.getMediaDetails(yodeckMediaId, corrId);
+          const extraAny = extraCheck.media as any;
+          const extraSize = extraAny?.file_size ?? 0;
+          debug.extraCheckFileSize = extraSize;
+          debug.extraCheckStatus = extraAny?.status;
+          debug.extraCheckGetUploadUrl = extraAny?.get_upload_url ? 'PRESENT' : 'MISSING';
+          console.log(`[YodeckPublish][${corrId}] Extra GET: status=${extraAny?.status} fileSize=${extraSize} get_upload_url=${debug.extraCheckGetUploadUrl}`);
+          if (extraSize === 0 || extraSize === '0') {
+            console.error(`[YodeckPublish][${corrId}] FATAL: Media ${yodeckMediaId} finished but fileSize still 0 — upload bytes never arrived`);
+            debug.outcome = "FILESIZE_ZERO";
+            await this.deleteMedia(yodeckMediaId, corrId);
+            debug.cleanedUp = true;
+            return { ok: false, debug };
+          }
+        }
+      }
 
       if (!pollResult.ok || pollResult.isAborted) {
         console.error(`[YodeckPublish][${corrId}] Media stuck/failed: ${pollResult.finalStatus}`);
