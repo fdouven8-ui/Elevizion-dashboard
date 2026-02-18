@@ -24287,6 +24287,71 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  app.post("/api/admin/yodeck/playlist-add-media", requireAdminAccess, async (req, res) => {
+    const corrId = `plAddMedia_${Date.now()}`;
+    try {
+      const { playlistId, mediaId } = req.body || {};
+      if (!playlistId || !mediaId) {
+        return res.status(400).json({ ok: false, error: "playlistId and mediaId are required" });
+      }
+      const token = process.env.YODECK_AUTH_TOKEN;
+      if (!token) {
+        return res.status(500).json({ ok: false, error: "YODECK_AUTH_TOKEN not configured" });
+      }
+      const headers = { "Authorization": `Token ${token}`, "Accept": "application/json" };
+
+      const mediaRes = await fetch(`https://app.yodeck.com/api/v2/media/${Number(mediaId)}/`, { headers });
+      if (!mediaRes.ok) {
+        return res.json({ ok: false, code: "MEDIA_NOT_FOUND", error: `Media ${mediaId} not found (HTTP ${mediaRes.status})` });
+      }
+      const media = await mediaRes.json() as any;
+      if (media.status !== "finished") {
+        return res.json({ ok: false, code: "MEDIA_NOT_READY", status: media.status, error: `Media ${mediaId} status=${media.status}, must be finished` });
+      }
+
+      const plRes = await fetch(`https://app.yodeck.com/api/v2/playlists/${Number(playlistId)}/`, { headers });
+      if (!plRes.ok) {
+        return res.json({ ok: false, code: "PLAYLIST_NOT_FOUND", error: `Playlist ${playlistId} not found (HTTP ${plRes.status})` });
+      }
+      const playlist = await plRes.json() as any;
+      const existingItems: any[] = Array.isArray(playlist.items) ? playlist.items : [];
+      const beforeIds = existingItems.map((i: any) => i.media ?? i.id);
+
+      const maxPriority = existingItems.reduce((max: number, i: any) => Math.max(max, i.priority ?? 0), 0);
+      const duration = (media.default_duration && media.default_duration > 0) ? media.default_duration : 15;
+
+      const patchItems = existingItems.map((i: any) => ({
+        id: i.media ?? i.id,
+        type: i.type ?? "media",
+        priority: i.priority ?? 0,
+        duration: i.duration ?? 15,
+      }));
+      patchItems.push({ id: Number(mediaId), type: "media", priority: maxPriority + 1, duration });
+
+      console.log(`[${corrId}] Adding media ${mediaId} to playlist ${playlistId}, before=${beforeIds.length} items, newPriority=${maxPriority + 1}, duration=${duration}`);
+
+      const patchRes = await fetch(`https://app.yodeck.com/api/v2/playlists/${Number(playlistId)}/`, {
+        method: "PATCH",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ items: patchItems }),
+      });
+      if (!patchRes.ok) {
+        const errText = await patchRes.text();
+        console.error(`[${corrId}] PATCH failed: HTTP ${patchRes.status}`, errText);
+        return res.json({ ok: false, code: "PATCH_FAILED", error: `PATCH HTTP ${patchRes.status}: ${errText}` });
+      }
+      const patchData = await patchRes.json() as any;
+      const afterItems: any[] = Array.isArray(patchData.items) ? patchData.items : [];
+      const afterIds = afterItems.map((i: any) => i.media ?? i.id);
+
+      console.log(`[${corrId}] OK: playlist ${playlistId} now has ${afterIds.length} items`);
+      res.json({ ok: true, corrId, beforeItems: beforeIds, afterItems: afterIds, addedMediaId: Number(mediaId), duration });
+    } catch (error: any) {
+      console.error(`[${corrId}] Error:`, error);
+      res.status(500).json({ ok: false, corrId, error: error.message });
+    }
+  });
+
   app.post("/api/admin/yodeck/debug-get-playlist", requireAdminAccess, async (req, res) => {
     try {
       const { playlistId } = req.body || {};
