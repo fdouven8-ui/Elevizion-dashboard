@@ -7,6 +7,7 @@
  * - Idempotent operations using integration_outbox
  * - Rollback support for failed publishes
  */
+import * as Sentry from "@sentry/node";
 
 import { db } from "../db";
 import { integrationOutbox, placementPlans, adAssets, locations } from "@shared/schema";
@@ -1541,8 +1542,21 @@ class YodeckPublishService {
       debug.createKeys = createResp.data ? Object.keys(createResp.data) : [];
 
       if (createResp.status < 200 || createResp.status >= 300 || !createResp.data?.id) {
-        debug.createError = JSON.stringify(createResp.data).substring(0, 500);
-        console.error(`[YodeckPublish][${corrId}] Create media failed: HTTP ${createResp.status}`);
+        const respBody = typeof createResp.data === 'string' ? createResp.data : JSON.stringify(createResp.data);
+        debug.createError = respBody.substring(0, 2000);
+        debug.createRequestPayload = { name: normalizedName, type: 'video', media_origin: { source: 'local' } };
+        console.error(`[YodeckPublish][${corrId}] Create media failed: HTTP ${createResp.status} body=${respBody.substring(0, 500)}`);
+        Sentry.captureMessage('Yodeck POST /media failed', {
+          level: 'error',
+          extra: {
+            correlationId: corrId,
+            statusCode: createResp.status,
+            responseBody: respBody.substring(0, 2000),
+            requestPayload: { name: normalizedName, type: 'video', media_origin: { source: 'local' } },
+            storagePath,
+            method: 'localUploadFromR2',
+          },
+        });
         return { ok: false, debug };
       }
 
@@ -2327,7 +2341,23 @@ class YodeckPublishService {
       console.log(`[YodeckPublish][${corrId}] YODECK CREATE RESPONSE TEXT: ${createRespText.substring(0, 500)}`);
       
       if (createResp.status < 200 || createResp.status >= 300) {
-        debug.createError = createRespText.substring(0, 300);
+        debug.createError = createRespText.substring(0, 2000);
+        const sanitizedPayload: Record<string, any> = { ...payload };
+        if ((sanitizedPayload.media_origin as any)?.download_from_url) {
+          const url = (sanitizedPayload.media_origin as any).download_from_url;
+          sanitizedPayload.media_origin = { ...sanitizedPayload.media_origin, download_from_url: url.split('?')[0] + '?[REDACTED]' };
+        }
+        console.error(`[YodeckPublish][${corrId}] URL_IMPORT Create failed: HTTP ${createResp.status} body=${createRespText.substring(0, 500)}`);
+        Sentry.captureMessage('Yodeck POST /media failed (URL import)', {
+          level: 'error',
+          extra: {
+            correlationId: corrId,
+            statusCode: createResp.status,
+            responseBody: createRespText.substring(0, 2000),
+            requestPayload: sanitizedPayload,
+            method: 'tryUrlImport',
+          },
+        });
         return { ok: false, error: `Create failed: HTTP ${createResp.status}`, debug };
       }
 

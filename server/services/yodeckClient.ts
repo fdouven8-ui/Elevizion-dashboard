@@ -8,6 +8,9 @@
  * - In-memory caching with TTL
  * 
  * Auth: Authorization: Token <label:value>
+ */
+import * as Sentry from "@sentry/node";
+/**
  * Base URL: https://app.yodeck.com/api/v2
  */
 
@@ -990,6 +993,23 @@ export class YodeckClient {
           return { ok: false, error: `HTTP ${response.status} but no mediaId extracted from response`, data, httpStatus: response.status };
         }
 
+        const sanitizedBody = { ...body };
+        if (sanitizedBody.media_origin?.download_from_url) {
+          const u = sanitizedBody.media_origin.download_from_url;
+          sanitizedBody.media_origin = { ...sanitizedBody.media_origin, download_from_url: u.split('?')[0] + '?[REDACTED]' };
+        }
+        console.error(`[YodeckClient][${corrId}] createMediaFromUrl failed: HTTP ${response.status} body=${respBody.substring(0, 500)}`);
+        Sentry.captureMessage('Yodeck POST /media failed (createMediaFromUrl)', {
+          level: 'error',
+          extra: {
+            correlationId: corrId,
+            statusCode: response.status,
+            responseBody: respBody.substring(0, 2000),
+            requestPayload: sanitizedBody,
+            mediaName: opts.name,
+            method: 'createMediaFromUrl',
+          },
+        });
         return { ok: false, error: `HTTP ${response.status}: ${respBody}`, httpStatus: response.status };
       } finally {
         clearTimeout(timeout);
