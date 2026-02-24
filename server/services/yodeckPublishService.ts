@@ -1593,7 +1593,7 @@ class YodeckPublishService {
     };
 
     try {
-      const { headR2, getR2Stream } = await import("./r2Client");
+      const { headR2 } = await import("./r2Client");
 
       // --- Step A: ASSET_LOAD ---
       const assetLoadStart = Date.now();
@@ -1776,16 +1776,43 @@ class YodeckPublishService {
         data: pickUploadFields(urlData),
       });
 
-      const r2Stream = await getR2Stream(storagePath);
+      const { getR2Buffer } = await import("./r2Client");
+      const { isShuttingDown } = await import("../shutdownFlag");
+
+      if (isShuttingDown()) {
+        debug.outcome = "SHUTDOWN_GUARD";
+        console.warn(`[YodeckPublish][${corrId}] Skipping byte transfer — server is shutting down`);
+        await this.deleteMedia(yodeckMediaId, corrId);
+        debug.cleanedUp = true;
+        return { ok: false, debug };
+      }
+
+      const r2Buf = await getR2Buffer(storagePath, r2Head.contentLength);
       const contentType = r2Head.contentType || "video/mp4";
-      const contentLength = r2Head.contentLength;
+      const contentLength = r2Buf.buffer.length;
+
+      if (contentLength === 0) {
+        debug.outcome = "R2_BUFFER_EMPTY";
+        console.error(`[YodeckPublish][${corrId}] R2 buffer is 0 bytes for ${storagePath}`);
+        await this.deleteMedia(yodeckMediaId, corrId);
+        debug.cleanedUp = true;
+        return { ok: false, debug };
+      }
 
       const putHeaders: Record<string, string> = {
         "Content-Type": contentType,
+        "Content-Length": String(contentLength),
       };
-      if (contentLength) {
-        putHeaders["Content-Length"] = String(contentLength);
+
+      if (isShuttingDown()) {
+        debug.outcome = "SHUTDOWN_AFTER_BUFFER";
+        console.warn(`[YodeckPublish][${corrId}] Server shutting down after buffer load — aborting`);
+        await this.deleteMedia(yodeckMediaId, corrId);
+        debug.cleanedUp = true;
+        return { ok: false, debug };
       }
+
+      console.log(`[YodeckPublish][${corrId}] Buffer loaded: ${contentLength} bytes, Content-Type=${contentType}`);
 
       // --- Step D: BYTE_TRANSFER_TO_UPLOAD_URL ---
       const byteTransferStart = Date.now();
@@ -1794,17 +1821,17 @@ class YodeckPublishService {
       const MAX_PUT_RETRIES = 3;
 
       for (let attempt = 1; attempt <= MAX_PUT_RETRIES; attempt++) {
+        if (isShuttingDown()) {
+          lastPutError = "Server shutting down";
+          debug.outcome = "SHUTDOWN_DURING_PUT";
+          break;
+        }
+
         const attemptStart = Date.now();
         try {
-          console.log(`[YodeckPublish][${corrId}] PUT attempt ${attempt}/${MAX_PUT_RETRIES} to Yodeck upload URL...`);
+          console.log(`[YodeckPublish][${corrId}] PUT attempt ${attempt}/${MAX_PUT_RETRIES} (buffer ${contentLength} bytes) to Yodeck upload URL...`);
 
-          let uploadStream = r2Stream.stream;
-          if (attempt > 1) {
-            const freshR2 = await getR2Stream(storagePath);
-            uploadStream = freshR2.stream;
-          }
-
-          const putResp = await axios.put(presignedUploadUrl, uploadStream, {
+          const putResp = await axios.put(presignedUploadUrl, r2Buf.buffer, {
             headers: putHeaders,
             timeout: 300000,
             maxBodyLength: Infinity,
@@ -1820,10 +1847,11 @@ class YodeckPublishService {
             correlationId: corrId, method: "PUT", url: presignedUploadUrl,
             statusCode: putResp.status, durationMs: Date.now() - attemptStart,
             retryAttempt: attempt,
-            responseSummary: { bytesSent: contentLength || "unknown", etag: putResp.headers?.etag },
+            responseSummary: { bytesSent: contentLength, etag: putResp.headers?.etag },
           });
 
           if ([200, 201, 204].includes(putResp.status)) {
+            console.log(`[YodeckPublish][${corrId}] PUT OK: status=${putResp.status} bytes=${contentLength} etag=${putResp.headers?.etag || "none"}`);
             break;
           }
 

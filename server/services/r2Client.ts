@@ -102,8 +102,8 @@ export async function getR2Buffer(storagePath: string, expectedSize?: number | n
     throw new Error(`[R2Client] R2 returned empty body (0 bytes) for key=${key}`);
   }
 
-  if (expectedSize && buffer.length !== expectedSize) {
-    console.warn(`[R2Client] Size mismatch for key=${key}: expected=${expectedSize} got=${buffer.length}`);
+  if (expectedSize && expectedSize > 0 && buffer.length !== expectedSize) {
+    throw new Error(`[R2Client] Size mismatch for key=${key}: expected=${expectedSize} got=${buffer.length} — aborting to prevent truncated upload`);
   }
 
   console.log(`[R2Client] Buffer read OK: key=${key} bytes=${buffer.length}`);

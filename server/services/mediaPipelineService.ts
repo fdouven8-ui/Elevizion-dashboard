@@ -1013,32 +1013,30 @@ export async function publishSingleAsset(opts: {
       throw new Error(`No upload_url in presign response`);
     }
 
-    // STEP 3: PUT binary to presigned URL using streaming
-    const uploadFileSize = fs.statSync(localPath).size;
+    // STEP 3: PUT binary to presigned URL using buffer (not streaming)
+    const { isShuttingDown } = await import("../shutdownFlag");
+    const uploadBuffer = fs.readFileSync(localPath);
+    const uploadFileSize = uploadBuffer.length;
+
+    if (uploadFileSize === 0) {
+      throw new Error(`YODECK_UPLOAD_ABORTED: Local file is 0 bytes at ${localPath}`);
+    }
+
+    if (isShuttingDown()) {
+      throw new Error(`YODECK_UPLOAD_ABORTED: Server shutting down before PUT`);
+    }
+
+
     console.log(`${LOG} correlationId=${correlationId} PUT_BINARY assetId=${assetId} bytes=${uploadFileSize} presignUrl_length=${presignUrl.length}`);
 
-    const uploadStream = fs.createReadStream(localPath);
-    
-    let streamError: Error | null = null;
-    uploadStream.on('error', (err) => {
-      streamError = err;
-      console.error(`${LOG} correlationId=${correlationId} FILE_STREAM_ERROR: ${err.message}`);
-    });
-    
     const uploadResp = await fetch(presignUrl, {
       method: "PUT",
       headers: {
         "Content-Type": "video/mp4",
         "Content-Length": String(uploadFileSize),
       },
-      body: uploadStream as any,
-      // @ts-ignore - duplex required for streaming body in Node.js fetch
-      duplex: "half",
+      body: uploadBuffer,
     });
-
-    if (streamError) {
-      throw new Error(`YODECK_UPLOAD_ABORTED: File stream error during upload: ${(streamError as Error).message}`);
-    }
 
     let uploadRespBody = "";
     try {
