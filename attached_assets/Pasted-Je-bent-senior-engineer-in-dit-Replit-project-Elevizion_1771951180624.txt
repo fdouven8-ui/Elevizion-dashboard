@@ -1,0 +1,68 @@
+Je bent senior engineer in dit Replit project (Elevizion). Doel: fix de Yodeck publish/upload flow die blijft hangen op status=initialized en fileSize=0 en daarna timeout (“Timeout waiting for media <id> to become ready after 77 polls”).
+
+Context / bewijs:
+- Sentry event ID: 25c6fc1372a340c4b4fe258d88ab4318
+- Log: RetryPublish correlationId=publish-86abfbd3-32ce-4e7e-9319-8115d98ed5d1-1771950761748
+- assetId=86abfbd3-32ce-4e7e-9319-8115d98ed5d1
+- mediaId=30344656
+- Polls tonen: status=initialized, fileSize=0 t/m poll #77 -> UPLOAD_ERROR timeout.
+
+Wat je moet doen (in deze volgorde):
+
+A) SENTRY OPSPORING (met ID)
+1) Haal in Sentry het event op met ID 25c6fc1372a340c4b4fe258d88ab4318.
+2) Noteer:
+   - exception type + message
+   - stacktrace file/line
+   - breadcrumbs met alle HTTP calls (vooral /api/v2/media*, upload_url, upload/complete)
+   - extra/tags: correlationId, mediaId, assetId
+3) Zoek in Sentry naar verwante events met dezelfde signatures:
+   - “Timeout waiting for media”
+   - “status=initialized fileSize=0”
+   - “upload/complete” ontbreekt of faalt
+   - eventuele Yodeck error codes zoals err_1002, 4xx/5xx op /media, /upload, /upload/complete
+
+B) CODE PAD VINDEN
+4) Zoek in code naar de publish/retry flow die:
+   - media aanmaakt (POST /api/v2/media)
+   - upload_url ophaalt (GET /media/{id}/upload of vergelijkbaar)
+   - bytes uploadt (PUT naar upload_url)
+   - polling doet op (GET /media/{id})
+5) Bevestig of er ALTIJD een call gebeurt naar:
+   - PUT /media/{id}/upload/complete
+   Na succesvolle PUT naar upload_url.
+   Zo niet: dit is de bug.
+
+C) FIX IMPLEMENTEREN (minimaal, zonder rest te breken)
+6) Implementeer een robuuste helper (of endpoint) die in 1 flow doet:
+   - GET upload_url
+   - PUT file bytes naar upload_url (met juiste headers/content-length)
+   - PUT /media/{id}/upload/complete
+   - korte poll: wacht tot status != initialized en fileSize > 0 (of status=ready/finished)
+7) Zorg dat zowel “normale publish” als “recovery/retry publish” deze helper gebruiken.
+8) Als polling na X seconden nog steeds initialized/fileSize=0:
+   - log duidelijke diagnose (welke stap miste/failed)
+   - markeer publishStatus=PUBLISH_FAILED met publishError die de ontbrekende stap noemt
+   - optioneel: delete stale media om ruis te voorkomen (maar alleen als zeker is dat upload stuk is)
+
+D) EXTRA OBSERVABILITY (zodat Frank direct ziet wat er gebeurt)
+9) Voeg logging per correlationId toe:
+   - YODECK_MEDIA_CREATE statusCode + response
+   - YODECK_GET_UPLOAD_URL statusCode
+   - UPLOAD_PUT statusCode + bytesSent
+   - YODECK_UPLOAD_COMPLETE statusCode + response
+   - POLL states (status/fileSize/error)
+10) Zorg dat Sentry events deze velden meekrijgen als “extra”.
+
+E) VALIDATIE / TEST
+11) Maak een test-run (zonder UI wijzigingen) waarbij een asset opnieuw gepusht wordt.
+12) Succescriteria:
+   - media gaat van initialized -> ready/finished
+   - fileSize wordt > 0
+   - publish flow plaatst item in juiste playlist (screen playlist only)
+   - geen “connection error” overlay door buffering-url content.
+
+Lever op:
+- Exacte files + diff of codeblokken van wat je aangepast hebt
+- Korte uitleg waarom dit het probleem oplost
+- Hoe ik het kan testen (1 fetch call of 1 knop)

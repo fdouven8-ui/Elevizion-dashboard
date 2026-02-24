@@ -987,7 +987,7 @@ export async function publishSingleAsset(opts: {
     if (uploadJobId && yodeckMediaId) {
       try {
         await db.update(uploadJobs).set({
-          yodeckMediaId: String(yodeckMediaId),
+          yodeckMediaId: yodeckMediaId,
         }).where(eq(uploadJobs.id, uploadJobId));
       } catch {}
     }
@@ -1053,13 +1053,44 @@ export async function publishSingleAsset(opts: {
 
     console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_OK assetId=${assetId} status=${uploadResp.status} uploadedBytes=${uploadFileSize}`);
 
-    // STEP 4: Poll until ready (extended to 4 minutes for large files)
+    // STEP 3.5: PUT /media/{id}/upload/complete/ — signal Yodeck that upload is done
+    let completeOk = false;
+    for (let completeAttempt = 1; completeAttempt <= 3; completeAttempt++) {
+      try {
+        const completeResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/upload/complete/`, {
+          method: "PUT",
+          headers: {
+            "Authorization": `Token ${YODECK_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ upload_url: presignUrl }),
+        });
+        console.log(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE attempt=${completeAttempt} status=${completeResp.status}`);
+        if (completeResp.ok || completeResp.status < 400) {
+          completeOk = true;
+          break;
+        }
+        if (completeAttempt < 3) await new Promise(r => setTimeout(r, 2000));
+      } catch (completeErr: any) {
+        console.warn(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE attempt=${completeAttempt} error=${completeErr.message}`);
+        if (completeAttempt < 3) await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+    if (!completeOk) {
+      console.warn(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE never succeeded — polling may stall`);
+    }
+
+    // STEP 4: Poll until ready (4 min wall-clock, backoff 500ms→5s, fail-fast at 8 stuck polls)
     const POLL_MAX_MS = 240000;
+    const FAIL_FAST_INITIALIZED_POLLS = 8;
     const startTime = Date.now();
     let pollCount = 0;
+    let initializedZeroCount = 0;
+    let completeFallbackFired = false;
 
     while (Date.now() - startTime < POLL_MAX_MS) {
-      await new Promise(r => setTimeout(r, 3000));
+      const backoffMs = Math.min(500 * Math.pow(2, Math.min(pollCount, 4)), 5000);
+      await new Promise(r => setTimeout(r, backoffMs));
       pollCount++;
 
       const statusResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
@@ -1072,14 +1103,42 @@ export async function publishSingleAsset(opts: {
         const status = statusData.status;
         const errorMessage = statusData.error_message || statusData.errorMessage || statusData.error || "";
 
-        console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${polledFileSize} error=${errorMessage}`);
+        console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${polledFileSize} elapsed=${Date.now() - startTime}ms error=${errorMessage}`);
 
         if (status === "error" || (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes("abort"))) {
           throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} status=${status} error=${errorMessage}`);
         }
 
+        if (['failed', 'aborted', 'deleted'].includes((status || '').toLowerCase())) {
+          throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} terminal status=${status}`);
+        }
+
+        if (status === "initialized" && (polledFileSize === 0 || polledFileSize === '0')) {
+          initializedZeroCount++;
+
+          if (pollCount >= 5 && !completeFallbackFired) {
+            completeFallbackFired = true;
+            console.warn(`${LOG} correlationId=${correlationId} STUCK: ${pollCount} polls, status=initialized, fileSize=0 — retrying upload/complete`);
+            try {
+              await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/upload/complete/`, {
+                method: "PUT",
+                headers: {
+                  "Authorization": `Token ${YODECK_TOKEN}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({}),
+              });
+            } catch {}
+          }
+
+          if (initializedZeroCount >= FAIL_FAST_INITIALIZED_POLLS) {
+            throw new Error(`FAILED_INIT_STUCK: mediaId=${yodeckMediaId} stuck initialized+fileSize=0 for ${initializedZeroCount} consecutive polls after upload/complete (upload bytes likely never arrived)`);
+          }
+        } else {
+          initializedZeroCount = 0;
+        }
+
         if (status !== "initialized" && polledFileSize > 0) {
-          // Final verification
           const verifyResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
             headers: { "Authorization": `Token ${YODECK_TOKEN}` },
           });
@@ -1090,7 +1149,6 @@ export async function publishSingleAsset(opts: {
 
           console.log(`${LOG} correlationId=${correlationId} YODECK_READY_OK assetId=${assetId} mediaId=${yodeckMediaId}`);
 
-          // Mark PUBLISHED
           await db.update(adAssets).set({
             yodeckUploadedAt: new Date(),
             yodeckReadinessStatus: "READY",
@@ -1103,13 +1161,12 @@ export async function publishSingleAsset(opts: {
             updatedAt: new Date(),
           }).where(eq(advertisers.id, asset.advertiserId));
 
-          // Update upload job as READY
           if (uploadJobId) {
             try {
               await db.update(uploadJobs).set({
-                status: UPLOAD_JOB_STATUS.DONE,
+                status: UPLOAD_JOB_STATUS.READY,
                 finalState: UPLOAD_FINAL_STATE.READY,
-                yodeckMediaId: String(yodeckMediaId),
+                yodeckMediaId: yodeckMediaId,
                 pollAttempts: pollCount,
                 completedAt: new Date(),
               }).where(eq(uploadJobs.id, uploadJobId));
@@ -1122,8 +1179,7 @@ export async function publishSingleAsset(opts: {
       }
     }
 
-    // Timeout - mark failed but keep yodeckMediaId (already persisted)
-    throw new Error(`Timeout waiting for media ${yodeckMediaId} to become ready after ${pollCount} polls`);
+    throw new Error(`POLL_TIMEOUT: mediaId=${yodeckMediaId} still not ready after ${pollCount} polls (${Math.round((Date.now() - startTime) / 1000)}s). Last initialized+zero count: ${initializedZeroCount}. upload/complete ok: ${completeOk}`);
   } catch (uploadErr: any) {
     console.error(`${LOG} correlationId=${correlationId} UPLOAD_ERROR assetId=${assetId} mediaId=${yodeckMediaId} error=${uploadErr.message}`);
 
@@ -1158,11 +1214,11 @@ export async function publishSingleAsset(opts: {
       try {
         const errorCode = errMsg.match(/(FAILED_INIT_STUCK|POLL_TIMEOUT|POLL_404|VERIFY_404|FINAL_VERIFY_404)/)?.[1] || "UPLOAD_ERROR";
         await db.update(uploadJobs).set({
-          status: UPLOAD_JOB_STATUS.DONE,
+          status: UPLOAD_JOB_STATUS.PERMANENT_FAIL,
           finalState: UPLOAD_FINAL_STATE.FAILED,
-          yodeckMediaId: yodeckMediaId ? String(yodeckMediaId) : null,
+          yodeckMediaId: yodeckMediaId || null,
           errorCode,
-          errorMessage: errMsg.substring(0, 500),
+          lastError: errMsg.substring(0, 500),
           completedAt: new Date(),
         }).where(eq(uploadJobs.id, uploadJobId));
       } catch {}
