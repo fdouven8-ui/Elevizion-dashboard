@@ -1,0 +1,69 @@
+Je bent een senior TypeScript/Node engineer. Werk ALLEEN stap-voor-stap en maak een minimale, veilige patch. Doel: de echte oorzaak vinden én voorkomen dat we “false positives” als success markeren bij Yodeck uploads.
+
+CONTEXT / SYMPTOMEN
+- publishSingleAsset faalt met: POLL_TIMEOUT na ~48 polls / 244s.
+- lastStatus=finished maar fileSize=0 en hasFileObj=false en hasFileUrl=false.
+- upload/complete call is gedaan en ok (completeOk=true).
+- In TIMEOUT_FINAL_BODY zien we wél arguments.play_from_url en download_from_url, maar GEEN “file” object en geen file keys.
+- We willen niet “slimmer pollen” als dat leidt tot schijn-successen. Eerst bewijzen dat de upload bytes echt aankomen.
+
+SCOPE (ZEER BELANGRIJK)
+- Pas alleen aan wat nodig is in de bestaande flow, primair:
+  - server/services/mediaPipelineService.ts (publishSingleAsset)
+- Geen refactors, geen nieuwe dependencies, geen wijzigingen aan playlist/screen logic.
+- Geen breaking changes aan public API; alleen betere betrouwbaarheid/observability.
+- Voeg logging toe met correlationId (bestaat al in logs) en maak logs compact (geen megabytes).
+- Zorg dat secret URLs niet volledig gelogd worden (mask/prefix).
+
+WAT JE MOET IMPLEMENTEREN
+
+A) Upload “bytes” verificatie direct na de PUT naar de presigned URL
+1) Zoek in publishSingleAsset de stap waar het binaire bestand naar de presigned URL wordt ge-PUT.
+2) Na succesvolle PUT:
+   - Log: PUT status + relevante response headers (ETag indien aanwezig).
+   - Probeer een HEAD request naar dezelfde presigned URL om Content-Length te lezen.
+   - Als HEAD niet toegestaan is of faalt: fallback naar GET met Range: bytes=0-0 (of bytes=0-1) en controleer:
+       - status 206 (Partial Content) of 200
+       - Content-Range / Content-Length > 0
+   - Bepaal uploadBytesOk boolean en log dit (zonder volledige URL).
+3) Als uploadBytesOk=false:
+   - Stop direct met polling.
+   - Throw een error met duidelijke marker:
+     UPLOAD_BYTES_MISSING: mediaId=... putStatus=... headOrRangeStatus=... contentLength=...
+   - Dit moet als TERMINAL_FAILURE worden behandeld door bestaande retry/cleanup logic.
+
+B) upload/complete call behouden, maar extra diagnostiek
+- Zorg dat de upload/complete call blijft.
+- Log 1 regel: UPLOAD_COMPLETE_OK true/false + statuscode.
+- Als upload/complete faalt: throw met marker UPLOAD_COMPLETE_FAILED: ...
+
+C) Polling: beter diagnosticeren, maar NIET te snel “success”
+1) Houd de huidige success criteria streng:
+   - status != initialized EN (fileSize > 0 OF (hasFileObj && hasFileUrl)).
+2) Breid parsing uit zodat we file object/urls op meerdere plekken zoeken, maar alleen voor DIAGNOSTIEK tenzij hard bewijs:
+   - Kijk naar velden in top-level: file, files, file_url, download_url, streaming_url, play_from_url
+   - Kijk ook onder statusData.arguments.* voor play_from_url/download_from_url
+3) Log per poll (1 regel) de volgende compacte diagnose:
+   - status, fileSize, hasFileObj, hasFileUrl, topKeys (max 8), fileKeys (max 8), hasArgsPlayUrl, hasArgsDownloadUrl
+   - Mask URLs: log alleen hostname + eerste 20 chars path of “[SET]”.
+4) Als status=finished maar geen file/url (zoals nu):
+   - Log warning FINISHED_NO_FILE met poll number.
+   - Blijf pollen tot timeout (zoals nu), maar bij timeout log TIMEOUT_FINAL_BODY (gemaskeerd) en TIMEOUT_FINAL_DIAG (bestaat deels al).
+
+D) Guardrails tegen false positives
+- Markeer NOOIT success puur op basis van arguments.play_from_url of download_from_url.
+- Alleen success als fileSize>0 of (hasFileObj && hasFileUrl) zoals hierboven.
+
+E) Tests / Smoke checks (geen volledige test-suite nodig)
+- Voeg desnoods één kleine helper-functie toe in hetzelfde bestand voor:
+  - maskUrl(url: string) -> string
+  - tryHeadOrRangeForSize(url) -> { ok:boolean, contentLength?:number, status?:number, methodUsed:"HEAD"|"RANGE"|"NONE" }
+- Draai TypeScript check als beschikbaar (npm run check / npm test), maar faal niet op bestaande repo errors; focus op compilatie van aangepaste file.
+- Zorg dat logging niet extreem noisy is buiten publish flows (alleen binnen correlationId scope).
+
+OUTPUT DIE IK WIL
+1) Toon mij exact welke bestanden je aanpast (liefst 1 bestand).
+2) Toon de code-diff of duidelijke patch-sectie.
+3) Geef een korte “hoe te testen” checklist met 3 concrete acties in de app + wat ik in logs moet zien.
+
+BEGIN NU MET IMPLEMENTEREN.

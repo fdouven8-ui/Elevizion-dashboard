@@ -1014,23 +1014,65 @@ export async function publishSingleAsset(opts: {
     }
 
     // --- Diagnostic helpers ---
-    function safeUrlHash(url: string): string {
-      return url.substring(0, 30) + "…#" + crypto.createHash("sha256").update(url).digest("hex").substring(0, 12);
+    function maskUrl(url: string): string {
+      try {
+        const u = new URL(url);
+        return `${u.hostname}${u.pathname.substring(0, 20)}…#${crypto.createHash("sha256").update(url).digest("hex").substring(0, 8)}`;
+      } catch {
+        return url.substring(0, 30) + "…#" + crypto.createHash("sha256").update(url).digest("hex").substring(0, 8);
+      }
+    }
+
+    async function tryHeadOrRangeForSize(url: string): Promise<{
+      ok: boolean; contentLength?: number; status?: number; methodUsed: "HEAD" | "RANGE" | "NONE";
+    }> {
+      try {
+        const headResp = await fetch(url, { method: "HEAD" });
+        const cl = headResp.headers.get("content-length");
+        if (headResp.ok && cl && Number(cl) > 0) {
+          return { ok: true, contentLength: Number(cl), status: headResp.status, methodUsed: "HEAD" };
+        }
+        if (headResp.ok && cl) {
+          return { ok: false, contentLength: Number(cl), status: headResp.status, methodUsed: "HEAD" };
+        }
+        if (!headResp.ok && headResp.status !== 405 && headResp.status !== 403) {
+          return { ok: false, status: headResp.status, methodUsed: "HEAD" };
+        }
+      } catch {}
+      try {
+        const rangeResp = await fetch(url, { method: "GET", headers: { "Range": "bytes=0-0" } });
+        const crHeader = rangeResp.headers.get("content-range");
+        const clHeader = rangeResp.headers.get("content-length");
+        if ((rangeResp.status === 206 || rangeResp.status === 200) && crHeader) {
+          const match = crHeader.match(/\/(\d+)$/);
+          const totalSize = match ? Number(match[1]) : undefined;
+          return { ok: !!totalSize && totalSize > 0, contentLength: totalSize, status: rangeResp.status, methodUsed: "RANGE" };
+        }
+        if (rangeResp.ok && clHeader && Number(clHeader) > 0) {
+          return { ok: true, contentLength: Number(clHeader), status: rangeResp.status, methodUsed: "RANGE" };
+        }
+        return { ok: false, status: rangeResp.status, methodUsed: "RANGE" };
+      } catch {}
+      return { ok: false, methodUsed: "NONE" };
     }
 
     function getYodeckFileState(resp: any): {
       fileSize: number; hasFileObject: boolean; hasFileUrl: boolean;
       rawFileKeys: string[]; rawTopKeys: string[];
+      hasArgsPlayUrl: boolean; hasArgsDownloadUrl: boolean;
     } {
       const fileSize = Number(resp.filesize || resp.file_size || resp.fileSize || 0) || 0;
       const fileObj = resp.file;
       const hasFileObject = !!fileObj && typeof fileObj === "object";
       const hasFileUrl = hasFileObject && !!(fileObj.url || fileObj.file_url || fileObj.download_url);
-      const rawFileKeys = hasFileObject ? Object.keys(fileObj) : [];
+      const rawFileKeys = hasFileObject ? Object.keys(fileObj).slice(0, 8) : [];
       const rawTopKeys = Object.keys(resp).filter((k: string) =>
-        /file|size|url|status|error|processing|updated|modified|duration/i.test(k)
-      );
-      return { fileSize, hasFileObject, hasFileUrl, rawFileKeys, rawTopKeys };
+        /file|size|url|status|error|processing|updated|modified|duration|play|download|streaming/i.test(k)
+      ).slice(0, 8);
+      const args = resp.arguments || {};
+      const hasArgsPlayUrl = !!(args.play_from_url || resp.play_from_url);
+      const hasArgsDownloadUrl = !!(args.download_from_url || resp.download_from_url || resp.download_url);
+      return { fileSize, hasFileObject, hasFileUrl, rawFileKeys, rawTopKeys, hasArgsPlayUrl, hasArgsDownloadUrl };
     }
 
     function redactBody(data: any): string {
@@ -1040,10 +1082,20 @@ export async function publishSingleAsset(opts: {
       }
       if (safe.file && typeof safe.file === "object") {
         const sf = { ...safe.file };
-        if (sf.url) sf.url = safeUrlHash(sf.url);
-        if (sf.file_url) sf.file_url = safeUrlHash(sf.file_url);
-        if (sf.download_url) sf.download_url = safeUrlHash(sf.download_url);
+        for (const uk of ["url", "file_url", "download_url"]) {
+          if (sf[uk]) sf[uk] = maskUrl(sf[uk]);
+        }
         safe.file = sf;
+      }
+      if (safe.arguments && typeof safe.arguments === "object") {
+        const sa = { ...safe.arguments };
+        for (const uk of ["play_from_url", "download_from_url"]) {
+          if (sa[uk]) sa[uk] = maskUrl(sa[uk]);
+        }
+        safe.arguments = sa;
+      }
+      for (const uk of ["play_from_url", "download_from_url", "download_url", "streaming_url", "file_url"]) {
+        if (safe[uk] && typeof safe[uk] === "string") safe[uk] = maskUrl(safe[uk]);
       }
       return JSON.stringify(safe).substring(0, 800);
     }
@@ -1096,7 +1148,7 @@ export async function publishSingleAsset(opts: {
       "Content-Type": "video/mp4",
       "Content-Length": String(uploadFileSize),
     };
-    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_START assetId=${assetId} localPath=${localPath} fsStat=${fsStat.size} bufferLen=${uploadFileSize} headers=${JSON.stringify(putHeaders)} streaming=false`);
+    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_START assetId=${assetId} localPath=${localPath} fsStat=${fsStat.size} bufferLen=${uploadFileSize} CL=${uploadFileSize} streaming=false presign=${maskUrl(presignUrl)}`);
 
     const uploadResp = await fetch(presignUrl, {
       method: "PUT",
@@ -1118,19 +1170,19 @@ export async function publishSingleAsset(opts: {
       throw new Error(`YODECK_UPLOAD_ABORTED: PUT binary failed: status=${uploadResp.status} body=${uploadRespBody.substring(0, 300)}`);
     }
 
-    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_OK assetId=${assetId} status=${uploadResp.status} uploadedBytes=${uploadFileSize} respHeaders=${JSON.stringify(putRespHeaders)}`);
+    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_OK status=${uploadResp.status} bytes=${uploadFileSize} etag=${putRespHeaders["etag"] || "none"} amzReqId=${putRespHeaders["x-amz-request-id"] || "none"}`);
 
-    // STEP 3.1: HEAD presigned URL — verify bytes actually landed
-    try {
-      const headResp = await fetch(presignUrl, { method: "HEAD" });
-      const headCL = headResp.headers.get("content-length");
-      const headEtag = headResp.headers.get("etag");
-      console.log(`${LOG} correlationId=${correlationId} HEAD_PRESIGN status=${headResp.status} contentLength=${headCL} etag=${headEtag}`);
-      if (headResp.ok && headCL && Number(headCL) !== uploadFileSize) {
-        console.warn(`${LOG} correlationId=${correlationId} HEAD_SIZE_MISMATCH: headCL=${headCL} uploadedBytes=${uploadFileSize}`);
-      }
-    } catch (headErr: any) {
-      console.log(`${LOG} correlationId=${correlationId} HEAD_PRESIGN_FORBIDDEN (expected for some providers): ${headErr.message}`);
+    // STEP 3.1: Verify bytes landed via HEAD or Range fallback
+    const verifyResult = await tryHeadOrRangeForSize(presignUrl);
+    console.log(`${LOG} correlationId=${correlationId} UPLOAD_VERIFY: uploadBytesOk=${verifyResult.ok} methodUsed=${verifyResult.methodUsed} status=${verifyResult.status} contentLength=${verifyResult.contentLength} expected=${uploadFileSize}`);
+
+    if (verifyResult.ok && verifyResult.contentLength && verifyResult.contentLength !== uploadFileSize) {
+      console.warn(`${LOG} correlationId=${correlationId} UPLOAD_VERIFY_SIZE_MISMATCH: remote=${verifyResult.contentLength} local=${uploadFileSize}`);
+    }
+
+    if (!verifyResult.ok && verifyResult.methodUsed !== "NONE") {
+      console.error(`${LOG} correlationId=${correlationId} UPLOAD_BYTES_MISSING: putStatus=${uploadResp.status} verifyMethod=${verifyResult.methodUsed} verifyStatus=${verifyResult.status} contentLength=${verifyResult.contentLength || 0} expected=${uploadFileSize}`);
+      throw new Error(`UPLOAD_BYTES_MISSING: mediaId=${yodeckMediaId} putStatus=${uploadResp.status} ${verifyResult.methodUsed}Status=${verifyResult.status} contentLength=${verifyResult.contentLength || 0} expected=${uploadFileSize}`);
     }
 
     // STEP 3.5: PUT /media/{id}/upload/complete/ — exactly one call per attempt
@@ -1140,7 +1192,6 @@ export async function publishSingleAsset(opts: {
       try {
         const completePayload = { upload_url: presignUrl };
         completeCallCount++;
-        console.log(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE_START attempt=${completeAttempt} callCount=${completeCallCount} mediaId=${yodeckMediaId} payloadKeys=${Object.keys(completePayload).join(",")}`);
         const completeResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/upload/complete/`, {
           method: "PUT",
           headers: {
@@ -1151,7 +1202,7 @@ export async function publishSingleAsset(opts: {
         });
         let completeBody = "";
         try { completeBody = await completeResp.text(); } catch {}
-        console.log(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE_RESP attempt=${completeAttempt} status=${completeResp.status} body=${completeBody.substring(0, 300)}`);
+        console.log(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE_OK=${completeResp.ok} attempt=${completeAttempt} status=${completeResp.status} body=${completeBody.substring(0, 200)}`);
         if (completeResp.ok || completeResp.status < 400) {
           completeOk = true;
           break;
@@ -1163,7 +1214,7 @@ export async function publishSingleAsset(opts: {
       }
     }
     if (!completeOk) {
-      console.warn(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE never succeeded after ${completeCallCount} calls — polling may stall`);
+      throw new Error(`UPLOAD_COMPLETE_FAILED: mediaId=${yodeckMediaId} failed after ${completeCallCount} attempts`);
     }
 
     // STEP 4: Poll until ready (4 min wall-clock, backoff 500ms→5s, fail-fast at 8 stuck polls)
@@ -1175,7 +1226,7 @@ export async function publishSingleAsset(opts: {
     let completeFallbackFired = false;
     let finishedNoFileLogged = false;
     let lastPollStatus = "";
-    let lastFileState: ReturnType<typeof getYodeckFileState> = { fileSize: 0, hasFileObject: false, hasFileUrl: false, rawFileKeys: [], rawTopKeys: [] };
+    let lastFileState: ReturnType<typeof getYodeckFileState> = { fileSize: 0, hasFileObject: false, hasFileUrl: false, rawFileKeys: [], rawTopKeys: [], hasArgsPlayUrl: false, hasArgsDownloadUrl: false };
 
     while (Date.now() - startTime < POLL_MAX_MS) {
       const backoffMs = Math.min(500 * Math.pow(2, Math.min(pollCount, 4)), 5000);
@@ -1198,7 +1249,7 @@ export async function publishSingleAsset(opts: {
       lastPollStatus = status;
       const errorMessage = statusData.error_message || statusData.errorMessage || statusData.error || "";
 
-      console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl} topKeys=[${fileState.rawTopKeys.join(",")}] fileKeys=[${fileState.rawFileKeys.join(",")}] elapsed=${Date.now() - startTime}ms`);
+      console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl} argsPlay=${fileState.hasArgsPlayUrl} argsDL=${fileState.hasArgsDownloadUrl} topKeys=[${fileState.rawTopKeys.join(",")}] fileKeys=[${fileState.rawFileKeys.join(",")}] elapsed=${Date.now() - startTime}ms`);
 
       if (status === "error" || (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes("abort"))) {
         throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} status=${status} error=${errorMessage}`);
@@ -1208,6 +1259,7 @@ export async function publishSingleAsset(opts: {
         throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} terminal status=${status}`);
       }
 
+      // D) Strict ready criteria — NEVER use arguments.play_from_url or download_from_url as proof
       const isReady = status !== "initialized" && (fileState.fileSize > 0 || (fileState.hasFileObject && fileState.hasFileUrl));
 
       if (isReady) {
@@ -1245,7 +1297,7 @@ export async function publishSingleAsset(opts: {
           } catch {}
         }
         if (initializedZeroCount >= FAIL_FAST_INITIALIZED_POLLS) {
-          throw new Error(`FAILED_INIT_STUCK: mediaId=${yodeckMediaId} stuck initialized+fileSize=0 for ${initializedZeroCount} consecutive polls after ${completeCallCount} upload/complete calls (upload bytes likely never arrived)`);
+          throw new Error(`FAILED_INIT_STUCK: mediaId=${yodeckMediaId} stuck initialized+fileSize=0 for ${initializedZeroCount} consecutive polls after ${completeCallCount} upload/complete calls`);
         }
       } else {
         initializedZeroCount = 0;
@@ -1254,14 +1306,14 @@ export async function publishSingleAsset(opts: {
       if (status === "finished" && fileState.fileSize === 0 && !fileState.hasFileUrl) {
         if (!finishedNoFileLogged) {
           finishedNoFileLogged = true;
-          console.warn(`${LOG} correlationId=${correlationId} FINISHED_NO_FILE: status=finished but fileSize=0 and no file URL — full response (redacted): ${redactBody(statusData)}`);
+          console.warn(`${LOG} correlationId=${correlationId} FINISHED_NO_FILE #${pollCount}: ${redactBody(statusData)}`);
         } else {
           console.warn(`${LOG} correlationId=${correlationId} FINISHED_NO_FILE: still no file (poll #${pollCount})`);
         }
       }
     }
 
-    // STEP 5: Final diagnostic on timeout — one extra GET + full body dump
+    // STEP 5: Final diagnostic on timeout
     let finalDiag = "";
     try {
       const finalResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
@@ -1269,10 +1321,10 @@ export async function publishSingleAsset(opts: {
       });
       if (finalResp.ok) {
         const finalData = await finalResp.json();
-        const finalState = getYodeckFileState(finalData);
+        const fs2 = getYodeckFileState(finalData);
         const finalStatus = finalData.status;
-        const finalReady = finalStatus !== "initialized" && (finalState.fileSize > 0 || (finalState.hasFileObject && finalState.hasFileUrl));
-        finalDiag = `status=${finalStatus} fileSize=${finalState.fileSize} hasFileObj=${finalState.hasFileObject} hasFileUrl=${finalState.hasFileUrl} topKeys=[${finalState.rawTopKeys.join(",")}] fileKeys=[${finalState.rawFileKeys.join(",")}]`;
+        const finalReady = finalStatus !== "initialized" && (fs2.fileSize > 0 || (fs2.hasFileObject && fs2.hasFileUrl));
+        finalDiag = `status=${finalStatus} fileSize=${fs2.fileSize} hasFileObj=${fs2.hasFileObject} hasFileUrl=${fs2.hasFileUrl} argsPlay=${fs2.hasArgsPlayUrl} argsDL=${fs2.hasArgsDownloadUrl} topKeys=[${fs2.rawTopKeys.join(",")}]`;
         console.log(`${LOG} correlationId=${correlationId} TIMEOUT_FINAL_DIAG: ${finalDiag}`);
         console.log(`${LOG} correlationId=${correlationId} TIMEOUT_FINAL_BODY: ${redactBody(finalData)}`);
         if (finalReady) {
@@ -1288,13 +1340,13 @@ export async function publishSingleAsset(opts: {
       console.warn(`${LOG} correlationId=${correlationId} TIMEOUT_FINAL_DIAG_ERROR: ${finalErr.message}`);
     }
 
-    throw new Error(`POLL_TIMEOUT: mediaId=${yodeckMediaId} polls=${pollCount} elapsed=${Math.round((Date.now() - startTime) / 1000)}s lastStatus=${lastPollStatus} fileSize=${lastFileState.fileSize} hasFileObj=${lastFileState.hasFileObject} hasFileUrl=${lastFileState.hasFileUrl} completeOk=${completeOk} completeCalls=${completeCallCount} finalDiag={${finalDiag}}`);
+    throw new Error(`POLL_TIMEOUT: mediaId=${yodeckMediaId} polls=${pollCount} elapsed=${Math.round((Date.now() - startTime) / 1000)}s lastStatus=${lastPollStatus} fileSize=${lastFileState.fileSize} hasFileObj=${lastFileState.hasFileObject} hasFileUrl=${lastFileState.hasFileUrl} argsPlay=${lastFileState.hasArgsPlayUrl} argsDL=${lastFileState.hasArgsDownloadUrl} completeOk=${completeOk} completeCalls=${completeCallCount} finalDiag={${finalDiag}}`);
   } catch (uploadErr: any) {
     console.error(`${LOG} correlationId=${correlationId} UPLOAD_ERROR assetId=${assetId} mediaId=${yodeckMediaId} error=${uploadErr.message}`);
 
     // Determine error code for terminal failures
     const errMsg = uploadErr.message || "";
-    const isTerminal = /FAILED_INIT_STUCK|POLL_TIMEOUT|POLL_404|VERIFY_404|FINAL_VERIFY_404|YODECK_UPLOAD_ABORTED/.test(errMsg);
+    const isTerminal = /FAILED_INIT_STUCK|POLL_TIMEOUT|POLL_404|VERIFY_404|FINAL_VERIFY_404|YODECK_UPLOAD_ABORTED|UPLOAD_BYTES_MISSING|UPLOAD_COMPLETE_FAILED/.test(errMsg);
 
     // For terminal failures: ALWAYS clear canonical media IDs regardless of yodeckMediaId state
     // This ensures retry always forces a fresh CREATE_MEDIA + upload cycle
@@ -1321,7 +1373,7 @@ export async function publishSingleAsset(opts: {
     // Update upload job as FAILED
     if (uploadJobId) {
       try {
-        const errorCode = errMsg.match(/(FAILED_INIT_STUCK|POLL_TIMEOUT|POLL_404|VERIFY_404|FINAL_VERIFY_404)/)?.[1] || "UPLOAD_ERROR";
+        const errorCode = errMsg.match(/(FAILED_INIT_STUCK|POLL_TIMEOUT|POLL_404|VERIFY_404|FINAL_VERIFY_404|UPLOAD_BYTES_MISSING|UPLOAD_COMPLETE_FAILED)/)?.[1] || "UPLOAD_ERROR";
         await db.update(uploadJobs).set({
           status: UPLOAD_JOB_STATUS.PERMANENT_FAIL,
           finalState: UPLOAD_FINAL_STATE.FAILED,
