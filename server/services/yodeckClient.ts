@@ -965,9 +965,9 @@ export class YodeckClient {
 
         clearTimeout(timeout);
         const respText = await response.text();
-        const respBody = respText.substring(0, 2048);
+        const respBody = respText.substring(0, 12000);
 
-        console.log(`[YodeckClient][${corrId}] createMediaFromUrl RESPONSE: status=${response.status} body=${respBody}`);
+        console.log(`[YodeckClient][${corrId}] createMediaFromUrl RESPONSE: status=${response.status} body=${respBody.substring(0, 2048)}`);
 
         if (response.status >= 200 && response.status < 300) {
           const data = JSON.parse(respText);
@@ -998,13 +998,16 @@ export class YodeckClient {
           const u = sanitizedBody.media_origin.download_from_url;
           sanitizedBody.media_origin = { ...sanitizedBody.media_origin, download_from_url: u.split('?')[0] + '?[REDACTED]' };
         }
-        console.error(`[YodeckClient][${corrId}] createMediaFromUrl failed: HTTP ${response.status} body=${respBody.substring(0, 500)}`);
+        const respContentType = response.headers.get('content-type') || 'unknown';
+        console.error(`[YODECK_CREATE_MEDIA_ERROR][${corrId}] HTTP ${response.status} | content-type=${respContentType} | body=${respBody}`);
+        console.error(`[YODECK_CREATE_MEDIA_ERROR][${corrId}] request payload: ${JSON.stringify(sanitizedBody)}`);
         Sentry.captureMessage('Yodeck POST /media failed (createMediaFromUrl)', {
           level: 'error',
           extra: {
             correlationId: corrId,
             statusCode: response.status,
-            responseBody: respBody.substring(0, 2000),
+            responseBody: respBody,
+            responseContentType: respContentType,
             requestPayload: sanitizedBody,
             mediaName: opts.name,
             method: 'createMediaFromUrl',

@@ -1543,16 +1543,22 @@ class YodeckPublishService {
 
       if (createResp.status < 200 || createResp.status >= 300 || !createResp.data?.id) {
         const respBody = typeof createResp.data === 'string' ? createResp.data : JSON.stringify(createResp.data);
-        debug.createError = respBody.substring(0, 2000);
-        debug.createRequestPayload = { name: normalizedName, type: 'video', media_origin: { source: 'local' } };
-        console.error(`[YodeckPublish][${corrId}] Create media failed: HTTP ${createResp.status} body=${respBody.substring(0, 500)}`);
-        Sentry.captureMessage('Yodeck POST /media failed', {
+        const fullBody = respBody.substring(0, 12000);
+        const reqPayload = { name: normalizedName, type: 'video', media_origin: { source: 'local' } };
+        const respContentType = createResp.headers?.['content-type'] || 'unknown';
+        debug.createError = fullBody;
+        debug.createRequestPayload = reqPayload;
+        debug.responseContentType = respContentType;
+        console.error(`[YODECK_CREATE_MEDIA_ERROR][${corrId}] HTTP ${createResp.status} | content-type=${respContentType} | body=${fullBody}`);
+        console.error(`[YODECK_CREATE_MEDIA_ERROR][${corrId}] request payload: ${JSON.stringify(reqPayload)}`);
+        Sentry.captureMessage('Yodeck POST /media failed (localUploadFromR2)', {
           level: 'error',
           extra: {
             correlationId: corrId,
             statusCode: createResp.status,
-            responseBody: respBody.substring(0, 2000),
-            requestPayload: { name: normalizedName, type: 'video', media_origin: { source: 'local' } },
+            responseBody: fullBody,
+            responseContentType: respContentType,
+            requestPayload: reqPayload,
             storagePath,
             method: 'localUploadFromR2',
           },
@@ -2341,19 +2347,24 @@ class YodeckPublishService {
       console.log(`[YodeckPublish][${corrId}] YODECK CREATE RESPONSE TEXT: ${createRespText.substring(0, 500)}`);
       
       if (createResp.status < 200 || createResp.status >= 300) {
-        debug.createError = createRespText.substring(0, 2000);
+        const fullBody = createRespText.substring(0, 12000);
+        debug.createError = fullBody;
         const sanitizedPayload: Record<string, any> = { ...payload };
         if ((sanitizedPayload.media_origin as any)?.download_from_url) {
           const url = (sanitizedPayload.media_origin as any).download_from_url;
           sanitizedPayload.media_origin = { ...sanitizedPayload.media_origin, download_from_url: url.split('?')[0] + '?[REDACTED]' };
         }
-        console.error(`[YodeckPublish][${corrId}] URL_IMPORT Create failed: HTTP ${createResp.status} body=${createRespText.substring(0, 500)}`);
+        const respContentType = createResp.headers?.['content-type'] || 'unknown';
+        debug.responseContentType = respContentType;
+        console.error(`[YODECK_CREATE_MEDIA_ERROR][${corrId}] HTTP ${createResp.status} | content-type=${respContentType} | body=${fullBody}`);
+        console.error(`[YODECK_CREATE_MEDIA_ERROR][${corrId}] request payload: ${JSON.stringify(sanitizedPayload)}`);
         Sentry.captureMessage('Yodeck POST /media failed (URL import)', {
           level: 'error',
           extra: {
             correlationId: corrId,
             statusCode: createResp.status,
-            responseBody: createRespText.substring(0, 2000),
+            responseBody: fullBody,
+            responseContentType: respContentType,
             requestPayload: sanitizedPayload,
             method: 'tryUrlImport',
           },
