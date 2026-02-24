@@ -1,0 +1,41 @@
+Je bent een senior TypeScript/Node engineer. Implementeer een minimale, veilige fix voor een Yodeck upload/publish poll-timeout bug.
+
+Symptoom:
+- publishSingleAsset retry-flow pollt GET /api/v2/media/:id en ziet status encoding -> finished, maar fileSize blijft 0.
+- Na 48 polls (243s) terminal POLL_TIMEOUT.
+- upload/complete wordt door onze logs soms als “ok:true” gezien, maar we missen harde verificatie dat de binary upload + complete echt correct zijn.
+
+Scope:
+- Wijzig zo min mogelijk, liefst alleen server/services/mediaPipelineService.ts (publishSingleAsset).
+- Geen nieuwe playlists/schermen aanmaken.
+- Geen nieuwe dependencies.
+
+Taken:
+1) In server/services/mediaPipelineService.ts:
+   - Zorg dat na succesvolle binary PUT naar presigned upload URL ALTIJD expliciet een PUT naar:
+     /api/v2/media/{id}/upload/complete/
+     wordt gedaan (met correcte payload zoals Yodeck vereist).
+   - Voeg duidelijke logging toe (maar beperkt):
+     PUT_BINARY_START/OK (bytes/content-length)
+     UPLOAD_COMPLETE_START/OK (status + response snippet)
+     POLL (status + parsed filesize + hasFileObject + hasFileUrl)
+2) Maak parsing robuust:
+   - Implementeer helper getYodeckFileState(resp) die betrouwbaar bepaalt:
+     fileSize (uit fileSize/file_size/filesize)
+     hasFileObject (resp.file aanwezig)
+     hasFileUrl (resp.file.url of vergelijkbare url-velden bestaan)
+3) Update ready-condition in poll-loop:
+   - Ready als status !== "initialized" EN (fileSize > 0 OF (hasFileObject && hasFileUrl)).
+   - Als status == "finished" maar nog geen fileSize en geen fileUrl: blijf pollen, maar log waarom.
+4) Voeg een final verification toe (klein):
+   - Als status finished maar fileSize==0, probeer 1 extra fetch of check op file/url fields voordat je timeout als terminal markeert.
+5) Laat baselinePlaylistId / BaselineConfig code ongemoeid (geen auto-create). Alleen loggen als het 404 is.
+
+Deliverables:
+- Geef exact de codewijziging (diff stijl of volledige function body).
+- Geef 5 concrete teststappen (dev) met verwachte logregels.
+
+Belangrijk:
+- Geen refactor van hele pipeline.
+- Geen nieuwe tabellen of migraties.
+- Bescherm bestaande productie data.
