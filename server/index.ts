@@ -3,6 +3,32 @@ import * as Sentry from "@sentry/node";
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
 });
+
+const _originalConsoleError = console.error;
+const _originalConsoleWarn = console.warn;
+
+console.error = (...args: any[]) => {
+  _originalConsoleError(...args);
+  try {
+    const message = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+    Sentry.captureMessage(message.substring(0, 2000), {
+      level: 'error',
+      extra: { rawArgs: args.map(a => { try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch { return '[unserializable]'; } }) },
+    });
+  } catch (_) {}
+};
+
+console.warn = (...args: any[]) => {
+  _originalConsoleWarn(...args);
+  try {
+    const message = args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ');
+    Sentry.captureMessage(message.substring(0, 2000), {
+      level: 'warning',
+      extra: { rawArgs: args.map(a => { try { return typeof a === 'object' ? JSON.stringify(a) : String(a); } catch { return '[unserializable]'; } }) },
+    });
+  } catch (_) {}
+};
+
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
