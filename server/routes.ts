@@ -10,7 +10,7 @@ import crypto from "crypto";
 import { encryptToken, decryptToken, isTokenEncryptionEnabled } from "./tokenEncryption";
 import { sql, desc, eq, and, or, isNull, isNotNull, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens, placements, adAssets, tagPolicies, placementPlans, placementTargets, integrationOutbox } from "@shared/schema";
+import { emailLogs, contractDocuments, termsAcceptance, advertisers, portalTokens, claimPrefills, locations, screens, placements, adAssets, tagPolicies, e2eTestRuns, placementPlans, placementTargets, integrationOutbox } from "@shared/schema";
 import { MAX_ADS_PER_SCREEN } from "@shared/regions";
 import PDFDocument from "pdfkit";
 import { storage } from "./storage";
@@ -110,25 +110,33 @@ function setCache<T>(key: string, data: T): void {
 }
 
 // ============================================================================
-// YODECK SYNC MUTEX (distributed database lock - prevents race conditions across instances)
+// YODECK SYNC MUTEX (prevent concurrent syncs)
 // ============================================================================
-import { acquireLock, releaseLock } from "./syncLocks";
+let yodeckSyncInProgress = false;
+let yodeckSyncLastStarted: Date | null = null;
+const SYNC_MIN_INTERVAL_MS = 30_000; // 30 seconds minimum between syncs
 
-const SYNC_LOCK_ID = "yodeck_sync";
-
-async function canStartYodeckSync(): Promise<{ ok: boolean; reason?: string }> {
-  const result = await acquireLock(SYNC_LOCK_ID);
-  return result;
+function canStartYodeckSync(): { ok: boolean; reason?: string } {
+  if (yodeckSyncInProgress) {
+    return { ok: false, reason: "Sync al bezig, probeer later opnieuw" };
+  }
+  if (yodeckSyncLastStarted) {
+    const elapsed = Date.now() - yodeckSyncLastStarted.getTime();
+    if (elapsed < SYNC_MIN_INTERVAL_MS) {
+      const waitSecs = Math.ceil((SYNC_MIN_INTERVAL_MS - elapsed) / 1000);
+      return { ok: false, reason: `Te snel, wacht nog ${waitSecs} seconden` };
+    }
+  }
+  return { ok: true };
 }
 
-async function startYodeckSync(): Promise<void> {
-  // Lock already acquired in canStartYodeckSync
-  console.log("[YodeckSync] Lock acquired for sync operation");
+function startYodeckSync() {
+  yodeckSyncInProgress = true;
+  yodeckSyncLastStarted = new Date();
 }
 
-async function endYodeckSync(success: boolean = true, error?: string): Promise<void> {
-  await releaseLock(SYNC_LOCK_ID, { success, error });
-  console.log(`[YodeckSync] Lock released (success=${success})`);
+function endYodeckSync() {
+  yodeckSyncInProgress = false;
 }
 
 // ============================================================================
@@ -14154,13 +14162,13 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   // POST /api/sync/yodeck/run - Full sync with distinctItemCount per screen
   app.post("/api/sync/yodeck/run", requirePermission("manage_integrations"), async (req, res) => {
-    // Rate limit check with distributed lock
-    const canSync = await canStartYodeckSync();
+    // Rate limit check
+    const canSync = canStartYodeckSync();
     if (!canSync.ok) {
       return res.status(429).json({ ok: false, error: canSync.reason });
     }
     
-    await startYodeckSync();
+    startYodeckSync();
     
     try {
       const onlyOnline = Boolean(req.body?.onlyOnline);
@@ -14169,7 +14177,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       const client = await getYodeckClient();
       
       if (!client) {
-        await endYodeckSync(false, "Missing YODECK_AUTH_TOKEN");
+        endYodeckSync();
         return res.status(400).json({ 
           ok: false, 
           error: "Missing YODECK_AUTH_TOKEN env var",
@@ -14290,7 +14298,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       const contentUnknown = results.filter(r => r.status === "unknown_source").length;
       const contentError = results.filter(r => r.status === "error").length;
 
-      await endYodeckSync(true);
+      endYodeckSync();
       return res.json({
         ok: true,
         stats: {
@@ -14308,7 +14316,7 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         },
       });
     } catch (error: any) {
-      await endYodeckSync(false, error?.message ?? String(error));
+      endYodeckSync();
       res.status(500).json({ 
         ok: false, 
         error: error?.message ?? String(error),
@@ -17772,6 +17780,74 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // ADMIN: LAYOUTS (Baseline + Ads separation)
+  // ============================================================================
+  
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.get("/api/admin/layouts", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout system is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
+  });
+  
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.post("/api/admin/layouts/apply", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout system is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
+  });
+  
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.get("/api/admin/layouts/probe", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout system is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
+  });
+  
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.post("/api/admin/layouts/:locationId/seed-baseline", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Baseline seeding is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
+  });
+  
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.get("/api/admin/layouts/:locationId/baseline-status", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Baseline status is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
+  });
+
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.post("/api/admin/layouts/:locationId/force", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Force layout is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
+  });
+
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.get("/api/admin/layouts/detailed", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout status is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
+  });
+
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.get("/api/admin/layouts/:locationId/screen-status", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Screen layout status is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
+  });
+
+  // ============================================================================
   // ADMIN: MONITORING & ALERTS
   // ============================================================================
   
@@ -20136,6 +20212,14 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   // AUTOPILOT CONFIG ENDPOINTS
   // =========================================================================
 
+  // DEPRECATED: Baseline system is replaced by canonical playlist architecture
+  app.get("/api/admin/autopilot/baseline-status", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_BASELINE_SYSTEM_DISABLED",
+      message: "Baseline system is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
+  });
+
   /**
    * GET /api/admin/autopilot/config
    * Get all Yodeck autopilot configuration
@@ -20167,6 +20251,138 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message });
     }
+  });
+
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.post("/api/admin/autopilot/config/layout-region", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout region config is deprecated. Use canonical playlist via /api/admin/canonical-broadcast/config" 
+    });
+  });
+
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.get("/api/admin/autopilot/layout/:layoutId/regions", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout regions is deprecated. Use canonical playlist architecture" 
+    });
+  });
+
+  // DEPRECATED: Layout-based system is replaced by canonical playlist architecture
+  app.post("/api/admin/autopilot/ensure-ads-region/:layoutId", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout regions is deprecated. Use canonical playlist architecture" 
+    });
+  });
+
+  // DEPRECATED: Legacy autopilot system is replaced by canonical playlist architecture
+  app.post("/api/admin/autopilot/seed-playlist/:playlistId", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_SYSTEM_DISABLED",
+      message: "Seed playlist is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
+  });
+
+  // DEPRECATED: Legacy autopilot system is replaced by canonical playlist architecture
+  app.post("/api/admin/autopilot/verify-screen/:screenId", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_SYSTEM_DISABLED",
+      message: "Verify screen is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
+  });
+
+  // DEPRECATED: Legacy autopilot system is replaced by canonical playlist architecture
+  app.post("/api/admin/autopilot/full-repair/:locationId", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_SYSTEM_DISABLED",
+      message: "Full repair is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
+  });
+
+  // =========================================================================
+  // COMBINED PLAYLIST MODE ENDPOINTS (DEPRECATED - use canonical instead)
+  // =========================================================================
+
+  // DEPRECATED: Combined playlist system is replaced by canonical playlist architecture
+  app.get("/api/admin/autopilot/combined-config", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Combined playlist config is deprecated. Use /api/admin/canonical-broadcast/config" 
+    });
+  });
+
+  // DEPRECATED: Combined playlist system is replaced by canonical playlist architecture
+  app.post("/api/admin/autopilot/combined-config", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Combined playlist config is deprecated. Use /api/admin/canonical-broadcast/config" 
+    });
+  });
+
+  // DEPRECATED: Combined playlist system is replaced by canonical playlist architecture
+  app.post("/api/admin/autopilot/repair/:locationId", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Combined playlist repair is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
+  });
+
+  // DEPRECATED: Combined playlist system is replaced by canonical playlist architecture
+  app.get("/api/admin/locations/:id/content-status", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Content status is deprecated. Use /api/screens/:id/now-playing for verification" 
+    });
+  });
+
+  // =========================================================================
+  // AUTOPILOT: BASELINE FROM TEMPLATE (DEPRECATED)
+  // =========================================================================
+
+  // DEPRECATED: Legacy autopilot config is replaced by canonical broadcast config
+  app.get("/api/admin/autopilot/config", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_CONFIG_DISABLED",
+      message: "Autopilot config is deprecated. Use /api/admin/canonical-broadcast/config" 
+    });
+  });
+
+  // DEPRECATED: Legacy autopilot config is replaced by canonical broadcast config
+  app.post("/api/admin/autopilot/config", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_AUTOPILOT_CONFIG_DISABLED",
+      message: "Autopilot config is deprecated. Use /api/admin/canonical-broadcast/config" 
+    });
+  });
+
+  // DEPRECATED: Baseline sync is replaced by canonical playlist template cloning
+  app.post("/api/admin/autopilot/sync-baseline/:locationId", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_BASELINE_SYNC_DISABLED",
+      message: "Baseline sync is deprecated. Use canonical playlist via /api/admin/screens/:id/canonical-repair" 
+    });
+  });
+
+  // DEPRECATED: Template baseline debug is replaced by canonical playlist architecture
+  app.get("/api/admin/yodeck/debug/template-baseline/:locationId", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      error: "LEGACY_TEMPLATE_BASELINE_DISABLED",
+      message: "Template baseline debug is deprecated. Use /api/screens/:id/now-playing" 
+    });
+  });
+
+  /**
+   * DEPRECATED: POST /api/admin/autopilot/sync-all-baselines
+   * LEGACY_DISABLED - Use /api/admin/broadcast/cleanup-all instead
+   */
+  app.post("/api/admin/autopilot/sync-all-baselines", requireAdminAccess, async (req, res) => {
+    res.status(410).json({
+      ok: false,
+      error: "LEGACY_COMBINED_PLAYLIST_DISABLED",
+      message: "Use /api/admin/broadcast/cleanup-all instead"
+    });
   });
 
   // =========================================================================
@@ -22507,6 +22723,28 @@ KvK: 90982541 | BTW: NL004857473B37</p>
    */
   app.get("/api/admin/canonical-broadcast/config", requireAdminAccess, async (req, res) => {
     res.redirect(301, "/api/admin/broadcast/config");
+  });
+
+  /**
+   * POST /api/admin/canonical-broadcast/config (LEGACY - 410 Gone)
+   */
+  app.post("/api/admin/canonical-broadcast/config", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      ok: false, 
+      error: "LEGACY_CANONICAL_SYSTEM_DISABLED",
+      message: "Set YODECK_TEMPLATE_PLAYLIST_ID environment variable directly",
+    });
+  });
+
+  /**
+   * POST /api/admin/canonical-broadcast/run-worker (LEGACY - 410 Gone)
+   */
+  app.post("/api/admin/canonical-broadcast/run-worker", requireAdminAccess, async (req, res) => {
+    res.status(410).json({ 
+      ok: false, 
+      error: "LEGACY_CANONICAL_SYSTEM_DISABLED",
+      message: "Use /api/admin/autopilot/repair-all instead",
+    });
   });
 
   // =============================================================================
@@ -24904,6 +25142,27 @@ KvK: 90982541 | BTW: NL004857473B37</p>
   });
 
   // ============================================================================
+  // LEGACY LAYOUT ROUTES - BLOCKED (410 Gone)
+  // ============================================================================
+
+  /**
+   * POST /api/admin/locations/:locationId/force-layout
+   * BLOCKED - Layout system deprecated
+   */
+  app.post("/api/admin/locations/:locationId/force-layout", requireAdminAccess, async (req, res) => {
+    console.warn(`[LEGACY_BLOCKED] Attempted to use deprecated force-layout endpoint`);
+    res.status(410).json({
+      ok: false,
+      error: "LEGACY_LAYOUT_SYSTEM_DISABLED",
+      message: "Layout mode is deprecated. Use playlist-only endpoints instead.",
+      alternatives: [
+        "POST /api/admin/playlist-guard/ensure-playlist/:screenId",
+        "POST /api/admin/screens/:screenId/canonical-with-baseline",
+      ],
+    });
+  });
+
+  // ============================================================================
   // DEBUG: Storage / R2 endpoints
   // ============================================================================
   
@@ -25937,185 +26196,6 @@ KvK: 90982541 | BTW: NL004857473B37</p>
       });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err.message });
-    }
-  });
-
-  // ============================================================================
-  // PUBLISH QUEUE ENDPOINTS
-  // ============================================================================
-
-  // GET /api/publish-queue/stats - Queue statistics
-  app.get("/api/publish-queue/stats", requirePermission("view_screens"), async (_req, res) => {
-    try {
-      const { getQueueStats } = await import("./services/publishQueueService");
-      const stats = await getQueueStats();
-      res.json({ ok: true, stats });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // GET /api/publish-queue/items - Get queue items
-  app.get("/api/publish-queue/items", requirePermission("view_screens"), async (req, res) => {
-    try {
-      const { getQueueItems } = await import("./services/publishQueueService");
-      const items = await getQueueItems({
-        status: req.query.status as string,
-        advertiserId: req.query.advertiserId as string,
-        limit: req.query.limit ? parseInt(req.query.limit as string) : 100,
-        offset: req.query.offset ? parseInt(req.query.offset as string) : 0,
-      });
-      res.json({ ok: true, items });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // POST /api/publish-queue/retry/:id - Retry a failed item
-  app.post("/api/publish-queue/retry/:id", requirePermission("manage_integrations"), async (req, res) => {
-    try {
-      const { retryQueueItem } = await import("./services/publishQueueService");
-      const result = await retryQueueItem(req.params.id);
-      if (result.ok) {
-        res.json({ ok: true, message: "Item scheduled for retry" });
-      } else {
-        res.status(400).json({ ok: false, error: result.error });
-      }
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // POST /api/publish-queue/cancel/:id - Cancel a pending item
-  app.post("/api/publish-queue/cancel/:id", requirePermission("manage_integrations"), async (req, res) => {
-    try {
-      const { cancelQueueItem } = await import("./services/publishQueueService");
-      const result = await cancelQueueItem(req.params.id);
-      if (result.ok) {
-        res.json({ ok: true, message: "Item cancelled" });
-      } else {
-        res.status(400).json({ ok: false, error: result.error });
-      }
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // POST /api/publish-queue/process - Manually trigger processing
-  app.post("/api/publish-queue/process", requirePermission("manage_integrations"), async (_req, res) => {
-    try {
-      const { manualProcess } = await import("./workers/publishQueueWorker");
-      const result = await manualProcess();
-      res.json(result);
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // GET /api/publish-queue/health - Worker health check
-  app.get("/api/publish-queue/health", requirePermission("view_screens"), async (_req, res) => {
-    try {
-      const { getWorkerHealth } = await import("./workers/publishQueueWorker");
-      const health = await getWorkerHealth();
-      res.json({ ok: true, health });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // ============================================================================
-  // ALERTS ENDPOINTS
-  // ============================================================================
-
-  // GET /api/admin/alerts - Get alerts with filtering
-  app.get("/api/admin/alerts", requireAdminAccess, async (req, res) => {
-    try {
-      const { getActiveAlerts, getAlertStats, ALERT_SEVERITY, ALERT_CATEGORY } = await import("./services/alertService");
-      
-      const severity = req.query.severity as string;
-      const category = req.query.category as string;
-      const includeResolved = req.query.includeResolved === "true";
-      
-      // Get active alerts
-      const alerts = await getActiveAlerts({
-        severity: severity as any,
-        category: category as any,
-        limit: parseInt(req.query.limit as string) || 100,
-      });
-      
-      // Get stats
-      const stats = await getAlertStats(24 * 60 * 60 * 1000); // 24 hours
-      
-      res.json({
-        ok: true,
-        alerts,
-        stats,
-        severities: Object.values(ALERT_SEVERITY),
-        categories: Object.values(ALERT_CATEGORY),
-      });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // POST /api/admin/alerts/:id/acknowledge - Acknowledge an alert
-  app.post("/api/admin/alerts/:id/acknowledge", requireAdminAccess, async (req, res) => {
-    try {
-      const { acknowledgeAlert } = await import("./services/alertService");
-      const userId = (req.user as any)?.id || "unknown";
-      const result = await acknowledgeAlert(req.params.id, userId);
-      
-      if (result.ok) {
-        res.json({ ok: true, message: "Alert acknowledged" });
-      } else {
-        res.status(400).json({ ok: false, error: result.error });
-      }
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // POST /api/admin/alerts/cleanup - Clean up old acknowledged alerts
-  app.post("/api/admin/alerts/cleanup", requireAdminAccess, async (_req, res) => {
-    try {
-      const { cleanupOldAlerts } = await import("./services/alertService");
-      const count = await cleanupOldAlerts();
-      res.json({ ok: true, message: `Cleaned up ${count} old alerts` });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // GET /api/admin/sync-locks - Get sync lock status
-  app.get("/api/admin/sync-locks", requireAdminAccess, async (_req, res) => {
-    try {
-      const { getLockStatus, SYNC_LOCK_CONFIG } = await import("./syncLocks");
-      
-      const locks = await Promise.all(
-        Object.keys(SYNC_LOCK_CONFIG).map(async (lockId) => {
-          const status = await getLockStatus(lockId);
-          return {
-            id: lockId,
-            ...status,
-            config: SYNC_LOCK_CONFIG[lockId],
-          };
-        })
-      );
-      
-      res.json({ ok: true, locks });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
-    }
-  });
-
-  // POST /api/admin/sync-locks/:id/break - Force break a lock
-  app.post("/api/admin/sync-locks/:id/break", requireAdminAccess, async (req, res) => {
-    try {
-      const { forceBreakLock } = await import("./syncLocks");
-      await forceBreakLock(req.params.id);
-      res.json({ ok: true, message: `Lock ${req.params.id} broken` });
-    } catch (error: any) {
-      res.status(500).json({ ok: false, error: error.message });
     }
   });
 

@@ -3441,50 +3441,6 @@ export class DatabaseStorage implements IStorage {
       .returning();
     return job;
   }
-
-  // ============================================================================
-  // PUBLISH QUEUE
-  // ============================================================================
-
-  async createPublishQueueItem(data: {
-    adAssetId: string;
-    advertiserId: string;
-    status: string;
-    priority: number;
-    retryCount: number;
-    maxRetries: number;
-    scheduledFor?: Date;
-    metadata?: any;
-  }): Promise<string> {
-    const [item] = await db.insert(schema.publishQueue).values({
-      ...data,
-      metadata: data.metadata ? JSON.stringify(data.metadata) : null,
-    }).returning();
-    return item.id;
-  }
-
-  async getPublishQueueItem(id: string): Promise<any | undefined> {
-    const [item] = await db.select().from(schema.publishQueue).where(eq(schema.publishQueue.id, id));
-    return item;
-  }
-
-  async getPublishQueueItemsByAdvertiser(advertiserId: string): Promise<any[]> {
-    return db.select().from(schema.publishQueue)
-      .where(eq(schema.publishQueue.advertiserId, advertiserId))
-      .orderBy(desc(schema.publishQueue.createdAt));
-  }
-
-  async updatePublishQueueItem(id: string, data: Partial<any>): Promise<any | undefined> {
-    const [item] = await db.update(schema.publishQueue)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(schema.publishQueue.id, id))
-      .returning();
-    return item;
-  }
-
-  async deletePublishQueueItem(id: string): Promise<void> {
-    await db.delete(schema.publishQueue).where(eq(schema.publishQueue.id, id));
-  }
 }
 
 export const storage = new DatabaseStorage();

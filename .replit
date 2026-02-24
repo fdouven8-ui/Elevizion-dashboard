@@ -9,7 +9,6 @@ packages = ["ffmpeg", "jq"]
 [[ports]]
 localPort = 5000
 externalPort = 80
-exposeLocalhost = true
 
 [env]
 PORT = "5000"

@@ -447,19 +447,7 @@ export class YodeckClient {
         }
 
         if (!response.ok) {
-          const error = { ok: false, status: response.status, error: `HTTP ${response.status}` };
-          
-          // Send alert for significant errors
-          if (response.status >= 400) {
-            const { alertYodeckApiError } = await import("./alertService");
-            await alertYodeckApiError(
-              endpoint,
-              { message: `HTTP ${response.status}`, status: response.status },
-              { endpoint, params }
-            );
-          }
-          
-          return error;
+          return { ok: false, status: response.status, error: `HTTP ${response.status}` };
         }
 
         const data = await response.json() as T;
@@ -476,19 +464,7 @@ export class YodeckClient {
         throw err;
       }
     } catch (err: any) {
-      const errorMessage = err.message || "unknown_error";
-      
-      // Send alert for exceptions (only on final retry to avoid spam)
-      if (retries === 0 || retries === MAX_RETRIES) {
-        const { alertYodeckApiError } = await import("./alertService");
-        await alertYodeckApiError(
-          endpoint,
-          { message: errorMessage },
-          { endpoint, params, exception: true }
-        );
-      }
-      
-      return { ok: false, error: errorMessage };
+      return { ok: false, error: err.message || "unknown_error" };
     } finally {
       semaphore.release();
     }
