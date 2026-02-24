@@ -936,13 +936,19 @@ export class YodeckClient {
         throw new Error(`createMediaFromUrl: downloadUrl is missing or null for name="${opts.name}"`);
       }
 
+      const mediaType = opts.type || "video";
       const body: Record<string, any> = {
         name: opts.name,
         media_origin: {
+          type: mediaType,
           source: "url",
+          format: null,
+        },
+        arguments: {
           download_from_url: opts.downloadUrl,
         },
       };
+      console.log(`[YodeckClient][${corrId}] createMediaFromUrl payload keys: ${Object.keys(body).join(",")} media_origin.type=${mediaType} media_origin.source=url`);
       if (opts.tags && opts.tags.length > 0) {
         body.tags = opts.tags;
       }

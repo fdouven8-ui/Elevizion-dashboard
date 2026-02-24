@@ -1174,13 +1174,14 @@ export async function publishSingleAsset(opts: {
 
     // STEP 3.1: Verify bytes landed via HEAD or Range fallback
     const verifyResult = await tryHeadOrRangeForSize(presignUrl);
-    console.log(`${LOG} correlationId=${correlationId} UPLOAD_VERIFY: uploadBytesOk=${verifyResult.ok} methodUsed=${verifyResult.methodUsed} status=${verifyResult.status} contentLength=${verifyResult.contentLength} expected=${uploadFileSize}`);
+    const byteVerifyOk = verifyResult.ok || verifyResult.methodUsed === "NONE";
+    console.log(`${LOG} correlationId=${correlationId} UPLOAD_VERIFY: byteVerifyOk=${byteVerifyOk} methodUsed=${verifyResult.methodUsed} status=${verifyResult.status} contentLength=${verifyResult.contentLength} expected=${uploadFileSize}`);
 
     if (verifyResult.ok && verifyResult.contentLength && verifyResult.contentLength !== uploadFileSize) {
       console.warn(`${LOG} correlationId=${correlationId} UPLOAD_VERIFY_SIZE_MISMATCH: remote=${verifyResult.contentLength} local=${uploadFileSize}`);
     }
 
-    if (!verifyResult.ok && verifyResult.methodUsed !== "NONE") {
+    if (!byteVerifyOk) {
       console.error(`${LOG} correlationId=${correlationId} UPLOAD_BYTES_MISSING: putStatus=${uploadResp.status} verifyMethod=${verifyResult.methodUsed} verifyStatus=${verifyResult.status} contentLength=${verifyResult.contentLength || 0} expected=${uploadFileSize}`);
       throw new Error(`UPLOAD_BYTES_MISSING: mediaId=${yodeckMediaId} putStatus=${uploadResp.status} ${verifyResult.methodUsed}Status=${verifyResult.status} contentLength=${verifyResult.contentLength || 0} expected=${uploadFileSize}`);
     }
@@ -1306,10 +1307,16 @@ export async function publishSingleAsset(opts: {
       if (status === "finished" && fileState.fileSize === 0 && !fileState.hasFileUrl) {
         if (!finishedNoFileLogged) {
           finishedNoFileLogged = true;
-          console.warn(`${LOG} correlationId=${correlationId} FINISHED_NO_FILE #${pollCount}: ${redactBody(statusData)}`);
+          const label = byteVerifyOk ? "YODECK_METADATA_LAG" : "FINISHED_NO_FILE";
+          console.warn(`${LOG} correlationId=${correlationId} ${label} #${pollCount} byteVerifyOk=${byteVerifyOk}: ${redactBody(statusData)}`);
         } else {
-          console.warn(`${LOG} correlationId=${correlationId} FINISHED_NO_FILE: still no file (poll #${pollCount})`);
+          const label = byteVerifyOk ? "YODECK_METADATA_LAG" : "FINISHED_NO_FILE";
+          console.warn(`${LOG} correlationId=${correlationId} ${label}: still no file (poll #${pollCount}) byteVerifyOk=${byteVerifyOk}`);
         }
+      }
+
+      if (status === "encoding" && fileState.fileSize === 0 && byteVerifyOk) {
+        console.log(`${LOG} correlationId=${correlationId} ENCODING_BYTE_VERIFY_OK: status=encoding fileSize=0 but bytes verified — Yodeck still processing (poll #${pollCount})`);
       }
     }
 
@@ -1340,7 +1347,7 @@ export async function publishSingleAsset(opts: {
       console.warn(`${LOG} correlationId=${correlationId} TIMEOUT_FINAL_DIAG_ERROR: ${finalErr.message}`);
     }
 
-    throw new Error(`POLL_TIMEOUT: mediaId=${yodeckMediaId} polls=${pollCount} elapsed=${Math.round((Date.now() - startTime) / 1000)}s lastStatus=${lastPollStatus} fileSize=${lastFileState.fileSize} hasFileObj=${lastFileState.hasFileObject} hasFileUrl=${lastFileState.hasFileUrl} argsPlay=${lastFileState.hasArgsPlayUrl} argsDL=${lastFileState.hasArgsDownloadUrl} completeOk=${completeOk} completeCalls=${completeCallCount} finalDiag={${finalDiag}}`);
+    throw new Error(`POLL_TIMEOUT: mediaId=${yodeckMediaId} polls=${pollCount} elapsed=${Math.round((Date.now() - startTime) / 1000)}s lastStatus=${lastPollStatus} fileSize=${lastFileState.fileSize} hasFileObj=${lastFileState.hasFileObject} hasFileUrl=${lastFileState.hasFileUrl} argsPlay=${lastFileState.hasArgsPlayUrl} argsDL=${lastFileState.hasArgsDownloadUrl} byteVerifyOk=${byteVerifyOk} completeOk=${completeOk} completeCalls=${completeCallCount} finalDiag={${finalDiag}}`);
   } catch (uploadErr: any) {
     console.error(`${LOG} correlationId=${correlationId} UPLOAD_ERROR assetId=${assetId} mediaId=${yodeckMediaId} error=${uploadErr.message}`);
 

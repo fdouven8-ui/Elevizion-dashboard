@@ -1,0 +1,55 @@
+Je bent de software engineer in deze codebase (Node/TS). DOEL: fix Yodeck publish failures waar Yodeck status=finished maar fileSize=0 blijft, ondanks PUT 200 + upload/complete 200. Tevens fix: POST /api/v2/media/ faalt soms met err_1002 missing_key "type".
+
+BELANGRIJK: Je mag naast Replit logs óók de Sentry error/event details bekijken. Gebruik Sentry event ID:
+ca5d11e92ac041b8b58e74908753c922
+Zoek in de codebase naar Sentry integratie/config (SENTRY_DSN, sentry init, logging helpers) en check of er een link/lookup workflow is (bijv. console log link, dashboard link, of helper output). Als je geen directe toegang hebt tot Sentry UI vanuit Replit, voeg dan (tijdelijk, veilig) extra logging toe rond dezelfde error path zodat we dezelfde context lokaal terugzien. Gebruik de event ID om te bevestigen dat je naar de juiste error path kijkt (PlacementPlans / YodeckPublish / Media resolve).
+
+CONTEXT (log evidence):
+- R2 asset load OK (Buffer bytes=239160).
+- POST https://app.yodeck.com/api/v2/media/ → 201 (mediaId=30356872)
+- GET /media/{id}/upload → 200 (uploadUrlHost=dsbackend.s3.amazonaws.com)
+- PUT uploadUrl → 200, bytesSent=239160, etag present
+- PUT /media/{id}/upload/complete/ → 200
+- daarna poll: status encoding→finished maar fileSize=0; Extra GET bevestigt; get_upload_url wordt later MISSING; code concludeert “upload bytes never arrived”; media wordt deleted.
+- Daarnaast: PlacementPlans kan falen met MEDIA_RESOLVE_FAILED + createAttempt 400 err_1002 missing_key "type".
+
+TAKEN (minimale wijzigingen, geen grote refactors):
+
+1) Upload PUT hardenen (presigned S3 URL):
+   - In de functie die de presigned upload uitvoert (zoek naar BYTE_TRANSFER_TO_UPLOAD_URL / YodeckPublish / uploadToYodeck / publishSingleAsset):
+     - Zet headers expliciet:
+       - Content-Type: detected contentType (video/mp4)
+       - Content-Length: buffer.length (CRITISCH)
+     - Verstuur Buffer direct (geen stream/chunked).
+     - Log per PUT attempt: buffer.length, Content-Length header, status, etag.
+
+2) Verifieer bytes na PUT (hard bewijs dat object niet leeg is):
+   - DIRECT na succesvolle PUT (200/204):
+     - Probeer HEAD op uploadUrl en log status + content-length + etag.
+     - Als HEAD niet kan (403/405): doe GET met Range: bytes=0-0 en verwacht 206; log status + Content-Range + Content-Length.
+   - Als verificatie content-length == 0 of ontbreekt: stop en markeer als UPLOAD_BYTES_MISSING voordat je upload/complete doet.
+
+3) upload/complete en polling logica aanpassen:
+   - Als byte-verificatie OK was, beschouw dat als “bytes arrived” en laat polling niet falen puur op fileSize=0.
+   - Polling success als status in {"encoding","finished"} EN (fileSize>0 OF file object/url aanwezig OF byte-verificatie eerder OK).
+   - Als status=finished maar fileSize=0: doe 1 extra GET (zoals nu) + backoff, maar label het als “YODECK_METADATA_LAG” i.p.v. “bytes never arrived” wanneer byte-verificatie OK was.
+
+4) Fix err_1002 missing_key "type" bij POST /media/:
+   - Vind waar de payload voor POST /media/ wordt opgebouwd (YODECK_MEDIA_CREATE log).
+   - Zorg dat veld "type" altijd gezet is voor video (bijv. "video").
+   - Voeg guard: als type ontbreekt -> throw met duidelijke log + correlationId + payload keys.
+
+5) Diagnostics + Sentry:
+   - Zorg dat errors in PlacementPlans/YodeckPublish voldoende structured debug hebben:
+     correlationId, mediaId, createAttempt payload keys, uploadUrl host, byte-verification outcome, status keys.
+   - Cross-check dat dit dezelfde failure is als Sentry event ca5d11e92ac041b8b58e74908753c922 (zelfde errorCode/media resolve flow).
+
+6) Output (verplicht):
+   - Welke bestanden aangepast
+   - Korte uitleg van de fixes
+   - Voorbeeld van nieuwe logregels die we moeten zien bij een succesvolle run:
+     - POST-PUT VERIFY ... content-length=...
+     - Poll success ondanks metadata-lag (als fileSize nog 0 is maar verify OK)
+     - createAttempt payload bevat type=video
+
+Implementeer dit nu, zorg dat build/tests slagen, en commit alleen noodzakelijke wijzigingen.
