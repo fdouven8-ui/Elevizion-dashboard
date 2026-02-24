@@ -444,7 +444,7 @@ app.use((req, res, next) => {
           
           if (baselinePlaylistId) {
             const status = await getBaselinePlaylistStatus();
-            console.log(`[BOOT][BaselineConfig] baselinePlaylistId=${baselinePlaylistId} configured=true items=${status.itemCount} name="${status.playlistName || 'unknown'}"`);
+            console.log(`[BOOT][BaselineConfig] baselinePlaylistId=${baselinePlaylistId} configured=${status.configured} items=${status.itemCount} name="${status.playlistName || 'unknown'}"${status.error ? ` error="${status.error}"` : ''}`);
           } else {
             console.log(`[BOOT][BaselineConfig] baselinePlaylistId=null configured=false - Configure via Settings > Autopilot`);
           }

@@ -477,6 +477,19 @@ export async function getBaselinePlaylistStatus(): Promise<BaselineStatus> {
   const result = await yodeckRequest<any>(`/playlists/${playlistId}/`);
   
   if (!result.ok || !result.data) {
+    const status = (result as any).status;
+    if (status === 404) {
+      console.warn(`[BaselineConfig] WARNING: baselinePlaylistId=${playlistId} returned 404 from Yodeck — playlist does not exist. Treating as NOT configured.`);
+      return {
+        configured: false,
+        playlistId: null,
+        playlistName: null,
+        itemCount: 0,
+        items: [],
+        lastCheckedAt: now,
+        error: `BASELINE_PLAYLIST_NOT_FOUND - Playlist ${playlistId} bestaat niet in Yodeck (404). Configureer een geldige playlist via Instellingen.`,
+      };
+    }
     return {
       configured: true,
       playlistId,
