@@ -248,7 +248,9 @@ class YodeckPublishService {
     console.log(`[YodeckPublish][${corrId}] Starting media status poll for ${mediaId} (max ${maxAttempts} attempts)`);
     
     let lastStatus = 'unknown';
+    let lastFileSize: number | string = 0;
     let attempts = 0;
+    let completeFallbackFired = false;
     
     while (attempts < maxAttempts) {
       attempts++;
@@ -263,8 +265,10 @@ class YodeckPublishService {
       
       const media = result.media!;
       lastStatus = media.status;
+      const mediaAny = media as any;
+      lastFileSize = mediaAny.file_size ?? mediaAny.fileSize ?? 0;
       
-      console.log(`[YodeckPublish][${corrId}] Poll attempt ${attempts}: status="${lastStatus}" duration=${media.duration || 0}s`);
+      console.log(`[YodeckPublish][${corrId}] Poll attempt ${attempts}: status="${lastStatus}" fileSize=${lastFileSize} duration=${media.duration || 0}s`);
       
       if (lastStatus === 'finished' || lastStatus === 'ready' || lastStatus === 'active' || media.is_ready) {
         return {
@@ -290,6 +294,28 @@ class YodeckPublishService {
         };
       }
       
+      // Safety fallback: if stuck on initialized with fileSize=0 after 5 polls,
+      // retry upload/complete once (idempotent) to unstick the media
+      if (attempts >= 5 && !completeFallbackFired &&
+          lastStatus === 'initialized' && (lastFileSize === 0 || lastFileSize === '0')) {
+        completeFallbackFired = true;
+        console.warn(`[YodeckPublish][${corrId}] STUCK: ${attempts} polls, status=initialized, fileSize=0 — retrying upload/complete as safety fallback`);
+        try {
+          const apiKey = await this.getApiKey();
+          const fallbackResp = await axios.put(`${YODECK_BASE_URL}/media/${mediaId}/upload/complete/`, {}, {
+            headers: {
+              "Authorization": `Token ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 30000,
+            validateStatus: () => true,
+          });
+          console.log(`[YodeckPublish][${corrId}] Safety upload/complete fallback: HTTP ${fallbackResp.status}`);
+        } catch (fallbackErr: any) {
+          console.warn(`[YodeckPublish][${corrId}] Safety upload/complete fallback error (non-fatal): ${fallbackErr.message}`);
+        }
+      }
+      
       // Still processing (uploading, encoding, etc.)
       await new Promise(r => setTimeout(r, intervalMs));
     }
@@ -299,13 +325,27 @@ class YodeckPublishService {
     const finalMedia = finalCheck.media;
     const isUsable = finalMedia?.duration && finalMedia.duration > 0;
     
+    if (!isUsable) {
+      const errorCode = 'UPLOAD_NOT_FINALIZED';
+      const errorMsg = `${errorCode}: mediaId=${mediaId} lastStatus=${lastStatus} fileSize=${lastFileSize} correlationId=${corrId} after ${attempts} polls`;
+      console.error(`[YodeckPublish][${corrId}] ${errorMsg}`);
+      return {
+        ok: false,
+        finalStatus: lastStatus,
+        isUsable: false,
+        isAborted: false,
+        pollAttempts: attempts,
+        error: errorMsg,
+        mediaDetails: finalMedia,
+      };
+    }
+    
     return {
-      ok: isUsable || false,
+      ok: true,
       finalStatus: lastStatus,
-      isUsable: isUsable || false,
+      isUsable: true,
       isAborted: false,
       pollAttempts: attempts,
-      error: isUsable ? undefined : `Poll timeout after ${attempts} attempts, last status: ${lastStatus}`,
       mediaDetails: finalMedia,
     };
   }
@@ -1647,19 +1687,34 @@ class YodeckPublishService {
       }
 
       console.log(`[YodeckPublish][${corrId}] Completing upload...`);
-      try {
-        await axios.put(`${YODECK_BASE_URL}/media/${yodeckMediaId}/upload/complete/`, {
-          upload_url: presignedUploadUrl,
-        }, {
-          headers: {
-            "Authorization": `Token ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 30000,
-          validateStatus: () => true,
-        });
-      } catch (completeErr: any) {
-        console.log(`[YodeckPublish][${corrId}] Complete endpoint optional failure (non-blocking): ${completeErr.message}`);
+      let completeOk = false;
+      for (let completeAttempt = 1; completeAttempt <= 3; completeAttempt++) {
+        try {
+          const completeResp = await axios.put(`${YODECK_BASE_URL}/media/${yodeckMediaId}/upload/complete/`, {
+            upload_url: presignedUploadUrl,
+          }, {
+            headers: {
+              "Authorization": `Token ${apiKey}`,
+              "Content-Type": "application/json",
+            },
+            timeout: 30000,
+            validateStatus: () => true,
+          });
+          debug.completeStatus = completeResp.status;
+          console.log(`[YodeckPublish][${corrId}] upload/complete attempt ${completeAttempt}: HTTP ${completeResp.status}`);
+          if (completeResp.status >= 200 && completeResp.status < 400) {
+            completeOk = true;
+            break;
+          }
+          if (completeAttempt < 3) await new Promise(r => setTimeout(r, 2000));
+        } catch (completeErr: any) {
+          console.warn(`[YodeckPublish][${corrId}] upload/complete attempt ${completeAttempt} error: ${completeErr.message}`);
+          if (completeAttempt < 3) await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+      debug.uploadCompleteOk = completeOk;
+      if (!completeOk) {
+        console.warn(`[YodeckPublish][${corrId}] upload/complete never succeeded — polling may stall`);
       }
 
       console.log(`[YodeckPublish][${corrId}] Polling media ${yodeckMediaId} status...`);
