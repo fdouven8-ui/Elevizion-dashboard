@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -8,6 +9,7 @@ import { startOutboxWorker, stopOutboxWorker } from "./services/outboxWorker";
 import { startCapacityWatcher, stopCapacityWatcher } from "./services/capacityWatcherWorker";
 import { startMonthlyReportWorker, stopMonthlyReportWorker } from "./services/monthlyReportWorker";
 import { startAutopilotWorker, stopAutopilotWorker } from "./workers/autopilotWorker";
+import { startWorker as startPublishQueueWorker, stopWorker as stopPublishQueueWorker } from "./workers/publishQueueWorker";
 import { checkVideoProcessingDependencies } from "./services/videoMetadataService";
 import { shouldStartAutopilotWorker, logContentPipelineConfig } from "./config/contentPipeline";
 import { db } from "./db";
@@ -65,6 +67,9 @@ async function gracefulShutdown(signal: string) {
   
   // Stop autopilot worker
   stopAutopilotWorker();
+  
+  // Stop publish queue worker
+  stopPublishQueueWorker();
   
   // Close HTTP server (stop accepting new connections)
   httpServer.close(() => {
@@ -351,8 +356,7 @@ app.use((req, res, next) => {
   httpServer.listen(
     {
       port,
-      host: "0.0.0.0",
-      reusePort: true,
+      host: "127.0.0.1",
     },
     () => {
       // Boot log for TEST_MODE visibility
@@ -479,6 +483,17 @@ app.use((req, res, next) => {
           startMonthlyReportWorker();
         }
       }, 25000);
+      
+      // Start publish queue worker (10 second interval)
+      // Processes approved ad assets through upload → publish pipeline
+      setTimeout(() => {
+        if (!isShuttingDown && process.env.DISABLE_PUBLISH_QUEUE !== "true") {
+          startPublishQueueWorker();
+          console.log("[BOOT][PublishQueue] Worker started");
+        } else {
+          console.log("[BOOT][PublishQueue] Worker disabled via DISABLE_PUBLISH_QUEUE");
+        }
+      }, 35000);
       
       // Start autopilot worker (5 minute interval) - CONDITIONAL based on kill-switches
       setTimeout(() => {

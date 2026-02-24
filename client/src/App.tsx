@@ -60,6 +60,7 @@ import Layouts from "@/pages/Layouts";
 import YodeckDebug from "@/pages/YodeckDebug";
 import AiDump from "@/pages/AiDump";
 import AdminIndex from "@/pages/AdminIndex";
+import AdminAlerts from "@/pages/AdminAlerts";
 import NotFound from "@/pages/not-found";
 import Adverteren from "@/pages/marketing/Adverteren";
 import SchermLocatie from "@/pages/marketing/SchermLocatie";
@@ -130,6 +131,7 @@ function DashboardRouter() {
         <Route path="/yodeck-debug" component={YodeckDebug} />
         <Route path="/admin/yodeck-debug" component={YodeckDebug} />
         <Route path="/admin/ai-dump" component={AiDump} />
+        <Route path="/admin/alerts" component={AdminAlerts} />
         <Route path="/admin" component={AdminIndex} />
         <Route component={NotFound} />
       </Switch>

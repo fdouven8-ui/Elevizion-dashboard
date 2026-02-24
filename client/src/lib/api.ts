@@ -200,3 +200,11 @@ export interface DashboardKPIs {
 export const dashboardApi = {
   getKPIs: () => fetchJson<DashboardKPIs>("/api/dashboard/kpis"),
 };
+
+// Default export for axios-like API
+export default {
+  get: (url: string) => fetchJson<any>(url),
+  post: (url: string, body?: any) => fetchJson<any>(url, { method: "POST", body: JSON.stringify(body) }),
+  patch: (url: string, body?: any) => fetchJson<any>(url, { method: "PATCH", body: JSON.stringify(body) }),
+  delete: (url: string) => fetchJson<any>(url, { method: "DELETE" }),
+};
