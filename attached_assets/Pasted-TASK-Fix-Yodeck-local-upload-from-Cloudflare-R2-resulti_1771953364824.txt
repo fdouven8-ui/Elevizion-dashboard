@@ -1,0 +1,169 @@
+TASK: Fix Yodeck local upload from Cloudflare R2 resulting in status=finished but fileSize=0. Keep changes minimal and scoped to the upload-to-Yodeck path only.
+
+CONTEXT (from logs):
+
+We create media → GET /media/{id}/upload returns S3 upload_url → PUT upload_url returns 200 with ETag and bytesSent=...
+
+We call /upload/complete (200)
+
+Polling shows encoding → finished but fileSize=0, then we conclude “bytes never arrived”
+
+This strongly indicates the presigned S3 PUT received a request but stored a 0-byte object (common when streaming PUT without Content-Length / stream abort / runtime SIGTERM).
+
+We also saw SIGTERM in Replit around the flow, so we must make the PUT robust and verifiable.
+
+1) Implement robust upload: read R2 object into Buffer and PUT with Content-Length
+
+Find the code that does the upload step after GET /media/{id}/upload (where we currently stream from R2 into fetch PUT).
+
+Replace the streaming PUT with:
+
+R2 HEAD is already available and returns byteSize.
+
+Do GET from R2 as Buffer (not stream) for now (files are ads, typically small; we can optimize later).
+
+Do PUT to presigned upload_url using that Buffer.
+
+Set headers:
+
+Content-Length: buffer.length
+
+Content-Type: contentType (from R2 HEAD or fallback video/mp4)
+
+Validate:
+
+If buffer.length === 0 throw immediately.
+
+If PUT status not 200/204 → throw.
+
+Capture etag from response headers.
+
+Important: Do not change any playlist/screen logic. Only the upload function.
+
+Pseudocode (adapt to actual structure)
+const { bodyStream, byteSize, contentType } = await r2.getObjectAsStreamAndMeta(key); // you already have head + get stream
+// NEW: read fully into Buffer
+const buf = await streamToBuffer(bodyStream, byteSize); // implement helper with max safety
+if (!buf?.length) throw new Error("R2 returned empty buffer");
+
+const putRes = await fetch(uploadUrl, {
+  method: "PUT",
+  headers: {
+    "Content-Length": String(buf.length),
+    "Content-Type": contentType || "video/mp4",
+  },
+  body: buf,
+});
+const putText = await safeReadText(putRes); // only if needed; usually empty
+if (!putRes.ok) throw new Error(`Yodeck upload PUT failed: ${putRes.status} ${putText}`);
+const etag = putRes.headers.get("etag") || putRes.headers.get("ETag");
+
+Implement helpers:
+
+streamToBuffer(readable, expectedSize):
+
+collect chunks
+
+if expectedSize exists and total exceeds it → throw
+
+after end: if expectedSize exists and total !== expectedSize → log warn (don’t necessarily throw, but for now we can throw to be strict)
+
+safeReadText(res) with try/catch to avoid hanging.
+
+2) After PUT + upload/complete, make poll success criteria stricter and deterministic
+
+Current issue: status becomes finished while fileSize=0.
+
+Change readiness rule:
+
+Success only when:
+
+status is one of: finished (or whatever final ready status is used in your code)
+
+AND fileSize > 0
+
+If status is finished but fileSize==0:
+
+do one extra GET (already done)
+
+if still 0 → treat as HARD FAIL and delete media (existing behavior ok)
+
+log a structured error including:
+
+mediaId
+
+bufferLength
+
+expectedByteSize (from R2 head)
+
+upload PUT status + etag
+
+whether Content-Length header was sent
+
+Do NOT fail early due to “stall detected” in first few seconds.
+
+Either remove STATUS_POLL_STALL_DETECTED or only trigger it after e.g. 30–60s AND at least N polls, and only as warning, not fatal.
+
+Real fail should be timeout (240s) or finished-with-zero-bytes.
+
+3) Add high-signal logging (for this flow only)
+
+In the yodeck trace logging for the correlationId, log these fields:
+
+r2Key, r2ByteSize, r2ContentType, r2Etag
+
+bufferLength
+
+uploadUrlHost
+
+putStatus, putEtag, putDurationMs
+
+sentContentLengthHeader: true
+
+During poll: status + fileSize + durationMsSinceStart
+
+On failure: include all above in a single debug object.
+
+Make sure no secrets or full presigned URLs are logged; host only is fine.
+
+4) Safety: handle SIGTERM / process shutdown during upload
+
+Wrap the upload+complete+poll in try/catch/finally:
+
+If aborted mid-upload, delete the Yodeck media to avoid leftover “initialized/encoding” junk.
+
+Ensure you don’t start long polls after SIGTERM is received. If you have a global “isShuttingDown” flag set on SIGTERM, abort polling and return a clean error.
+
+Minimal approach:
+
+Add a module-level boolean SHUTTING_DOWN set true in SIGTERM handler.
+
+In poll loop: if SHUTTING_DOWN throw ShutdownAbortError.
+
+5) Validate with one test action
+
+After implementing:
+
+Run the same retry publish for asset 86abfbd3-32ce-4e7e-9319-8115d98ed5d1
+
+Expect:
+
+PUT uses Buffer and Content-Length
+
+Poll reaches finished with fileSize > 0
+
+publish proceeds (next steps unchanged)
+
+Deliverables:
+
+Code changes committed.
+
+Keep behavior same except:
+
+upload becomes buffer-based with Content-Length
+
+poll doesn’t false-fail on early stall
+
+logs show bufferLength + content-length usage
+
+No changes to playlists/screens/autopilot beyond necessary shutdown guard.

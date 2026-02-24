@@ -53,6 +53,7 @@ const DEBUG_MEMORY = process.env.DEBUG_MEMORY === "true";
 // Scheduled sync interval (15 minutes)
 const SYNC_INTERVAL_MS = 15 * 60 * 1000;
 let syncIntervalId: NodeJS.Timeout | null = null;
+import { isShuttingDown as getShuttingDown, setShuttingDown } from "./shutdownFlag";
 let isShuttingDown = false;
 
 // Memory logging (only if DEBUG_MEMORY=true)
@@ -68,6 +69,7 @@ if (DEBUG_MEMORY) {
 async function gracefulShutdown(signal: string) {
   if (isShuttingDown) return;
   isShuttingDown = true;
+  setShuttingDown();
   
   console.log(`[Server] ${signal} received, starting graceful shutdown...`);
   
