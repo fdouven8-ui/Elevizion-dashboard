@@ -6,6 +6,7 @@ export default defineConfig({
     include: ["server/**/*.test.ts"],
     exclude: ["node_modules", "dist", ".cache"],
     environment: "node",
+    globals: true,
   },
   resolve: {
     alias: {

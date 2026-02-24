@@ -1,0 +1,52 @@
+Je bent een senior TS/Node developer. Werk in deze repo uitsluitend aan het upload/publish pad naar Yodeck en maak een minimale, veilige fix. DOEL: voorkomen dat presigned URL verificatie (HEAD / Range) met 403/405/501 leidt tot “UPLOAD_BYTES_MISSING” terwijl de PUT upload zelf succesvol was (status 200/204 en ETag aanwezig). Hierdoor breekt het proces nu af vóór upload/complete en vóór polling.
+
+Context / bewijs uit logs:
+- PUT naar presigned S3 URL is OK (status=200) en heeft ETag.
+- Verificatie HEAD en fallback GET Range geven 403 (PUT-only presign). Dit is normaal.
+- Code gooit daarna: UPLOAD_BYTES_MISSING … verifyStatus=403 expected=106021 → TERMINAL_FAILURE → wist yodeckMediaId.
+- In breadcrumbs ontbreekt volledig: PUT /api/v2/media/{id}/upload/complete/ en daarna POLL #…
+
+TAKEN (minimaal, gericht):
+1) Zoek in server/services/mediaPipelineService.ts (publishSingleAsset) waar upload verification gedaan wordt (HEAD/Range), en waar UPLOAD_BYTES_MISSING gegooid wordt.
+2) Pas de logic aan zodat verifyStatus 403/405/501 NIET als FAIL wordt behandeld als:
+   - putOk true (resp.ok of status 204)
+   - én (etagPresent true OF completeOk true)
+   => dan decision = INCONCLUSIVE (of OK) en GA DOOR.
+   Concreet: verwijder/voorkom throw “UPLOAD_BYTES_MISSING” wanneer verifyStatus 403/405/501 en PUT was ok.
+3) Zorg dat Yodeck upload complete altijd wordt aangeroepen na succesvolle PUT:
+   PUT `${YODECK_API_BASE}/media/${yodeckMediaId}/upload/complete/` body { upload_url: presignUrl }
+   - Als complete niet 200 is: fail hard (COMPLETE_UPLOAD_FAILED_{status})
+   - Log altijd: COMPLETE_UPLOAD_{OK|FAIL} met correlationId, mediaId, status, body (max 500 chars)
+4) Polling: nadat complete OK is, ga door met POLL loop zoals bedoeld.
+   - Voeg logging toe: POLL #n: status, filesize/file_size, error_message, hasFileUrls boolean.
+   - Stopconditie: “encoding/finished” of (status != initialized) EN (filesize>0 OF hasFileUrls)
+   - Timeout blijft 240s.
+
+Sentry / observability:
+5) Voeg één duidelijke breadcrumb/log regel toe op elk van deze stappen:
+   - GET_UPLOAD_URL_OK (presign host + truncated path)
+   - PUT_BINARY_OK (status, bytes, etagPresent)
+   - UPLOAD_VERIFY_RESULT (method, status, contentLength/undefined)
+   - COMPLETE_UPLOAD_OK/FAIL (status + response snippet)
+   - POLL_START en POLL_PROGRESS
+6) Controleer of er een Sentry capture plaatsvindt bij UPLOAD_ERROR. Als niet: voeg captureException toe met tags:
+   { correlationId, assetId, yodeckMediaId, step: "UPLOAD_VERIFY"|"COMPLETE"|"POLL" }
+   Let op: geen secrets loggen (geen volledige presign querystring).
+
+Tests:
+7) Update/maak unit tests voor classifyUploadVerification:
+   - putOk true, etagPresent true, completeOk true, verifyStatus 403 => INCONCLUSIVE
+   - putOk true, etagPresent true, completeOk true, verifyStatus undefined => INCONCLUSIVE
+   - verifyStatus 200 + contentLength mismatch => FAIL
+   Zorg dat productiecode deze helper ook echt gebruikt (geen “oude” byteVerifyOk boolean die alsnog gooit).
+
+Regressie-eis:
+8) Houd de rest van de pipeline intact (playlists/screen push/auto placement niet aanpassen).
+9) Geen nieuwe playlists aanmaken, geen cleanup flows aanpassen. Alleen upload-verificatie + complete + polling.
+
+OPLEVERING:
+- Geef exact welke bestanden zijn aangepast.
+- Geef een korte uitleg “waarom 403 verify normaal is” en waarom dit nu niet meer tot fail leidt.
+- Geef één handmatige test instructie: admin “Opnieuw proberen” → verwachte logs: PUT ok → COMPLETE ok → POLL -> READY.
+
+Ga nu aan de slag.

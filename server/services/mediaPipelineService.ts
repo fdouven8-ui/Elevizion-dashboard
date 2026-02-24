@@ -7,12 +7,32 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import crypto from "crypto";
+import * as Sentry from "@sentry/node";
 import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
 
 const objectStorage = new ObjectStorageService();
 
 const YODECK_API_BASE = "https://app.yodeck.com/api/v2";
 const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN;
+
+export function classifyUploadVerification(opts: {
+  putOk: boolean; etagPresent: boolean; verifyOk: boolean;
+  verifyStatus?: number; methodUsed: string;
+  contentLength?: number; expectedSize: number;
+}): "OK" | "INCONCLUSIVE" | "FAIL" {
+  if (opts.verifyOk && opts.contentLength && opts.contentLength === opts.expectedSize) return "OK";
+  if (opts.verifyOk && opts.contentLength && opts.contentLength > 0) return "OK";
+  if (opts.verifyOk) return "OK";
+  const INCONCLUSIVE_STATUSES = new Set([403, 405, 501]);
+  if (opts.verifyStatus && INCONCLUSIVE_STATUSES.has(opts.verifyStatus) && opts.putOk && (opts.etagPresent || opts.methodUsed === "NONE")) {
+    return "INCONCLUSIVE";
+  }
+  if (opts.methodUsed === "NONE" && opts.putOk) return "INCONCLUSIVE";
+  if (opts.verifyStatus && INCONCLUSIVE_STATUSES.has(opts.verifyStatus) && opts.putOk) return "INCONCLUSIVE";
+  if (!opts.verifyOk && opts.contentLength === 0) return "FAIL";
+  if (!opts.verifyOk && opts.verifyStatus && !INCONCLUSIVE_STATUSES.has(opts.verifyStatus)) return "FAIL";
+  return opts.putOk ? "INCONCLUSIVE" : "FAIL";
+}
 
 interface PipelineLog {
   timestamp: string;
@@ -895,6 +915,7 @@ export async function publishSingleAsset(opts: {
     console.warn(`${LOG} correlationId=${correlationId} Failed to create upload job: ${jobErr.message} (continuing)`);
   }
 
+  let presignUrl: string | undefined;
   try {
     if (!YODECK_TOKEN) {
       throw new Error("YODECK_AUTH_TOKEN not configured");
@@ -1007,11 +1028,15 @@ export async function publishSingleAsset(opts: {
     }
 
     const presignData = await presignResp.json();
-    const presignUrl = presignData.upload_url || presignData.presign_url || presignData.url;
+    presignUrl = presignData.upload_url || presignData.presign_url || presignData.url;
 
     if (!presignUrl) {
       throw new Error(`No upload_url in presign response`);
     }
+    try {
+      const presignParsed = new URL(presignUrl);
+      console.log(`${LOG} correlationId=${correlationId} GET_UPLOAD_URL_OK host=${presignParsed.hostname} path=${presignParsed.pathname.substring(0, 30)}…`);
+    } catch { console.log(`${LOG} correlationId=${correlationId} GET_UPLOAD_URL_OK (unparseable)`); }
 
     // --- Diagnostic helpers ---
     function maskUrl(url: string): string {
@@ -1173,15 +1198,22 @@ export async function publishSingleAsset(opts: {
     console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_OK status=${uploadResp.status} bytes=${uploadFileSize} etag=${putRespHeaders["etag"] || "none"} amzReqId=${putRespHeaders["x-amz-request-id"] || "none"}`);
 
     // STEP 3.1: Verify bytes landed via HEAD or Range fallback
+    const putOk = uploadResp.ok || uploadResp.status === 204;
+    const etagPresent = !!(putRespHeaders["etag"]);
     const verifyResult = await tryHeadOrRangeForSize(presignUrl);
-    const byteVerifyOk = verifyResult.ok || verifyResult.methodUsed === "NONE";
-    console.log(`${LOG} correlationId=${correlationId} UPLOAD_VERIFY: byteVerifyOk=${byteVerifyOk} methodUsed=${verifyResult.methodUsed} status=${verifyResult.status} contentLength=${verifyResult.contentLength} expected=${uploadFileSize}`);
+    const verifyDecision = classifyUploadVerification({
+      putOk, etagPresent, verifyOk: verifyResult.ok,
+      verifyStatus: verifyResult.status, methodUsed: verifyResult.methodUsed,
+      contentLength: verifyResult.contentLength, expectedSize: uploadFileSize,
+    });
+    const byteVerifyOk = verifyDecision !== "FAIL";
+    console.log(`${LOG} correlationId=${correlationId} UPLOAD_VERIFY_RESULT: decision=${verifyDecision} methodUsed=${verifyResult.methodUsed} verifyStatus=${verifyResult.status} contentLength=${verifyResult.contentLength} expected=${uploadFileSize} putOk=${putOk} etagPresent=${etagPresent}`);
 
     if (verifyResult.ok && verifyResult.contentLength && verifyResult.contentLength !== uploadFileSize) {
       console.warn(`${LOG} correlationId=${correlationId} UPLOAD_VERIFY_SIZE_MISMATCH: remote=${verifyResult.contentLength} local=${uploadFileSize}`);
     }
 
-    if (!byteVerifyOk) {
+    if (verifyDecision === "FAIL") {
       console.error(`${LOG} correlationId=${correlationId} UPLOAD_BYTES_MISSING: putStatus=${uploadResp.status} verifyMethod=${verifyResult.methodUsed} verifyStatus=${verifyResult.status} contentLength=${verifyResult.contentLength || 0} expected=${uploadFileSize}`);
       throw new Error(`UPLOAD_BYTES_MISSING: mediaId=${yodeckMediaId} putStatus=${uploadResp.status} ${verifyResult.methodUsed}Status=${verifyResult.status} contentLength=${verifyResult.contentLength || 0} expected=${uploadFileSize}`);
     }
@@ -1219,6 +1251,7 @@ export async function publishSingleAsset(opts: {
     }
 
     // STEP 4: Poll until ready (4 min wall-clock, backoff 500ms→5s, fail-fast at 8 stuck polls)
+    console.log(`${LOG} correlationId=${correlationId} POLL_START mediaId=${yodeckMediaId} byteVerifyOk=${byteVerifyOk} completeOk=${completeOk} maxMs=240000`);
     const POLL_MAX_MS = 240000;
     const FAIL_FAST_INITIALIZED_POLLS = 8;
     const startTime = Date.now();
@@ -1350,6 +1383,15 @@ export async function publishSingleAsset(opts: {
     throw new Error(`POLL_TIMEOUT: mediaId=${yodeckMediaId} polls=${pollCount} elapsed=${Math.round((Date.now() - startTime) / 1000)}s lastStatus=${lastPollStatus} fileSize=${lastFileState.fileSize} hasFileObj=${lastFileState.hasFileObject} hasFileUrl=${lastFileState.hasFileUrl} argsPlay=${lastFileState.hasArgsPlayUrl} argsDL=${lastFileState.hasArgsDownloadUrl} byteVerifyOk=${byteVerifyOk} completeOk=${completeOk} completeCalls=${completeCallCount} finalDiag={${finalDiag}}`);
   } catch (uploadErr: any) {
     console.error(`${LOG} correlationId=${correlationId} UPLOAD_ERROR assetId=${assetId} mediaId=${yodeckMediaId} error=${uploadErr.message}`);
+
+    const step = /UPLOAD_BYTES_MISSING/.test(uploadErr.message || "") ? "UPLOAD_VERIFY"
+      : /UPLOAD_COMPLETE_FAILED/.test(uploadErr.message || "") ? "COMPLETE"
+      : /POLL_TIMEOUT|POLL_404/.test(uploadErr.message || "") ? "POLL"
+      : "UPLOAD";
+    Sentry.captureException(uploadErr, {
+      tags: { correlationId, assetId: String(assetId), yodeckMediaId: String(yodeckMediaId || "none"), step },
+      extra: { uploadJobId, presignHost: (() => { try { return presignUrl ? new URL(presignUrl).hostname : "none"; } catch { return "parse-error"; } })() },
+    });
 
     // Determine error code for terminal failures
     const errMsg = uploadErr.message || "";
