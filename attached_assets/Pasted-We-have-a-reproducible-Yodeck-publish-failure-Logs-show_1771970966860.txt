@@ -1,0 +1,48 @@
+We have a reproducible Yodeck publish failure. Logs show:
+POLL_TIMEOUT after 48 polls (243s), lastStatus=finished, fileSize=0, hasFileUrl=false, hasFileObj=false, while upload/complete ok: true.
+Media example: 30355290 (but implement generally).
+
+Goal: instrument and minimally harden server/services/mediaPipelineService.ts publishSingleAsset so we can prove where the ingest breaks.
+
+Constraints:
+- Do NOT change DB schema.
+- Do NOT create/delete playlists or screens.
+- Keep patch minimal and reversible.
+- Add structured logs (single-line JSON is OK) with correlationId.
+- Avoid logging secrets; if logging URLs, log only prefix + hash (e.g., first 30 chars + sha256(url)).
+
+Tasks:
+1) In publishSingleAsset, around the binary PUT to the presigned URL:
+   - Log local file path, local file size (fs.stat), and intended Content-Length.
+   - Log PUT request headers we set (Content-Type, Content-Length) and whether request uses streaming.
+   - Capture and log PUT response status code + response headers (ETag, x-amz-request-id or cf-ray equivalents if present).
+   - Ensure Content-Length is explicitly set and equals fs.stat.size.
+
+2) Immediately after PUT succeeds, attempt a HEAD request to the same presigned URL (if allowed):
+   - Log status and Content-Length from HEAD.
+   - If HEAD is forbidden, log that and continue (do not fail).
+
+3) For upload/complete call:
+   - Log request payload shape (redacted) and response status/body (redacted).
+   - Confirm we call /media/{id}/upload/complete/ exactly once per attempt.
+
+4) For polling GET /media/{id}/:
+   - Log the raw subset of fields from the response each poll:
+     status, error, file, file.url, file_size/filesize, last_modified/updated_at, any processing fields.
+   - On FINISHED_NO_FILE scenario (status=finished and no file), log the full response body once (redacted) to avoid spam.
+
+5) Add a final diagnostic on timeout:
+   - Perform one extra GET /media/{id}/ and log the same subset + full body once.
+   - Return an error that includes lastStatus, parsed size, hasFileUrl/hasFileObj.
+
+Deliverables:
+- Provide a single git diff for the changes.
+- Point out exactly which log lines to look for to differentiate:
+  (A) PUT did not upload bytes,
+  (B) PUT uploaded but Yodeck never attached file,
+  (C) Yodeck returned file fields under unexpected keys.
+
+Optional (only if very small):
+- Add a fallback ready-check that treats status=finished as ready ONLY if ANY of:
+  file_size>0 OR filesize>0 OR file.url exists.
+  But do NOT mark ready if all file indicators are missing.

@@ -1013,10 +1013,72 @@ export async function publishSingleAsset(opts: {
       throw new Error(`No upload_url in presign response`);
     }
 
+    // --- Diagnostic helpers ---
+    function safeUrlHash(url: string): string {
+      return url.substring(0, 30) + "…#" + crypto.createHash("sha256").update(url).digest("hex").substring(0, 12);
+    }
+
+    function getYodeckFileState(resp: any): {
+      fileSize: number; hasFileObject: boolean; hasFileUrl: boolean;
+      rawFileKeys: string[]; rawTopKeys: string[];
+    } {
+      const fileSize = Number(resp.filesize || resp.file_size || resp.fileSize || 0) || 0;
+      const fileObj = resp.file;
+      const hasFileObject = !!fileObj && typeof fileObj === "object";
+      const hasFileUrl = hasFileObject && !!(fileObj.url || fileObj.file_url || fileObj.download_url);
+      const rawFileKeys = hasFileObject ? Object.keys(fileObj) : [];
+      const rawTopKeys = Object.keys(resp).filter((k: string) =>
+        /file|size|url|status|error|processing|updated|modified|duration/i.test(k)
+      );
+      return { fileSize, hasFileObject, hasFileUrl, rawFileKeys, rawTopKeys };
+    }
+
+    function redactBody(data: any): string {
+      const safe = { ...data };
+      for (const k of ["authorization", "token", "api_key", "secret"]) {
+        if (safe[k]) safe[k] = "[REDACTED]";
+      }
+      if (safe.file && typeof safe.file === "object") {
+        const sf = { ...safe.file };
+        if (sf.url) sf.url = safeUrlHash(sf.url);
+        if (sf.file_url) sf.file_url = safeUrlHash(sf.file_url);
+        if (sf.download_url) sf.download_url = safeUrlHash(sf.download_url);
+        safe.file = sf;
+      }
+      return JSON.stringify(safe).substring(0, 800);
+    }
+
+    async function markAssetReady(pollsUsed: number, source: string) {
+      console.log(`${LOG} correlationId=${correlationId} YODECK_READY_OK assetId=${assetId} mediaId=${yodeckMediaId} source=${source} polls=${pollsUsed}`);
+      await db.update(adAssets).set({
+        yodeckUploadedAt: new Date(),
+        yodeckReadinessStatus: "READY",
+        publishStatus: "PUBLISHED",
+        publishError: null,
+      }).where(eq(adAssets.id, assetId));
+      await db.update(advertisers).set({
+        assetStatus: "live",
+        updatedAt: new Date(),
+      }).where(eq(advertisers.id, asset.advertiserId));
+      if (uploadJobId) {
+        try {
+          await db.update(uploadJobs).set({
+            status: UPLOAD_JOB_STATUS.READY,
+            finalState: UPLOAD_FINAL_STATE.READY,
+            yodeckMediaId: yodeckMediaId,
+            pollAttempts: pollsUsed,
+            completedAt: new Date(),
+          }).where(eq(uploadJobs.id, uploadJobId));
+        } catch {}
+      }
+      try { fs.unlinkSync(localPath); } catch {}
+    }
+
     // STEP 3: PUT binary to presigned URL using buffer (not streaming)
     const { isShuttingDown } = await import("../shutdownFlag");
     const uploadBuffer = fs.readFileSync(localPath);
     const uploadFileSize = uploadBuffer.length;
+    const fsStat = fs.statSync(localPath);
 
     if (uploadFileSize === 0) {
       throw new Error(`YODECK_UPLOAD_ABORTED: Local file is 0 bytes at ${localPath}`);
@@ -1026,47 +1088,70 @@ export async function publishSingleAsset(opts: {
       throw new Error(`YODECK_UPLOAD_ABORTED: Server shutting down before PUT`);
     }
 
-    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_START assetId=${assetId} bytes=${uploadFileSize} contentLength=${uploadFileSize}`);
+    if (fsStat.size !== uploadFileSize) {
+      console.warn(`${LOG} correlationId=${correlationId} SIZE_MISMATCH: fsStat=${fsStat.size} bufferLen=${uploadFileSize}`);
+    }
+
+    const putHeaders: Record<string, string> = {
+      "Content-Type": "video/mp4",
+      "Content-Length": String(uploadFileSize),
+    };
+    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_START assetId=${assetId} localPath=${localPath} fsStat=${fsStat.size} bufferLen=${uploadFileSize} headers=${JSON.stringify(putHeaders)} streaming=false`);
 
     const uploadResp = await fetch(presignUrl, {
       method: "PUT",
-      headers: {
-        "Content-Type": "video/mp4",
-        "Content-Length": String(uploadFileSize),
-      },
+      headers: putHeaders,
       body: uploadBuffer,
     });
 
     let uploadRespBody = "";
-    try {
-      uploadRespBody = await uploadResp.text();
-    } catch {}
+    try { uploadRespBody = await uploadResp.text(); } catch {}
+
+    const putRespHeaders: Record<string, string> = {};
+    for (const hdr of ["etag", "x-amz-request-id", "x-amz-id-2", "cf-ray", "content-length"]) {
+      const v = uploadResp.headers.get(hdr);
+      if (v) putRespHeaders[hdr] = v;
+    }
 
     if (!uploadResp.ok && uploadResp.status !== 204) {
+      console.error(`${LOG} correlationId=${correlationId} PUT_BINARY_FAIL status=${uploadResp.status} respHeaders=${JSON.stringify(putRespHeaders)} body=${uploadRespBody.substring(0, 300)}`);
       throw new Error(`YODECK_UPLOAD_ABORTED: PUT binary failed: status=${uploadResp.status} body=${uploadRespBody.substring(0, 300)}`);
     }
 
-    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_OK assetId=${assetId} status=${uploadResp.status} uploadedBytes=${uploadFileSize}`);
+    console.log(`${LOG} correlationId=${correlationId} PUT_BINARY_OK assetId=${assetId} status=${uploadResp.status} uploadedBytes=${uploadFileSize} respHeaders=${JSON.stringify(putRespHeaders)}`);
 
-    // STEP 3.5: PUT /media/{id}/upload/complete/ — signal Yodeck that binary upload is done
-    // Yodeck API spec requires { "upload_url": "<presigned url>" } to confirm the upload
+    // STEP 3.1: HEAD presigned URL — verify bytes actually landed
+    try {
+      const headResp = await fetch(presignUrl, { method: "HEAD" });
+      const headCL = headResp.headers.get("content-length");
+      const headEtag = headResp.headers.get("etag");
+      console.log(`${LOG} correlationId=${correlationId} HEAD_PRESIGN status=${headResp.status} contentLength=${headCL} etag=${headEtag}`);
+      if (headResp.ok && headCL && Number(headCL) !== uploadFileSize) {
+        console.warn(`${LOG} correlationId=${correlationId} HEAD_SIZE_MISMATCH: headCL=${headCL} uploadedBytes=${uploadFileSize}`);
+      }
+    } catch (headErr: any) {
+      console.log(`${LOG} correlationId=${correlationId} HEAD_PRESIGN_FORBIDDEN (expected for some providers): ${headErr.message}`);
+    }
+
+    // STEP 3.5: PUT /media/{id}/upload/complete/ — exactly one call per attempt
     let completeOk = false;
-    let completeResponseSnippet = "";
+    let completeCallCount = 0;
     for (let completeAttempt = 1; completeAttempt <= 3; completeAttempt++) {
       try {
-        console.log(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE_START attempt=${completeAttempt} mediaId=${yodeckMediaId}`);
+        const completePayload = { upload_url: presignUrl };
+        completeCallCount++;
+        console.log(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE_START attempt=${completeAttempt} callCount=${completeCallCount} mediaId=${yodeckMediaId} payloadKeys=${Object.keys(completePayload).join(",")}`);
         const completeResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/upload/complete/`, {
           method: "PUT",
           headers: {
             "Authorization": `Token ${YODECK_TOKEN}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ upload_url: presignUrl }),
+          body: JSON.stringify(completePayload),
         });
         let completeBody = "";
         try { completeBody = await completeResp.text(); } catch {}
-        completeResponseSnippet = completeBody.substring(0, 300);
-        console.log(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE_OK attempt=${completeAttempt} status=${completeResp.status} body=${completeResponseSnippet}`);
+        console.log(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE_RESP attempt=${completeAttempt} status=${completeResp.status} body=${completeBody.substring(0, 300)}`);
         if (completeResp.ok || completeResp.status < 400) {
           completeOk = true;
           break;
@@ -1078,16 +1163,7 @@ export async function publishSingleAsset(opts: {
       }
     }
     if (!completeOk) {
-      console.warn(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE never succeeded after 3 attempts — polling may stall`);
-    }
-
-    // Helper: extract file state from Yodeck media response (handles field name variants)
-    function getYodeckFileState(resp: any): { fileSize: number; hasFileObject: boolean; hasFileUrl: boolean } {
-      const fileSize = Number(resp.filesize || resp.file_size || resp.fileSize || 0) || 0;
-      const fileObj = resp.file;
-      const hasFileObject = !!fileObj && typeof fileObj === "object";
-      const hasFileUrl = hasFileObject && !!(fileObj.url || fileObj.file_url || fileObj.download_url);
-      return { fileSize, hasFileObject, hasFileUrl };
+      console.warn(`${LOG} correlationId=${correlationId} UPLOAD_COMPLETE never succeeded after ${completeCallCount} calls — polling may stall`);
     }
 
     // STEP 4: Poll until ready (4 min wall-clock, backoff 500ms→5s, fail-fast at 8 stuck polls)
@@ -1097,8 +1173,9 @@ export async function publishSingleAsset(opts: {
     let pollCount = 0;
     let initializedZeroCount = 0;
     let completeFallbackFired = false;
+    let finishedNoFileLogged = false;
     let lastPollStatus = "";
-    let lastFileState = { fileSize: 0, hasFileObject: false, hasFileUrl: false };
+    let lastFileState: ReturnType<typeof getYodeckFileState> = { fileSize: 0, hasFileObject: false, hasFileUrl: false, rawFileKeys: [], rawTopKeys: [] };
 
     while (Date.now() - startTime < POLL_MAX_MS) {
       const backoffMs = Math.min(500 * Math.pow(2, Math.min(pollCount, 4)), 5000);
@@ -1109,109 +1186,83 @@ export async function publishSingleAsset(opts: {
         headers: { "Authorization": `Token ${YODECK_TOKEN}` },
       });
 
-      if (statusResp.ok) {
-        const statusData = await statusResp.json();
-        const fileState = getYodeckFileState(statusData);
-        lastFileState = fileState;
-        const status = statusData.status;
-        lastPollStatus = status;
-        const errorMessage = statusData.error_message || statusData.errorMessage || statusData.error || "";
+      if (!statusResp.ok) {
+        console.warn(`${LOG} correlationId=${correlationId} POLL #${pollCount}: HTTP ${statusResp.status} — retrying`);
+        continue;
+      }
 
-        console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl} elapsed=${Date.now() - startTime}ms`);
+      const statusData = await statusResp.json();
+      const fileState = getYodeckFileState(statusData);
+      lastFileState = fileState;
+      const status = statusData.status;
+      lastPollStatus = status;
+      const errorMessage = statusData.error_message || statusData.errorMessage || statusData.error || "";
 
-        if (status === "error" || (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes("abort"))) {
-          throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} status=${status} error=${errorMessage}`);
+      console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl} topKeys=[${fileState.rawTopKeys.join(",")}] fileKeys=[${fileState.rawFileKeys.join(",")}] elapsed=${Date.now() - startTime}ms`);
+
+      if (status === "error" || (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes("abort"))) {
+        throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} status=${status} error=${errorMessage}`);
+      }
+
+      if (['failed', 'aborted', 'deleted'].includes((status || '').toLowerCase())) {
+        throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} terminal status=${status}`);
+      }
+
+      const isReady = status !== "initialized" && (fileState.fileSize > 0 || (fileState.hasFileObject && fileState.hasFileUrl));
+
+      if (isReady) {
+        const verifyResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
+          headers: { "Authorization": `Token ${YODECK_TOKEN}` },
+        });
+        if (verifyResp.status === 404) {
+          throw new Error(`FINAL_VERIFY_404: Media ${yodeckMediaId} returns 404`);
         }
-
-        if (['failed', 'aborted', 'deleted'].includes((status || '').toLowerCase())) {
-          throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} terminal status=${status}`);
+        const verifyData = await verifyResp.json();
+        const verifyFileState = getYodeckFileState(verifyData);
+        const verifyStatus = verifyData.status;
+        const verifyReady = verifyStatus !== "initialized" && (verifyFileState.fileSize > 0 || (verifyFileState.hasFileObject && verifyFileState.hasFileUrl));
+        if (!verifyReady) {
+          console.warn(`${LOG} correlationId=${correlationId} VERIFY_FLAP: poll said ready but verify says status=${verifyStatus} fileSize=${verifyFileState.fileSize} hasFileUrl=${verifyFileState.hasFileUrl} — continuing`);
+          continue;
         }
+        await markAssetReady(pollCount, "poll_verify");
+        return { ok: true, assetId, correlationId, yodeckMediaId };
+      }
 
-        const isReady = status !== "initialized" && (fileState.fileSize > 0 || (fileState.hasFileObject && fileState.hasFileUrl));
-
-        if (isReady) {
-          const verifyResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
-            headers: { "Authorization": `Token ${YODECK_TOKEN}` },
-          });
-
-          if (verifyResp.status === 404) {
-            throw new Error(`FINAL_VERIFY_404: Media ${yodeckMediaId} returns 404`);
-          }
-
-          const verifyData = await verifyResp.json();
-          const verifyFileState = getYodeckFileState(verifyData);
-          const verifyStatus = verifyData.status;
-          const verifyReady = verifyStatus !== "initialized" && (verifyFileState.fileSize > 0 || (verifyFileState.hasFileObject && verifyFileState.hasFileUrl));
-
-          if (!verifyReady) {
-            console.warn(`${LOG} correlationId=${correlationId} VERIFY_FLAP: first poll said ready but verify says status=${verifyStatus} fileSize=${verifyFileState.fileSize} hasFileUrl=${verifyFileState.hasFileUrl} — continuing poll`);
-            continue;
-          }
-
-          console.log(`${LOG} correlationId=${correlationId} YODECK_READY_OK assetId=${assetId} mediaId=${yodeckMediaId} verifyStatus=${verifyStatus} fileSize=${verifyFileState.fileSize}`);
-
-          await db.update(adAssets).set({
-            yodeckUploadedAt: new Date(),
-            yodeckReadinessStatus: "READY",
-            publishStatus: "PUBLISHED",
-            publishError: null,
-          }).where(eq(adAssets.id, assetId));
-
-          await db.update(advertisers).set({
-            assetStatus: "live",
-            updatedAt: new Date(),
-          }).where(eq(advertisers.id, asset.advertiserId));
-
-          if (uploadJobId) {
-            try {
-              await db.update(uploadJobs).set({
-                status: UPLOAD_JOB_STATUS.READY,
-                finalState: UPLOAD_FINAL_STATE.READY,
-                yodeckMediaId: yodeckMediaId,
-                pollAttempts: pollCount,
-                completedAt: new Date(),
-              }).where(eq(uploadJobs.id, uploadJobId));
-            } catch {}
-          }
-
-          try { fs.unlinkSync(localPath); } catch {}
-          return { ok: true, assetId, correlationId, yodeckMediaId };
+      if (status === "initialized" && fileState.fileSize === 0 && !fileState.hasFileUrl) {
+        initializedZeroCount++;
+        if (pollCount >= 5 && !completeFallbackFired) {
+          completeFallbackFired = true;
+          completeCallCount++;
+          console.warn(`${LOG} correlationId=${correlationId} STUCK: ${pollCount} polls, status=initialized, fileSize=0 — retrying upload/complete callCount=${completeCallCount}`);
+          try {
+            const retryResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/upload/complete/`, {
+              method: "PUT",
+              headers: { "Authorization": `Token ${YODECK_TOKEN}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ upload_url: presignUrl }),
+            });
+            console.log(`${LOG} correlationId=${correlationId} STUCK_COMPLETE_RETRY status=${retryResp.status}`);
+          } catch {}
         }
+        if (initializedZeroCount >= FAIL_FAST_INITIALIZED_POLLS) {
+          throw new Error(`FAILED_INIT_STUCK: mediaId=${yodeckMediaId} stuck initialized+fileSize=0 for ${initializedZeroCount} consecutive polls after ${completeCallCount} upload/complete calls (upload bytes likely never arrived)`);
+        }
+      } else {
+        initializedZeroCount = 0;
+      }
 
-        // Track stuck initialized+fileSize=0 cycles
-        if (status === "initialized" && fileState.fileSize === 0 && !fileState.hasFileUrl) {
-          initializedZeroCount++;
-
-          if (pollCount >= 5 && !completeFallbackFired) {
-            completeFallbackFired = true;
-            console.warn(`${LOG} correlationId=${correlationId} STUCK: ${pollCount} polls, status=initialized, fileSize=0 — retrying upload/complete with upload_url`);
-            try {
-              const retryResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/upload/complete/`, {
-                method: "PUT",
-                headers: {
-                  "Authorization": `Token ${YODECK_TOKEN}`,
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify({ upload_url: presignUrl }),
-              });
-              console.log(`${LOG} correlationId=${correlationId} STUCK_COMPLETE_RETRY status=${retryResp.status}`);
-            } catch {}
-          }
-
-          if (initializedZeroCount >= FAIL_FAST_INITIALIZED_POLLS) {
-            throw new Error(`FAILED_INIT_STUCK: mediaId=${yodeckMediaId} stuck initialized+fileSize=0 for ${initializedZeroCount} consecutive polls after upload/complete (upload bytes likely never arrived)`);
-          }
+      if (status === "finished" && fileState.fileSize === 0 && !fileState.hasFileUrl) {
+        if (!finishedNoFileLogged) {
+          finishedNoFileLogged = true;
+          console.warn(`${LOG} correlationId=${correlationId} FINISHED_NO_FILE: status=finished but fileSize=0 and no file URL — full response (redacted): ${redactBody(statusData)}`);
         } else {
-          initializedZeroCount = 0;
-        }
-
-        if (status === "finished" && fileState.fileSize === 0 && !fileState.hasFileUrl) {
-          console.warn(`${LOG} correlationId=${correlationId} FINISHED_NO_FILE: status=finished but fileSize=0 and no file URL — Yodeck may still be processing, continuing poll`);
+          console.warn(`${LOG} correlationId=${correlationId} FINISHED_NO_FILE: still no file (poll #${pollCount})`);
         }
       }
     }
 
-    // Final verification: one last check before declaring timeout
+    // STEP 5: Final diagnostic on timeout — one extra GET + full body dump
+    let finalDiag = "";
     try {
       const finalResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
         headers: { "Authorization": `Token ${YODECK_TOKEN}` },
@@ -1221,39 +1272,23 @@ export async function publishSingleAsset(opts: {
         const finalState = getYodeckFileState(finalData);
         const finalStatus = finalData.status;
         const finalReady = finalStatus !== "initialized" && (finalState.fileSize > 0 || (finalState.hasFileObject && finalState.hasFileUrl));
-        console.log(`${LOG} correlationId=${correlationId} FINAL_CHECK: status=${finalStatus} fileSize=${finalState.fileSize} hasFileUrl=${finalState.hasFileUrl} ready=${finalReady}`);
+        finalDiag = `status=${finalStatus} fileSize=${finalState.fileSize} hasFileObj=${finalState.hasFileObject} hasFileUrl=${finalState.hasFileUrl} topKeys=[${finalState.rawTopKeys.join(",")}] fileKeys=[${finalState.rawFileKeys.join(",")}]`;
+        console.log(`${LOG} correlationId=${correlationId} TIMEOUT_FINAL_DIAG: ${finalDiag}`);
+        console.log(`${LOG} correlationId=${correlationId} TIMEOUT_FINAL_BODY: ${redactBody(finalData)}`);
         if (finalReady) {
-          console.log(`${LOG} correlationId=${correlationId} YODECK_READY_OK (final check) assetId=${assetId} mediaId=${yodeckMediaId}`);
-          await db.update(adAssets).set({
-            yodeckUploadedAt: new Date(),
-            yodeckReadinessStatus: "READY",
-            publishStatus: "PUBLISHED",
-            publishError: null,
-          }).where(eq(adAssets.id, assetId));
-          await db.update(advertisers).set({
-            assetStatus: "live",
-            updatedAt: new Date(),
-          }).where(eq(advertisers.id, asset.advertiserId));
-          if (uploadJobId) {
-            try {
-              await db.update(uploadJobs).set({
-                status: UPLOAD_JOB_STATUS.READY,
-                finalState: UPLOAD_FINAL_STATE.READY,
-                yodeckMediaId: yodeckMediaId,
-                pollAttempts: pollCount,
-                completedAt: new Date(),
-              }).where(eq(uploadJobs.id, uploadJobId));
-            } catch {}
-          }
-          try { fs.unlinkSync(localPath); } catch {}
+          await markAssetReady(pollCount, "timeout_final_check");
           return { ok: true, assetId, correlationId, yodeckMediaId };
         }
+      } else {
+        finalDiag = `httpStatus=${finalResp.status}`;
+        console.warn(`${LOG} correlationId=${correlationId} TIMEOUT_FINAL_DIAG: GET failed ${finalResp.status}`);
       }
     } catch (finalErr: any) {
-      console.warn(`${LOG} correlationId=${correlationId} FINAL_CHECK_ERROR: ${finalErr.message}`);
+      finalDiag = `error=${finalErr.message}`;
+      console.warn(`${LOG} correlationId=${correlationId} TIMEOUT_FINAL_DIAG_ERROR: ${finalErr.message}`);
     }
 
-    throw new Error(`POLL_TIMEOUT: mediaId=${yodeckMediaId} still not ready after ${pollCount} polls (${Math.round((Date.now() - startTime) / 1000)}s). lastStatus=${lastPollStatus} fileSize=${lastFileState.fileSize} hasFileUrl=${lastFileState.hasFileUrl}. upload/complete ok: ${completeOk}`);
+    throw new Error(`POLL_TIMEOUT: mediaId=${yodeckMediaId} polls=${pollCount} elapsed=${Math.round((Date.now() - startTime) / 1000)}s lastStatus=${lastPollStatus} fileSize=${lastFileState.fileSize} hasFileObj=${lastFileState.hasFileObject} hasFileUrl=${lastFileState.hasFileUrl} completeOk=${completeOk} completeCalls=${completeCallCount} finalDiag={${finalDiag}}`);
   } catch (uploadErr: any) {
     console.error(`${LOG} correlationId=${correlationId} UPLOAD_ERROR assetId=${assetId} mediaId=${yodeckMediaId} error=${uploadErr.message}`);
 
