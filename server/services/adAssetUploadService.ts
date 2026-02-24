@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import { db } from '../db';
 import { adAssets, advertisers, portalTokens } from '@shared/schema';
 import { eq, and, or, isNull, isNotNull, ne, SQL } from 'drizzle-orm';
@@ -779,6 +780,14 @@ export async function approveAsset(
         console.log(`[AdminReview] Auto-placement success: ${autoPlacementResult.placementsCreated} placements, ${autoPlacementResult.screensPublished} screens`);
       } else {
         console.warn('[AdminReview] Auto-placement failed (non-fatal):', autoPlacementResult.message);
+        Sentry.captureMessage('Auto-placement failed (non-fatal)', {
+          level: 'warning',
+          extra: {
+            advertiserId: asset.advertiserId,
+            assetId,
+            reason: autoPlacementResult.message,
+          },
+        });
       }
     } catch (autoPlacementError: any) {
       console.error('[AdminReview] Auto-placement error (non-fatal):', autoPlacementError.message);
