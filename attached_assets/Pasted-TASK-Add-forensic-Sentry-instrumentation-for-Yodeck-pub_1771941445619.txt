@@ -1,0 +1,83 @@
+TASK: Add forensic Sentry instrumentation for Yodeck publish/retryPublish so we can diagnose media stuck at status=initialized fileSize=0 (timeouts after many polls). DO NOT change business logic or “fix” the flow yet. Only add observability + 1 debug endpoint.
+
+CONTEXT:
+- We see errors like:
+  [RetryPublish] ... UPLOAD_ERROR ... Timeout waiting for media {mediaId} to become ready after {polls}
+  Polls show status=initialized and fileSize=0 repeatedly.
+- We must be able to trace a single publish from assetId -> yodeckMediaId -> upload_url -> upload bytes -> upload complete -> status transitions -> playlist insertion.
+- Logs arrive via Sentry (console breadcrumbs + captured messages/events).
+
+REQUIREMENTS (OBSERVABILITY ONLY):
+1) Add a correlationId for every publish attempt and ensure it is included in ALL logs and Sentry events.
+   - Format: publish-{assetId}-{timestamp} (or keep existing if already in place, but propagate everywhere).
+
+2) Implement a dedicated logging helper used by the whole flow:
+   logYodeckStep({correlationId, assetId, mediaId, step, ok, data})
+   - This should:
+     a) console.info/error with a consistent prefix: [YodeckTrace]
+     b) Sentry.addBreadcrumb({ category:"yodeck", message: step, data })
+     c) For failures: Sentry.captureMessage or captureException with tags + extra.
+
+3) For EVERY external call in the publish/retryPublish pipeline (Yodeck + R2):
+   - Log request/response metadata to Sentry as breadcrumb:
+     - method, url (NO api key), status code, durationMs
+     - response summary: selected fields only (see “safe fields” below)
+   - Also include retry attempt count if any.
+
+4) Add “SAFE DATA” extraction for Yodeck objects so we can log without leaking secrets.
+   - Never log: api keys, Authorization headers, signed upload urls query params if they contain credentials, tokens.
+   - Create a function sanitizeUrl(url) that strips query string entirely.
+   - Create pickMediaFields(media) returning ONLY:
+     id, name, status, fileSize, duration, mime_type/type, created_at, updated_at, origin/media_origin if present, error/message fields if present, processing/encoding fields if present.
+   - Create pickUploadFields(uploadResp) returning ONLY:
+     upload_url (sanitized), expires_at/expiry if present, method/type if present.
+   - Create pickPlaylistFields(playlist) returning ONLY:
+     id, name, itemsCount if available.
+
+5) Instrument these exact steps (each step logs start + end with durationMs):
+   A. ASSET_LOAD: assetId, filename, contentType, byteSize (from R2 HEAD), r2Key, r2Etag if available.
+   B. YODECK_MEDIA_CREATE: payload summary (safe), response mediaId + pickMediaFields.
+   C. YODECK_GET_UPLOAD_URL: GET /media/{id}/upload response -> pickUploadFields.
+   D. BYTE_TRANSFER_TO_UPLOAD_URL: actual upload to upload_url
+      - log: method used, bytesSent, durationMs, response status
+      - if streaming, log calculated bytes (from file size) and confirm completion.
+   E. YODECK_UPLOAD_COMPLETE_CALL: whether code attempted it or not (even if not implemented yet)
+      - If it does not exist in code currently, log explicitly:
+        step=UPLOAD_COMPLETE_MISSING ok=false data={reason:"not called by current implementation"}
+   F. STATUS_POLL_LOOP:
+      - Each poll logs: pollIndex, status, fileSize, any error field, durationMs since start.
+      - Additionally log “stall detection”: if status+fileSize unchanged for N polls, emit a WARNING breadcrumb once.
+   G. MEDIA_RESOLVE_BY_NAME (if exists anywhere):
+      - If code attempts to reuse an old “finished” media by name, log:
+        resolvedFrom="name", requestedName, chosenMediaId, chosenStatus, reason, and ALSO log the originally created mediaId.
+      - We need to detect masking of failed new uploads by old finished media.
+
+6) Add one DEBUG endpoint for gathering live Yodeck state without changing publish logic:
+   POST /api/admin/yodeck/trace-media
+   body: { mediaId:number }
+   - It should:
+     - GET /api/v2/media/{id}/
+     - GET /api/v2/media/{id}/upload (if exists)
+     - GET /api/v2/media/{id}/status (if exists; if not, skip)
+     - Return a JSON object with the picked safe fields + durations
+   - Also log via logYodeckStep with correlationId="admin-trace-{mediaId}-{timestamp}"
+
+7) Sentry tagging:
+   For all captured messages/exceptions, include tags:
+   - component="yodeck"
+   - flow="publish" or "retryPublish"
+   - assetId, mediaId
+   - correlationId
+   - step
+   And extras:
+   - r2Key, fileSize, pollCount, lastKnownStatus, lastKnownFileSize
+
+8) Output expectations:
+   - After implementation, a single failing publish should produce a complete ordered breadcrumb trail in Sentry showing:
+     asset load -> media create -> upload url -> bytes transfer -> (missing/attempted) upload complete -> polling -> resolution behavior.
+   - Ensure logs are not too noisy: poll logs can stay as console.info but only breadcrumb every poll; captureMessage only on significant transitions or final failure.
+
+DELIVERABLE:
+- Implement in the minimal set of files where publish/retryPublish and yodeck client live.
+- Add the admin endpoint route.
+- Add a short note in code comments where to find the Sentry breadcrumbs by correlationId.

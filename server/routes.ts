@@ -19041,6 +19041,56 @@ KvK: 90982541 | BTW: NL004857473B37</p>
     }
   });
 
+  /**
+   * POST /api/admin/yodeck/trace-media
+   * Debug endpoint: gather live Yodeck state for a specific media ID.
+   * Returns safe-picked fields only, logs via logYodeckStep.
+   */
+  app.post("/api/admin/yodeck/trace-media", requireAdminAccess, async (req, res) => {
+    try {
+      const { mediaId } = req.body;
+      if (!mediaId || typeof mediaId !== "number") {
+        return res.status(400).json({ ok: false, error: "mediaId (number) required" });
+      }
+
+      const { logYodeckStep, traceExternalCall, pickMediaFields, pickUploadFields, sanitizeUrl } = await import("./services/yodeckTraceHelpers");
+      const corrId = `admin-trace-${mediaId}-${Date.now()}`;
+      const result: Record<string, any> = { correlationId: corrId, mediaId, queriedAt: new Date().toISOString() };
+
+      const { YodeckPublishService } = await import("./services/yodeckPublishService");
+      const publishService = new YodeckPublishService();
+
+      const mediaStart = Date.now();
+      const mediaResult = await publishService.getMediaDetails(mediaId, corrId);
+      const mediaDurationMs = Date.now() - mediaStart;
+      result.media = mediaResult.ok ? pickMediaFields(mediaResult.media) : { error: mediaResult.error };
+      result.mediaDurationMs = mediaDurationMs;
+      logYodeckStep({ correlationId: corrId, mediaId, step: "TRACE_GET_MEDIA", ok: mediaResult.ok, flow: "admin-trace", durationMs: mediaDurationMs, data: result.media });
+
+      try {
+        const axios = (await import("axios")).default;
+        const apiKey = process.env.YODECK_AUTH_TOKEN || "";
+        const uploadStart = Date.now();
+        const uploadResp = await axios.get(`https://app.yodeck.com/api/v2/media/${mediaId}/upload/`, {
+          headers: { "Authorization": `Token ${apiKey}`, "Accept": "application/json" },
+          timeout: 15000,
+          validateStatus: () => true,
+        });
+        const uploadDurationMs = Date.now() - uploadStart;
+        result.upload = uploadResp.status === 200 ? pickUploadFields(uploadResp.data) : { status: uploadResp.status, error: JSON.stringify(uploadResp.data).substring(0, 500) };
+        result.uploadDurationMs = uploadDurationMs;
+        traceExternalCall({ correlationId: corrId, method: "GET", url: `https://app.yodeck.com/api/v2/media/${mediaId}/upload/`, statusCode: uploadResp.status, durationMs: uploadDurationMs });
+        logYodeckStep({ correlationId: corrId, mediaId, step: "TRACE_GET_UPLOAD", ok: uploadResp.status === 200, flow: "admin-trace", durationMs: uploadDurationMs, data: result.upload });
+      } catch (uploadErr: any) {
+        result.upload = { error: uploadErr.message };
+      }
+
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
   app.get("/api/admin/yodeck/playlists", requireAdminAccess, async (req, res) => {
     try {
       const q = (req.query.q as string) || "";

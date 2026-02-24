@@ -10,6 +10,7 @@
  * Auth: Authorization: Token <label:value>
  */
 import * as Sentry from "@sentry/node";
+import { logYodeckStep, traceExternalCall, sanitizeUrl, pickMediaFields } from "./yodeckTraceHelpers";
 /**
  * Base URL: https://app.yodeck.com/api/v2
  */
@@ -953,6 +954,7 @@ export class YodeckClient {
       const timeout = setTimeout(() => controller.abort(), 30000);
 
       try {
+        const fetchStart = Date.now();
         const response = await fetch(`${YODECK_BASE_URL}/media/`, {
           method: "POST",
           headers: {
@@ -964,8 +966,14 @@ export class YodeckClient {
         });
 
         clearTimeout(timeout);
+        const fetchDurationMs = Date.now() - fetchStart;
         const respText = await response.text();
         const respBody = respText.substring(0, 12000);
+
+        traceExternalCall({
+          correlationId: corrId, method: "POST", url: `${YODECK_BASE_URL}/media/`,
+          statusCode: response.status, durationMs: fetchDurationMs,
+        });
 
         console.log(`[YodeckClient][${corrId}] createMediaFromUrl RESPONSE: status=${response.status} body=${respBody.substring(0, 2048)}`);
 
