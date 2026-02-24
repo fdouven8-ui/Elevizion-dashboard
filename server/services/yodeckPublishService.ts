@@ -1829,7 +1829,7 @@ class YodeckPublishService {
     });
     uploadFields.push('file');
     
-    console.log(`[YodeckPublish] Upload attempt (format=${mediaOriginFormat}): fields=[${uploadFields.join(', ')}] name="${normalizedName}" file="${filename}" size=${fileSize}`);
+    console.log(`[YodeckPublish] Upload attempt (format=${_mediaOriginFormat}): fields=[${uploadFields.join(', ')}] name="${normalizedName}" file="${filename}" size=${fileSize}`);
     
     const apiKey = await this.getApiKey();
     const url = `${YODECK_BASE_URL}/media`;
@@ -1877,7 +1877,7 @@ class YodeckPublishService {
         sentFields: uploadFields, 
         url, 
         statusCode, 
-        format: mediaOriginFormat,
+        format: _mediaOriginFormat,
         requestHeaders: Object.keys(headers).filter(k => k !== 'Authorization'), // Log header keys (no secrets)
       };
       let yodeckErrorCode: string | undefined;
@@ -2650,9 +2650,9 @@ class YodeckPublishService {
       }
       
       // If POST create failed, report the error (no placeholder fallback - use tag-based publishing instead)
-      if (createResult === null || !createResult.ok) {
+      if (!createResult?.ok) {
         const errorCode = "YODECK_PLAYLIST_ITEM_CREATE_FAILED";
-        const errorMsg = createResult?.error || "Playlist item create failed. Consider using tag-based publishing.";
+        const errorMsg = createResult?.error ?? "Playlist item create failed. Consider using tag-based publishing.";
         console.error(`[YodeckPublish] ${errorCode}: ${errorMsg}`);
         
         await db.update(integrationOutbox)

@@ -150,9 +150,9 @@ export function sanitizePayload<T extends Record<string, unknown>>(obj: T): Part
  * Log the create-media payload for debugging.
  * Shows both full JSON and keys for easy verification.
  */
-export function logCreateMediaPayload(payload: YodeckCreateMediaPayload, correlationId?: string): void {
+export function logCreateMediaPayload(payload: YodeckCreateMediaPayload | YodeckCreateMediaPayloadOfficial, correlationId?: string): void {
   const prefix = correlationId ? `[${correlationId}]` : "";
   console.log(`[YodeckPayload]${prefix} CREATE_MEDIA payload:`, JSON.stringify(payload, null, 2));
   console.log(`[YodeckPayload]${prefix} CREATE_MEDIA payload keys:`, Object.keys(payload).join(", "));
-  console.log(`[YodeckPayload]${prefix} CREATE_MEDIA media_origin="${payload.media_origin}" media_type="${payload.media_type}"`);
+  console.log(`[YodeckPayload]${prefix} CREATE_MEDIA media_origin="${JSON.stringify(payload.media_origin)}" media_type="${'media_type' in payload ? (payload as any).media_type : 'N/A'}"`);
 }
