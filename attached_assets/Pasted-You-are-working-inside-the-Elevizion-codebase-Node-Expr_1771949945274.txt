@@ -1,0 +1,138 @@
+You are working inside the Elevizion codebase (Node/Express + TS). We have Sentry issues + console logs showing multiple failures. Replit has access to Sentry and can pull the exact events. Use the IDs/correlationIds below to locate the Sentry events and implement minimal, targeted fixes (no refactors).
+
+================================================================================
+SENTRY TRIAGE — WHAT TO SEARCH FOR (ERROR CODES / SIGNATURES)
+Use Sentry search with these exact signatures + IDs (match on message/exception + tags + breadcrumbs):
+1) YODECK API create-media failure:
+   - error.code: "err_1002"
+   - error.details.missing_key: "type"
+   - message contains: "A field is missing from request input"
+   - breadcrumbs/http: POST https://app.yodeck.com/api/v2/media/
+   - internal log step/tag: "YODECK_MEDIA_CREATE" AND "ok=false" AND "statusCode=400"
+2) Publish timeout failure:
+   - publishError contains: "Timeout waiting for media" OR "to become ready"
+   - internal log: "Timeout waiting for media <id> to become ready after <n> polls"
+   - tag/extra likely present: yodeckMediaId, pollCount, assetId
+3) Stale media stuck initialized (origin=url / buffering=true):
+   - message contains: "STALE_MEDIA DETECTED" OR "initialized_not_local" OR "DELETE_STALE"
+   - breadcrumbs/http: GET https://app.yodeck.com/api/v2/media/<id> AND DELETE /media/<id>
+   - look for extras: origin.source="url", buffering=true, status="initialized"
+4) Local upload pipeline failures:
+   - anything referencing:
+     - upload_url retrieval (GET /media/<id>/upload)
+     - missing upload complete step (PUT /media/<id>/upload/complete)
+     - media stuck: status="initialized" AND fileSize=0 (or fileSizeBytes=0)
+   - internal steps to search: "YODECK_UPLOAD_URL", "YODECK_UPLOAD_PUT", "YODECK_UPLOAD_COMPLETE"
+5) R2 / asset load errors:
+   - "R2_HEAD_FAILED" OR "ALL_METHODS_FAILED" OR "[R2Client] HEAD"
+   - url patterns: https://elevizion-assets.<account>.r2.cloudflarestorage.com/<key>
+6) System/boot warnings (non-blocking but track):
+   - "[baseline-browser-mapping] The data in this module is over two months old"
+
+Also search by these identifiers in Sentry:
+- assetId: 86abfbd3-32ce-4e7e-9319-8115d98ed5d1
+- yodeckMediaId involved: 30337535
+- correlationId prefix: publish-86abfbd3-32ce-4e7e-9319-8115d98ed5d1-1771942287040
+- file key: normalized/86abfbd3-32ce-4e7e-9319-8115d98ed5d1-normalized.mp4
+- screenIds seen in logs: 591896, 591895
+- playlists seen in logs: 30590180, 30590872
+
+================================================================================
+CONTEXT / EVIDENCE (from logs)
+- During admin retry publish:
+  - ensureMedia sees mediaId=30337535 as STALE: status="initialized", origin.source="url", buffering=true
+  - it deletes stale media OK (DELETE 204)
+  - recovery tries fresh local upload from R2; R2 HEAD is OK for normalized/...-normalized.mp4
+  - then POST /api/v2/media fails with HTTP 400 err_1002 missing_key=type
+  - our internal log claims payload includes {"name":..., "type":"video", "media_origin":{"source":"local"}}
+=> This strongly suggests the JSON request body is not being sent correctly (Content-Type missing, body not JSON.stringified, or a wrapper mutates/strips payload before sending). Even if our code logs the object, the wire payload may differ.
+
+Other issue:
+- publishError earlier: "Timeout waiting for media 30337535 to become ready after 77 polls"
+- baseline-browser-mapping warning suggests dependency is outdated
+
+================================================================================
+GOALS
+Fix ALL issues below:
+(1) YODECK_MEDIA_CREATE 400 err_1002 missing_key=type (must be solved)
+(2) Make local upload recovery reliable: create media -> get upload_url -> PUT -> upload/complete -> poll ready
+(3) Reduce/avoid publish timeouts by correct readiness logic + backoff + fail-fast on stuck states
+(4) Resolve baseline-browser-mapping warning safely
+
+================================================================================
+TASKS (DO IN ORDER)
+
+A) SENTRY TRIAGE (NO CODE CHANGES YET)
+1) Use the Sentry search signatures above. Open the most recent matching events.
+2) For each of the 4 categories, extract:
+   - exact request breadcrumb (method/url/status)
+   - exception/message
+   - event tags/extras (assetId, yodeckMediaId, correlationId)
+   - stack trace frames: file path + function name where the HTTP call is made
+3) Create a short “Sentry Findings” note in the PR description (or internal notes).
+
+B) FIX #1: Ensure POST /api/v2/media ALWAYS sends correct JSON
+1) Locate the function that calls POST /media/ (createMedia).
+2) Add wire-level debug logging ONLY when:
+   - env YODECK_WIRE_DEBUG=true OR response status >= 400
+   Log:
+   - url, method
+   - headers actually sent (esp Content-Type)
+   - RAW request body string actually sent (JSON string)
+   - response status + raw body
+3) Fix sending logic:
+   - If using fetch: headers include Content-Type: application/json and body = JSON.stringify(payload)
+   - If using axios: ensure axios.post(url, payload, { headers:{'Content-Type':'application/json'} })
+     (payload in data, not params; ensure no transformRequest removes fields)
+4) Add a guard before sending: assert payload has `type`, `name`, and `media_origin.source`.
+5) Re-test by triggering the publish retry again and confirm createMedia succeeds (2xx) and returns new mediaId.
+
+C) FIX #2: Local upload pipeline complete (create -> upload_url -> PUT -> upload/complete -> poll)
+1) Confirm recovery flow includes these steps in THIS order:
+   - POST /media (create, local)
+   - GET /media/{id}/upload (retrieve upload_url)
+   - PUT upload_url (upload bytes, stream from R2)
+   - PUT /media/{id}/upload/complete (required)
+   - Poll GET /media/{id} until ready/finished and fileSize > 0
+2) If missing, implement minimally.
+3) Ensure no “resolve old finished media by name” is used in recovery; always use the new mediaId returned by create.
+4) Emit structured YodeckTrace steps:
+   - YODECK_MEDIA_CREATE
+   - YODECK_UPLOAD_URL
+   - YODECK_UPLOAD_PUT
+   - YODECK_UPLOAD_COMPLETE
+   - YODECK_MEDIA_POLL (include status + fileSize each poll)
+
+D) FIX #3: Publish timeout / polling improvements
+1) Replace fixed-interval polling with exponential backoff (500ms -> 1s -> 2s -> max 5s).
+2) Cap total wait time (3–5 minutes), BUT fail fast if:
+   - status remains "initialized" AND fileSize=0 after upload complete for N polls (e.g. 6-10)
+3) Ensure after deleting stale media, we never reference the deleted mediaId again.
+
+E) FIX #4: baseline-browser-mapping warning
+1) Update dev dependency baseline-browser-mapping@latest as suggested.
+2) Ensure build passes; commit lockfile updates.
+3) If build breaks, revert and instead suppress the warning ONLY in dev logs (last resort).
+
+================================================================================
+ACCEPTANCE TEST (MUST PASS)
+1) Trigger admin retry publish for assetId 86abfbd3-32ce-4e7e-9319-8115d98ed5d1 (or create a new test asset).
+2) Confirm logs show:
+   - YODECK_MEDIA_CREATE success (2xx)
+   - upload_url retrieved, upload PUT executed, upload/complete called
+   - media becomes ready/finished with fileSize > 0
+   - asset publishStatus becomes PUBLISHED and is inserted into the correct screen playlist only
+3) Confirm no new unexpected playlists are created.
+4) Confirm baseline-browser-mapping warning no longer appears.
+
+CONSTRAINTS:
+- Minimal targeted changes; no refactors.
+- Do not alter unrelated portal/onboarding logic.
+- Keep “Basis playlist” + “EVZ | SCREEN | <playerId>” stable.
+- Debug logs gated behind env flags.
+
+DELIVERABLE:
+- list of changed files + what changed
+- any new env flags (e.g. YODECK_WIRE_DEBUG)
+- brief Sentry Findings summary with links/IDs (no secrets)
+- acceptance test evidence (log excerpts)

@@ -248,12 +248,14 @@ class YodeckPublishService {
     intervalMs?: number;
     correlationId?: string;
   }): Promise<MediaStatusPollResult> {
-    const { maxAttempts = 30, intervalMs = 2000, correlationId } = options || {};
+    const { maxAttempts = 60, intervalMs = 500, correlationId } = options || {};
     const corrId = correlationId || crypto.randomUUID().substring(0, 8);
     const flow: YodeckFlow = corrId.includes("-retry") ? "retryPublish" : "publish";
     const pollStartTime = Date.now();
+    const MAX_POLL_DURATION_MS = 4 * 60 * 1000;
+    const FAIL_FAST_INITIALIZED_POLLS = 8;
     
-    console.log(`[YodeckPublish][${corrId}] Starting media status poll for ${mediaId} (max ${maxAttempts} attempts)`);
+    console.log(`[YodeckPublish][${corrId}] Starting media status poll for ${mediaId} (max ${maxAttempts} attempts, backoff 500ms→5s, timeout ${MAX_POLL_DURATION_MS / 1000}s)`);
     
     let lastStatus = 'unknown';
     let lastFileSize: number | string = 0;
@@ -263,8 +265,14 @@ class YodeckPublishService {
     let prevStatus = '';
     let prevFileSize: number | string = 0;
     let unchangedCount = 0;
+    let initializedZeroCount = 0;
     
     while (attempts < maxAttempts) {
+      if (Date.now() - pollStartTime > MAX_POLL_DURATION_MS) {
+        console.error(`[YodeckPublish][${corrId}] Poll timeout: exceeded ${MAX_POLL_DURATION_MS / 1000}s wall-clock limit`);
+        break;
+      }
+
       attempts++;
       
       const pollAttemptStart = Date.now();
@@ -277,7 +285,7 @@ class YodeckPublishService {
           level: "warning",
           data: { correlationId: corrId, mediaId, pollIndex: attempts, error: result.error, durationMsSinceStart: Date.now() - pollStartTime },
         });
-        await new Promise(r => setTimeout(r, intervalMs));
+        await new Promise(r => setTimeout(r, Math.min(intervalMs * Math.pow(2, Math.min(attempts - 1, 4)), 5000)));
         continue;
       }
       
@@ -342,6 +350,12 @@ class YodeckPublishService {
           mediaDetails: media,
         };
       }
+
+      if (lastStatus === 'initialized' && (lastFileSize === 0 || lastFileSize === '0')) {
+        initializedZeroCount++;
+      } else {
+        initializedZeroCount = 0;
+      }
       
       if (attempts >= 5 && !completeFallbackFired &&
           lastStatus === 'initialized' && (lastFileSize === 0 || lastFileSize === '0')) {
@@ -362,8 +376,28 @@ class YodeckPublishService {
           console.warn(`[YodeckPublish][${corrId}] Safety upload/complete fallback error (non-fatal): ${fallbackErr.message}`);
         }
       }
-      
-      await new Promise(r => setTimeout(r, intervalMs));
+
+      if (initializedZeroCount >= FAIL_FAST_INITIALIZED_POLLS) {
+        const failFastMsg = `FAIL_FAST: mediaId=${mediaId} stuck initialized+fileSize=0 for ${initializedZeroCount} consecutive polls after upload/complete fallback`;
+        console.error(`[YodeckPublish][${corrId}] ${failFastMsg}`);
+        logYodeckStep({
+          correlationId: corrId, mediaId, step: "STATUS_POLL_LOOP", ok: false, flow,
+          durationMs: Date.now() - pollStartTime,
+          data: { finalStatus: lastStatus, fileSize: lastFileSize, pollCount: attempts, reason: "fail_fast_initialized_zero", initializedZeroCount },
+        });
+        return {
+          ok: false,
+          finalStatus: lastStatus,
+          isUsable: false,
+          isAborted: true,
+          pollAttempts: attempts,
+          error: failFastMsg,
+          mediaDetails: media,
+        };
+      }
+
+      const backoffMs = Math.min(intervalMs * Math.pow(2, Math.min(attempts - 1, 4)), 5000);
+      await new Promise(r => setTimeout(r, backoffMs));
     }
     
     const finalCheck = await this.getMediaDetails(mediaId, corrId);
@@ -1591,9 +1625,26 @@ class YodeckPublishService {
 
       // --- Step B: YODECK_MEDIA_CREATE ---
       const createStart = Date.now();
-      const createPayload = { name: normalizedName, type: "video", media_origin: { source: "local" } };
+      const createPayload = {
+        name: normalizedName,
+        media_origin: { type: "video", source: "local", format: null },
+        arguments: { resolution: "highest", buffering: false },
+      };
+
+      if (!createPayload.name || !createPayload.media_origin?.type || !createPayload.media_origin?.source) {
+        const missingFields = [];
+        if (!createPayload.name) missingFields.push("name");
+        if (!createPayload.media_origin?.type) missingFields.push("media_origin.type");
+        if (!createPayload.media_origin?.source) missingFields.push("media_origin.source");
+        const guardMsg = `[YodeckPublish][${corrId}] PAYLOAD_GUARD: missing required fields: ${missingFields.join(", ")}`;
+        console.error(guardMsg);
+        debug.payloadGuardError = guardMsg;
+        return { ok: false, debug };
+      }
+
+      const createBodyStr = JSON.stringify(createPayload);
       console.log(`[YodeckPublish][${corrId}] Creating Yodeck media (local) for "${normalizedName}"...`);
-      const createResp = await axios.post(`${YODECK_BASE_URL}/media/`, createPayload, {
+      const createResp = await axios.post(`${YODECK_BASE_URL}/media/`, createBodyStr, {
         headers: {
           "Authorization": `Token ${apiKey}`,
           "Content-Type": "application/json",
@@ -1601,8 +1652,14 @@ class YodeckPublishService {
         },
         timeout: 30000,
         validateStatus: () => true,
+        transformRequest: [(data: any) => data],
       });
       const createDurationMs = Date.now() - createStart;
+
+      if (process.env.YODECK_WIRE_DEBUG === "true" || createResp.status >= 400) {
+        const wireRespBody = typeof createResp.data === "string" ? createResp.data : JSON.stringify(createResp.data);
+        console.log(`[YODECK_WIRE][${corrId}] POST /media/ => ${createResp.status} | req-ct=${createResp.config?.headers?.["Content-Type"]} | req-body=${createBodyStr.substring(0, 500)} | resp-body=${wireRespBody.substring(0, 500)}`);
+      }
 
       traceExternalCall({
         correlationId: corrId, method: "POST", url: `${YODECK_BASE_URL}/media/`,
@@ -1860,10 +1917,8 @@ class YodeckPublishService {
         console.warn(`[YodeckPublish][${corrId}] upload/complete never succeeded — polling may stall`);
       }
 
-      console.log(`[YodeckPublish][${corrId}] Polling media ${yodeckMediaId} status...`);
+      console.log(`[YodeckPublish][${corrId}] Polling media ${yodeckMediaId} status (backoff 500ms→5s, max 4min)...`);
       const pollResult = await this.pollMediaStatus(yodeckMediaId, {
-        maxAttempts: 40,
-        intervalMs: 3000,
         correlationId: corrId,
       });
 

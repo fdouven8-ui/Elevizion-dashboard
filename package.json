@@ -60,6 +60,7 @@
     "@uppy/progress-bar": "^4.3.2",
     "@uppy/react": "^4.5.2",
     "axios": "^1.13.2",
+    "baseline-browser-mapping": "^2.10.0",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
