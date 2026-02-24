@@ -380,11 +380,21 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
+  console.log(`[BOOT] Starting server on 0.0.0.0:${port} (NODE_ENV=${process.env.NODE_ENV})`);
+
+  httpServer.on("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE") {
+      console.error(`[BOOT] FATAL: Port ${port} is already in use. Exiting.`);
+      process.exit(1);
+    }
+    console.error(`[BOOT] Server error:`, err);
+    process.exit(1);
+  });
+
   httpServer.listen(
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
     },
     () => {
       // Boot log for TEST_MODE visibility
