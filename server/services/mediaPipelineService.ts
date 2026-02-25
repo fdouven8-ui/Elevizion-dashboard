@@ -19,7 +19,7 @@ const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN;
 export function isYodeckMediaReadyStandalone(
   statusData: { status?: string; error_message?: string; error?: string; [key: string]: any },
   fileState: { fileSize: number; hasFileObject: boolean; hasFileUrl: boolean; hasLastUploaded: boolean; hasThumbnailUrl: boolean },
-): { ready: boolean; signal: "FILE_FIELDS" | "STRONG" | "WEAK" | "NONE"; reason: string } {
+): { ready: boolean; signal: "FILE_FIELDS" | "STRONG" | "WAIT_THUMBNAIL" | "NONE"; reason: string } {
   const status = (statusData.status || "").toLowerCase();
   if (status === "failed") {
     throw new Error(`YODECK_UPLOAD_FAILED: status=failed error=${statusData.error_message || statusData.error || "unknown"}`);
@@ -31,8 +31,8 @@ export function isYodeckMediaReadyStandalone(
   if (status === "finished" && fileState.hasLastUploaded && fileState.hasThumbnailUrl) {
     return { ready: true, signal: "STRONG", reason: `finished+last_uploaded+thumbnail_url` };
   }
-  if (status === "finished" && (fileState.hasLastUploaded || fileState.hasThumbnailUrl)) {
-    return { ready: true, signal: "WEAK", reason: `finished+${fileState.hasLastUploaded ? "last_uploaded" : "thumbnail_url"}_only` };
+  if (status === "finished" && fileState.hasLastUploaded && !fileState.hasThumbnailUrl) {
+    return { ready: false, signal: "WAIT_THUMBNAIL", reason: `finished+last_uploaded but thumbnail_url missing — keep polling` };
   }
   return { ready: false, signal: "NONE", reason: `status=${status} noFileFields noFinishedSignals` };
 }
@@ -1129,7 +1129,7 @@ export async function publishSingleAsset(opts: {
       return { fileSize, hasFileObject, hasFileUrl, rawFileKeys, rawTopKeys, hasArgsPlayUrl, hasArgsDownloadUrl, hasLastUploaded, hasThumbnailUrl };
     }
 
-    function isYodeckMediaReady(statusData: any, fileState: ReturnType<typeof getYodeckFileState>): { ready: boolean; signal: "FILE_FIELDS" | "STRONG" | "WEAK" | "NONE"; reason: string } {
+    function isYodeckMediaReady(statusData: any, fileState: ReturnType<typeof getYodeckFileState>): { ready: boolean; signal: "FILE_FIELDS" | "STRONG" | "WAIT_THUMBNAIL" | "NONE"; reason: string } {
       const status = (statusData.status || "").toLowerCase();
       if (status === "failed") {
         throw new Error(`YODECK_UPLOAD_FAILED: mediaId=${yodeckMediaId} status=failed error=${statusData.error_message || statusData.error || "unknown"}`);
@@ -1141,8 +1141,8 @@ export async function publishSingleAsset(opts: {
       if (status === "finished" && fileState.hasLastUploaded && fileState.hasThumbnailUrl) {
         return { ready: true, signal: "STRONG", reason: `finished+last_uploaded+thumbnail_url` };
       }
-      if (status === "finished" && (fileState.hasLastUploaded || fileState.hasThumbnailUrl)) {
-        return { ready: true, signal: "WEAK", reason: `finished+${fileState.hasLastUploaded ? "last_uploaded" : "thumbnail_url"}_only` };
+      if (status === "finished" && fileState.hasLastUploaded && !fileState.hasThumbnailUrl) {
+        return { ready: false, signal: "WAIT_THUMBNAIL", reason: `finished+last_uploaded but thumbnail_url missing — keep polling` };
       }
       return { ready: false, signal: "NONE", reason: `status=${status} noFileFields noFinishedSignals` };
     }
@@ -1336,7 +1336,8 @@ export async function publishSingleAsset(opts: {
       lastPollStatus = status;
       const errorMessage = statusData.error_message || statusData.errorMessage || statusData.error || "";
 
-      console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl} lastUploaded=${fileState.hasLastUploaded} thumbnail=${fileState.hasThumbnailUrl} topKeys=[${fileState.rawTopKeys.join(",")}] fileKeys=[${fileState.rawFileKeys.join(",")}] elapsed=${Date.now() - startTime}ms`);
+      const detailKeys = Object.keys(statusData).slice(0, 20);
+      console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl} last_uploaded=${fileState.hasLastUploaded} thumbnail_present=${fileState.hasThumbnailUrl} topKeys=[${fileState.rawTopKeys.join(",")}] fileKeys=[${fileState.rawFileKeys.join(",")}] detailKeys=[${detailKeys.join(",")}] elapsed=${Date.now() - startTime}ms`);
 
       if (status === "error" || (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes("abort"))) {
         throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} status=${status} error=${errorMessage}`);
@@ -1348,10 +1349,12 @@ export async function publishSingleAsset(opts: {
 
       const readiness = isYodeckMediaReady(statusData, fileState);
 
+      if (!readiness.ready && readiness.signal === "WAIT_THUMBNAIL") {
+        console.log(`${LOG} correlationId=${correlationId} [WAIT_THUMBNAIL] mediaId=${yodeckMediaId} status=${status} last_uploaded=${fileState.hasLastUploaded} thumbnail_present=false — keep polling`);
+        continue;
+      }
+
       if (readiness.ready) {
-        if (readiness.signal === "WEAK") {
-          console.warn(`${LOG} correlationId=${correlationId} READY_WEAK_SIGNAL: ${readiness.reason} — accepting but logging`);
-        }
         const verifyResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
           headers: { "Authorization": `Token ${YODECK_TOKEN}` },
         });

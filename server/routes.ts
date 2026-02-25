@@ -19024,6 +19024,19 @@ KvK: 90982541 | BTW: NL004857473B37</p>
 
   app.get("/api/admin/yodeck/media", requireAdminAccess, async (req, res) => {
     try {
+      const mediaId = req.query.mediaId as string | undefined;
+      if (mediaId) {
+        const apiKey = process.env.YODECK_AUTH_TOKEN;
+        if (!apiKey) return res.status(500).json({ ok: false, error: "YODECK_AUTH_TOKEN not configured" });
+        const detailResp = await fetch(`https://app.yodeck.com/api/v2/media/${mediaId}/`, {
+          headers: { "Authorization": `Token ${apiKey}` },
+        });
+        if (!detailResp.ok) return res.status(detailResp.status).json({ ok: false, error: `Yodeck returned ${detailResp.status}` });
+        const detail = await detailResp.json();
+        console.log(`[YODECK_DETAIL] mediaId=${mediaId} status=${detail.status} thumbnail=${!!detail.thumbnail_url} last_uploaded=${!!detail.last_uploaded} filesize=${detail.filesize || 0} keys=[${Object.keys(detail).slice(0, 15).join(",")}]`);
+        return res.json({ ok: true, source: "detail", media: detail });
+      }
+
       const q = (req.query.q as string) || "";
       const { yodeckRequest } = await import("./services/simplePlaylistModel");
       const endpoint = q ? `/media/?search=${encodeURIComponent(q)}&limit=50` : "/media/?limit=50";
@@ -19035,7 +19048,24 @@ KvK: 90982541 | BTW: NL004857473B37</p>
         file_extension: m.file_extension ?? null,
         filesize: m.filesize || m.file_size || 0,
       }));
-      res.json({ ok: true, count: media.length, totalInYodeck: result.data?.count || 0, query: q || null, media });
+      res.json({ ok: true, source: "list", count: media.length, totalInYodeck: result.data?.count || 0, query: q || null, media });
+    } catch (error: any) {
+      res.status(500).json({ ok: false, error: error.message });
+    }
+  });
+
+  app.get("/api/admin/yodeck/media/:id", requireAdminAccess, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const apiKey = process.env.YODECK_AUTH_TOKEN;
+      if (!apiKey) return res.status(500).json({ ok: false, error: "YODECK_AUTH_TOKEN not configured" });
+      const detailResp = await fetch(`https://app.yodeck.com/api/v2/media/${id}/`, {
+        headers: { "Authorization": `Token ${apiKey}` },
+      });
+      if (!detailResp.ok) return res.status(detailResp.status).json({ ok: false, error: `Yodeck returned ${detailResp.status}` });
+      const detail = await detailResp.json();
+      console.log(`[YODECK_DETAIL] mediaId=${id} status=${detail.status} thumbnail=${!!detail.thumbnail_url} last_uploaded=${!!detail.last_uploaded} filesize=${detail.filesize || 0} keys=[${Object.keys(detail).slice(0, 15).join(",")}]`);
+      res.json({ ok: true, source: "detail", media: detail });
     } catch (error: any) {
       res.status(500).json({ ok: false, error: error.message });
     }

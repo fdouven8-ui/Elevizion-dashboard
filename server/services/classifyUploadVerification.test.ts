@@ -56,22 +56,22 @@ describe("isYodeckMediaReadyStandalone", () => {
     expect(result.signal).toBe("STRONG");
   });
 
-  it("returns WEAK when finished + last_uploaded only", () => {
+  it("returns WAIT_THUMBNAIL (not ready) when finished + last_uploaded but no thumbnail", () => {
     const result = isYodeckMediaReadyStandalone(
       { status: "finished", last_uploaded: "2025-01-01T00:00:00Z" },
       { ...noFiles, hasLastUploaded: true },
     );
-    expect(result.ready).toBe(true);
-    expect(result.signal).toBe("WEAK");
+    expect(result.ready).toBe(false);
+    expect(result.signal).toBe("WAIT_THUMBNAIL");
   });
 
-  it("returns WEAK when finished + thumbnail_url only", () => {
+  it("returns NONE (not ready) when finished + thumbnail_url only (no last_uploaded)", () => {
     const result = isYodeckMediaReadyStandalone(
       { status: "finished", thumbnail_url: "https://..." },
       { ...noFiles, hasThumbnailUrl: true },
     );
-    expect(result.ready).toBe(true);
-    expect(result.signal).toBe("WEAK");
+    expect(result.ready).toBe(false);
+    expect(result.signal).toBe("NONE");
   });
 
   it("returns FILE_FIELDS when file metadata present", () => {
