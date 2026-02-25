@@ -18,23 +18,23 @@ const YODECK_TOKEN = process.env.YODECK_AUTH_TOKEN;
 
 export function isYodeckMediaReadyStandalone(
   statusData: { status?: string; error_message?: string; error?: string; [key: string]: any },
-  fileState: { fileSize: number; hasFileObject: boolean; hasFileUrl: boolean; hasLastUploaded: boolean; hasThumbnailUrl: boolean },
-): { ready: boolean; signal: "FILE_FIELDS" | "STRONG" | "WAIT_THUMBNAIL" | "NONE"; reason: string } {
+  fileState: { fileSize: number; hasFileObject: boolean; hasFileUrl: boolean; hasLastUploaded: boolean; hasThumbnailUrl: boolean; hasPlayableUrl?: boolean },
+): { ready: boolean; signal: "PLAYABLE" | "WAIT_YODECK_FILE_OBJECT" | "NONE"; reason: string } {
   const status = (statusData.status || "").toLowerCase();
   if (status === "failed") {
     throw new Error(`YODECK_UPLOAD_FAILED: status=failed error=${statusData.error_message || statusData.error || "unknown"}`);
   }
   if (status === "initialized") return { ready: false, signal: "NONE", reason: "still_initialized" };
-  if (fileState.fileSize > 0 || (fileState.hasFileObject && fileState.hasFileUrl)) {
-    return { ready: true, signal: "FILE_FIELDS", reason: `fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl}` };
+  const hasPlayableUrl = !!(fileState as any).hasPlayableUrl ||
+    !!(statusData.play_from_url || statusData.download_from_url ||
+       (statusData.arguments && (statusData.arguments.play_from_url || statusData.arguments.download_from_url)));
+  if (fileState.fileSize > 0 || (fileState.hasFileObject && fileState.hasFileUrl) || hasPlayableUrl) {
+    return { ready: true, signal: "PLAYABLE", reason: `fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl} hasPlayableUrl=${hasPlayableUrl}` };
   }
-  if (status === "finished" && fileState.hasLastUploaded && fileState.hasThumbnailUrl) {
-    return { ready: true, signal: "STRONG", reason: `finished+last_uploaded+thumbnail_url` };
+  if (status === "finished") {
+    return { ready: false, signal: "WAIT_YODECK_FILE_OBJECT", reason: `status=finished but no file object, no file_size>0, no playable URL — not yet playable` };
   }
-  if (status === "finished" && fileState.hasLastUploaded && !fileState.hasThumbnailUrl) {
-    return { ready: false, signal: "WAIT_THUMBNAIL", reason: `finished+last_uploaded but thumbnail_url missing — keep polling` };
-  }
-  return { ready: false, signal: "NONE", reason: `status=${status} noFileFields noFinishedSignals` };
+  return { ready: false, signal: "NONE", reason: `status=${status} not_playable` };
 }
 
 export function classifyUploadVerification(opts: {
@@ -1129,22 +1129,20 @@ export async function publishSingleAsset(opts: {
       return { fileSize, hasFileObject, hasFileUrl, rawFileKeys, rawTopKeys, hasArgsPlayUrl, hasArgsDownloadUrl, hasLastUploaded, hasThumbnailUrl };
     }
 
-    function isYodeckMediaReady(statusData: any, fileState: ReturnType<typeof getYodeckFileState>): { ready: boolean; signal: "FILE_FIELDS" | "STRONG" | "WAIT_THUMBNAIL" | "NONE"; reason: string } {
+    function isYodeckMediaReady(statusData: any, fileState: ReturnType<typeof getYodeckFileState>): { ready: boolean; signal: "PLAYABLE" | "WAIT_YODECK_FILE_OBJECT" | "NONE"; reason: string } {
       const status = (statusData.status || "").toLowerCase();
       if (status === "failed") {
         throw new Error(`YODECK_UPLOAD_FAILED: mediaId=${yodeckMediaId} status=failed error=${statusData.error_message || statusData.error || "unknown"}`);
       }
       if (status === "initialized") return { ready: false, signal: "NONE", reason: "still_initialized" };
-      if (fileState.fileSize > 0 || (fileState.hasFileObject && fileState.hasFileUrl)) {
-        return { ready: true, signal: "FILE_FIELDS", reason: `fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl}` };
+      const hasPlayableUrl = fileState.hasArgsPlayUrl || fileState.hasArgsDownloadUrl;
+      if (fileState.fileSize > 0 || (fileState.hasFileObject && fileState.hasFileUrl) || hasPlayableUrl) {
+        return { ready: true, signal: "PLAYABLE", reason: `fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl} hasPlayableUrl=${hasPlayableUrl}` };
       }
-      if (status === "finished" && fileState.hasLastUploaded && fileState.hasThumbnailUrl) {
-        return { ready: true, signal: "STRONG", reason: `finished+last_uploaded+thumbnail_url` };
+      if (status === "finished") {
+        return { ready: false, signal: "WAIT_YODECK_FILE_OBJECT", reason: `status=finished but no file object, no file_size>0, no playable URL — not yet playable` };
       }
-      if (status === "finished" && fileState.hasLastUploaded && !fileState.hasThumbnailUrl) {
-        return { ready: false, signal: "WAIT_THUMBNAIL", reason: `finished+last_uploaded but thumbnail_url missing — keep polling` };
-      }
-      return { ready: false, signal: "NONE", reason: `status=${status} noFileFields noFinishedSignals` };
+      return { ready: false, signal: "NONE", reason: `status=${status} not_playable` };
     }
 
     function redactBody(data: any): string {
@@ -1337,7 +1335,8 @@ export async function publishSingleAsset(opts: {
       const errorMessage = statusData.error_message || statusData.errorMessage || statusData.error || "";
 
       const detailKeys = Object.keys(statusData).slice(0, 20);
-      console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} fileSize=${fileState.fileSize} hasFileObj=${fileState.hasFileObject} hasFileUrl=${fileState.hasFileUrl} last_uploaded=${fileState.hasLastUploaded} thumbnail_present=${fileState.hasThumbnailUrl} topKeys=[${fileState.rawTopKeys.join(",")}] fileKeys=[${fileState.rawFileKeys.join(",")}] detailKeys=[${detailKeys.join(",")}] elapsed=${Date.now() - startTime}ms`);
+      const hasPlayableUrl = fileState.hasArgsPlayUrl || fileState.hasArgsDownloadUrl;
+      console.log(`${LOG} correlationId=${correlationId} POLL #${pollCount}: mediaId=${yodeckMediaId} status=${status} hasFile=${fileState.hasFileObject} fileSize=${fileState.fileSize} hasPlayableUrl=${hasPlayableUrl} hasThumbnail=${fileState.hasThumbnailUrl} last_uploaded=${fileState.hasLastUploaded} topKeys=[${fileState.rawTopKeys.join(",")}] fileKeys=[${fileState.rawFileKeys.join(",")}] detailKeys=[${detailKeys.join(",")}] elapsed=${Date.now() - startTime}ms`);
 
       if (status === "error" || (typeof errorMessage === 'string' && errorMessage.toLowerCase().includes("abort"))) {
         throw new Error(`YODECK_UPLOAD_ABORTED: mediaId=${yodeckMediaId} status=${status} error=${errorMessage}`);
@@ -1349,19 +1348,13 @@ export async function publishSingleAsset(opts: {
 
       const readiness = isYodeckMediaReady(statusData, fileState);
 
-      let thumbnailTimedOut = false;
-      if (!readiness.ready && readiness.signal === "WAIT_THUMBNAIL") {
+      if (!readiness.ready && readiness.signal === "WAIT_YODECK_FILE_OBJECT") {
         const elapsedMs = Date.now() - startTime;
-        if (elapsedMs > 60_000) {
-          console.log(`${LOG} correlationId=${correlationId} [THUMBNAIL_TIMEOUT] mediaId=${yodeckMediaId} status=${status} — finished+last_uploaded, thumbnail never appeared after ${Math.round(elapsedMs/1000)}s — accepting as READY`);
-          thumbnailTimedOut = true;
-        } else {
-          console.log(`${LOG} correlationId=${correlationId} [WAIT_THUMBNAIL] mediaId=${yodeckMediaId} status=${status} last_uploaded=${fileState.hasLastUploaded} thumbnail_present=false — keep polling (${Math.round(elapsedMs/1000)}s elapsed)`);
-          continue;
-        }
+        console.log(`${LOG} correlationId=${correlationId} [WAIT_YODECK_FILE_OBJECT] mediaId=${yodeckMediaId} status=${status} hasFile=${fileState.hasFileObject} fileSize=${fileState.fileSize} hasPlayableUrl=${fileState.hasArgsPlayUrl || fileState.hasArgsDownloadUrl} hasThumbnail=${fileState.hasThumbnailUrl} elapsed=${Math.round(elapsedMs/1000)}s — not yet playable, keep polling`);
+        continue;
       }
 
-      if (readiness.ready || thumbnailTimedOut) {
+      if (readiness.ready) {
         const verifyResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
           headers: { "Authorization": `Token ${YODECK_TOKEN}` },
         });
@@ -1371,13 +1364,12 @@ export async function publishSingleAsset(opts: {
         const verifyData = await verifyResp.json();
         const verifyFileState = getYodeckFileState(verifyData);
         const verifyReadiness = isYodeckMediaReady(verifyData, verifyFileState);
-        if (!verifyReadiness.ready && !thumbnailTimedOut) {
+        if (!verifyReadiness.ready) {
           console.warn(`${LOG} correlationId=${correlationId} VERIFY_FLAP: poll said ready(${readiness.signal}/${readiness.reason}) but verify says not ready: ${verifyReadiness.reason} — continuing`);
           continue;
         }
-        const effectiveSignal = thumbnailTimedOut ? "THUMBNAIL_TIMEOUT" : verifyReadiness.signal;
-        console.log(`${LOG} correlationId=${correlationId} READY_CONFIRMED signal=${effectiveSignal} reason=${verifyReadiness.ready ? verifyReadiness.reason : "thumbnail_timeout_60s"}`);
-        await markAssetReady(pollCount, `poll_verify_${effectiveSignal}`);
+        console.log(`${LOG} correlationId=${correlationId} READY_CONFIRMED signal=${verifyReadiness.signal} reason=${verifyReadiness.reason}`);
+        await markAssetReady(pollCount, `poll_verify_${verifyReadiness.signal}`);
         return { ok: true, assetId, correlationId, yodeckMediaId };
       }
 
@@ -1444,7 +1436,7 @@ export async function publishSingleAsset(opts: {
       console.warn(`${LOG} correlationId=${correlationId} TIMEOUT_FINAL_DIAG_ERROR: ${finalErr.message}`);
     }
 
-    throw new Error(`POLL_TIMEOUT: mediaId=${yodeckMediaId} polls=${pollCount} elapsed=${Math.round((Date.now() - startTime) / 1000)}s lastStatus=${lastPollStatus} fileSize=${lastFileState.fileSize} hasFileObj=${lastFileState.hasFileObject} hasFileUrl=${lastFileState.hasFileUrl} lastUploaded=${lastFileState.hasLastUploaded} thumbnail=${lastFileState.hasThumbnailUrl} byteVerifyOk=${byteVerifyOk} completeOk=${completeOk} completeCalls=${completeCallCount} finalDiag={${finalDiag}}`);
+    throw new Error(`POLL_TIMEOUT: Yodeck media never became playable — mediaId=${yodeckMediaId} polls=${pollCount} elapsed=${Math.round((Date.now() - startTime) / 1000)}s lastStatus=${lastPollStatus} fileSize=${lastFileState.fileSize} hasFileObj=${lastFileState.hasFileObject} hasPlayableUrl=${lastFileState.hasArgsPlayUrl || lastFileState.hasArgsDownloadUrl} byteVerifyOk=${byteVerifyOk} completeOk=${completeOk} completeCalls=${completeCallCount} finalDiag={${finalDiag}}`);
   } catch (uploadErr: any) {
     console.error(`${LOG} correlationId=${correlationId} UPLOAD_ERROR assetId=${assetId} mediaId=${yodeckMediaId} error=${uploadErr.message}`);
 

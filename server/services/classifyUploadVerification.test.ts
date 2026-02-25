@@ -47,43 +47,79 @@ describe("classifyUploadVerification", () => {
 const noFiles = { fileSize: 0, hasFileObject: false, hasFileUrl: false, hasLastUploaded: false, hasThumbnailUrl: false };
 
 describe("isYodeckMediaReadyStandalone", () => {
-  it("returns STRONG when finished + last_uploaded + thumbnail_url (no file fields)", () => {
+  it("returns PLAYABLE when file has fileSize > 0", () => {
+    const result = isYodeckMediaReadyStandalone(
+      { status: "finished" },
+      { ...noFiles, fileSize: 106021 },
+    );
+    expect(result.ready).toBe(true);
+    expect(result.signal).toBe("PLAYABLE");
+  });
+
+  it("returns PLAYABLE when file object with URL present", () => {
+    const result = isYodeckMediaReadyStandalone(
+      { status: "finished" },
+      { ...noFiles, hasFileObject: true, hasFileUrl: true },
+    );
+    expect(result.ready).toBe(true);
+    expect(result.signal).toBe("PLAYABLE");
+  });
+
+  it("returns PLAYABLE when download_from_url present", () => {
+    const result = isYodeckMediaReadyStandalone(
+      { status: "finished", download_from_url: "https://cdn.yodeck.com/video.mp4" },
+      noFiles,
+    );
+    expect(result.ready).toBe(true);
+    expect(result.signal).toBe("PLAYABLE");
+  });
+
+  it("returns PLAYABLE when play_from_url present", () => {
+    const result = isYodeckMediaReadyStandalone(
+      { status: "finished", play_from_url: "https://cdn.yodeck.com/video.mp4" },
+      noFiles,
+    );
+    expect(result.ready).toBe(true);
+    expect(result.signal).toBe("PLAYABLE");
+  });
+
+  it("returns PLAYABLE when arguments.play_from_url present", () => {
+    const result = isYodeckMediaReadyStandalone(
+      { status: "finished", arguments: { play_from_url: "https://cdn.yodeck.com/video.mp4" } },
+      noFiles,
+    );
+    expect(result.ready).toBe(true);
+    expect(result.signal).toBe("PLAYABLE");
+  });
+
+  it("returns PLAYABLE when arguments.download_from_url present", () => {
+    const result = isYodeckMediaReadyStandalone(
+      { status: "finished", arguments: { download_from_url: "https://cdn.yodeck.com/video.mp4" } },
+      noFiles,
+    );
+    expect(result.ready).toBe(true);
+    expect(result.signal).toBe("PLAYABLE");
+  });
+
+  it("returns WAIT_YODECK_FILE_OBJECT when finished but no file/url (NOT READY)", () => {
     const result = isYodeckMediaReadyStandalone(
       { status: "finished", last_uploaded: "2025-01-01T00:00:00Z", thumbnail_url: "https://..." },
       { ...noFiles, hasLastUploaded: true, hasThumbnailUrl: true },
     );
-    expect(result.ready).toBe(true);
-    expect(result.signal).toBe("STRONG");
+    expect(result.ready).toBe(false);
+    expect(result.signal).toBe("WAIT_YODECK_FILE_OBJECT");
   });
 
-  it("returns WAIT_THUMBNAIL (not ready) when finished + last_uploaded but no thumbnail", () => {
+  it("returns WAIT_YODECK_FILE_OBJECT when finished + last_uploaded but no file (NOT READY)", () => {
     const result = isYodeckMediaReadyStandalone(
       { status: "finished", last_uploaded: "2025-01-01T00:00:00Z" },
       { ...noFiles, hasLastUploaded: true },
     );
     expect(result.ready).toBe(false);
-    expect(result.signal).toBe("WAIT_THUMBNAIL");
+    expect(result.signal).toBe("WAIT_YODECK_FILE_OBJECT");
   });
 
-  it("returns NONE (not ready) when finished + thumbnail_url only (no last_uploaded)", () => {
-    const result = isYodeckMediaReadyStandalone(
-      { status: "finished", thumbnail_url: "https://..." },
-      { ...noFiles, hasThumbnailUrl: true },
-    );
-    expect(result.ready).toBe(false);
-    expect(result.signal).toBe("NONE");
-  });
-
-  it("returns FILE_FIELDS when file metadata present", () => {
-    const result = isYodeckMediaReadyStandalone(
-      { status: "finished" },
-      { fileSize: 106021, hasFileObject: true, hasFileUrl: true, hasLastUploaded: false, hasThumbnailUrl: false },
-    );
-    expect(result.ready).toBe(true);
-    expect(result.signal).toBe("FILE_FIELDS");
-  });
-
-  it("returns not ready when status=encoding, no signals", () => {
+  it("returns NONE when status=encoding, no signals", () => {
     const result = isYodeckMediaReadyStandalone(
       { status: "encoding" },
       noFiles,
@@ -92,7 +128,7 @@ describe("isYodeckMediaReadyStandalone", () => {
     expect(result.signal).toBe("NONE");
   });
 
-  it("returns not ready when status=initialized", () => {
+  it("returns NONE when status=initialized", () => {
     const result = isYodeckMediaReadyStandalone(
       { status: "initialized" },
       noFiles,
@@ -108,12 +144,29 @@ describe("isYodeckMediaReadyStandalone", () => {
     )).toThrow("YODECK_UPLOAD_FAILED");
   });
 
-  it("returns not ready when finished but no signals at all", () => {
+  it("returns WAIT_YODECK_FILE_OBJECT when finished but no playable signals at all", () => {
     const result = isYodeckMediaReadyStandalone(
       { status: "finished" },
       noFiles,
     );
     expect(result.ready).toBe(false);
-    expect(result.signal).toBe("NONE");
+    expect(result.signal).toBe("WAIT_YODECK_FILE_OBJECT");
+  });
+
+  it("thumbnail alone does NOT make media ready", () => {
+    const result = isYodeckMediaReadyStandalone(
+      { status: "finished", thumbnail_url: "https://thumb.yodeck.com/1.jpg" },
+      { ...noFiles, hasThumbnailUrl: true },
+    );
+    expect(result.ready).toBe(false);
+    expect(result.signal).toBe("WAIT_YODECK_FILE_OBJECT");
+  });
+
+  it("finished + last_uploaded + thumbnail but no file = NOT READY", () => {
+    const result = isYodeckMediaReadyStandalone(
+      { status: "finished", last_uploaded: "2025-01-01", thumbnail_url: "https://thumb.yodeck.com/1.jpg" },
+      { ...noFiles, hasLastUploaded: true, hasThumbnailUrl: true },
+    );
+    expect(result.ready).toBe(false);
   });
 });
