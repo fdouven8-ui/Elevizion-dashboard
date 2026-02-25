@@ -232,6 +232,9 @@ export class ObjectStorageService {
   getPrivateObjectDir(): string {
     const dir = process.env.PRIVATE_OBJECT_DIR || "";
     if (!dir) {
+      if (EFFECTIVE_BUCKET_NAME) {
+        return `/${EFFECTIVE_BUCKET_NAME}/.private`;
+      }
       throw new Error(
         "PRIVATE_OBJECT_DIR not set. Create a bucket in 'Object Storage' " +
           "tool and set PRIVATE_OBJECT_DIR env var."

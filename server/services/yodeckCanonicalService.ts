@@ -3013,16 +3013,17 @@ export async function ensureCanonicalSetupForLocation(locationId: string): Promi
  * Chain: advertiser → contracts → placements → screens → locations
  */
 export async function findLocationsForAdvertiser(advertiserId: string): Promise<string[]> {
-  // Get all active contracts for this advertiser
-  const advertiserContracts = await db.select({ id: contracts.id })
+  const advertiserContracts = await db.select({ id: contracts.id, status: contracts.status })
     .from(contracts)
     .where(and(
       eq(contracts.advertiserId, advertiserId),
-      eq(contracts.status, "signed")
+      or(eq(contracts.status, "signed"), eq(contracts.status, "active"))
     ));
+
+  const statuses = advertiserContracts.map(c => c.status);
+  console.log(`[FindLocations] advertiserId=${advertiserId} matchedContracts=${advertiserContracts.length} statuses=[${statuses.join(",")}]`);
   
   if (advertiserContracts.length === 0) {
-    console.log(`[FindLocations] No active contracts for advertiser ${advertiserId}`);
     return [];
   }
   

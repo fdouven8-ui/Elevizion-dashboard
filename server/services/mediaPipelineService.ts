@@ -1349,12 +1349,19 @@ export async function publishSingleAsset(opts: {
 
       const readiness = isYodeckMediaReady(statusData, fileState);
 
+      let thumbnailTimedOut = false;
       if (!readiness.ready && readiness.signal === "WAIT_THUMBNAIL") {
-        console.log(`${LOG} correlationId=${correlationId} [WAIT_THUMBNAIL] mediaId=${yodeckMediaId} status=${status} last_uploaded=${fileState.hasLastUploaded} thumbnail_present=false — keep polling`);
-        continue;
+        const elapsedMs = Date.now() - startTime;
+        if (elapsedMs > 60_000) {
+          console.log(`${LOG} correlationId=${correlationId} [THUMBNAIL_TIMEOUT] mediaId=${yodeckMediaId} status=${status} — finished+last_uploaded, thumbnail never appeared after ${Math.round(elapsedMs/1000)}s — accepting as READY`);
+          thumbnailTimedOut = true;
+        } else {
+          console.log(`${LOG} correlationId=${correlationId} [WAIT_THUMBNAIL] mediaId=${yodeckMediaId} status=${status} last_uploaded=${fileState.hasLastUploaded} thumbnail_present=false — keep polling (${Math.round(elapsedMs/1000)}s elapsed)`);
+          continue;
+        }
       }
 
-      if (readiness.ready) {
+      if (readiness.ready || thumbnailTimedOut) {
         const verifyResp = await fetch(`${YODECK_API_BASE}/media/${yodeckMediaId}/`, {
           headers: { "Authorization": `Token ${YODECK_TOKEN}` },
         });
@@ -1364,12 +1371,13 @@ export async function publishSingleAsset(opts: {
         const verifyData = await verifyResp.json();
         const verifyFileState = getYodeckFileState(verifyData);
         const verifyReadiness = isYodeckMediaReady(verifyData, verifyFileState);
-        if (!verifyReadiness.ready) {
+        if (!verifyReadiness.ready && !thumbnailTimedOut) {
           console.warn(`${LOG} correlationId=${correlationId} VERIFY_FLAP: poll said ready(${readiness.signal}/${readiness.reason}) but verify says not ready: ${verifyReadiness.reason} — continuing`);
           continue;
         }
-        console.log(`${LOG} correlationId=${correlationId} READY_CONFIRMED signal=${verifyReadiness.signal} reason=${verifyReadiness.reason}`);
-        await markAssetReady(pollCount, `poll_verify_${verifyReadiness.signal}`);
+        const effectiveSignal = thumbnailTimedOut ? "THUMBNAIL_TIMEOUT" : verifyReadiness.signal;
+        console.log(`${LOG} correlationId=${correlationId} READY_CONFIRMED signal=${effectiveSignal} reason=${verifyReadiness.ready ? verifyReadiness.reason : "thumbnail_timeout_60s"}`);
+        await markAssetReady(pollCount, `poll_verify_${effectiveSignal}`);
         return { ok: true, assetId, correlationId, yodeckMediaId };
       }
 

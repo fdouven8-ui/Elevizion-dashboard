@@ -679,6 +679,34 @@ export async function getPendingReviewAssets(): Promise<ReviewQueueItem[]> {
   return getReviewAssets('pending-review');
 }
 
+export async function getReviewAssetById(assetId: string): Promise<ReviewQueueItem | null> {
+  const asset = await db.query.adAssets.findFirst({
+    where: eq(adAssets.id, assetId),
+  });
+  if (!asset) return null;
+
+  const advertiser = await db.query.advertisers.findFirst({
+    where: eq(advertisers.id, asset.advertiserId),
+  });
+  if (!advertiser) return null;
+
+  const { getPortalPlacementScreens } = await import('./placementResolver');
+  let portalScreens: { screenId: string; name: string; city: string | null; status: string }[] = [];
+  try { portalScreens = await getPortalPlacementScreens(advertiser.id); } catch {}
+
+  return {
+    asset,
+    advertiser: {
+      id: advertiser.id,
+      companyName: advertiser.companyName,
+      packageType: advertiser.packageType,
+      targetRegionCodes: advertiser.targetRegionCodes,
+      linkKey: advertiser.linkKey,
+    },
+    portalScreens,
+  };
+}
+
 export interface ApproveResult {
   success: boolean;
   message: string;
@@ -768,41 +796,42 @@ export async function approveAsset(
       metadata: { notes },
     });
     
-    // AUTO-PLACEMENT: Create placements and publish to screens immediately
-    // Note: autoPlacement requires a contract. If no contract exists, we check portalPlacements instead.
     let autoPlacementResult: { success: boolean; placementsCreated: number; screensPublished: number; message: string } | null = null;
     let portalPlacementCount = 0;
+    let portalScreenIds: string[] = [];
+    let targetingSource: "AUTO_PLACEMENT" | "PORTAL_SELECTED" | "NONE" = "NONE";
+
+    const { getPortalPlacementScreens } = await import('./placementResolver');
+    try {
+      const portalScreens = await getPortalPlacementScreens(asset.advertiserId);
+      portalPlacementCount = portalScreens.length;
+      portalScreenIds = portalScreens.map(s => s.screenId);
+      if (portalPlacementCount > 0) {
+        console.log(`[TARGETING] assetId=${assetId} source=PORTAL_SELECTED screens=[${portalScreenIds.join(",")}]`);
+      }
+    } catch (err: any) {
+      console.warn('[AdminReview] Portal placement check error:', err.message);
+    }
+
     try {
       const { createAutoPlacementsForAsset } = await import('./autoPlacementService');
       autoPlacementResult = await createAutoPlacementsForAsset(assetId, asset.advertiserId);
       
       if (autoPlacementResult.success) {
+        targetingSource = "AUTO_PLACEMENT";
         console.log(`[AdminReview] Auto-placement success: ${autoPlacementResult.placementsCreated} placements, ${autoPlacementResult.screensPublished} screens`);
       } else {
         console.warn('[AdminReview] Auto-placement failed (non-fatal):', autoPlacementResult.message);
-        Sentry.captureMessage('Auto-placement failed (non-fatal)', {
-          level: 'warning',
-          extra: {
-            advertiserId: asset.advertiserId,
-            assetId,
-            reason: autoPlacementResult.message,
-          },
-        });
+        if (portalPlacementCount > 0) {
+          targetingSource = "PORTAL_SELECTED";
+          console.log(`[AdminReview] Falling back to portal selection: ${portalPlacementCount} screens`);
+        }
       }
     } catch (autoPlacementError: any) {
       console.error('[AdminReview] Auto-placement error (non-fatal):', autoPlacementError.message);
-    }
-    
-    // Check for portal placements (customer-selected screens) as alternative targeting
-    try {
-      const { getPortalPlacementScreens } = await import('./placementResolver');
-      const portalScreens = await getPortalPlacementScreens(asset.advertiserId);
-      portalPlacementCount = portalScreens.length;
       if (portalPlacementCount > 0) {
-        console.log(`[AdminReview] Portal placements found: ${portalPlacementCount} screens (customer-selected targeting available)`);
+        targetingSource = "PORTAL_SELECTED";
       }
-    } catch (err: any) {
-      console.warn('[AdminReview] Portal placement check error:', err.message);
     }
     
     // MEDIA PIPELINE: Publish this specific asset to Yodeck (no scan/dedup)
@@ -871,6 +900,22 @@ export async function approveAsset(
       console.error(`[AutoPublish] ${approveCorrelationId} outcome=ERROR error=${canonicalError.message}`);
     }
     
+    let portalPublishResult: { ok: boolean; touchedPlaylists: string[]; pushedPlayers: string[]; errors: string[] } | null = null;
+    if (targetingSource === "PORTAL_SELECTED" && effectiveYodeckMediaId && portalScreenIds.length > 0) {
+      try {
+        const { publishAssetToScreens } = await import('./portalPublishService');
+        portalPublishResult = await publishAssetToScreens({
+          assetId,
+          yodeckMediaId: effectiveYodeckMediaId,
+          screenIds: portalScreenIds,
+          correlationId: approveCorrelationId,
+        });
+        console.log(`[PUBLISH_TO_SCREENS] correlationId=${approveCorrelationId} touchedPlaylists=[${portalPublishResult.touchedPlaylists.join(",")}] pushedPlayers=[${portalPublishResult.pushedPlayers.join(",")}] errors=${portalPublishResult.errors.length}`);
+      } catch (portalPublishError: any) {
+        console.error(`[PUBLISH_TO_SCREENS] correlationId=${approveCorrelationId} error=${portalPublishError.message}`);
+      }
+    }
+
     // Legacy: Also trigger placement plan for backward compatibility
     let planId: string | undefined;
     try {
@@ -883,7 +928,6 @@ export async function approveAsset(
         planId = planResult.planId;
       }
     } catch (planError: any) {
-      // This is now secondary, auto-placement is primary
       console.warn('[AdminReview] Placement plan error (secondary):', planError.message);
     }
     
@@ -900,7 +944,7 @@ export async function approveAsset(
       console.error('[AdminReview] Failed to send approval email:', emailError);
     }
     
-    const publishActioned = canonicalPublishResult?.success || autoPlacementResult?.success;
+    const publishActioned = canonicalPublishResult?.success || autoPlacementResult?.success || portalPublishResult?.ok;
     const publishSuccess = !!(effectiveYodeckMediaId && publishActioned);
     const hasTargetsAvailable = portalPlacementCount > 0 || autoPlacementResult?.success;
     const publishErrorMsg = !effectiveYodeckMediaId 

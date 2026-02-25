@@ -2624,6 +2624,12 @@ Sitemap: ${SITE_URL}/sitemap.xml
   // Get video review queue with bucket filter (ADMIN ONLY)
   app.get("/api/admin/video-review", requireAdminAccess, async (req: any, res) => {
     try {
+      const assetId = req.query.assetId as string | undefined;
+      if (assetId) {
+        const { getReviewAssetById } = await import("./services/adAssetUploadService");
+        const item = await getReviewAssetById(assetId);
+        return res.json(item ? [item] : []);
+      }
       const validBuckets = ['pending-review', 'approved-pending', 'failed', 'rejected', 'published', 'all'] as const;
       const bucket = validBuckets.includes(req.query.bucket as any) ? req.query.bucket : 'pending-review';
       const { getReviewAssets } = await import("./services/adAssetUploadService");
@@ -4766,6 +4772,41 @@ Sitemap: ${SITE_URL}/sitemap.xml
     }
   });
 
+  app.post("/api/upload-portal/:linkKey/request-upload-token", async (req, res) => {
+    try {
+      const { linkKey } = req.params;
+      const adv = await db.query.advertisers.findFirst({
+        where: eq(advertisers.linkKey, linkKey),
+      });
+      if (!adv) {
+        return res.status(404).json({ ok: false, message: "Ongeldige link" });
+      }
+
+      const rawToken = crypto.randomBytes(32).toString("hex");
+      const tokenHash = crypto.createHash("sha256").update(rawToken).digest("hex");
+      const ttlMs = 60 * 60 * 1000;
+      const expiresAt = new Date(Date.now() + ttlMs);
+
+      await db.insert(portalTokens).values({
+        advertiserId: adv.id,
+        tokenHash,
+        expiresAt,
+      });
+
+      const baseUrl = process.env.REPLIT_DEV_DOMAIN
+        ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+        : "http://localhost:5000";
+      const uploadUrl = `/api/upload-portal/${rawToken}/upload`;
+
+      console.log(`[PORTAL_TOKEN_ISSUED] advertiserId=${adv.id} linkKey=${linkKey} ttl=3600s expiresAt=${expiresAt.toISOString()}`);
+
+      res.json({ ok: true, token: rawToken, expiresAt, uploadUrl: `${baseUrl}${uploadUrl}` });
+    } catch (error: any) {
+      console.error("[request-upload-token] Error:", error.message);
+      res.status(500).json({ ok: false, message: error.message });
+    }
+  });
+
   // Public upload portal - get advertiser info
   app.get("/api/upload-portal/:token", async (req, res) => {
     try {
@@ -4808,7 +4849,7 @@ Sitemap: ${SITE_URL}/sitemap.xml
     try {
       // Memory safety check - reject uploads if RSS exceeds threshold (platform enforces RSS)
       const mem = process.memoryUsage();
-      const RSS_LIMIT_MB = 180; // Platform limit is ~200MB, leave buffer
+      const RSS_LIMIT_MB = process.env.NODE_ENV === 'development' ? 999 : 180;
       const rssMB = mem.rss / 1024 / 1024;
       if (rssMB > RSS_LIMIT_MB) {
         console.warn(`[UploadPortal] RSS memory high (${rssMB.toFixed(1)}MB > ${RSS_LIMIT_MB}MB), rejecting upload`);

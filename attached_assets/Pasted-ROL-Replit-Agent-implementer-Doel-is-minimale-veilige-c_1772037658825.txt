@@ -1,0 +1,113 @@
+ROL: Replit Agent (implementer). Doel is minimale, veilige changes. Geen refactors. Geen bestaande flows breken.
+
+PRODUCTDOEL (UX):
+Adverteerder kan altijd:
+1) Klikken op "Video uploaden" of "Video vervangen"
+2) Locaties/schermen selecteren waar de video live moet
+3) Uploaden
+4) Admin review → approve → publish
+5) Publish gaat naar exact de geselecteerde screens (portal selectie is source-of-truth), zonder contract-blocks.
+
+CONTEXT / HUIDIGE BEVINDINGEN:
+- portal_tokens zijn verlopen → uploads komen nooit binnen → ad_assets=0 → review leeg.
+- getPortalPlacementScreens() bestaat, maar portal selectie wordt niet gebruikt om daadwerkelijk te publishen; alleen voor error message.
+- createAutoPlacementsForAsset vereist actief contract.
+- findLocationsForAdvertiser in yodeckCanonicalService zoekt alleen status='signed' (mist 'active').
+- Yodeck readiness gebruikt nu detail endpoint en werkt (READY_STRONG met thumbnail_url + last_uploaded).
+
+WAT WE GAAN BOUWEN (HYBRIDE, MINIMALE DIFFS):
+A) "Upload session token" uitgeven op klik Uploaden/Vervangen (altijd geldig)
+B) Portal selectie van screens/locaties opslaan als placements (source of truth)
+C) Approve/publish gebruikt die portal selectie om te publishen naar precies die screens, ook als contract ontbreekt
+D) Kleine contract status fix (signed OR active) voor canonical publish, zonder regressies
+
+STAP A — UPLOAD SESSION TOKEN (SELF-HEALING)
+1) Voeg nieuw endpoint toe (portal/public):
+   POST /api/upload-portal/:linkKey/request-upload-token
+   - Validatie: linkKey hoort bij advertiser (bestaand mechanisme)
+   - Maak nieuw record in portal_tokens met ttl (default 1 uur)
+   - Return JSON: { token, expiresAt, uploadUrl: `/api/upload-portal/${token}/upload` }
+   - Voeg logging toe: [PORTAL_TOKEN_ISSUED] advertiserId=... ttl=... expiresAt=...
+
+2) Frontend: waar nu direct upload naar /api/upload-portal/:token/upload gaat, wijzig MINIMAAL:
+   - bij klik "Uploaden" of "Vervangen": eerst request-upload-token call doen
+   - daarna upload naar uploadUrl
+   (geen grote UI rewrite; alleen de URL verkrijgen)
+
+STAP B — SCREEN/LOCATIE SELECTIE OPSLAAN (SOURCE OF TRUTH)
+3) Zorg dat portal selectie wordt opgeslagen in portal_placements (of bestaande tabel):
+   - Voeg endpoint toe of bevestig bestaand endpoint:
+     POST /api/portal/placements
+     body: { linkKey OR advertiserId resolved via session, screenIds: number[] }
+   - Upsert per (advertiserId, screenId) met status='ACTIVE'
+   - Mogelijkheid "vervangen": overschrijft selectie (markeer oude as REMOVED)
+   - Logging: [PORTAL_PLACEMENTS_SAVE] advertiserId=... count=...
+
+STAP C — APPROVE/PUBLISH GEBRUIKT PORTAL SELECTIE (BELANGRIJK)
+4) In approve flow (approveAsset in adAssetUploadService.ts):
+   - Haal portal placements op via getPortalPlacementScreens()
+   - Als portal placements > 0:
+     - Zet targetingMethod='PORTAL_SELECTED'
+     - Sla targetScreens op in response/logs
+     - Maak/gebruik een placement plan op basis van deze screens (minimaal: direct publish naar deze screens)
+   - Contract mag NIET blokkeren als portal selectie bestaat.
+     Dus: als createAutoPlacementsForAsset faalt door "geen contract" maar portal placements bestaan → ga toch door met publish naar geselecteerde screens.
+
+5) Implementatie (minimaal):
+   - Voeg een nieuwe helper toe in yodeck publish laag:
+     publishAssetToScreens({ assetId, yodeckMediaId, screenIds })
+     - gebruikt bestaande "PUBLISH_GUARD: NO playlist creation allowed"
+     - zoekt bestaande screenPlaylistId per screen (uit cache/DB zoals nu)
+     - touch playlist: voeg mediaId toe (idempotent)
+     - push naar players
+     - verify/screenshot indien bestaande verify flow beschikbaar
+
+   BELANGRIJK: dit is een gerichte “selected screens publish” pad; laat canonical publish ongemoeid.
+
+6) Logging voor bewijs:
+   [TARGETING] assetId=... source=PORTAL_SELECTED screens=[...]
+   [PUBLISH_TO_SCREENS] touchedPlaylists=[...] pushedPlayers=[...]
+
+STAP D — CONTRACT STATUS FIX (CANONICAL, 1 REGEL)
+7) In yodeckCanonicalService.ts findLocationsForAdvertiser():
+   - wijzig contract filter van alleen "signed" naar ("signed" OR "active")
+   - logging: [FindLocations] advertiserId=... matchedContracts=... statuses=...
+
+ADMIN REVIEW ZICHTBAARHEID (OPTIONEEL MAAR HANDIG)
+8) Voeg support toe om 1 asset op te vragen in review endpoint:
+   GET /api/admin/video-review?assetId=<uuid>
+   - return 1 record ongeacht status (voor debugging)
+
+VERIFICATIEPLAN (MOET JE UITVOEREN EN RAPPORTEREN)
+1) Maak token via:
+   POST /api/upload-portal/<DouvenLinkKey>/request-upload-token
+   → uploadUrl gebruiken en 1 video uploaden
+2) Na upload:
+   - check DB: ad_assets count = 1, approvalStatus='UPLOADED'
+   - GET /api/admin/video-review toont de asset
+3) Portal selectie:
+   - POST /api/portal/placements met 1 screenId
+   - verify DB: portal_placements count > 0
+4) Approve:
+   - POST /api/admin/video-review/:assetId/approve
+   - verwacht logs:
+     [TARGETING] source=PORTAL_SELECTED
+     [PUBLISH_TO_SCREENS] ...
+   - verify in Yodeck: media in juiste screen playlist + push uitgevoerd
+5) Edge cases:
+   - Vervangen video: upload nieuwe asset, approve, publish overschrijft of voegt correct toe zonder duplicates
+   - Zonder selectie: blijft oude contract targeting gedrag (of duidelijke foutmelding)
+
+CONSTRAINTS / NIET DOEN:
+- Geen refactors van publish pipeline.
+- Geen wijzigingen aan duplicate cleanup service.
+- Geen wijzigingen aan baseline playlists.
+- Geen schema migrations tenzij strikt nodig (liefst niet).
+- Alles idempotent (zelfde publish 2x mag niet dupliceren).
+
+OUTPUT:
+- Geef overzicht van gewijzigde bestanden + korte diff samenvatting
+- Geef de exacte curl/fetch voorbeelden om te testen (copy-paste)
+- Toon 10 belangrijkste logregels die bewijs geven dat het werkt
+
+START NU.
