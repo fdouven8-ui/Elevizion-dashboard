@@ -10,9 +10,10 @@
 import * as Sentry from "@sentry/node";
 
 import { db } from "../db";
-import { integrationOutbox, placementPlans, adAssets, locations } from "@shared/schema";
+import { integrationOutbox, placementPlans, adAssets, locations, advertisers } from "@shared/schema";
 import { eq, and } from "drizzle-orm";
 import crypto from "crypto";
+import { stampAssetMarkerOnMedia } from "./yodeckDuplicateCleanupService";
 import { ObjectStorageService } from "../objectStorage";
 import { dispatchMailEvent } from "./mailEventService";
 import { logAudit } from "./auditService";
@@ -3173,6 +3174,47 @@ class YodeckPublishService {
     const mediaNameMp4 = opts.mediaName.endsWith(".mp4") ? opts.mediaName : `${opts.mediaName}.mp4`;
     debug.candidateName = mediaNameMp4;
 
+    if (opts.assetId) {
+      const canonicalAsset = await db.query.adAssets.findFirst({
+        where: eq(adAssets.id, parseInt(opts.assetId)),
+      });
+      const canonicalId = canonicalAsset?.yodeckMediaId;
+      if (canonicalId) {
+        const verify = await client.fetchMediaRaw(canonicalId);
+        if (verify.ok && verify.data) {
+          console.log(`[YodeckResolve][${corrId}] RESOLVED via asset_canonical: mediaId=${canonicalId} status=${verify.data.status || "?"} — SKIPPING name resolve`);
+          debug.resolvedVia = "db";
+          debug.mediaId = canonicalId;
+          debug.canonicalSource = "adAssets.yodeckMediaId";
+          await this.persistResolvedMediaId(opts.planId, canonicalId, "db", corrId, debug);
+          return { mediaId: canonicalId, resolvedVia: "db", debug };
+        }
+        console.log(`[YodeckResolve][${corrId}] asset_canonical mediaId=${canonicalId} not valid in Yodeck (${verify.error}), continuing resolve`);
+        debug.assetCanonicalInvalid = { mediaId: canonicalId, error: verify.error };
+      }
+    }
+
+    if (opts.advertiserId) {
+      const advertiser = await db.query.advertisers.findFirst({
+        where: eq(advertisers.id, opts.advertiserId),
+      });
+      const canonicalId = advertiser?.yodeckMediaIdCanonical;
+      if (canonicalId) {
+        const verify = await client.fetchMediaRaw(canonicalId);
+        if (verify.ok && verify.data) {
+          console.log(`[YodeckResolve][${corrId}] RESOLVED via advertiser_canonical: mediaId=${canonicalId} status=${verify.data.status || "?"} — SKIPPING name resolve`);
+          debug.resolvedVia = "db";
+          debug.mediaId = canonicalId;
+          debug.canonicalSource = "advertisers.yodeckMediaIdCanonical";
+          await this.persistResolvedMediaId(opts.planId, canonicalId, "db", corrId, debug);
+          return { mediaId: canonicalId, resolvedVia: "db", debug };
+        }
+        console.log(`[YodeckResolve][${corrId}] advertiser_canonical mediaId=${canonicalId} not valid in Yodeck (${verify.error}), continuing resolve`);
+        debug.advertiserCanonicalInvalid = { mediaId: canonicalId, error: verify.error };
+      }
+    }
+
+    console.log(`[YodeckResolve][${corrId}] NO_CANONICAL_ID — falling back to name resolve for "${mediaNameMp4}"`);
     const existingByName = await client.findMediaByNameExact(mediaNameMp4);
     debug.findByName = { found: !!existingByName, mediaId: existingByName?.id, status: existingByName?.status };
 
@@ -3183,7 +3225,8 @@ class YodeckPublishService {
         data: {
           resolvedFrom: "name", requestedName: mediaNameMp4,
           chosenMediaId: existingByName.id, chosenStatus: existingByName.status,
-          reason: "pre-existing media found by exact name match",
+          reason: "pre-existing media found by exact name match (no canonical ID available)",
+          resolvedVia: "name",
         },
       });
       debug.resolvedVia = "name";
@@ -3205,6 +3248,9 @@ class YodeckPublishService {
       console.log(`[YodeckResolve][${corrId}] RESOLVED via created_url: mediaId=${createResult.mediaId}`);
       debug.resolvedVia = "created_url";
       debug.mediaId = createResult.mediaId;
+      if (opts.assetId) {
+        stampAssetMarkerOnMedia(createResult.mediaId, parseInt(opts.assetId), corrId).catch(() => {});
+      }
       await this.persistResolvedMediaId(opts.planId, createResult.mediaId, "created_url", corrId, debug);
       return { mediaId: createResult.mediaId, resolvedVia: "created_url", debug };
     }
@@ -3244,6 +3290,9 @@ class YodeckPublishService {
       console.log(`[YodeckResolve][${corrId}] RESOLVED via created_local: mediaId=${uploadResult.mediaId}`);
       debug.resolvedVia = "created_local";
       debug.mediaId = uploadResult.mediaId;
+      if (opts.assetId) {
+        stampAssetMarkerOnMedia(uploadResult.mediaId, parseInt(opts.assetId), corrId).catch(() => {});
+      }
       await this.persistResolvedMediaId(opts.planId, uploadResult.mediaId, "created_local", corrId, debug);
       return { mediaId: uploadResult.mediaId, resolvedVia: "created_local", debug };
     }

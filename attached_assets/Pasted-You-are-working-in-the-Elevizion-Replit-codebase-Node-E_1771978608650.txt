@@ -1,0 +1,63 @@
+You are working in the Elevizion Replit codebase (Node/Express + Yodeck API v2). Goal: enforce “ONE Yodeck media item per asset” and add safe automatic cleanup of duplicates after successful upload/publish, without breaking existing flows or creating playlists.
+
+NON-NEGOTIABLE RULES
+- Do NOT delete based on name matching.
+- Do NOT create any new playlists (keep existing PUBLISH_GUARD behavior).
+- If asset.yodeckMediaId exists, publishing must use that canonical ID (never resolve by name in that case).
+- Cleanup must be SAFE: never delete the canonical id; never delete anything that appears “in use” by a playlist/screen (if we can detect it); otherwise default to DRY_RUN logging until confirmed.
+
+WHAT TO IMPLEMENT
+
+A) Stamp a stable asset marker onto every Yodeck media created by our pipeline
+1) When we create/upload/patch a Yodeck media item for an asset, stamp a stable marker that can be searched later:
+   - Preferred: a tag: "elevizion:asset:<assetId>"
+   - If tags are limited/unavailable: put a description marker: "EVZ_ASSET_ID=<assetId>"
+2) Keep existing tags usage (elevizion:ad, elevizion:advertiser, elevizion:plan, elevizion:location) and just add the asset marker.
+
+B) Add duplicate cleanup after YODECK_READY_OK (or immediately after publish success)
+Create a function (e.g., cleanupDuplicateYodeckMediaForAsset(assetId, canonicalMediaId, opts)) that:
+1) Lists all Yodeck media that match the asset marker (tag or description), not name.
+2) Determines canonicalMediaId = asset.yodeckMediaId (must be present at this point).
+3) Computes duplicates = all matching media IDs excluding canonicalMediaId.
+4) For each duplicate candidate:
+   - NEVER delete canonicalMediaId.
+   - If candidate is still encoding/processing/initialized, mark as “skippedBusy” (or optionally allow delete if clearly safe—default to skip).
+   - Check “in use” if possible:
+     - If Yodeck API provides a way to see assignments/playlist usage for a media item, use it.
+     - If not available, implement a conservative heuristic OR do not delete and mark as “skippedUnknownUsage”.
+5) Support DRY_RUN mode:
+   - Default DRY_RUN=true (no deletes) unless explicitly disabled via env (e.g., EVZ_YODECK_CLEANUP_DRY_RUN=false).
+6) When DRY_RUN=false, delete safe duplicates via Yodeck delete endpoint.
+7) Log a clear one-line summary and a detailed JSON trace:
+   - CLEANUP_DUPLICATES assetId=... kept=<canonicalId> candidates=[...] deleted=[...] skippedInUse=[...] skippedBusy=[...] skippedUnknownUsage=[...]
+   - Include correlationId in logs.
+
+C) Wire cleanup into the approve/publish pipeline
+1) After we log YODECK_READY_OK / publishSingleAsset OK (i.e., we have a canonical yodeckMediaId persisted on the asset), call cleanupDuplicateYodeckMediaForAsset(assetId, yodeckMediaId).
+2) Do not block the request excessively; but ensure it runs during the same flow and logs results. If it must be async, still return success and include cleanup outcome in response payload.
+
+D) Fix publish to avoid wrong media selection
+Your logs show we still sometimes resolve by name:
+  - findMediaByNameExact FOUND id=30148692 ... and then publish uses that instead of the new 30357955.
+Implement this rule:
+1) If plan/asset already has yodeckMediaId (canonical), ALWAYS use it and do not call findMediaByNameExact.
+2) Only fall back to name resolve if yodeckMediaId is missing AND there is a strong reason (legacy data). If you must resolve by name, immediately persist the resolved id back to the plan/asset with a “resolvedVia=name” trace.
+
+E) Add an admin endpoint to run cleanup on demand (for debugging)
+Add POST /api/admin/yodeck/cleanup-duplicates
+Body: { assetId: string, dryRun?: boolean }
+- Looks up the asset and its canonical yodeckMediaId.
+- Runs cleanupDuplicateYodeckMediaForAsset.
+- Returns a JSON result with kept/deleted/skipped arrays and correlationId.
+
+DELIVERABLES
+- Implement the changes with minimal diff across existing files (likely yodeckClient/service + publish flow + routes).
+- Keep existing baseline/upload/review logic intact.
+- Add/extend logs so we can verify:
+  1) publish uses canonical yodeckMediaId when available
+  2) duplicates are detected via asset marker and safely cleaned (or dry-run logged)
+
+After implementation, provide:
+- List of changed files
+- Example logs from a dry-run cleanup
+- Example logs from an actual cleanup (DRY_RUN=false) if safe to simulate

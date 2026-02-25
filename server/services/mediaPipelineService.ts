@@ -9,6 +9,7 @@ import * as os from "os";
 import crypto from "crypto";
 import * as Sentry from "@sentry/node";
 import { buildYodeckCreateMediaPayload, assertNoForbiddenKeys, logCreateMediaPayload } from "./yodeckPayloadBuilder";
+import { stampAssetMarkerOnMedia, cleanupDuplicateYodeckMediaForAsset } from "./yodeckDuplicateCleanupService";
 
 const objectStorage = new ObjectStorageService();
 
@@ -1025,6 +1026,10 @@ export async function publishSingleAsset(opts: {
 
     console.log(`${LOG} correlationId=${correlationId} EARLY_ID_SAVED assetId=${assetId} mediaId=${yodeckMediaId}`);
 
+    stampAssetMarkerOnMedia(yodeckMediaId!, assetId, correlationId).catch(err =>
+      console.warn(`${LOG} correlationId=${correlationId} STAMP_MARKER_BACKGROUND_ERROR: ${err.message}`)
+    );
+
     // Update upload job with yodeckMediaId
     if (uploadJobId && yodeckMediaId) {
       try {
@@ -1179,6 +1184,12 @@ export async function publishSingleAsset(opts: {
         assetStatus: "live",
         updatedAt: new Date(),
       }).where(eq(advertisers.id, asset.advertiserId));
+
+      if (yodeckMediaId) {
+        cleanupDuplicateYodeckMediaForAsset(assetId, yodeckMediaId, { correlationId }).catch(err =>
+          console.warn(`${LOG} correlationId=${correlationId} CLEANUP_BACKGROUND_ERROR: ${err.message}`)
+        );
+      }
       if (uploadJobId) {
         try {
           await db.update(uploadJobs).set({

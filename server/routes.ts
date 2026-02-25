@@ -24532,9 +24532,23 @@ KvK: 90982541 | BTW: NL004857473B37</p>
    */
   app.post("/api/admin/yodeck/cleanup-duplicates", requireAdminAccess, async (req, res) => {
     try {
-      const { advertiserId, dryRun } = req.body || {};
+      const { advertiserId, assetId, dryRun } = req.body || {};
+
+      if (assetId) {
+        const { cleanupDuplicateYodeckMediaForAsset } = await import("./services/yodeckDuplicateCleanupService");
+        const asset = await db.query.adAssets.findFirst({
+          where: eq(adAssets.id, parseInt(assetId)),
+        });
+        if (!asset) return res.status(404).json({ ok: false, error: "Asset niet gevonden" });
+        if (!asset.yodeckMediaId) return res.status(400).json({ ok: false, error: "Asset heeft geen yodeckMediaId (canonical)" });
+        const result = await cleanupDuplicateYodeckMediaForAsset(
+          parseInt(assetId), asset.yodeckMediaId, { dryRun: dryRun !== false }
+        );
+        return res.json({ ok: true, ...result });
+      }
+
       if (!advertiserId) {
-        return res.status(400).json({ ok: false, error: "advertiserId is required" });
+        return res.status(400).json({ ok: false, error: "advertiserId or assetId is required" });
       }
       const { cleanupDuplicates } = await import("./services/yodeckAdminService");
       const result = await cleanupDuplicates(advertiserId, dryRun !== false);
