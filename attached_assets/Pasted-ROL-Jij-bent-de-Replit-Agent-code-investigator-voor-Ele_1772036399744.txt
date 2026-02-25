@@ -1,0 +1,110 @@
+ROL: Jij bent de Replit Agent / code investigator voor Elevizion. JE MAG GEEN CODE WIJZIGEN. Alleen analyseren, testen, en rapporteren met concrete bewijsstukken (bestanden/regels/logs).
+
+DOEL:
+Voer een end-to-end analyse uit van de volledige advertentie video flow:
+upload → normalize → admin review list → approve → publish (Yodeck media) → place in juiste playlist/screen → push → verify.
+Doel is: exact aanwijzen waar de flow op dit moment NIET klopt / vastloopt / onzichtbaar wordt, met bewijs (logs, response payloads, codepaden).
+
+CONTEXT (BEVESTIGD):
+1) Yodeck detail endpoint is inmiddels live in onze app:
+   GET /api/admin/yodeck/media/:id werkt en geeft detail JSON terug.
+   Voor mediaId=30367829 zien we READY_STRONG data:
+   status=finished, last_uploaded aanwezig, thumbnail_url aanwezig, media_origin.source=local, download_from_url aanwezig.
+   Dit betekent: upload + encoding bij Yodeck werkt.
+
+2) Admin review list endpoint lijkt “stuk” of te streng gefilterd:
+   In browser console komt terug:
+   fetch("/api/admin/video-review") => 200, maar RAW: [] en COUNT: 0.
+   Daardoor kan admin niets zien/debuggen, en targets/placementPlanId/portalPlacements zijn niet te achterhalen via dit endpoint.
+
+3) In eerdere server logs zagen we (als referentie):
+   - Auto-placement faalt met: "Geen actief contract gevonden voor deze adverteerder" → placementsCreated=0, screensPublished=0
+   - Er wordt wel een placement plan gemaakt (Simulation OK / planId)
+   - YodeckPublish gebruikte “PUBLISH_GUARD: NO playlist creation allowed” en touchte bestaande screen playlist
+   Maar het blijft onduidelijk of “selected screen placement” ooit wordt toegepast als er geen contract is.
+
+BELANGRIJK: Geen grote refactors. Geen wijzigingen. Alleen analyse + tests.
+
+TAKEN (ANALYSE + TESTPLAN):
+
+A) MAP DE FLOW IN CODE (ZONDER TE WIJZIGEN)
+1) Vind de routehandlers/bestanden voor:
+   - POST /api/upload-portal/.../upload
+   - Normalization pipeline (NormalizeYodeck / ffmpeg)
+   - GET /api/admin/video-review
+   - POST /api/admin/video-review/:assetId/approve
+   - Placement plan creation + approval:
+     - POST /api/placement-plans/:planId/approve
+     - publish van plan (YodeckPublish)
+   - Yodeck client calls: create media, get upload url, put binary, upload complete, polling, tags update
+   - playlist/screen push/verify (screenshot refresh / now playing / verify routes)
+
+2) Schrijf per stap:
+   - exact bestandspad + functienaam
+   - welke statuses in DB worden gezet (approvalStatus, publishStatus, yodeckMediaId, readiness status)
+   - welke guards/filters bestaan (bv. “PORTAL_ONLY”, “PUBLISH_GUARD”, contract gating)
+
+B) REPRODUCEERBARE TESTS (ALLEEN READ/EXECUTE, GEEN PATCH)
+Gebruik waar mogelijk bestaande endpoints en log output. Als er interne scripts bestaan, gebruik die read-only.
+
+1) Upload test (als er een veilige testfile bestaat in repo of assets):
+   - run de upload endpoint of beschrijf hoe upload normaliter gebeurt (inputs, headers)
+   - verifieer dat normalizedStoragePath wordt aangemaakt en dat asset status READY_FOR_YODECK wordt.
+
+2) Admin review list test:
+   - Call GET /api/admin/video-review (zoals frontend) en verifieer waarom hij [] returned:
+     - check query/filter criteria in handler
+     - check welke DB records aanwezig zijn voor recente assets (UPLOADED/PENDING/LIVE/etc.)
+     - rapporteer exact: “filter X sluit alles uit omdat statuswaarden in DB Y zijn”
+
+3) Approve test:
+   - Traceer POST /api/admin/video-review/:assetId/approve codepad:
+     - wanneer wordt publishSingleAsset geroepen?
+     - wanneer wordt yodeckMediaId opgeslagen?
+     - wordt placement plan gemaakt? waar komt planId vandaan?
+     - wordt autopublish / placement engine gestart en waarom faalt contract gating?
+
+4) Yodeck readiness test:
+   - Verifieer dat de publish/retry flow de DETAIL JSON gebruikt voor readiness:
+     - status=finished + last_uploaded + thumbnail_url => READY_STRONG
+     - rapporteer welke functie deze beslissing maakt
+
+5) Placement + publish to screen test:
+   - Vind waar “portal selected screens” of “portal placements found: 1 screens” vandaan komt:
+     - welke tabel/records? hoe wordt selectie opgeslagen?
+   - Check of publish code ooit die selectie gebruikt als contract ontbreekt.
+   - Rapporteer: “selected screen info bestaat wel/niet en wordt wel/niet gebruikt bij publish”.
+
+6) Push + verify test:
+   - Vind endpoints of jobs die pushen naar screen playlists en verifiëren (screenshot/now-playing).
+   - Voer een dry test uit op een bestaande screen/playlist ID (read-only):
+     - check playlist items bevatten mediaId?
+     - check push trigger?
+     - check verify status?
+   - Rapporteer of en waar het vastloopt.
+
+C) OUTPUT (JOUW RAPPORT)
+Lever één compact rapport met deze structuur:
+
+1) Flow diagram (bullet steps)
+2) Waar het nu misgaat (top 3 issues), elk met:
+   - Symptom (wat ziet user)
+   - Root cause in code (bestand + regels/conditie)
+   - Bewijs (logregel, queryresult, endpoint response)
+3) Specifiek: waarom /api/admin/video-review [] returned (exact filter mismatch)
+4) Specifiek: of “selected screen placement” bestaat, waar opgeslagen, en of publish het gebruikt
+5) Risico’s / regressie punten (wat NIET aanraken)
+6) Aanbevolen minimale fixes (nog geen code, alleen voorstel), gesorteerd op impact/risico
+
+CONSTRAINTS:
+- Geen code wijzigingen.
+- Geen database migrations.
+- Geen playlist cleanup of delete acties.
+- Alleen read/test/analyse.
+- Als je iets niet kunt testen zonder write, beschrijf exact welke read-only info ontbreekt en welke endpoint/log nodig is.
+
+START:
+Begin met (B2) video-review endpoint: waarom geeft hij []?
+Daarna map je stap voor stap de rest.
+
+EINDE.
